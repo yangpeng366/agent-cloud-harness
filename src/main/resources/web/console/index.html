@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Cloud Console</title>
+    <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<div class="shell">
+    <aside class="rail rail--sessions">
+        <div class="rail__header">
+            <div>
+                <p class="eyebrow">Continuity Console</p>
+                <h1>Agent Cloud Harness</h1>
+            </div>
+            <span class="status-dot" id="healthBadge">booting</span>
+        </div>
+
+        <nav class="surface-switch" aria-label="surface switch">
+            <a class="surface-switch__link" href="/dialogue/">Dialogue</a>
+            <a class="surface-switch__link surface-switch__link--active" href="/console/">Console</a>
+        </nav>
+
+        <form class="stack-form" id="sessionForm">
+            <label class="field">
+                <span>新会话</span>
+                <input id="sessionTitle" type="text" placeholder="例如：公众号选题实验">
+            </label>
+            <button class="button button--ghost" type="submit">创建会话</button>
+        </form>
+
+        <div class="section-title">
+            <span>会话轨道</span>
+            <button class="link-button" id="refreshSessionsButton" type="button">刷新</button>
+        </div>
+        <div class="session-list" id="sessionList"></div>
+    </aside>
+
+    <main class="stage">
+        <section class="hero">
+            <div class="hero__copy">
+                <p class="eyebrow">Task Dialogue Desk</p>
+                <h2 id="heroTitle">把任务像对话一样发给 harness</h2>
+                <p id="heroSubtitle">
+                    当前页面把会话、任务发布、继续执行和运行态观察合成在一起。中间是任务对话线程，右侧是 live flow。
+                </p>
+            </div>
+            <div class="hero__meta">
+                <div class="metric">
+                    <span>会话数</span>
+                    <strong id="sessionCount">0</strong>
+                </div>
+                <div class="metric">
+                    <span>任务数</span>
+                    <strong id="taskCount">0</strong>
+                </div>
+                <div class="metric">
+                    <span>轮询</span>
+                    <strong id="pollingState">ON</strong>
+                </div>
+            </div>
+        </section>
+
+        <section class="timeline-panel">
+            <div class="section-title">
+                <span>任务对话线程</span>
+                <div class="section-title__note" id="timelineHint">选择左侧会话后，这里会按时间串起任务。</div>
+            </div>
+            <div class="timeline" id="taskTimeline"></div>
+        </section>
+
+        <section class="composer">
+            <div class="section-title">
+                <span>发布任务</span>
+                <div class="section-title__note">如果没选会话，系统会自动创建 session。</div>
+            </div>
+
+            <form id="taskForm">
+                <div class="composer__grid">
+                    <label class="field field--wide">
+                        <span>标题</span>
+                        <input id="taskTitle" type="text" placeholder="留空则按任务说明自动生成">
+                    </label>
+
+                    <label class="field">
+                        <span>任务类型</span>
+                        <select id="taskType">
+                            <option value="continuation">continuation</option>
+                            <option value="doc">doc</option>
+                            <option value="research">research</option>
+                            <option value="coding">coding</option>
+                            <option value="browser">browser</option>
+                            <option value="ops">ops</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>优先级</span>
+                        <select id="taskPriority">
+                            <option value="high">high</option>
+                            <option value="medium">medium</option>
+                            <option value="low">low</option>
+                        </select>
+                    </label>
+
+                    <label class="field field--wide">
+                        <span>目标</span>
+                        <input id="taskGoal" type="text" placeholder="可选，用一句话定义最终交付">
+                    </label>
+
+                    <label class="field field--wide field--toggle">
+                        <span>启动方式</span>
+                        <span class="toggle-row">
+                            <input id="taskAutoStart" type="checkbox" checked>
+                            <span>创建后立即进入 control graph</span>
+                        </span>
+                    </label>
+                </div>
+
+                <label class="field field--textarea">
+                    <span>任务说明</span>
+                    <textarea id="taskIntent" rows="5" placeholder="例如：写一篇《AI Agent 的下一波壁垒，可能是 continuity，而不是 autonomy》公众号文章，结合参考资料，先出提纲，再迭代成终稿。"></textarea>
+                </label>
+
+                <div class="composer__actions">
+                    <div class="composer__context">
+                        <span>当前会话</span>
+                        <strong id="composerSessionLabel">自动创建</strong>
+                        <p class="composer__task-hint" id="composerTaskHint">选择一个任务后，可以基于它的 next step 生成 follow-up 草稿。</p>
+                    </div>
+                    <div class="composer__button-group">
+                        <button class="button button--ghost" id="followupButton" type="button">生成 follow-up</button>
+                        <button class="button button--ghost" id="clearFollowupButton" type="button">清除关联</button>
+                        <button class="button" id="submitTaskButton" type="submit">发布任务</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+    </main>
+
+    <aside class="rail rail--inspector">
+        <div class="rail__header rail__header--tight">
+            <div>
+                <p class="eyebrow">Live Flow</p>
+                <h2 id="inspectorTitle">选择一个任务</h2>
+            </div>
+            <button class="link-button" id="refreshTaskButton" type="button">刷新当前任务</button>
+        </div>
+
+        <div class="task-overview" id="taskOverview"></div>
+
+        <div class="action-bar" id="taskActions">
+            <button class="button button--ghost" data-task-action="continue" type="button">继续</button>
+            <button class="button button--ghost" data-task-action="pause" type="button">暂停</button>
+            <button class="button button--ghost" data-task-action="resume" type="button">恢复</button>
+            <button class="button button--ghost" data-task-action="escalate" type="button">升级</button>
+        </div>
+
+        <div class="handoff-box">
+            <label class="field">
+                <span>移交到</span>
+                <select id="handoffWorker"></select>
+            </label>
+            <button class="button button--ghost" id="handoffButton" type="button">执行 handoff</button>
+        </div>
+
+        <div class="inspector-scroll">
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>迭代链上下文</span>
+                </div>
+                <div id="chainContext"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>连续性摘要</span>
+                </div>
+                <div class="continuity-copy" id="continuitySummary"></div>
+                <div class="chip-group" id="continuityChips"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>路由与判断</span>
+                </div>
+                <div class="route-box" id="routeBox"></div>
+                <div class="decision-list" id="decisionList"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>最近产物</span>
+                </div>
+                <div class="artifact-list" id="artifactList"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>工具轨迹</span>
+                </div>
+                <div class="tool-list" id="toolList"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>原始 JSON</span>
+                </div>
+                <details class="raw-box">
+                    <summary>展开 live_flow</summary>
+                    <pre id="rawJson"></pre>
+                </details>
+            </section>
+        </div>
+    </aside>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

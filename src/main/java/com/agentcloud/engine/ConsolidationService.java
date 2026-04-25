@@ -37,23 +37,52 @@ public class ConsolidationService {
 
         // Step 1: Reactivation - 收集最近轨迹
         List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
-        List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.id(), task.id(), 20);
+        List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
         List<Event> events = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 50);
 
         // Step 2: Selection - 筛出高价值项
         List<String> keyDecisions = decisions.stream()
             .filter(d -> d.impactLevel() != null && List.of("high", "critical").contains(d.impactLevel()))
             .map(Decision::summary)
+            .filter(summary -> summary != null && !summary.isBlank())
+            .limit(5)
             .toList();
 
         List<String> keyArtifacts = artifacts.stream()
-            .map(Artifact::title)
-            .filter(t -> t != null)
+            .map(this::artifactLine)
+            .filter(line -> line != null && !line.isBlank())
+            .limit(5)
+            .toList();
+
+        List<String> openQuestions = decisions.stream()
+            .map(Decision::rationale)
+            .filter(this::looksOpenQuestion)
+            .distinct()
+            .limit(3)
+            .toList();
+
+        List<String> keyConstraints = collectKeyConstraints(task);
+
+        List<String> nextCandidates = new ArrayList<>();
+        addIfPresent(nextCandidates, task.nextStep());
+        decisions.stream()
+            .map(this::extractNextCandidate)
+            .filter(candidate -> candidate != null && !candidate.isBlank())
+            .distinct()
+            .limit(3)
+            .forEach(nextCandidates::add);
+        nextCandidates = nextCandidates.stream().distinct().limit(3).toList();
+
+        List<String> repeatedFailureHints = decisions.stream()
+            .map(Decision::rationale)
+            .filter(this::looksFailureHint)
+            .distinct()
+            .limit(3)
             .toList();
 
         // Step 3: Compression - 合并重复/低价值噪声
-        String summary = String.format("Task [%s] consolidated. %d decisions, %d artifacts, %d events reviewed.",
-            task.title(), decisions.size(), artifacts.size(), events.size());
+        String summary = buildConsolidationSummary(task, decisions.size(), artifacts.size(), events.size(),
+            openQuestions, nextCandidates, repeatedFailureHints);
 
         // Step 4: Abstraction - 提取结构化关系
         List<Map<String, String>> newRelations = new ArrayList<>();
@@ -71,15 +100,28 @@ public class ConsolidationService {
         refinedPacket.put("trigger", triggerType);
         refinedPacket.put("key_decisions", keyDecisions);
         refinedPacket.put("key_artifacts", keyArtifacts);
+        refinedPacket.put("open_questions", openQuestions);
+        refinedPacket.put("key_constraints", keyConstraints);
+        refinedPacket.put("next_candidates", nextCandidates);
+        refinedPacket.put("repeated_failure_hints", repeatedFailureHints);
+        refinedPacket.put("task_summary", firstNonBlank(task.summary(), task.title()));
+        refinedPacket.put("assigned_worker", task.assignedWorker());
         refinedPacket.put("consolidated_at", Instant.now().toString());
 
         Map<String, Object> worldModelDelta = new HashMap<>();
         worldModelDelta.put("new_relations", newRelations);
         worldModelDelta.put("stale_items", List.of());
+        worldModelDelta.put("open_questions", openQuestions);
+        worldModelDelta.put("next_candidates", nextCandidates);
 
         Checkpoint cp = new Checkpoint(
             IdGenerator.newId("cp"), task.sessionId(), task.id(), Instant.now(),
-            triggerType, summary, refinedPacket, worldModelDelta, Map.of()
+            triggerType, summary, refinedPacket, worldModelDelta,
+            Map.of(
+                "decision_count", decisions.size(),
+                "artifact_count", artifacts.size(),
+                "event_count", events.size()
+            )
         );
         checkpointDao.insert(cp);
 
@@ -89,5 +131,104 @@ public class ConsolidationService {
 
     public java.util.List<com.agentcloud.model.Checkpoint> listByTask(String taskId, int limit) {
         return checkpointDao.listByTask(taskId, limit);
+    }
+
+    private List<String> collectKeyConstraints(Task task) {
+        List<String> constraints = new ArrayList<>();
+        addIfPresent(constraints, task.priority() != null ? "priority=" + task.priority() : null);
+        addIfPresent(constraints, task.assignedWorker() != null ? "assigned_worker=" + task.assignedWorker() : null);
+        addIfPresent(constraints, task.waitingReason() != null ? "waiting_reason=" + task.waitingReason() : null);
+        if (task.metadata() != null) {
+            addIfPresent(constraints, valueLine("task_type", task.metadata().get("task_type")));
+            addIfPresent(constraints, valueLine("intent", task.metadata().get("intent")));
+            addIfPresent(constraints, valueLine("source", task.metadata().get("source")));
+        }
+        return constraints.stream().distinct().limit(5).toList();
+    }
+
+    private String buildConsolidationSummary(Task task, int decisionCount, int artifactCount, int eventCount,
+                                             List<String> openQuestions, List<String> nextCandidates,
+                                             List<String> repeatedFailureHints) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Task [").append(task.title()).append("] consolidated. ")
+            .append(decisionCount).append(" decisions, ")
+            .append(artifactCount).append(" artifacts, ")
+            .append(eventCount).append(" events reviewed.");
+        if (!openQuestions.isEmpty()) {
+            sb.append(" Open questions: ").append(String.join(" | ", openQuestions)).append(".");
+        }
+        if (!nextCandidates.isEmpty()) {
+            sb.append(" Next candidates: ").append(String.join(" | ", nextCandidates)).append(".");
+        }
+        if (!repeatedFailureHints.isEmpty()) {
+            sb.append(" Failure hints: ").append(String.join(" | ", repeatedFailureHints)).append(".");
+        }
+        return sb.toString();
+    }
+
+    private String artifactLine(Artifact artifact) {
+        if (artifact == null) {
+            return null;
+        }
+        String title = firstNonBlank(artifact.title(), artifact.artifactType());
+        String summary = firstNonBlank(artifact.summary());
+        if (title == null) {
+            return summary;
+        }
+        return summary == null ? title : title + ": " + summary;
+    }
+
+    private String extractNextCandidate(Decision decision) {
+        if (decision == null) {
+            return null;
+        }
+        if (decision.metadata() != null) {
+            Object nextStep = decision.metadata().get("next_step");
+            if (nextStep != null && !nextStep.toString().isBlank()) {
+                return nextStep.toString();
+            }
+            Object suggested = decision.metadata().get("suggested_next_action");
+            if (suggested != null && !suggested.toString().isBlank()) {
+                return suggested.toString();
+            }
+        }
+        return null;
+    }
+
+    private boolean looksOpenQuestion(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.toLowerCase();
+        return value.contains("?") || normalized.contains("need") || normalized.contains("clarif")
+            || normalized.contains("unclear");
+    }
+
+    private boolean looksFailureHint(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.toLowerCase();
+        return normalized.contains("fail") || normalized.contains("error")
+            || normalized.contains("misalign") || normalized.contains("blocked");
+    }
+
+    private String valueLine(String key, Object value) {
+        return value == null || value.toString().isBlank() ? null : key + "=" + value;
+    }
+
+    private void addIfPresent(List<String> items, String value) {
+        if (value != null && !value.isBlank()) {
+            items.add(value);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

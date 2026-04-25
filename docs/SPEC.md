@@ -11,6 +11,8 @@
 | F05 | 任务暂停与续跑包刷新 | Control Graph / Memory 模块 | `TaskHandler.handle` / `TaskService.pauseTask` | 核心 |
 | F06 | 人工升级与等待确认 | Control Graph 模块 | `TaskHandler.handle` / `TaskService.escalateTask` | 重要 |
 | F07 | 任务移交 | Control Graph / Memory 模块 | `TaskHandler.handle` / `TaskService.handoffTask` | 重要 |
+| F10 | 显式 worker 路由决策查询 | Task / Router 模块 | `TaskHandler.handle` / `TaskService.selectWorker` | 重要 |
+| F11 | 显式 handoff packet 预览 | Task / Memory 模块 | `TaskHandler.handle` / `TaskService.getHandoffPacket` | 重要 |
 | F08 | 技能注册与就绪检查 | Skill 模块 | `SkillHandler.handle` | 辅助 |
 | F09 | Checkpoint 查询 | Consolidation 模块 | `CheckpointHandler.handle` | 重要 |
 
@@ -76,7 +78,7 @@
            (packetNode)
                 |
                 v
-      (buildResumePacket in memory)
+      (buildResumePacket and persist)
                 |
                 v
     (ConsolidationService.consolidate)
@@ -93,7 +95,7 @@
 **关键代码路径**:
 1. `src/main/java/com/agentcloud/server/TaskHandler.java:47` — 暴露 pause 接口。
 2. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java:128` — 将任务改成 `paused` 并跳到 `packet` 节点。
-3. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java:91` — 构建 resume packet 并触发 consolidation。
+3. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java` — 构建并持久化 resume packet，随后触发 consolidation。
 4. `src/main/java/com/agentcloud/engine/ConsolidationService.java:31` — 汇总最近决策、产物、事件并写入 checkpoint。
 
 ### 2.3 恢复任务并重新调度
@@ -132,9 +134,15 @@
 
 图: 升级与移交流程
 
-    [GET /escalate] --> (waiting_human + human_gate) --> [等待人工]
+    [GET /escalate] --> (persist packet + checkpoint) --> (waiting_human + human_gate) --> [等待人工]
 
     [POST /handoff]
+          |
+          v
+    (build handoff packet)
+          |
+          v
+    (persist packet + checkpoint)
           |
           v
     (assigned_worker=target)
@@ -143,16 +151,14 @@
       (handoffNode)
           |
           v
-    (consolidate handoff_before)
-          |
-          v
       (回到 scheduler)
 
 **关键代码路径**:
 1. `src/main/java/com/agentcloud/server/TaskHandler.java:56` — 手工升级接口。
 2. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java:135` — 升级后进入 `human_gate`。
 3. `src/main/java/com/agentcloud/server/TaskHandler.java:64` — 移交接口读取 `target_worker`。
-4. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java:142` — 移交前创建 `handoff_before` consolidation。
+4. `src/main/java/com/agentcloud/engine/TaskService.java` — 可显式生成 handoff packet 预览。
+5. `src/main/java/com/agentcloud/engine/ControlNodeGraph.java` — 移交前会先固化 resume packet 并创建 `handoff_before` checkpoint。
 
 ## 3. 数据模型
 
@@ -253,7 +259,7 @@
 | 字段名 | 类型 | 说明 | 约束 |
 |--------|------|------|------|
 | `task_id` | TEXT | 所属任务 | FK |
-| `checkpoint_type` | TEXT | `periodic/pause_before/handoff_before/session_end` | 非空 |
+| `checkpoint_type` | TEXT | `periodic/pause_before/escalate_before/handoff_before/halt_before/session_end` | 非空 |
 | `consolidation_summary` | TEXT | 巩固摘要 | 可空 |
 | `refined_packet_json` | TEXT | 精炼包 | 可空 |
 | `world_model_delta_json` | TEXT | 关系增量 | 可空 |
@@ -280,9 +286,9 @@
 |---------|------|---------|---------|
 | `active` | `pause` | `paused` | 切到 `packet` 节点并尝试生成续跑上下文 |
 | `paused` | `resume` | `active` | 清空等待原因，重新进入 `scheduler` |
-| `active` | `escalate` | `waiting_human` | 切到 `human_gate`，等待人工确认 |
-| 任意 | `handoff` | 原状态不变 | 指定目标 worker 并先做 handoff consolidation |
-| 任意 | `halt` | `done` | 进入 `end` 节点并停止流转 |
+| `active` | `escalate` | `waiting_human` | 先固化 packet/checkpoint，再切到 `human_gate` |
+| 任意 | `handoff` | 原状态不变 | 先生成交接 packet 并固化 checkpoint，再切换 worker |
+| 任意 | `halt` | `done` | 进入 `end` 节点前先固化 packet/checkpoint |
 
 ## 5. 关键算法与策略
 
@@ -306,3 +312,10 @@
 - **用途**: 在任务切换前压缩过程记忆，产出 checkpoint。
 - **简要逻辑**: 依次执行 Reactivation、Selection、Compression、Abstraction、Integration 五步，从近 20 条决策、20 条产物和 50 条事件中抽取高价值信息，生成 `refinedPacket` 与 `worldModelDelta` 后写入 `checkpoints`。
 - **复杂度**: 受固定条数限制，近似 `O(1)`。
+
+### 5.4 Runtime Judgment 策略
+
+- **代码位置**: `src/main/java/com/agentcloud/engine/RuntimeJudgmentService.java`
+- **用途**: 在 `continue_task` 之前判断当前任务该继续、暂停、升级、移交还是停止。
+- **简要逻辑**: 当前实现是 rule-based，优先检查 `status`，再检查 `metadata.auto_halt`、`pause_requested`、`requires_human_confirmation`、`target_worker` 等信号，输出下一迁移动作。
+- **复杂度**: 只检查当前任务状态和少量 metadata，近似 `O(1)`。

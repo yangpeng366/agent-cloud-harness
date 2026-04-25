@@ -3,7 +3,6 @@ package com.agentcloud.store;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.jdbi.v3.core.Jdbi;
-import org.jdbi.v3.core.mapper.reflect.ConstructorMapper;
 import org.jdbi.v3.sqlobject.SqlObjectPlugin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.stream.Collectors;
 
-public class DatabaseManager {
+public class DatabaseManager implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(DatabaseManager.class);
     private final HikariDataSource dataSource;
     private final Jdbi jdbi;
@@ -40,6 +39,7 @@ public class DatabaseManager {
         this.jdbi.registerArgument(new InstantArgumentFactory());
         // 注册显式 RowMapper
         this.jdbi.registerRowMapper(com.agentcloud.model.Session.class, Mappers.SESSION);
+        this.jdbi.registerRowMapper(com.agentcloud.model.SessionMessage.class, Mappers.SESSION_MESSAGE);
         this.jdbi.registerRowMapper(com.agentcloud.model.Task.class, Mappers.TASK);
         this.jdbi.registerRowMapper(com.agentcloud.model.Decision.class, Mappers.DECISION);
         this.jdbi.registerRowMapper(com.agentcloud.model.Artifact.class, Mappers.ARTIFACT);
@@ -48,6 +48,8 @@ public class DatabaseManager {
         this.jdbi.registerRowMapper(com.agentcloud.model.Relation.class, Mappers.RELATION);
         this.jdbi.registerRowMapper(com.agentcloud.model.Skill.class, Mappers.SKILL);
         this.jdbi.registerRowMapper(com.agentcloud.model.Checkpoint.class, Mappers.CHECKPOINT);
+        this.jdbi.registerRowMapper(com.agentcloud.model.LearningMemory.class, Mappers.LEARNING_MEMORY);
+        this.jdbi.registerRowMapper(com.agentcloud.model.ToolInvocationRecord.class, Mappers.TOOL_INVOCATION);
 
         initSchema();
         log.info("Database initialized at {}", dbPath);
@@ -75,5 +77,6 @@ public class DatabaseManager {
 
     public Jdbi jdbi() { return jdbi; }
     public DataSource dataSource() { return dataSource; }
+    @Override
     public void close() { dataSource.close(); }
 }

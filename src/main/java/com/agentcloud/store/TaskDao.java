@@ -45,14 +45,15 @@ public interface TaskDao extends SqlObject {
     @SqlQuery("SELECT * FROM tasks ORDER BY updated_at DESC LIMIT :limit")
     List<Task> listRecent(@Bind("limit") int limit);
 
-    @SqlUpdate("UPDATE tasks SET status = :status, updated_at = :updatedAt, summary = :summary, next_step = :nextStep, assigned_worker = :assignedWorker, control_node = :controlNode, waiting_reason = :waitingReason WHERE id = :id")
+    @SqlUpdate("UPDATE tasks SET status = :status, updated_at = :updatedAt, completed_at = COALESCE(:completedAt, completed_at), summary = :summary, next_step = :nextStep, assigned_worker = :assignedWorker, control_node = :controlNode, waiting_reason = :waitingReason WHERE id = :id")
     int updateState(@Bind("id") String id, @Bind("status") String status, @Bind("updatedAt") Instant updatedAt,
+                    @Bind("completedAt") Instant completedAt,
                     @Bind("summary") String summary, @Bind("nextStep") String nextStep,
                     @Bind("assignedWorker") String assignedWorker, @Bind("controlNode") String controlNode,
                     @Bind("waitingReason") String waitingReason);
 
     default int updateState(Task t) {
-        return updateState(t.id(), t.status(), Instant.now(), t.summary(), t.nextStep(),
+        return updateState(t.id(), t.status(), Instant.now(), t.completedAt(), t.summary(), t.nextStep(),
                            t.assignedWorker(), t.controlNode(), t.waitingReason());
     }
 }

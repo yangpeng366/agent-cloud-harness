@@ -47,6 +47,18 @@ public record Task(
             workerId, controlNode, waitingReason, metadata);
     }
 
+    public Task withSummary(String newSummary) {
+        return new Task(id, sessionId, parentTaskId, title, status, priority,
+            createdAt, Instant.now(), startedAt, completedAt, ownerRole, newSummary, goal, nextStep,
+            assignedWorker, controlNode, waitingReason, metadata);
+    }
+
+    public Task withNextStep(String newNextStep) {
+        return new Task(id, sessionId, parentTaskId, title, status, priority,
+            createdAt, Instant.now(), startedAt, completedAt, ownerRole, summary, goal, newNextStep,
+            assignedWorker, controlNode, waitingReason, metadata);
+    }
+
     public Task withControlNode(String node) {
         return new Task(id, sessionId, parentTaskId, title, status, priority,
             createdAt, Instant.now(), startedAt, completedAt, ownerRole, summary, goal, nextStep,
@@ -57,5 +69,11 @@ public record Task(
         return new Task(id, sessionId, parentTaskId, title, status, priority,
             createdAt, Instant.now(), startedAt, completedAt, ownerRole, summary, goal, nextStep,
             assignedWorker, controlNode, reason, metadata);
+    }
+
+    public Task withCompletedAt(Instant newCompletedAt) {
+        return new Task(id, sessionId, parentTaskId, title, status, priority,
+            createdAt, Instant.now(), startedAt, newCompletedAt, ownerRole, summary, goal, nextStep,
+            assignedWorker, controlNode, waitingReason, metadata);
     }
 }

@@ -10,6 +10,9 @@ public record TaskCreateRequest(
     String source,      // user | schedule | resume | external_event
     String priority,    // low | medium | high
     String intent,
+    String goal,
+    String parentTaskId,
     String sessionId,
-    Map<String, Object> metadata
+    Map<String, Object> metadata,
+    Boolean autoStart
 ) {}

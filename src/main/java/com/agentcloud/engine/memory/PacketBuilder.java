@@ -45,7 +45,7 @@ public class PacketBuilder {
         payload.put("blockers", List.of());
         payload.put("key_constraints", List.of());
 
-        String nextStep = task.nextStep() != null ? task.nextStep() : "continue from current task";
+        String nextStep = resolvePacketNextStep(task);
 
         return new ResumePacket(
             java.util.UUID.randomUUID().toString(),
@@ -79,5 +79,25 @@ public class PacketBuilder {
 
         log.info("Handoff packet built for task={} from={} to={}", task.id(), fromWorker, toWorker);
         return packet;
+    }
+
+    private String resolvePacketNextStep(Task task) {
+        if (task == null) {
+            return "continue from current task";
+        }
+        if (isTerminalStatus(task.status())) {
+            return null;
+        }
+        if (task.nextStep() != null && !task.nextStep().isBlank()) {
+            return task.nextStep();
+        }
+        return "continue from current task";
+    }
+
+    private boolean isTerminalStatus(String status) {
+        if (status == null) {
+            return false;
+        }
+        return List.of("done", "failed").contains(status.toLowerCase());
     }
 }

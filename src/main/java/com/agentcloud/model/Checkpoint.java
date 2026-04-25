@@ -10,7 +10,7 @@ public record Checkpoint(
     String sessionId,
     String taskId,
     Instant createdAt,
-    String checkpointType,     // periodic | pause_before | handoff_before | session_end
+    String checkpointType,     // periodic | pause_before | escalate_before | handoff_before | halt_before | session_end
     String consolidationSummary,
     Map<String, Object> refinedPacket,
     Map<String, Object> worldModelDelta,

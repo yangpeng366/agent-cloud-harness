@@ -18,21 +18,29 @@ public class WorkerRegistry {
         // 预注册内置 worker
         register(new Worker("openclaw-native", "native-tool",
             List.of("browser", "doc", "message", "search"),
+            List.of(),
+            List.of(),
             Map.of("config_present", true, "backend_reachable", true),
-            Map.of(), true));
+            Map.of(), false, true));
         register(new Worker("codex", "codex",
             List.of("coding", "reading", "ops"),
+            List.of(),
+            List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(), true));
+            Map.of(), false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),
+            List.of(),
+            List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(), true));
+            Map.of(), true, true));
     }
 
     public void register(Worker worker) {
         workers.put(worker.workerId(), worker);
-        log.info("Worker registered: {} (type={}, caps={})", worker.workerId(), worker.workerType(), worker.capabilities());
+        log.info("Worker registered: {} (type={}, caps={}, tools={}, suggestOnly={})",
+            worker.workerId(), worker.workerType(), worker.capabilities(),
+            worker.toolCapabilities(), worker.suggestOnly());
     }
 
     public List<Worker> listAll() {
@@ -41,6 +49,16 @@ public class WorkerRegistry {
 
     public Worker get(String workerId) {
         return workers.get(workerId);
+    }
+
+    public boolean supportsTool(String workerId, String toolName) {
+        Worker worker = workers.get(workerId);
+        return worker != null && worker.toolCapabilities() != null && worker.toolCapabilities().contains(toolName);
+    }
+
+    public List<String> toolScope(String workerId) {
+        Worker worker = workers.get(workerId);
+        return worker == null || worker.toolScope() == null ? List.of() : worker.toolScope();
     }
 
     public List<Worker> findCapable(String taskType) {

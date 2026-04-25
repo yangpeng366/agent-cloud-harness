@@ -29,6 +29,17 @@ public final class Mappers {
         rs.getString("summary"), JsonMapper.fromJson(rs.getString("metadata_json"))
     );
 
+    public static final RowMapper<SessionMessage> SESSION_MESSAGE = (rs, ctx) -> new SessionMessage(
+        rs.getString("id"),
+        rs.getString("session_id"),
+        rs.getString("task_id"),
+        rs.getString("role"),
+        rs.getString("message_type"),
+        rs.getString("content"),
+        instant(rs, "created_at"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
     public static final RowMapper<Task> TASK = (rs, ctx) -> new Task(
         rs.getString("id"), rs.getString("session_id"), rs.getString("parent_task_id"),
         rs.getString("title"), rs.getString("status"), rs.getString("priority"),
@@ -91,6 +102,29 @@ public final class Mappers {
         rs.getString("consolidation_summary"),
         JsonMapper.fromJson(rs.getString("refined_packet_json")),
         JsonMapper.fromJson(rs.getString("world_model_delta_json")),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
+    public static final RowMapper<LearningMemory> LEARNING_MEMORY = (rs, ctx) -> new LearningMemory(
+        rs.getString("id"), rs.getString("session_id"), rs.getString("task_id"),
+        instant(rs, "created_at"), rs.getString("memory_type"), rs.getString("state"),
+        rs.getString("hint_key"), rs.getString("summary"),
+        rs.getDouble("confidence_score"), rs.getInt("reinforcement_count"),
+        JsonMapper.fromJson(rs.getString("evidence_json")),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
+    public static final RowMapper<ToolInvocationRecord> TOOL_INVOCATION = (rs, ctx) -> new ToolInvocationRecord(
+        rs.getString("id"),
+        rs.getString("session_id"),
+        rs.getString("task_id"),
+        rs.getString("worker_id"),
+        rs.getString("tool_name"),
+        JsonMapper.fromJson(rs.getString("arguments_json")),
+        rs.getString("result_summary"),
+        rs.getInt("success") == 1,
+        rs.getObject("elapsed_ms") != null ? rs.getInt("elapsed_ms") : null,
+        instant(rs, "created_at"),
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
 }

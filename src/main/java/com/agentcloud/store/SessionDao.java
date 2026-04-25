@@ -39,6 +39,9 @@ public interface SessionDao extends SqlObject {
     int updateState(@Bind("id") String id, @Bind("status") String status, @Bind("updatedAt") Instant updatedAt,
                     @Bind("currentTaskId") String currentTaskId, @Bind("summary") String summary);
 
+    @SqlUpdate("UPDATE sessions SET updated_at = :updatedAt WHERE id = :id")
+    int touch(@Bind("id") String id, @Bind("updatedAt") Instant updatedAt);
+
     default List<Session> listActive() {
         return listByStatus("active");
     }

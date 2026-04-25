@@ -73,6 +73,7 @@ agent-cloud-harness/
                               | Service / Engine      |
                               | TaskService           |
                               | SessionService        |
+                              | RuntimeJudgmentService|
                               | SkillRegistry         |
                               +-----------------------+
                                         |
@@ -106,6 +107,7 @@ agent-cloud-harness/
 | 接入层 | `src/main/java/com/agentcloud/server` | 暴露 HTTP API、解析请求、序列化响应 | `NioHttpServer`, `TaskHandler` |
 | 应用层 | `src/main/java/com/agentcloud/engine` | 编排任务生命周期、会话管理、技能注册 | `TaskService`, `SessionService`, `ControlNodeGraph` |
 | 路由与记忆层 | `src/main/java/com/agentcloud/engine/router`, `engine/memory` | Worker 选择、续跑包构建、上下文重建 | `WorkerRouter`, `PacketBuilder` |
+| 工具执行层 | `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool` | 统一 worker 执行入口、tool-aware 执行器、受控本地文件工具 | `WorkerExecutorRouter`, `ToolAwareWorkerExecutor`, `ToolPolicy` |
 | 数据层 | `src/main/java/com/agentcloud/store` | 初始化数据库、DAO 查询与写入、行映射 | `DatabaseManager`, `TaskDao` |
 | 领域模型层 | `src/main/java/com/agentcloud/model` | 定义 API 与存储共享的数据结构 | `Task`, `Session`, `Checkpoint` |
 
@@ -138,9 +140,11 @@ agent-cloud-harness/
 
 - **目录**: `src/main/java/com/agentcloud/engine`
 - **职责**: 该模块是业务核心，负责接收任务请求、驱动任务状态流转、触发暂停/恢复/移交/升级等控制动作。它通过 `ControlNodeGraph` 把任务生命周期拆成多个控制节点，用显式状态机替代分散在各处的条件分支。它还负责记录事件和会话当前任务，从而维持整个会话视角的一致性。
+- **补充说明**: 最新实现增加了一个最小 `RuntimeJudgmentService`，专门在 `continue` 前做规则式迁移判断，用来承接设计稿里的 judgment layer。
 - **入口文件**: `src/main/java/com/agentcloud/engine/TaskService.java`
 - **核心类/函数**:
   - `TaskService.createTask` — 自动建会话、写入任务与事件，并进入控制图。
+  - `RuntimeJudgmentService.judge` — 在继续推进前判断下一状态迁移。
   - `ControlNodeGraph.enter` — 根据 `control_node` 派发到具体节点逻辑。
   - `ConsolidationService.consolidate` — 在关键切换点生成 checkpoint 与摘要。
   - `SessionService` — 提供会话基础 CRUD 与当前任务维护。
@@ -160,7 +164,19 @@ agent-cloud-harness/
 - **对外提供**: worker 路由、resume/handoff 包构建、上下文恢复。
 - **依赖**: `store`, `model`
 
-### 5.5 存储模块
+### 5.5 Worker 执行与工具模块
+
+- **目录**: `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool`
+- **职责**: 该模块负责把“选中 worker 后如何执行一轮”正式收口。`WorkerExecutorRouter` 会根据 worker 合同在普通执行器和 tool-aware 执行器之间分流；`ToolAwareWorkerExecutor` 当前实现了一版最小双阶段协议，先让 LLM 判断是否需要单次工具调用，再基于工具结果收敛最终输出。`ToolPolicy` 和本地文件工具则负责把副作用限制在声明式 scope 内，并把工具调用沉淀到 `tool_invocations`。
+- **核心类/函数**:
+  - `WorkerExecutorRouter.executeOneRound` — 按 `suggest_only` 与 `tool_capabilities` 选择执行路径。
+  - `ToolAwareWorkerExecutor.executeOneRound` — 执行 `planning -> invoke -> finalization`。
+  - `ToolPolicy.resolveAllowedPath` — 校验访问路径必须落在 worker 声明的 scope 内。
+  - `ListFilesTool` / `SearchTextTool` / `ReadFileTool` / `WriteFileTool` — 第一版受控本地文件工具。
+- **对外提供**: 单轮 worker 执行门面、最小工具执行能力、工具调用轨迹。
+- **依赖**: `llm`, `engine/router`, `store`, `model`
+
+### 5.6 存储模块
 
 - **目录**: `src/main/java/com/agentcloud/store`, `src/main/resources`
 - **职责**: 该模块负责数据库初始化、类型映射、SQL Object DAO 定义和 schema 管理。它为上层提供稳定的会话、任务、决策、产物、事件、关系、技能、checkpoint 持久化接口。项目当前所有状态都落在单个本地 SQLite 文件中，因此该模块直接影响数据可靠性和并发特性。
@@ -205,7 +221,7 @@ agent-cloud-harness/
         |                +------------> ConsolidationService
         |                                  |
         +----------------------------------v
-                          [SQLite sessions/tasks/events/...]
+                          [SQLite sessions/tasks/events/tool_invocations/...]
         ^
         |
     [JSON 响应]
