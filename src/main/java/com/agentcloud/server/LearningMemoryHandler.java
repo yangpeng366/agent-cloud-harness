@@ -40,7 +40,7 @@ class LearningMemoryHandler implements HttpHandler {
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(list));
                     return;
                 }
-                NioHttpServer.sendJson(ex, 400, ApiResponse.error("400", "task_id or memory_type is required"));
+                NioHttpServer.sendBadRequest(ex, "task_id or memory_type is required");
                 return;
             }
 
@@ -52,10 +52,13 @@ class LearningMemoryHandler implements HttpHandler {
                 return;
             }
 
-            NioHttpServer.sendJson(ex, 405, ApiResponse.error("405", "method not allowed"));
+            NioHttpServer.sendMethodNotAllowed(ex);
+        } catch (IllegalArgumentException e) {
+            log.warn("LearningMemoryHandler validation error: {}", e.getMessage());
+            NioHttpServer.sendIllegalArgument(ex, e);
         } catch (Exception e) {
             log.error("LearningMemoryHandler error", e);
-            NioHttpServer.sendJson(ex, 500, ApiResponse.error("500", e.getMessage()));
+            NioHttpServer.sendInternalError(ex);
         }
     }
 

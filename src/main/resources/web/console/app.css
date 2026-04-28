@@ -284,6 +284,8 @@ button {
 .session-card,
 .overview-card,
 .route-box,
+.experiment-mode-card,
+.experiment-case-card,
 .artifact-item,
 .decision-item,
 .tool-item,
@@ -755,6 +757,49 @@ button {
 .tool-list {
     display: grid;
     gap: 10px;
+}
+
+.experiment-summary {
+    display: grid;
+    gap: 12px;
+}
+
+.experiment-summary__grid,
+.experiment-summary__case-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+}
+
+.experiment-mode-card,
+.experiment-case-card {
+    padding: 13px 14px;
+}
+
+.experiment-mode-card.is-current,
+.experiment-case-card.is-current {
+    border-color: rgba(31, 122, 105, 0.35);
+    background: linear-gradient(180deg, rgba(31, 122, 105, 0.08), rgba(255, 252, 246, 0.94));
+}
+
+.experiment-mode-card strong,
+.experiment-case-card strong {
+    display: block;
+    margin: 8px 0 6px;
+    line-height: 1.45;
+    color: var(--ink);
+}
+
+.experiment-mode-card p,
+.experiment-case-card p,
+.route-box p {
+    margin: 0;
+    color: var(--ink-soft);
+    line-height: 1.55;
+}
+
+.experiment-summary__chips {
+    margin-top: 0;
 }
 
 .chain-context {

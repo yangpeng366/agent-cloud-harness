@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Archiver-Version: Plexus Archiver
+Created-By: Apache Maven 3.6.0
+Built-By: admin
+Build-Jdk: 21.0.9
+Main-Class: com.agentcloud.cli.Main
+

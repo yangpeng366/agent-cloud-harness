@@ -2,6 +2,7 @@ package com.agentcloud.server;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.ApiResponse;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -38,7 +39,7 @@ class WorkerHandler implements HttpHandler {
             } else if ("GET".equals(method) && path.matches("/api/v1/workers/[^/]+")) {
                 String id = NioHttpServer.pathVar(ex, 4);
                 var w = registry.get(id);
-                if (w == null) NioHttpServer.sendJson(ex, 404, ApiResponse.error("404", "not found"));
+                if (w == null) NioHttpServer.sendNotFound(ex);
                 else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(w));
             } else if ("GET".equals(method) && path.matches("/api/v1/workers/[^/]+/readiness")) {
                 String id = NioHttpServer.pathVar(ex, 4);
@@ -60,14 +61,17 @@ class WorkerHandler implements HttpHandler {
                 registry.register(w);
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(w));
             } else {
-                NioHttpServer.sendJson(ex, 405, ApiResponse.error("405", "method not allowed"));
+                NioHttpServer.sendMethodNotAllowed(ex);
             }
+        } catch (JsonProcessingException e) {
+            log.warn("WorkerHandler invalid json: {}", e.getOriginalMessage());
+            NioHttpServer.sendMalformedJson(ex);
         } catch (IllegalArgumentException e) {
             log.warn("WorkerHandler validation error: {}", e.getMessage());
-            NioHttpServer.sendJson(ex, 400, ApiResponse.error("400", e.getMessage()));
+            NioHttpServer.sendIllegalArgument(ex, e);
         } catch (Exception e) {
             log.error("WorkerHandler error", e);
-            NioHttpServer.sendJson(ex, 500, ApiResponse.error("500", "internal error"));
+            NioHttpServer.sendInternalError(ex);
         }
     }
 

@@ -5,3 +5,5 @@ target/
 .settings/
 .idea/
 .vscode/
+.tmp/
+target/

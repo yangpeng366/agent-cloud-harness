@@ -2,13 +2,13 @@
 
 ## 1. Gotchas — 已知坑点
 
-### G01: 多个状态变更接口使用 GET
+### G01: 控制动作接口处于 GET/POST 双兼容期
 
-- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java:47`, `:50`, `:53`, `:56`; `src/main/java/com/agentcloud/server/SessionHandler.java:42`
-- **现象**: 代理、浏览器预取、缓存层或某些 API 网关可能把这些请求当成幂等读操作处理，造成意外状态变更。
-- **原因**: `pause/resume/continue/escalate/close` 都暴露成 GET，而非 POST/PATCH。
-- **规避方式**: 外部接入时禁用预取和缓存；正式化接口前建议改成 POST 或 PATCH。
-- **代码证据**: handler 直接在 GET 分支里执行写操作。
+- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java`; `src/main/java/com/agentcloud/server/SessionHandler.java:42`
+- **现象**: 任务控制动作已经有正式 `POST` 接口，但历史 `GET` 兼容路径仍在；如果外部继续调用旧 `GET`，仍可能被预取或缓存层误触发。
+- **原因**: 为兼容旧调用方，`pause/resume/continue/escalate` 暂未立即删除 GET 分支。
+- **规避方式**: 新接入统一改用 `POST /api/v1/tasks/{id}/pause|resume|continue|escalate`；仅把 GET 当作过渡兼容。
+- **代码证据**: handler 同时保留 `POST` 正式入口与 `GET` 兼容分支。
 
 ### G02: 任务列表过滤键名存在双写兼容期
 
@@ -64,7 +64,39 @@
   3. 对照 `WorkerRouter.selectWorker` 的筛选规则。
 - **解决方案**: 创建任务时明确传 `task_type`，并为 worker 正确注册 capability。
 
-### 2.4 `/tool_trace` 为空，或 `live_flow` 中没有工具轨迹
+### 2.4 `/dialogue/` 里消息已写入，但页面不显示
+
+- **典型表现**: `POST /api/v1/sessions/{id}/messages` 返回成功，但 `/dialogue/` 中间的消息流或右侧 `Related Messages` 仍然为空。
+- **可能原因**:
+  1. 当前页面选中的 `session` 不是消息实际写入的那个 session
+  2. 消息绑定了 `task_id`，但当前右侧查看的是另一个 task
+  3. 前端 URL hash 仍锁在旧的 `session/task`
+  4. 刚执行了任务动作，但页面还没刷新最新的 `assistant/system` 回执
+  5. 本轮任务并没有产出新的 `summary / next_step`，所以不会额外生成 `task_progress`
+  6. 上半区消息过滤器当前切到了 `assistant`、`system` 或 `task-only/session-only`，把目标消息筛掉了
+- **排查步骤**:
+  1. 先直接调用 `GET /api/v1/sessions/{id}/messages?limit=20`，确认消息已落库
+  2. 如果看 `Related Messages`，再调用 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`
+  3. 确认 `/dialogue/` 左侧当前选中的 session 与 API 返回的 `session_id` 一致
+  4. 刷新页面，或清掉 URL hash 后重新选择 session/task
+  5. 如果是刚执行 `pause/resume/continue/handoff`，确认当前页面是否已重新拉取消息列表
+  6. 检查上半区过滤器是否处于 `all + all`，先排除前端筛选造成的“假空列表”
+- **解决方案**: 优先确认 session/task 选中态是否正确；若是通过任务表单自动镜像的消息，确认任务创建后页面是否已经切换到了新 task 所在 session。
+
+### 2.4.1 只有 `task_receipt / task_action / task_state`，没有 `task_progress / task_result`
+
+- **典型表现**: `/dialogue/` 已经能看到任务回执，但看不到更像“assistant 进展播报”的消息。
+- **可能原因**:
+  1. 本轮动作并没有触发新的执行推进，例如只做了普通状态更新
+  2. runtime 里没有可用的 `summary / judgment / artifact / next_step`
+  3. 任务尚未进入 `done / failed`，因此不会产生 `task_result`
+- **排查步骤**:
+  1. 先查 `GET /api/v1/tasks/{id}/live_flow?limit=8`，确认 `task.summary`、`judgment_trace`、`runtime_context.active_context` 是否已有可读内容
+  2. 再查 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`，确认该 task 已经收到了哪些 message type
+  3. 对照本次动作是否属于 `auto_start / resume / continue / handoff`
+- **解决方案**: 先确认这轮是否真的推进了执行链；若只是普通状态切换，只看到 `task_state` 是符合当前实现的。若要稳定出现 `task_progress`，需要让任务在本轮产出摘要或下一步建议。
+
+### 2.5 `/tool_trace` 为空，或 `live_flow` 中没有工具轨迹
 
 - **典型表现**: 任务执行过后，`/api/v1/tasks/{id}/tool_trace` 返回空数组，或 `/api/v1/tasks/{id}/live_flow` 中 `tool_invocations` 为空。
 - **可能原因**:
@@ -79,7 +111,7 @@
   4. 查看服务日志中的 tool planning / tool invocation 相关输出
 - **解决方案**: 优先确认任务是否路由到了真正的 tool-aware worker；若只是试点验证，建议直接按 `docs/LOCAL_DOC_WORKER_PILOT.md` 使用自定义 `task_type=local_doc`。
 
-### 2.5 本地文档试点任务没有命中 `kimi-local-doc`
+### 2.6 本地文档试点任务没有命中 `kimi-local-doc`
 
 - **典型表现**: 明明注册了 `kimi-local-doc`，但任务仍然分给了内置 `doc` worker。
 - **可能原因**:
@@ -92,7 +124,7 @@
   3. 对照 `docs/LOCAL_DOC_WORKER_PILOT.md` 的脚本参数和示例负载
 - **解决方案**: 试点阶段优先使用 `local_doc`，避免和内置 `doc` capability 发生路由竞争。
 
-### 2.6 `mvn package` 直接报“无效的目标发行版: 21”
+### 2.7 `mvn package` 直接报“无效的目标发行版: 21”
 
 - **典型表现**: Maven 在编译阶段直接失败，报错类似 `invalid target release: 21` 或 `无效的目标发行版: 21`。
 - **可能原因**:
@@ -122,7 +154,7 @@ mvn -v
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
 ```
 
-### 2.7 新打出来的 shaded JAR 能启动，但 `/health` 或其他 JSON 接口直接报 `BufferRecyclers`
+### 2.8 新打出来的 shaded JAR 能启动，但 `/health` 或其他 JSON 接口直接报 `BufferRecyclers`
 
 - **典型表现**:
   1. 服务启动日志正常，端口也能监听

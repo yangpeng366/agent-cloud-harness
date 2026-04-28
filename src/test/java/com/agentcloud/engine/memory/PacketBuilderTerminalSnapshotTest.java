@@ -14,6 +14,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PacketBuilderTerminalSnapshotTest {
 
@@ -38,6 +39,11 @@ class PacketBuilderTerminalSnapshotTest {
         var packet = builder.buildResumePacket(task, session);
 
         assertEquals("done", packet.payload().get("task_status"));
+        assertEquals("done", packet.currentStatus());
+        assertEquals("end", packet.currentNode());
+        assertEquals("finished summary", packet.latestSummary());
+        assertEquals("task_1", packet.taskIdentity().taskId());
+        assertTrue(packet.blockers().isEmpty());
         assertNull(packet.nextStep());
     }
 

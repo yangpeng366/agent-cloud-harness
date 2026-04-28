@@ -56,9 +56,13 @@ public class Main {
         LearningMemoryDao learningMemoryDao = db.jdbi().onDemand(LearningMemoryDao.class);
         ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
         SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
+        ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
 
         // 引擎
         LearningMemoryService learningMemoryService = new LearningMemoryService(learningMemoryDao);
+        ExperimentRunService experimentRunService = new ExperimentRunService(
+            experimentRunDao, decisionDao, artifactDao, eventDao, toolInvocationDao
+        );
         WorkerRegistry workerRegistry = new WorkerRegistry();
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
         PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao);
@@ -121,16 +125,19 @@ public class Main {
         SkillRegistry skillRegistry = new SkillRegistry(skillDao);
         SkillRouter skillRouter = new SkillRouter(skillRegistry);
 
-        SessionService sessionService = new SessionService(sessionDao, taskDao, sessionMessageDao);
+        SessionService sessionService = new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao);
         TaskService taskService = new TaskService(
             taskDao, sessionDao, eventDao, packetDao, workerRouter, packetBuilder, controlGraph,
-            runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao
+            runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao,
+            sessionMessageDao, experimentRunService
         );
+        ExperimentMatrixService experimentMatrixService = new ExperimentMatrixService(taskService, experimentRunService);
 
         // NIO HTTP Server (虚拟线程)
         int port = Integer.parseInt(System.getProperty("server.port", "8080"));
         NioHttpServer server = new NioHttpServer(
-            port, taskService, sessionService, workerRegistry, skillRegistry, consolidation, learningMemoryService
+            port, taskService, sessionService, workerRegistry, skillRegistry, consolidation, learningMemoryService,
+            experimentRunService, experimentMatrixService
         );
         server.start();
 
@@ -141,6 +148,8 @@ public class Main {
         log.info("  GET  /api/v1/sessions       - list sessions");
         log.info("  GET  /api/v1/sessions/{id}/messages - list session messages");
         log.info("  POST /api/v1/sessions/{id}/messages - append session message");
+        log.info("  POST /api/v1/sessions/{id}/pause   - pause session");
+        log.info("  POST /api/v1/sessions/{id}/resume  - resume session");
         log.info("  POST /api/v1/tasks          - create task");
         log.info("  GET  /api/v1/tasks          - list tasks");
         log.info("  GET  /api/v1/tasks/{id}     - get task");
@@ -149,14 +158,16 @@ public class Main {
         log.info("  GET  /api/v1/tasks/{id}/runtime_context - inspect working memory/runtime context");
         log.info("  GET  /api/v1/tasks/{id}/judgment_trace - inspect latest execution/completion judgment");
         log.info("  GET  /api/v1/tasks/{id}/live_flow - inspect aggregated live flow diagnostics");
+        log.info("  GET  /api/v1/tasks/{id}/experiment_run - inspect persisted experiment metrics");
         log.info("  GET  /api/v1/tasks/{id}/tool_trace - inspect recent tool invocation trace");
-        log.info("  GET  /api/v1/tasks/{id}/pause      - pause task");
-        log.info("  GET  /api/v1/tasks/{id}/resume     - resume task");
-        log.info("  GET  /api/v1/tasks/{id}/continue   - continue task");
-        log.info("  GET  /api/v1/tasks/{id}/escalate   - escalate task");
+        log.info("  POST /api/v1/tasks/{id}/pause      - pause task");
+        log.info("  POST /api/v1/tasks/{id}/resume     - resume task");
+        log.info("  POST /api/v1/tasks/{id}/continue   - continue task");
+        log.info("  POST /api/v1/tasks/{id}/escalate   - escalate task");
         log.info("  GET  /api/v1/tasks/{id}/refresh_packet - refresh resume packet");
         log.info("  GET  /api/v1/tasks/{id}/handoff_packet - preview handoff packet");
         log.info("  POST /api/v1/tasks/{id}/handoff    - handoff task");
+        log.info("  POST /api/v1/sessions/{id}/close   - close session");
         log.info("  GET  /api/v1/workers        - list workers");
         log.info("  GET  /api/v1/workers/{id}/readiness - check readiness");
         log.info("  GET  /api/v1/skills         - list skills");
@@ -165,6 +176,11 @@ public class Main {
         log.info("  GET  /api/v1/checkpoints/{taskId} - list checkpoints");
         log.info("  GET  /api/v1/learning_memories/{taskId} - list learning memories by task");
         log.info("  GET  /api/v1/learning_memories?memory_type=... - list learning memories by type");
+        log.info("  GET  /api/v1/experiment_runs - list experiment runs");
+        log.info("  GET  /api/v1/experiment_runs/{taskId} - inspect experiment run by task");
+        log.info("  GET  /api/v1/experiment_matrix/cases - list built-in baseline matrix cases");
+        log.info("  POST /api/v1/experiment_matrix/runs - create comparable baseline runs");
+        log.info("  GET  /api/v1/experiment_matrix/summary?experiment_name=... - summarize matrix results");
         log.info("  GET  /api/v1/health         - health check");
 
         // 保持运行

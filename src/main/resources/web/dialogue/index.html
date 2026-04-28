@@ -69,6 +69,55 @@
             </div>
         </header>
 
+        <section class="message-panel">
+            <div class="message-panel__header">
+                <div>
+                    <h3>Session Messages</h3>
+                    <p id="messagePanelHint">在当前 session 下记录上下文消息，再把需要执行的内容发布成 task。</p>
+                </div>
+            </div>
+            <div class="message-panel__controls">
+                <div class="filter-group" id="messageRoleFilters" aria-label="message role filters">
+                    <button class="filter-chip is-active" type="button" data-filter-group="role" data-filter-value="all">all</button>
+                    <button class="filter-chip" type="button" data-filter-group="role" data-filter-value="user">user</button>
+                    <button class="filter-chip" type="button" data-filter-group="role" data-filter-value="assistant">assistant</button>
+                    <button class="filter-chip" type="button" data-filter-group="role" data-filter-value="system">system</button>
+                </div>
+                <div class="filter-group" id="messageScopeFilters" aria-label="message scope filters">
+                    <button class="filter-chip is-active" type="button" data-filter-group="scope" data-filter-value="all">all</button>
+                    <button class="filter-chip" type="button" data-filter-group="scope" data-filter-value="task-only">task-only</button>
+                    <button class="filter-chip" type="button" data-filter-group="scope" data-filter-value="session-only">session-only</button>
+                </div>
+            </div>
+            <div class="message-panel__body">
+                <div class="message-stream">
+                    <div class="message-summary" id="messageSummary"></div>
+                    <div class="message-list" id="messageList"></div>
+                </div>
+                <form class="message-composer" id="messageForm">
+                    <label class="field field--textarea">
+                        <span>消息内容</span>
+                        <textarea id="messageContent" rows="3" placeholder="先记一条补充说明、约束、选题判断，或把下一轮草稿沉淀为 session message。"></textarea>
+                    </label>
+                    <div class="message-composer__footer">
+                        <div class="message-composer__context">
+                            <span>消息会话</span>
+                            <strong id="messageSessionLabel">自动创建</strong>
+                            <p id="messageHint">未选中 session 时，会按第一条消息自动创建会话；可选把消息关联到当前 task。</p>
+                        </div>
+                        <div class="message-composer__actions">
+                            <label class="toggle-pill toggle-pill--compact">
+                                <input id="messageAttachTask" type="checkbox" checked>
+                                <span>关联当前任务</span>
+                            </label>
+                            <button class="button button--ghost" id="clearMessageButton" type="button">清空消息</button>
+                            <button class="button" type="submit">记录消息</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </section>
+
         <section class="thread-panel">
             <div class="thread-panel__header">
                 <div>
@@ -177,6 +226,13 @@
 
             <section class="details-card">
                 <div class="section-title">
+                    <span>Related Messages</span>
+                </div>
+                <div class="stack-list" id="relatedMessages"></div>
+            </section>
+
+            <section class="details-card">
+                <div class="section-title">
                     <span>连续性摘要</span>
                 </div>
                 <div class="rich-copy" id="continuitySummary"></div>
@@ -189,6 +245,13 @@
                 </div>
                 <div class="route-box" id="routeBox"></div>
                 <div class="stack-list" id="decisionList"></div>
+            </section>
+
+            <section class="details-card">
+                <div class="section-title">
+                    <span>实验对比</span>
+                </div>
+                <div id="experimentSummary"></div>
             </section>
 
             <section class="details-card">

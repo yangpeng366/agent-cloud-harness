@@ -1,0 +1,462 @@
+package com.agentcloud.engine;
+
+import com.agentcloud.model.BaselineTaskCase;
+import com.agentcloud.model.ExperimentMatrixBatch;
+import com.agentcloud.model.ExperimentMatrixCreateRequest;
+import com.agentcloud.model.ExperimentMatrixSummary;
+import com.agentcloud.model.ExperimentRunRecord;
+import com.agentcloud.model.Task;
+import com.agentcloud.model.TaskCreateRequest;
+
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * 提供最小 baseline matrix 的固定任务集、批量建 run 与结果汇总。
+ */
+public class ExperimentMatrixService {
+    private static final List<String> SUPPORTED_MODES = List.of("strong_only", "small_only", "orchestrated");
+    private static final List<BaselineTaskCase> BASELINE_CASES = List.of(
+        baselineCase(
+            "short-001",
+            "Fix a small regression in task routing and add one assertion",
+            "short",
+            "Locate a compact routing regression and describe the smallest safe fix.",
+            "Produce a concise fix plan and the exact assertion that should be added."
+        ),
+        baselineCase(
+            "short-002",
+            "Explain a failing single-path test and propose the minimal code change",
+            "short",
+            "Inspect one failing path and identify the direct cause.",
+            "Return a short explanation plus the smallest code-level fix."
+        ),
+        baselineCase(
+            "short-003",
+            "Refactor one helper into a reusable method without changing behavior",
+            "short",
+            "Reduce duplication around a small helper while preserving runtime behavior.",
+            "Provide the refactor outline and the unchanged behavior guarantees."
+        ),
+        baselineCase(
+            "medium-001",
+            "Add one diagnostics endpoint and cover it with a regression test",
+            "medium",
+            "Implement a focused endpoint addition with enough verification to prevent regressions.",
+            "Deliver the endpoint contract, expected data shape, and required test coverage."
+        ),
+        baselineCase(
+            "medium-002",
+            "Trace worker selection metadata across one execution lifecycle",
+            "medium",
+            "Follow the runtime metadata path from routing to output artifacts.",
+            "Explain where the trace fields should be written and how they should be verified."
+        ),
+        baselineCase(
+            "medium-003",
+            "Harden pause and resume behavior with one packet-oriented regression test",
+            "medium",
+            "Check continuity behavior around packet generation and resume handoff.",
+            "Describe the bug surface, the safe fix, and the regression test."
+        ),
+        baselineCase(
+            "long-001",
+            "Complete a multi-step orchestration improvement across routing, execution, and validation",
+            "long",
+            "Plan and sequence a strong-planner to small-executor runtime change that spans multiple components.",
+            "Produce a phased implementation brief with execution order, risk points, and validation checkpoints."
+        ),
+        baselineCase(
+            "long-002",
+            "Design an experiment comparison pipeline for strong, small, and orchestrated modes",
+            "long",
+            "Define how the same task should be replayed in three modes and compared on stable metrics.",
+            "Return the run plan, the comparison fields, and the expected output format."
+        ),
+        baselineCase(
+            "long-003",
+            "Stabilize resume and handoff continuity for an interrupted long-running task",
+            "long",
+            "Handle interruption, recovery, and worker transfer without losing execution context.",
+            "Provide the recovery steps, handoff boundaries, and the criteria for successful continuation."
+        )
+    );
+
+    private final TaskService taskService;
+    private final ExperimentRunService experimentRunService;
+
+    public ExperimentMatrixService(TaskService taskService, ExperimentRunService experimentRunService) {
+        this.taskService = taskService;
+        this.experimentRunService = experimentRunService;
+    }
+
+    public List<BaselineTaskCase> listBaselineCases() {
+        return BASELINE_CASES;
+    }
+
+    public List<String> supportedModes() {
+        return SUPPORTED_MODES;
+    }
+
+    public ExperimentMatrixBatch createBaselineRuns(ExperimentMatrixCreateRequest request) {
+        String experimentName = firstNonBlank(
+            request != null ? request.experimentName() : null,
+            IdGenerator.newId("experiment")
+        );
+        List<String> modes = resolveModes(request != null ? request.modes() : null);
+        List<BaselineTaskCase> taskCases = resolveCases(request != null ? request.caseKeys() : null);
+        boolean autoStart = request != null && Boolean.TRUE.equals(request.autoStart());
+        String priority = request != null ? request.priority() : "high";
+        String source = request != null ? request.source() : "eval";
+        Map<String, Object> extraMetadata = request != null ? request.metadata() : Map.of();
+
+        List<Task> created = new ArrayList<>();
+        for (BaselineTaskCase taskCase : taskCases) {
+            for (String mode : modes) {
+                LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+                metadata.putAll(taskCase.metadata());
+                metadata.putAll(extraMetadata);
+                metadata.put("experiment_name", experimentName);
+                metadata.put("task_case_key", taskCase.caseKey());
+                metadata.put("task_length_bucket", taskCase.taskLengthBucket());
+                metadata.put("model_mode", mode);
+                metadata.put("baseline_matrix_source", "baseline_v1");
+                metadata.put("baseline_case_title", taskCase.title());
+                metadata.put("baseline_case_version", "v1");
+
+                Task createdTask = taskService.createTask(new TaskCreateRequest(
+                    taskCase.title() + " [" + mode + "]",
+                    taskCase.taskType(),
+                    source,
+                    priority,
+                    taskCase.intent(),
+                    taskCase.goal(),
+                    null,
+                    null,
+                    metadata,
+                    autoStart
+                ));
+                created.add(createdTask);
+            }
+        }
+        return new ExperimentMatrixBatch(
+            experimentName,
+            taskCases.stream().map(BaselineTaskCase::caseKey).toList(),
+            modes,
+            created.size(),
+            created
+        );
+    }
+
+    public ExperimentMatrixSummary summarizeExperiment(String experimentName) {
+        String normalizedExperimentName = blankToNull(experimentName);
+        if (normalizedExperimentName == null) {
+            throw new IllegalArgumentException("experiment_name is required");
+        }
+        List<ExperimentRunRecord> runs = experimentRunService.listRuns(normalizedExperimentName, null, null, null, 200);
+
+        List<ExperimentMatrixSummary.ModeSummary> modeSummaries = new ArrayList<>();
+        for (String mode : SUPPORTED_MODES) {
+            List<ExperimentRunRecord> runsByMode = runs.stream()
+                .filter(run -> mode.equals(run.modelMode()))
+                .toList();
+            int runCount = runsByMode.size();
+            int completedCount = (int) runsByMode.stream()
+                .filter(run -> "done".equalsIgnoreCase(run.completionStatus()))
+                .count();
+            int acceptedCount = (int) runsByMode.stream()
+                .filter(run -> "accepted".equalsIgnoreCase(run.acceptanceResult()))
+                .count();
+            int rejectedCount = (int) runsByMode.stream()
+                .filter(run -> "rejected".equalsIgnoreCase(run.acceptanceResult()))
+                .count();
+            int needsFollowupCount = (int) runsByMode.stream()
+                .filter(run -> "needs_followup".equalsIgnoreCase(run.acceptanceResult()))
+                .count();
+            double totalCost = roundToThree(runsByMode.stream()
+                .map(ExperimentRunRecord::totalCost)
+                .filter(value -> value != null)
+                .mapToDouble(Double::doubleValue)
+                .sum());
+            int totalHandoffs = runsByMode.stream()
+                .map(ExperimentRunRecord::handoffCount)
+                .filter(value -> value != null)
+                .mapToInt(Integer::intValue)
+                .sum();
+            int totalResumes = runsByMode.stream()
+                .map(ExperimentRunRecord::resumeCount)
+                .filter(value -> value != null)
+                .mapToInt(Integer::intValue)
+                .sum();
+            int totalHumanGates = runsByMode.stream()
+                .map(ExperimentRunRecord::humanGateCount)
+                .filter(value -> value != null)
+                .mapToInt(Integer::intValue)
+                .sum();
+            int runsWithRouteData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataString(metadata, "route_source"))
+                .filter(value -> value != null && !value.isBlank())
+                .count();
+            int runsWithLearningHint = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataString(metadata, "preferred_worker_hint"))
+                .filter(value -> value != null && !value.isBlank())
+                .count();
+            int learningHintAppliedCount = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "learning_hint_applied"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double learningHintAppliedRate = runsWithLearningHint == 0
+                ? 0.0
+                : roundToThree((double) learningHintAppliedCount / runsWithLearningHint);
+            List<Integer> observedToolChainSteps = runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataInt(metadata, "tool_chain_step_count"))
+                .filter(value -> value != null && value >= 0)
+                .toList();
+            int runsWithToolChainData = observedToolChainSteps.size();
+            double averageToolChainStepCount = runsWithToolChainData == 0
+                ? 0.0
+                : roundToThree(observedToolChainSteps.stream().mapToInt(Integer::intValue).average().orElse(0.0));
+            int maxToolChainStepCount = observedToolChainSteps.stream()
+                .mapToInt(Integer::intValue)
+                .max()
+                .orElse(0);
+            Map<String, Integer> routeSourceCounts = countMetadataValues(runsByMode, "route_source");
+            Map<String, Integer> toolExecutionModeCounts = countMetadataValues(runsByMode, "tool_execution_mode");
+            Map<String, Integer> toolChainTerminationReasonCounts = countMetadataValues(
+                runsByMode, "tool_chain_termination_reason"
+            );
+            double averageCost = runCount == 0 ? 0.0 : roundToThree(totalCost / runCount);
+            double completionRate = runCount == 0 ? 0.0 : roundToThree((double) completedCount / runCount);
+            double acceptanceRate = runCount == 0 ? 0.0 : roundToThree((double) acceptedCount / runCount);
+            modeSummaries.add(new ExperimentMatrixSummary.ModeSummary(
+                mode,
+                runCount,
+                completedCount,
+                acceptedCount,
+                rejectedCount,
+                needsFollowupCount,
+                totalCost,
+                averageCost,
+                totalHandoffs,
+                totalResumes,
+                totalHumanGates,
+                completionRate,
+                acceptanceRate,
+                runsWithRouteData,
+                runsWithLearningHint,
+                learningHintAppliedCount,
+                learningHintAppliedRate,
+                routeSourceCounts,
+                runsWithToolChainData,
+                averageToolChainStepCount,
+                maxToolChainStepCount,
+                toolExecutionModeCounts,
+                toolChainTerminationReasonCounts
+            ));
+        }
+
+        Map<String, List<ExperimentRunRecord>> runsByCaseKey = runs.stream()
+            .collect(Collectors.groupingBy(
+                ExperimentRunRecord::taskCaseKey,
+                LinkedHashMap::new,
+                Collectors.toList()
+            ));
+
+        Map<String, Integer> baselineOrder = new LinkedHashMap<>();
+        for (int i = 0; i < BASELINE_CASES.size(); i++) {
+            baselineOrder.put(BASELINE_CASES.get(i).caseKey(), i);
+        }
+
+        List<ExperimentMatrixSummary.CaseComparison> caseComparisons = runsByCaseKey.entrySet().stream()
+            .sorted((left, right) -> Integer.compare(
+                baselineOrder.getOrDefault(left.getKey(), Integer.MAX_VALUE),
+                baselineOrder.getOrDefault(right.getKey(), Integer.MAX_VALUE)
+            ))
+            .map(entry -> {
+                List<ExperimentRunRecord> caseRuns = entry.getValue();
+                ExperimentRunRecord sample = caseRuns.get(0);
+                LinkedHashMap<String, ExperimentRunRecord> runsByMode = new LinkedHashMap<>();
+                for (String mode : SUPPORTED_MODES) {
+                    caseRuns.stream()
+                        .filter(run -> mode.equals(run.modelMode()))
+                        .findFirst()
+                        .ifPresent(run -> runsByMode.put(mode, run));
+                }
+                caseRuns.stream()
+                    .filter(run -> !runsByMode.containsKey(run.modelMode()))
+                    .forEach(run -> runsByMode.put(run.modelMode(), run));
+                return new ExperimentMatrixSummary.CaseComparison(
+                    entry.getKey(),
+                    firstNonBlank(sample.taskTitle(), sample.taskId()),
+                    firstNonBlank(sample.taskLengthBucket(), "unspecified"),
+                    runsByMode
+                );
+            })
+            .toList();
+
+        return new ExperimentMatrixSummary(
+            normalizedExperimentName,
+            runs.size(),
+            SUPPORTED_MODES,
+            modeSummaries,
+            caseComparisons
+        );
+    }
+
+    private List<String> resolveModes(List<String> requestedModes) {
+        if (requestedModes == null || requestedModes.isEmpty()) {
+            return SUPPORTED_MODES;
+        }
+        LinkedHashMap<String, String> deduped = new LinkedHashMap<>();
+        for (String requestedMode : requestedModes) {
+            String normalized = normalizeMode(requestedMode);
+            if (normalized == null) {
+                throw new IllegalArgumentException("unsupported model mode: " + requestedMode);
+            }
+            deduped.put(normalized, normalized);
+        }
+        return deduped.values().stream().toList();
+    }
+
+    private List<BaselineTaskCase> resolveCases(List<String> requestedCaseKeys) {
+        if (requestedCaseKeys == null || requestedCaseKeys.isEmpty()) {
+            return BASELINE_CASES;
+        }
+        Map<String, BaselineTaskCase> indexed = BASELINE_CASES.stream()
+            .collect(Collectors.toMap(BaselineTaskCase::caseKey, taskCase -> taskCase, (left, right) -> left, LinkedHashMap::new));
+        List<BaselineTaskCase> selected = new ArrayList<>();
+        for (String caseKey : requestedCaseKeys) {
+            BaselineTaskCase taskCase = indexed.get(caseKey);
+            if (taskCase == null) {
+                throw new IllegalArgumentException("unknown baseline case: " + caseKey);
+            }
+            selected.add(taskCase);
+        }
+        return selected;
+    }
+
+    private String normalizeMode(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase();
+        return SUPPORTED_MODES.contains(normalized) ? normalized : null;
+    }
+
+    private static BaselineTaskCase baselineCase(String caseKey,
+                                                 String title,
+                                                 String lengthBucket,
+                                                 String intent,
+                                                 String goal) {
+        return new BaselineTaskCase(
+            caseKey,
+            title,
+            "coding",
+            lengthBucket,
+            intent,
+            goal,
+            Map.of(
+                "task_pack", "baseline_matrix_v1",
+                "length_bucket", lengthBucket
+            )
+        );
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || metadata.isEmpty() || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private Integer metadataInt(Map<String, Object> metadata, String key) {
+        if (metadata == null || metadata.isEmpty() || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Boolean metadataBoolean(Map<String, Object> metadata, String key) {
+        if (metadata == null || metadata.isEmpty() || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text) {
+            String normalized = text.trim();
+            if ("true".equalsIgnoreCase(normalized)) {
+                return true;
+            }
+            if ("false".equalsIgnoreCase(normalized)) {
+                return false;
+            }
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        return null;
+    }
+
+    private Map<String, Integer> countMetadataValues(List<ExperimentRunRecord> runs, String key) {
+        if (runs == null || runs.isEmpty() || key == null || key.isBlank()) {
+            return Map.of();
+        }
+        return runs.stream()
+            .map(ExperimentRunRecord::metadata)
+            .map(metadata -> metadataString(metadata, key))
+            .filter(value -> value != null && !value.isBlank())
+            .collect(Collectors.groupingBy(
+                value -> value,
+                LinkedHashMap::new,
+                Collectors.summingInt(value -> 1)
+            ))
+            .entrySet()
+            .stream()
+            .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
+            .collect(Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+    }
+
+    private double roundToThree(double value) {
+        return Math.round(value * 1000.0) / 1000.0;
+    }
+}

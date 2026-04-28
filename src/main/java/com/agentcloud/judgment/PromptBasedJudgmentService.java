@@ -162,6 +162,20 @@ public class PromptBasedJudgmentService implements JudgmentService {
             return;
         }
         sb.append("Latest Worker Metadata:\n");
+        appendMetadataLine(sb, metadata, "selected_worker");
+        appendMetadataLine(sb, metadata, "selected_worker_type");
+        appendMetadataLine(sb, metadata, "selected_model_tier");
+        appendMetadataLine(sb, metadata, "execution_role");
+        appendMetadataLine(sb, metadata, "why_selected");
+        appendMetadataLine(sb, metadata, "preferred_worker_hint");
+        appendMetadataLine(sb, metadata, "learning_hint_applied");
+        appendMetadataLine(sb, metadata, "fallback_reason");
+        appendMetadataLine(sb, metadata, "route_source");
+        appendMetadataLine(sb, metadata, "model_mode");
+        appendMetadataLine(sb, metadata, "orchestration_stage");
+        appendMetadataLine(sb, metadata, "planner_worker");
+        appendMetadataLine(sb, metadata, "executor_worker");
+        appendMetadataLine(sb, metadata, "target_worker");
         appendMetadataLine(sb, metadata, "tool_aware_executor");
         appendMetadataLine(sb, metadata, "tool_execution_mode");
         appendMetadataLine(sb, metadata, "tool_name");

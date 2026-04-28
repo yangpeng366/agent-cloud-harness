@@ -187,6 +187,34 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
   FOREIGN KEY(task_id) REFERENCES tasks(id)
 );
 
+CREATE TABLE IF NOT EXISTS experiment_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL UNIQUE,
+  experiment_name TEXT,
+  task_case_key TEXT,
+  task_title TEXT NOT NULL,
+  task_type TEXT,
+  task_length_bucket TEXT,
+  model_mode TEXT NOT NULL,
+  total_steps INTEGER NOT NULL DEFAULT 0,
+  completion_status TEXT NOT NULL,
+  acceptance_result TEXT,
+  total_cost REAL NOT NULL DEFAULT 0,
+  strong_model_cost_ratio REAL,
+  handoff_count INTEGER NOT NULL DEFAULT 0,
+  resume_count INTEGER NOT NULL DEFAULT 0,
+  human_gate_count INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  recovery_success INTEGER,
+  final_artifact_quality_note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_tasks_session_status_updated
 ON tasks(session_id, status, updated_at);
@@ -232,3 +260,9 @@ ON tool_invocations(task_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_tool_invocations_session_task_created
 ON tool_invocations(session_id, task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_runs_experiment_case
+ON experiment_runs(experiment_name, task_case_key, model_mode, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_runs_task_length
+ON experiment_runs(task_length_bucket, model_mode, updated_at);

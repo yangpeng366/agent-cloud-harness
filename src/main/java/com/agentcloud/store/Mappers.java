@@ -127,4 +127,30 @@ public final class Mappers {
         instant(rs, "created_at"),
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
+
+    public static final RowMapper<ExperimentRunRecord> EXPERIMENT_RUN = (rs, ctx) -> new ExperimentRunRecord(
+        rs.getString("id"),
+        rs.getString("session_id"),
+        rs.getString("task_id"),
+        rs.getString("experiment_name"),
+        rs.getString("task_case_key"),
+        rs.getString("task_title"),
+        rs.getString("task_type"),
+        rs.getString("task_length_bucket"),
+        rs.getString("model_mode"),
+        rs.getObject("total_steps") != null ? rs.getInt("total_steps") : null,
+        rs.getString("completion_status"),
+        rs.getString("acceptance_result"),
+        rs.getObject("total_cost") != null ? rs.getDouble("total_cost") : null,
+        rs.getObject("strong_model_cost_ratio") != null ? rs.getDouble("strong_model_cost_ratio") : null,
+        rs.getObject("handoff_count") != null ? rs.getInt("handoff_count") : null,
+        rs.getObject("resume_count") != null ? rs.getInt("resume_count") : null,
+        rs.getObject("human_gate_count") != null ? rs.getInt("human_gate_count") : null,
+        rs.getString("failure_reason"),
+        rs.getObject("recovery_success") != null ? rs.getInt("recovery_success") == 1 : null,
+        rs.getString("final_artifact_quality_note"),
+        instant(rs, "created_at"),
+        instant(rs, "updated_at"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
 }

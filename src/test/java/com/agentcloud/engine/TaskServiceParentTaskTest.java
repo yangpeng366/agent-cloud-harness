@@ -1,5 +1,6 @@
 package com.agentcloud.engine;
 
+import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
 import com.agentcloud.store.DatabaseManager;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -59,6 +61,59 @@ class TaskServiceParentTaskTest {
             );
 
             assertEquals("parent task must belong to the same session", error.getMessage());
+        }
+    }
+
+    @Test
+    void taskRejectsClosedSession() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("closed-session-reject.db"))) {
+            TaskService service = service(db);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+
+            Session session = Session.create("session_closed", "closed session", "active");
+            sessionDao.insert(session);
+            Instant closedAt = Instant.now();
+            sessionDao.updateState(session.id(), "closed", closedAt, closedAt, null, "Session closed");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                service.createTask(new TaskCreateRequest(
+                    "should fail", "continuation", "user", "high",
+                    "cannot attach to closed session", "expect validation", null, session.id(), Map.of(), false
+                ))
+            );
+
+            assertEquals("session is closed", error.getMessage());
+        }
+    }
+
+    @Test
+    void taskCreationPreservesPausedSessionStatus() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("paused-session-preserve.db"))) {
+            TaskService service = service(db);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+
+            Session pausedSession = new Session(
+                "session_paused",
+                "paused session",
+                "paused",
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+            sessionDao.insert(pausedSession);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "should stay paused", "continuation", "user", "high",
+                "bind task to paused session", "preserve session status", null, pausedSession.id(), Map.of(), false
+            ));
+            Session persisted = sessionDao.findById(pausedSession.id()).orElseThrow();
+
+            assertEquals("paused", persisted.status());
+            assertEquals(task.id(), persisted.currentTaskId());
         }
     }
 

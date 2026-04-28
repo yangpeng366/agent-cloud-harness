@@ -32,11 +32,11 @@ class CheckpointHandler implements HttpHandler {
                 var list = consolidation.listByTask(taskId, 20);
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(list));
             } else {
-                NioHttpServer.sendJson(ex, 405, ApiResponse.error("405", "method not allowed"));
+                NioHttpServer.sendMethodNotAllowed(ex);
             }
         } catch (Exception e) {
             log.error("CheckpointHandler error", e);
-            NioHttpServer.sendJson(ex, 500, ApiResponse.error("500", e.getMessage()));
+            NioHttpServer.sendInternalError(ex);
         }
     }
 }

@@ -66,7 +66,7 @@
 
 图: 暂停任务并生成 checkpoint
 
-    [GET /api/v1/tasks/{id}/pause]
+    [POST /api/v1/tasks/{id}/pause]
                 |
                 v
          (triggerPause)
@@ -105,7 +105,7 @@
 
 图: 恢复任务并重新调度
 
-    [GET /api/v1/tasks/{id}/resume]
+    [POST /api/v1/tasks/{id}/resume]
                 |
                 v
          (triggerResume)
@@ -134,7 +134,7 @@
 
 图: 升级与移交流程
 
-    [GET /escalate] --> (persist packet + checkpoint) --> (waiting_human + human_gate) --> [等待人工]
+    [POST /api/v1/tasks/{id}/escalate] --> (persist packet + checkpoint) --> (waiting_human + human_gate) --> [等待人工]
 
     [POST /handoff]
           |
@@ -202,6 +202,7 @@
 |--------|------|------|------|
 | `id` | TEXT | 会话主键 | PK |
 | `status` | TEXT | `active/paused/closed` | 非空 |
+| `closed_at` | TEXT | 会话关闭时间 | 仅 `closed` 时非空 |
 | `root_task_id` | TEXT | 根任务引用 | 可空 |
 | `current_task_id` | TEXT | 当前任务引用 | 可空 |
 | `summary` | TEXT | 会话摘要 | 可空 |
@@ -231,10 +232,35 @@
 | 字段名 | 类型 | 说明 | 约束 |
 |--------|------|------|------|
 | `packet_version` | TEXT | 包格式版本 | 非空 |
+| `active_task_summary` | TEXT | 兼容旧消费方的人类摘要 | 可空 |
 | `decision_summary` | TEXT | 最近决策摘要 | 可空 |
 | `artifact_summary` | TEXT | 最近产物摘要 | 可空 |
+| `open_questions_json` | TEXT | 顶层未决问题列表 | 可空 |
 | `next_step` | TEXT | 恢复后建议动作 | 可空 |
-| `payload_json` | TEXT | 结构化上下文 | 非空 |
+| `payload_json` | TEXT | machine-readable first 的结构化上下文，当前固定包含 `task_identity/current_objective/current_status/current_node/assigned_worker/latest_summary/blockers/open_questions/recent_artifacts/recent_decisions/resume_hint` | 非空 |
+
+#### HandoffPacket
+
+- **生成位置**: `TaskService.getHandoffPacket` / `TaskService.handoffTask`
+- **对应代码**: `src/main/java/com/agentcloud/model/HandoffPacket.java`
+- **核心字段**:
+
+| 字段名 | 类型 | 说明 | 约束 |
+|--------|------|------|------|
+| `task_identity` | OBJECT | 当前交接任务身份 | 非空 |
+| `from_worker` | TEXT | 当前交出方 worker | 可空 |
+| `to_worker` | TEXT | 目标接收方 worker | 可空 |
+| `current_objective` | TEXT | 当前交接目标 | 可空 |
+| `current_status` | TEXT | 当前任务状态 | 可空 |
+| `current_node` | TEXT | 当前控制节点 | 可空 |
+| `why_handoff` | TEXT | 交接原因 | 可空 |
+| `what_done` | TEXT[] | 已完成工作摘要 | 非空，默认空数组 |
+| `what_remaining` | TEXT[] | 剩余待做事项 | 非空，默认空数组 |
+| `cautions` | TEXT[] | 风险、阻塞或注意事项 | 非空，默认空数组 |
+| `resume_hint` | TEXT | 接手后最直接的恢复提示 | 可空 |
+| `latest_summary` | TEXT | 最近适合交接的摘要 | 可空 |
+| `handoff_summary` | TEXT | 面向人类快速浏览的交接描述 | 可空 |
+| `metadata` | OBJECT | model mode / orchestration stage / planner/executor worker 等附加上下文 | 非空，默认空对象 |
 
 #### Skill
 
@@ -303,7 +329,7 @@
 
 - **代码位置**: `src/main/java/com/agentcloud/engine/memory/PacketBuilder.java`
 - **用途**: 为暂停恢复或移交生成可继续执行的最小上下文。
-- **简要逻辑**: 从当前任务最近的决策和产物中抽取摘要，构造成 `decision_summary`、`artifact_summary` 和结构化 `payload`，默认补齐 `blockers`、`key_constraints`、`next_step` 等字段。
+- **简要逻辑**: 从当前任务最近的决策和产物中抽取摘要，同时固化 `task_identity/current_objective/current_status/current_node/assigned_worker/latest_summary/blockers/open_questions/recent_artifacts/recent_decisions` 等最小 machine-readable 字段；handoff 场景则额外输出 typed `HandoffPacket`，明确 `why_handoff/what_done/what_remaining/cautions/resume_hint`。
 - **复杂度**: 主要取决于最近记录条数，当前实现是固定上限查询，近似 `O(1)`。
 
 ### 5.3 Consolidation 巩固策略

@@ -86,22 +86,30 @@
 
 ## 4. 当前工作树状态
 
-当前工作树已经开始补消息层骨架，方向是对的，但还没有完成端到端闭环：
+当前工作树已经把第一轮消息层闭环打通，后续重点应转向“assistant message 质量”和“消息层与任务观测面的进一步融合”，而不是再从零搭骨架：
 
-- 已开始的后端骨架：
+- 已落地的后端骨架：
   - `SessionMessage`
   - `SessionMessageCreateRequest`
   - `session_messages` 表
   - `SessionMessageDao`
   - `SessionService.addMessage(...) / listMessages(...)`
   - `GET/POST /api/v1/sessions/{id}/messages`
+- 已落地的前端与回执：
+  - `/dialogue/` 已接入消息流 API
+  - 已有 session message 流、message composer、`Related Messages`
+  - 发布 task 后会镜像 `task_brief / task_followup`
+  - 任务创建、状态更新和控制动作会追加 `task_receipt / task_action / task_state`
+  - `auto_start / resume / continue / handoff` 后会 best-effort 追加 `task_progress / task_result`
+  - `GET /api/v1/tasks/{id}/live_flow` 已开始聚合 task 级 `related_messages`
+  - `/dialogue/` 选中任务后会优先消费 `live_flow.related_messages`
+  - `/dialogue/` 的 session message 流已支持按 `role(user / assistant / system)` 与 `scope(all / task-only / session-only)` 过滤
+  - session message 流已补 `assistant / system` 分组摘要卡片，便于先扫最近回执和 top message types，再下钻明细
 - 还没完成的部分：
-  - `/dialogue/` 前端还没接到该 API
-  - 没有 session message 的 UI
-  - “发布 task 后镜像成一条 user message” 还没接完
-  - 还没有 smoke 级端到端验证
+  - assistant message 仍是 best-effort 摘要，不是完整 judgment/artifact 流式投影
+  - 还没有把 session 级普通消息或更细粒度 assistant 投影进一步纳入 `live_flow`
 
-所以接下来最重要的是把这个半截骨架收口，而不是再扩新概念。
+所以接下来最重要的是继续收口“消息质量与可观测性”，而不是再扩新概念。
 
 ## 5. 最小可用目标（MVP）
 
@@ -113,6 +121,7 @@ MVP 完成后，`/dialogue/` 至少要满足：
 4. 某条消息可以“用作任务草稿”，自动填入 task composer。
 5. 任务创建后会补一条关联 `task_id` 的 user message。
 6. 任务详情侧栏能看到与当前 task 关联的消息。
+7. 任务推进后，消息流里能看到来自 harness 的最小 assistant/system 回执。
 
 只要这 6 件事成立，这个页面就已经从“任务拼装页”升级成“任务式对话页”了。
 
@@ -300,14 +309,21 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 这几个点有价值，但不要放进第一批：
 
-- 自动把 judgment / artifact 反写成 assistant/system message
-- 在消息流里显示 task state changes
+- 把 judgment / artifact 更细粒度地反写成 assistant/system message，而不只是 best-effort 摘要
 - 消息过滤器：只看 note / 只看 task_brief / 只看关联当前 task
 - 链级摘要消息
 - SSE / streaming
 - 多用户协作与认证
 
 这些都应建立在前面 A/B/C 稳定之后。
+
+当前已开始落地的增强点：
+
+- task 创建后，后端会追加一条 `assistant / task_receipt`
+- task 的 `state update / pause / resume / continue / escalate / handoff` 会追加 `system` 回执消息
+- `auto_start / resume / continue / handoff` 后，若 runtime 已产出可读摘要，还会追加 `assistant / task_progress`
+- 任务进入 `done / failed` 时，会把这条 assistant 回执收成 `task_result`
+- `/dialogue/` 已能把这些回执和 user message 一起展示
 
 ## 7. 文件级改造清单
 

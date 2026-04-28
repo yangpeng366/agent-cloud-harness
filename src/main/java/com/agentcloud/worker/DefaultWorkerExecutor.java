@@ -44,6 +44,29 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildSystemPrompt(TaskRuntimeContext context, String workerId) {
+        String modelMode = metadataString(context.task().metadata(), "model_mode");
+        String orchestrationStage = metadataString(context.task().metadata(), "orchestration_stage");
+        if ("orchestrated".equalsIgnoreCase(modelMode) && isPlannerStage(orchestrationStage)) {
+            return "You are the strong planning worker in an orchestration runtime. Worker ID: " + workerId
+                + ". Do not try to finish the entire task if it can be delegated. "
+                + "Produce a compact execution brief for a smaller executor and clearly state the immediate next step. "
+                + "Respond with a JSON object containing exactly these fields: "
+                + "summary (string), output_text (string), produced_artifact (boolean), "
+                + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
+                + "confidence (high|medium|low). Keep summary concise, keep output_text under 1200 characters, "
+                + "keep artifact_content under 1600 characters, and use suggested_next_step for the executor handoff instruction. "
+                + "No markdown, no extra text.";
+        }
+        if ("orchestrated".equalsIgnoreCase(modelMode) && isExecutionStage(orchestrationStage)) {
+            return "You are the delegated execution worker in an orchestration runtime. Worker ID: " + workerId
+                + ". Follow the current next step and planning brief instead of replanning the whole task. "
+                + "Respond with a JSON object containing exactly these fields: "
+                + "summary (string), output_text (string), produced_artifact (boolean), "
+                + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
+                + "confidence (high|medium|low). Keep summary concise, keep output_text under 1200 characters, "
+                + "keep artifact_content under 1600 characters, and focus on concrete execution progress. "
+                + "No markdown, no extra text.";
+        }
         return "You are a task execution worker. Worker ID: " + workerId
             + ". Execute the assigned task to the best of your ability. "
             + "Respond with a JSON object containing exactly these fields: "
@@ -64,8 +87,21 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         if (t.metadata() != null && t.metadata().get("intent") != null) {
             sb.append("Intent: ").append(t.metadata().get("intent")).append("\n");
         }
+        String modelMode = metadataString(t.metadata(), "model_mode");
+        String orchestrationStage = metadataString(t.metadata(), "orchestration_stage");
+        if (modelMode != null) {
+            sb.append("Model Mode: ").append(modelMode).append("\n");
+        }
+        if (orchestrationStage != null) {
+            sb.append("Orchestration Stage: ").append(orchestrationStage).append("\n");
+        }
         if (t.nextStep() != null && !t.nextStep().isBlank()) {
             sb.append("Next Step: ").append(t.nextStep()).append("\n");
+        }
+        if ("orchestrated".equalsIgnoreCase(modelMode) && isPlannerStage(orchestrationStage)) {
+            sb.append("Execution Contract: produce a delegation brief for a small executor, not a final closeout.\n");
+        } else if ("orchestrated".equalsIgnoreCase(modelMode) && isExecutionStage(orchestrationStage)) {
+            sb.append("Execution Contract: execute the delegated next step before proposing broader replans.\n");
         }
         if (context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
             sb.append("\nActive Context:\n");
@@ -101,6 +137,28 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
 
         sb.append("\nPlease execute the task and provide your output.");
         return sb.toString();
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private boolean isPlannerStage(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return false;
+        }
+        return "plan_pending".equalsIgnoreCase(stage) || "planner_active".equalsIgnoreCase(stage);
+    }
+
+    private boolean isExecutionStage(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return false;
+        }
+        return stage.toLowerCase().startsWith("execution");
     }
 
     private WorkerExecutionResult parseExecutionResult(String raw, long durationMs) {

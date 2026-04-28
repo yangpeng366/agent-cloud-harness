@@ -35,9 +35,15 @@ public interface SessionDao extends SqlObject {
     @SqlQuery("SELECT * FROM sessions ORDER BY updated_at DESC")
     List<Session> listAll();
 
-    @SqlUpdate("UPDATE sessions SET status = :status, updated_at = :updatedAt, current_task_id = :currentTaskId, summary = :summary WHERE id = :id")
+    @SqlUpdate("UPDATE sessions SET status = :status, updated_at = :updatedAt, closed_at = :closedAt, " +
+               "current_task_id = :currentTaskId, summary = :summary WHERE id = :id")
     int updateState(@Bind("id") String id, @Bind("status") String status, @Bind("updatedAt") Instant updatedAt,
-                    @Bind("currentTaskId") String currentTaskId, @Bind("summary") String summary);
+                    @Bind("closedAt") Instant closedAt, @Bind("currentTaskId") String currentTaskId,
+                    @Bind("summary") String summary);
+
+    default int updateState(String id, String status, Instant updatedAt, String currentTaskId, String summary) {
+        return updateState(id, status, updatedAt, null, currentTaskId, summary);
+    }
 
     @SqlUpdate("UPDATE sessions SET updated_at = :updatedAt WHERE id = :id")
     int touch(@Bind("id") String id, @Bind("updatedAt") Instant updatedAt);

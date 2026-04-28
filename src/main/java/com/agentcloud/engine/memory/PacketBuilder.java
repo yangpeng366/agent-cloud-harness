@@ -6,7 +6,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -26,6 +28,19 @@ public class PacketBuilder {
     public ResumePacket buildResumePacket(Task task, Session session) {
         List<Decision> decisions = decisionDao.listBySessionAndTask(session.id(), task.id(), 10);
         List<Artifact> artifacts = artifactDao.listBySessionAndTask(session.id(), task.id(), 10);
+        PacketTaskIdentity taskIdentity = buildTaskIdentity(task);
+        List<PacketDecisionRef> recentDecisions = decisions.stream()
+            .limit(5)
+            .map(this::toDecisionRef)
+            .toList();
+        List<PacketArtifactRef> recentArtifacts = artifacts.stream()
+            .limit(5)
+            .map(this::toArtifactRef)
+            .toList();
+        List<String> openQuestions = resolveOpenQuestions(task, decisions);
+        List<String> blockers = resolveBlockers(task, decisions);
+        String currentObjective = firstNonBlank(task.goal(), task.nextStep(), task.title());
+        String latestSummary = resolveLatestSummary(task, artifacts, decisions);
 
         String decisionSummary = decisions.stream()
             .map(d -> "[" + d.createdAt() + "] " + d.summary())
@@ -34,51 +49,102 @@ public class PacketBuilder {
         String artifactSummary = artifacts.stream()
             .map(a -> a.artifactType() + ": " + a.title())
             .collect(Collectors.joining("\n"));
+        String nextStep = resolvePacketNextStep(task);
 
-        Map<String, Object> payload = new HashMap<>();
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("machine_readable_first", true);
+        payload.put("task_identity", taskIdentity);
+        payload.put("current_objective", currentObjective);
+        payload.put("current_status", task.status());
+        payload.put("current_node", task.controlNode());
+        payload.put("assigned_worker", task.assignedWorker());
+        payload.put("latest_summary", latestSummary);
+        payload.put("next_step", nextStep);
+        payload.put("blockers", blockers);
+        payload.put("open_questions", openQuestions);
+        payload.put("recent_artifacts", recentArtifacts);
+        payload.put("recent_decisions", recentDecisions);
+        payload.put("recent_decision_summaries", decisions.stream().map(Decision::summary).toList());
+        payload.put("resume_hint", nextStep);
+        payload.put("task_title", task.title());
+        payload.put("task_type", metadataString(task.metadata(), "task_type"));
+        payload.put("parent_task_id", task.parentTaskId());
         payload.put("session_id", session.id());
         payload.put("session_title", session.title());
-        payload.put("active_goal", task.goal());
+        payload.put("active_goal", currentObjective);
         payload.put("task_status", task.status());
-        payload.put("recent_decisions", decisions.stream().map(Decision::summary).toList());
         payload.put("relevant_artifacts", artifacts.stream().map(Artifact::title).toList());
-        payload.put("blockers", List.of());
         payload.put("key_constraints", List.of());
-
-        String nextStep = resolvePacketNextStep(task);
 
         return new ResumePacket(
             java.util.UUID.randomUUID().toString(),
-            session.id(), task.id(), Instant.now(), "1.0",
+            session.id(), task.id(), Instant.now(), "1.1",
             task.summary(), decisionSummary, artifactSummary,
-            List.of(), nextStep, payload
+            openQuestions, nextStep, payload,
+            taskIdentity,
+            currentObjective,
+            task.status(),
+            task.controlNode(),
+            task.assignedWorker(),
+            latestSummary,
+            blockers,
+            recentArtifacts,
+            recentDecisions,
+            Boolean.TRUE
         );
     }
 
-    public Map<String, Object> buildHandoffPacket(Task task, Session session, String fromWorker, String toWorker) {
+    public HandoffPacket buildHandoffPacket(Task task, Session session, String fromWorker, String toWorker) {
         List<Decision> decisions = decisionDao.listBySessionAndTask(session.id(), task.id(), 10);
         List<Artifact> artifacts = artifactDao.listBySessionAndTask(session.id(), task.id(), 10);
         List<Task> subTasks = taskDao.listBySession(session.id()).stream()
             .filter(t -> task.id().equals(t.parentTaskId()))
             .toList();
+        PacketTaskIdentity taskIdentity = buildTaskIdentity(task);
+        String currentObjective = firstNonBlank(task.goal(), task.nextStep(), task.title());
+        String latestSummary = resolveLatestSummary(task, artifacts, decisions);
+        List<String> openQuestions = resolveOpenQuestions(task, decisions);
+        List<String> cautions = mergeLines(resolveBlockers(task, decisions), openQuestions, 5);
+        List<String> whatDone = resolveWhatDone(task, subTasks, artifacts, decisions);
+        List<String> whatRemaining = resolveWhatRemaining(task, subTasks);
+        String resumeHint = firstNonBlank(resolvePacketNextStep(task), whatRemaining.isEmpty() ? null : whatRemaining.get(0), currentObjective);
+        String whyHandoff = deriveWhyHandoff(task, fromWorker, toWorker);
 
-        Map<String, Object> packet = new HashMap<>();
-        packet.put("session_id", session.id());
-        packet.put("handoff_from_agent", fromWorker);
-        packet.put("handoff_to_agent", toWorker);
-        packet.put("active_goal", task.goal());
-        packet.put("handoff_task", task.title());
-        packet.put("completed_work", subTasks.stream().filter(t -> "done".equals(t.status())).map(Task::title).toList());
-        packet.put("pending_work", subTasks.stream().filter(t -> !"done".equals(t.status())).map(Task::title).toList());
-        packet.put("blockers", List.of());
-        packet.put("relevant_decisions", decisions.stream().map(Decision::summary).toList());
-        packet.put("required_artifacts", artifacts.stream().map(Artifact::title).toList());
-        packet.put("shared_constraints", List.of());
-        packet.put("expected_output", task.goal());
-        packet.put("priority", task.priority());
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("session_id", session.id());
+        metadata.put("priority", task.priority());
+        metadata.put("assigned_worker", task.assignedWorker());
+        metadata.put("recent_artifact_count", artifacts.size());
+        metadata.put("recent_decision_count", decisions.size());
+        metadata.put("open_questions", openQuestions);
+        copyMetadata(task.metadata(), metadata, "task_type");
+        copyMetadata(task.metadata(), metadata, "model_mode");
+        copyMetadata(task.metadata(), metadata, "orchestration_stage");
+        copyMetadata(task.metadata(), metadata, "planner_worker");
+        copyMetadata(task.metadata(), metadata, "executor_worker");
+        copyMetadata(task.metadata(), metadata, "selected_model_tier");
+        copyMetadata(task.metadata(), metadata, "fallback_reason");
 
         log.info("Handoff packet built for task={} from={} to={}", task.id(), fromWorker, toWorker);
-        return packet;
+        return new HandoffPacket(
+            "1.0",
+            Boolean.TRUE,
+            taskIdentity,
+            fromWorker,
+            toWorker,
+            currentObjective,
+            task.status(),
+            task.controlNode(),
+            whyHandoff,
+            whatDone,
+            whatRemaining,
+            cautions,
+            resumeHint,
+            latestSummary,
+            "handoff " + firstNonBlank(fromWorker, "unassigned") + " -> " + firstNonBlank(toWorker, "unassigned")
+                + " for task " + firstNonBlank(task.title(), task.id()),
+            metadata
+        );
     }
 
     private String resolvePacketNextStep(Task task) {
@@ -99,5 +165,223 @@ public class PacketBuilder {
             return false;
         }
         return List.of("done", "failed").contains(status.toLowerCase());
+    }
+
+    private PacketTaskIdentity buildTaskIdentity(Task task) {
+        return new PacketTaskIdentity(
+            task.id(),
+            task.sessionId(),
+            task.parentTaskId(),
+            task.title(),
+            metadataString(task.metadata(), "task_type")
+        );
+    }
+
+    private PacketDecisionRef toDecisionRef(Decision decision) {
+        return new PacketDecisionRef(
+            decision.decisionType(),
+            decision.summary(),
+            decision.rationale(),
+            decision.createdAt() != null ? decision.createdAt().toString() : null
+        );
+    }
+
+    private PacketArtifactRef toArtifactRef(Artifact artifact) {
+        return new PacketArtifactRef(
+            artifact.artifactType(),
+            artifact.title(),
+            artifact.summary(),
+            artifact.createdAt() != null ? artifact.createdAt().toString() : null
+        );
+    }
+
+    private String resolveLatestSummary(Task task, List<Artifact> artifacts, List<Decision> decisions) {
+        return firstNonBlank(
+            task.summary(),
+            artifacts.stream()
+                .map(artifact -> firstNonBlank(artifact.summary(), artifact.title()))
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null),
+            decisions.stream()
+                .map(Decision::summary)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null),
+            task.goal(),
+            task.title()
+        );
+    }
+
+    private List<String> resolveOpenQuestions(Task task, List<Decision> decisions) {
+        List<String> items = new ArrayList<>(metadataStringList(task.metadata(), "open_questions"));
+        decisions.stream()
+            .map(decision -> metadataString(decision.metadata(), "open_question"))
+            .filter(value -> value != null && !value.isBlank())
+            .limit(2)
+            .forEach(items::add);
+        decisions.stream()
+            .map(Decision::rationale)
+            .filter(this::looksOpenQuestion)
+            .limit(2)
+            .forEach(items::add);
+        if (!isTerminalStatus(task.status()) && (task.nextStep() == null || task.nextStep().isBlank())) {
+            items.add("next_step_not_yet_clear");
+        }
+        return dedupe(items, 5);
+    }
+
+    private List<String> resolveBlockers(Task task, List<Decision> decisions) {
+        List<String> items = new ArrayList<>(metadataStringList(task.metadata(), "blockers"));
+        if (task.waitingReason() != null && !task.waitingReason().isBlank()) {
+            items.add(task.waitingReason());
+        }
+        if ("paused".equalsIgnoreCase(task.status())) {
+            items.add("task_paused");
+        }
+        if ("waiting_human".equalsIgnoreCase(task.status())) {
+            items.add("awaiting_human_confirmation");
+        }
+        decisions.stream()
+            .map(decision -> metadataString(decision.metadata(), "blocker"))
+            .filter(value -> value != null && !value.isBlank())
+            .limit(2)
+            .forEach(items::add);
+        return dedupe(items, 5);
+    }
+
+    private List<String> resolveWhatDone(Task task, List<Task> subTasks, List<Artifact> artifacts, List<Decision> decisions) {
+        List<String> items = new ArrayList<>();
+        subTasks.stream()
+            .filter(subTask -> "done".equalsIgnoreCase(subTask.status()))
+            .map(subTask -> firstNonBlank(subTask.summary(), subTask.title()))
+            .filter(value -> value != null && !value.isBlank())
+            .forEach(items::add);
+        artifacts.stream()
+            .map(artifact -> firstNonBlank(artifact.summary(), artifact.title()))
+            .filter(value -> value != null && !value.isBlank())
+            .limit(3)
+            .forEach(items::add);
+        if (items.isEmpty()) {
+            items.add(firstNonBlank(task.summary(), decisions.stream().map(Decision::summary).findFirst().orElse(null), task.title()));
+        }
+        return dedupe(items, 5);
+    }
+
+    private List<String> resolveWhatRemaining(Task task, List<Task> subTasks) {
+        List<String> items = new ArrayList<>();
+        if (!isTerminalStatus(task.status()) && task.nextStep() != null && !task.nextStep().isBlank()) {
+            items.add(task.nextStep());
+        }
+        subTasks.stream()
+            .filter(subTask -> !"done".equalsIgnoreCase(subTask.status()))
+            .map(subTask -> firstNonBlank(subTask.nextStep(), subTask.title()))
+            .filter(value -> value != null && !value.isBlank())
+            .forEach(items::add);
+        if (items.isEmpty() && !isTerminalStatus(task.status())) {
+            items.add("continue toward objective: " + firstNonBlank(task.goal(), task.title(), task.id()));
+        }
+        return dedupe(items, 5);
+    }
+
+    private String deriveWhyHandoff(Task task, String fromWorker, String toWorker) {
+        String explicit = firstNonBlank(
+            metadataString(task.metadata(), "handoff_reason"),
+            metadataString(task.metadata(), "fallback_reason")
+        );
+        if (explicit != null) {
+            return explicit;
+        }
+        if ("orchestrated".equalsIgnoreCase(metadataString(task.metadata(), "model_mode"))
+            && fromWorker != null && toWorker != null && !fromWorker.equalsIgnoreCase(toWorker)) {
+            return "orchestrated runtime delegated execution from " + fromWorker + " to " + toWorker;
+        }
+        return "handoff to " + firstNonBlank(toWorker, "target worker") + " for continued execution";
+    }
+
+    private List<String> mergeLines(List<String> first, List<String> second, int limit) {
+        List<String> items = new ArrayList<>();
+        if (first != null) {
+            items.addAll(first);
+        }
+        if (second != null) {
+            items.addAll(second);
+        }
+        return dedupe(items, limit);
+    }
+
+    private List<String> dedupe(List<String> items, int limit) {
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        if (items == null) {
+            return List.of();
+        }
+        for (String item : items) {
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            unique.add(item);
+            if (unique.size() >= limit) {
+                break;
+            }
+        }
+        return List.copyOf(unique);
+    }
+
+    private boolean looksOpenQuestion(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.toLowerCase();
+        return normalized.contains("?")
+            || normalized.contains("待确认")
+            || normalized.contains("unclear")
+            || normalized.contains("unknown");
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object raw = metadata.get(key);
+        if (raw instanceof List<?> values) {
+            List<String> items = new ArrayList<>();
+            for (Object value : values) {
+                if (value != null && !value.toString().isBlank()) {
+                    items.add(value.toString());
+                }
+            }
+            return items;
+        }
+        if (raw != null && !raw.toString().isBlank()) {
+            return List.of(raw.toString());
+        }
+        return List.of();
+    }
+
+    private void copyMetadata(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source == null || target == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

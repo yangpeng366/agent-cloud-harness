@@ -18,5 +18,7 @@ public record TaskLiveFlowView(
     JudgmentTraceView judgmentTrace,
     List<Checkpoint> checkpoints,
     List<LearningMemory> learningMemories,
-    List<ToolInvocationRecord> toolInvocations
+    List<ToolInvocationRecord> toolInvocations,
+    List<SessionMessage> relatedMessages,
+    ExperimentRunRecord experimentRun
 ) {}

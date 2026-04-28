@@ -91,10 +91,11 @@ public class ControlNodeGraph {
         log.info("[Scheduler] task={}", task.id());
         emitEvent(task, "node_scheduler", "Scheduling task");
         WorkerExecutionResult executionResult = null;
+        WorkerRouter.RouteResult route = null;
 
         // 自动路由 worker（如果还没分配）
         if (task.assignedWorker() == null || task.assignedWorker().isBlank()) {
-            WorkerRouter.RouteResult route = router.selectWorker(task);
+            route = router.selectWorker(task);
             if (route.selectedWorker() != null) {
                 task = task.withAssignedWorker(route.selectedWorker());
                 log.info("[Scheduler] task={} routed to worker={}", task.id(), route.selectedWorker());
@@ -103,6 +104,14 @@ public class ControlNodeGraph {
 
         // 执行一轮 worker work
         if (task.assignedWorker() != null) {
+            Worker selectedWorker = router.getWorker(task.assignedWorker());
+            String selectedWorkerType = selectedWorker != null ? selectedWorker.workerType() : null;
+            String selectedModelTier = workerMetadata(selectedWorker, "model_tier");
+            String executionRole = workerMetadata(selectedWorker, "primary_role");
+            String whySelected = route != null
+                ? firstNonBlank(route.whySelected(), route.routeReason())
+                : resolvePreassignedWorkerReason(task);
+            String fallbackReason = route != null ? route.fallbackReason() : null;
             log.info("[Scheduler] task={} building runtime context for worker={}", task.id(), task.assignedWorker());
             TaskRuntimeContext ctx = runtimeContextBuilder.build(task);
             log.info("[Scheduler] task={} executing one round with worker={}", task.id(), task.assignedWorker());
@@ -132,6 +141,21 @@ public class ControlNodeGraph {
                     buildWorkerArtifactMetadata(
                         executionResult,
                         "worker_id", task.assignedWorker(),
+                        "selected_worker", task.assignedWorker(),
+                        "selected_worker_type", selectedWorkerType,
+                        "selected_model_tier", selectedModelTier,
+                        "execution_role", executionRole,
+                        "why_selected", whySelected,
+                        "preferred_worker_hint", route != null ? route.preferredWorkerHint() : null,
+                        "learning_hint_applied", route != null ? route.learningHintApplied() : null,
+                        "fallback_reason", fallbackReason,
+                        "route_source", route != null ? route.routeSource() : "preassigned",
+                        "model_mode", metadataString(task.metadata(), "model_mode"),
+                        "orchestration_stage", metadataString(task.metadata(), "orchestration_stage"),
+                        "planner_worker", metadataString(task.metadata(), "planner_worker"),
+                        "executor_worker", metadataString(task.metadata(), "executor_worker"),
+                        "target_worker", metadataString(task.metadata(), "target_worker"),
+                        "candidate_workers", route != null ? route.candidateWorkers() : null,
                         "duration_ms", executionResult.durationMs(),
                         "confidence", executionResult.confidence(),
                         "suggested_next_step", executionResult.suggestedNextStep(),
@@ -171,11 +195,32 @@ public class ControlNodeGraph {
         TaskRuntimeContext ctx = runtimeContextBuilder.build(task);
         String latestOutput = resolveLatestOutput(ctx, executionResult);
         Map<String, Object> latestWorkerMetadata = resolveLatestWorkerMetadata(ctx, executionResult);
+        Worker selectedWorker = router != null ? router.getWorker(task.assignedWorker()) : null;
+        String selectedWorkerId = firstNonBlank(task.assignedWorker(), stringValue(latestWorkerMetadata.get("selected_worker")));
+        String selectedModelTier = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("selected_model_tier")),
+            workerMetadata(selectedWorker, "model_tier")
+        );
+        String executionRole = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("execution_role")),
+            workerMetadata(selectedWorker, "primary_role")
+        );
+        String whySelected = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("why_selected")),
+            selectedWorkerId != null ? "task assigned to worker=" + selectedWorkerId : null
+        );
+        String fallbackReason = stringValue(latestWorkerMetadata.get("fallback_reason"));
         JudgmentContext jctx = new JudgmentContext(task, ctx, latestOutput, null, latestWorkerMetadata);
 
         // Execution Judgment
         var execDecision = judgmentService.judgeExecution(jctx);
         var completionDecision = judgmentService.judgeCompletion(jctx);
+        OrchestrationJudgment orchestrationJudgment = applyOrchestrationJudgment(
+            task, latestWorkerMetadata, executionResult, execDecision, completionDecision
+        );
+        task = orchestrationJudgment.task();
+        execDecision = orchestrationJudgment.executionDecision();
+        completionDecision = orchestrationJudgment.completionDecision();
         log.info("[Continue] task={} executionDecision action={} reason={}",
             task.id(), execDecision.action(), execDecision.reason());
         log.info("[Continue] task={} completionDecision status={} alignment={} reason={}",
@@ -190,6 +235,13 @@ public class ControlNodeGraph {
             "medium", null,
             metadataOf(
                 "action", execDecision.action(),
+                "judgment_actor", "judgment_service",
+                "judgment_stage", "execution",
+                "selected_worker", selectedWorkerId,
+                "selected_model_tier", selectedModelTier,
+                "execution_role", executionRole,
+                "why_selected", whySelected,
+                "fallback_reason", fallbackReason,
                 "next_step", firstNonBlank(execDecision.nextStep(), executionResult != null ? executionResult.suggestedNextStep() : null),
                 "needs_checkpoint", execDecision.needsCheckpoint(),
                 "needs_human", execDecision.needsHuman(),
@@ -205,9 +257,17 @@ public class ControlNodeGraph {
             completionDecision.reason(),
             "medium", null,
             metadataOf(
+                "judgment_actor", "judgment_service",
+                "judgment_stage", "completion",
+                "selected_worker", selectedWorkerId,
+                "selected_model_tier", selectedModelTier,
+                "execution_role", executionRole,
+                "why_selected", whySelected,
+                "fallback_reason", fallbackReason,
                 "status", completionDecision.status(),
                 "alignment_level", completionDecision.alignmentLevel(),
-                "suggested_next_action", completionDecision.suggestedNextAction()
+                "suggested_next_action", completionDecision.suggestedNextAction(),
+                "evaluation_result", completionDecision.status() + ":" + completionDecision.alignmentLevel()
             )
         );
         decisionDao.insert(completionRecord);
@@ -229,7 +289,17 @@ public class ControlNodeGraph {
         }
 
         // 根据 decision 选择下一状态迁移
-        return switch (resolveAction(execDecision.action(), completionDecision.status(), completionDecision.alignmentLevel())) {
+        String resolvedAction = resolveAction(
+            execDecision.action(), completionDecision.status(), completionDecision.alignmentLevel()
+        );
+        if (List.of("done", "checkpoint_then_done").contains(resolvedAction)) {
+            Task completedStage = markOrchestrationCompleted(task);
+            if (!sameState(task, completedStage)) {
+                taskDao.updateState(completedStage);
+                task = completedStage;
+            }
+        }
+        return switch (resolvedAction) {
             case "done" -> {
                 Task moved = finalizeCompletedTask(task);
                 taskDao.updateState(moved);
@@ -238,10 +308,17 @@ public class ControlNodeGraph {
             case "checkpoint" -> packetNode(task, "periodic");
             case "checkpoint_then_done" -> checkpointThenDone(task, "periodic");
             case "handoff" -> {
-                String target = execDecision.targetWorker();
+                String target = firstNonBlank(
+                    execDecision.targetWorker(),
+                    metadataString(task.metadata(), "target_worker"),
+                    task.assignedWorker()
+                );
                 Task moved = task.withAssignedWorker(target != null ? target : task.assignedWorker())
                     .withControlNode("handoff");
                 taskDao.updateState(moved);
+                if (shouldAutoContinueHandoff(moved)) {
+                    yield handoffNode(moved, true);
+                }
                 yield moved;
             }
             case "escalate", "wait", "human_gate" -> {
@@ -323,6 +400,83 @@ public class ControlNodeGraph {
         return updated;
     }
 
+    private OrchestrationJudgment applyOrchestrationJudgment(Task task,
+                                                             Map<String, Object> latestWorkerMetadata,
+                                                             WorkerExecutionResult executionResult,
+                                                             com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+                                                             com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+        if (!isOrchestrated(task)) {
+            return new OrchestrationJudgment(task, executionDecision, completionDecision);
+        }
+
+        String stage = orchestrationStage(task);
+        String selectedWorkerId = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("selected_worker")),
+            task.assignedWorker()
+        );
+        String selectedModelTier = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("selected_model_tier")),
+            workerMetadata(router != null ? router.getWorker(selectedWorkerId) : null, "model_tier")
+        );
+        String nextStep = firstNonBlank(
+            executionDecision.nextStep(),
+            executionResult != null ? executionResult.suggestedNextStep() : null,
+            task.nextStep()
+        );
+
+        if (isPlannerStage(stage)) {
+            WorkerRouter.RouteResult executionRoute = selectExecutionWorker(task);
+            String targetWorker = firstNonBlank(
+                executionRoute != null ? executionRoute.selectedWorker() : null,
+                selectedWorkerId
+            );
+            String delegationReason = "orchestrated planner round completed; delegated execution to worker="
+                + firstNonBlank(targetWorker, "unassigned");
+            Task moved = withMetadataEntries(task,
+                "planner_worker", selectedWorkerId,
+                "planner_model_tier", selectedModelTier,
+                "orchestration_stage", "execution_pending",
+                "target_worker", targetWorker,
+                "preassigned_selection_reason", firstNonBlank(
+                    executionRoute != null ? executionRoute.whySelected() : null,
+                    executionRoute != null ? executionRoute.routeReason() : null,
+                    delegationReason
+                ),
+                "orchestration_reason", delegationReason,
+                "auto_continue_handoff", true
+            );
+            return new OrchestrationJudgment(
+                moved,
+                new com.agentcloud.judgment.model.ExecutionDecision(
+                    "handoff",
+                    mergeReasons(delegationReason, executionDecision.reason()),
+                    nextStep,
+                    executionDecision.needsCheckpoint(),
+                    false,
+                    targetWorker
+                ),
+                new com.agentcloud.judgment.model.CompletionDecision(
+                    "partially_done",
+                    normalizeAlignment(completionDecision.alignmentLevel()),
+                    mergeReasons("planner output accepted as delegation brief, not terminal completion", completionDecision.reason()),
+                    firstNonBlank(completionDecision.suggestedNextAction(), nextStep)
+                )
+            );
+        }
+
+        if (isExecutionStage(stage)) {
+            String nextStage = "execution_pending".equalsIgnoreCase(stage) ? "execution_active" : stage;
+            Task moved = withMetadataEntries(task,
+                "executor_worker", selectedWorkerId,
+                "executor_model_tier", selectedModelTier,
+                "orchestration_stage", nextStage
+            );
+            return new OrchestrationJudgment(moved, executionDecision, completionDecision);
+        }
+
+        return new OrchestrationJudgment(task, executionDecision, completionDecision);
+    }
+
     private String resolveLatestOutput(TaskRuntimeContext ctx, WorkerExecutionResult executionResult) {
         if (executionResult != null) {
             String output = firstNonBlank(executionResult.outputText(), executionResult.summary(), executionResult.artifactContent());
@@ -351,7 +505,7 @@ public class ControlNodeGraph {
                         extracted.put(entry.getKey().toString(), entry.getValue());
                     }
                 }
-                Map<String, Object> normalized = selectLatestWorkerMetadata(extracted);
+                Map<String, Object> normalized = mergeLatestWorkerMetadata(artifact.metadata(), extracted);
                 if (!normalized.isEmpty()) {
                     return normalized;
                 }
@@ -392,7 +546,8 @@ public class ControlNodeGraph {
             && java.util.Objects.equals(left.status(), right.status())
             && java.util.Objects.equals(left.controlNode(), right.controlNode())
             && java.util.Objects.equals(left.assignedWorker(), right.assignedWorker())
-            && java.util.Objects.equals(left.waitingReason(), right.waitingReason());
+            && java.util.Objects.equals(left.waitingReason(), right.waitingReason())
+            && java.util.Objects.equals(left.metadata(), right.metadata());
     }
 
     // === Packet Node ===
@@ -438,11 +593,18 @@ public class ControlNodeGraph {
 
     // === Handoff Node ===
     private Task handoffNode(Task task) {
+        return handoffNode(task, false);
+    }
+
+    private Task handoffNode(Task task, boolean continueImmediately) {
         log.info("[Handoff] task={}", task.id());
         emitEvent(task, "node_handoff", "Executing handoff");
 
-        Task moved = task.withControlNode("scheduler");
+        Task moved = clearAutoContinueHandoff(task).withControlNode("scheduler");
         taskDao.updateState(moved);
+        if (continueImmediately) {
+            return schedulerNode(moved);
+        }
         return moved;
     }
 
@@ -502,13 +664,139 @@ public class ControlNodeGraph {
         consolidation.consolidate(task, checkpointType);
     }
 
+    private WorkerRouter.RouteResult selectExecutionWorker(Task task) {
+        if (router == null) {
+            return null;
+        }
+        return router.selectWorker(withMetadataEntries(task, "orchestration_stage", "execution_pending"));
+    }
+
+    private Task markOrchestrationCompleted(Task task) {
+        if (!isOrchestrated(task)) {
+            return task;
+        }
+        return withMetadataEntries(task,
+            "orchestration_stage", "completed",
+            "auto_continue_handoff", false
+        );
+    }
+
+    private Task clearAutoContinueHandoff(Task task) {
+        if (task == null || task.metadata() == null || !task.metadata().containsKey("auto_continue_handoff")) {
+            return task;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(task.metadata());
+        metadata.remove("auto_continue_handoff");
+        return task.withMetadata(metadata);
+    }
+
+    private Task withMetadataEntries(Task task, Object... entries) {
+        if (task == null || entries == null || entries.length == 0) {
+            return task;
+        }
+        Map<String, Object> metadata = task.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(task.metadata());
+        for (int i = 0; i + 1 < entries.length; i += 2) {
+            Object key = entries[i];
+            if (key == null) {
+                continue;
+            }
+            Object value = entries[i + 1];
+            if (value == null) {
+                metadata.remove(key.toString());
+            } else {
+                metadata.put(key.toString(), value);
+            }
+        }
+        return task.withMetadata(metadata);
+    }
+
+    private boolean shouldAutoContinueHandoff(Task task) {
+        return task != null
+            && Boolean.parseBoolean(metadataString(task.metadata(), "auto_continue_handoff"))
+            && isOrchestrated(task)
+            && isExecutionStage(orchestrationStage(task));
+    }
+
+    private boolean isOrchestrated(Task task) {
+        return "orchestrated".equalsIgnoreCase(metadataString(task != null ? task.metadata() : null, "model_mode"));
+    }
+
+    private String orchestrationStage(Task task) {
+        return metadataString(task != null ? task.metadata() : null, "orchestration_stage");
+    }
+
+    private boolean isPlannerStage(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return false;
+        }
+        return "plan_pending".equalsIgnoreCase(stage) || "planner_active".equalsIgnoreCase(stage);
+    }
+
+    private boolean isExecutionStage(String stage) {
+        return stage != null && stage.toLowerCase().startsWith("execution");
+    }
+
+    private String normalizeAlignment(String alignmentLevel) {
+        String normalized = firstNonBlank(alignmentLevel, "medium");
+        return "low".equalsIgnoreCase(normalized) ? "medium" : normalized;
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private String mergeReasons(String left, String right) {
+        String normalizedLeft = firstNonBlank(left);
+        String normalizedRight = firstNonBlank(right);
+        if (normalizedLeft == null) {
+            return normalizedRight;
+        }
+        if (normalizedRight == null) {
+            return normalizedLeft;
+        }
+        return normalizedLeft + "; " + normalizedRight;
+    }
+
+    private String resolvePreassignedWorkerReason(Task task) {
+        return firstNonBlank(
+            metadataString(task != null ? task.metadata() : null, "preassigned_selection_reason"),
+            metadataString(task != null ? task.metadata() : null, "orchestration_reason"),
+            task != null && task.assignedWorker() != null
+                ? "task already assigned to worker=" + task.assignedWorker()
+                : null
+        );
+    }
+
     private Map<String, Object> buildWorkerArtifactMetadata(WorkerExecutionResult executionResult, Object... entries) {
         Map<String, Object> metadata = metadataOf(entries);
-        Map<String, Object> latestWorkerMetadata = selectLatestWorkerMetadata(executionResult != null ? executionResult.metadata() : null);
+        Map<String, Object> latestWorkerMetadata = mergeLatestWorkerMetadata(
+            metadata,
+            executionResult != null ? executionResult.metadata() : null
+        );
         if (!latestWorkerMetadata.isEmpty()) {
             metadata.put("latest_worker_metadata", latestWorkerMetadata);
         }
         return metadata;
+    }
+
+    private Map<String, Object> mergeLatestWorkerMetadata(Map<String, Object> primarySource,
+                                                          Map<String, Object> secondarySource) {
+        Map<String, Object> merged = new LinkedHashMap<>();
+        Map<String, Object> primary = selectLatestWorkerMetadata(primarySource);
+        if (!primary.isEmpty()) {
+            merged.putAll(primary);
+        }
+        Map<String, Object> secondary = selectLatestWorkerMetadata(secondarySource);
+        if (!secondary.isEmpty()) {
+            merged.putAll(secondary);
+        }
+        return merged.isEmpty() ? Map.of() : merged;
     }
 
     private Map<String, Object> selectLatestWorkerMetadata(Map<String, Object> source) {
@@ -518,6 +806,20 @@ public class ControlNodeGraph {
         Map<String, Object> selected = new LinkedHashMap<>();
         copyMetadataKey(source, selected, "tool_aware_executor");
         copyMetadataKey(source, selected, "tool_execution_mode");
+        copyMetadataKey(source, selected, "selected_worker");
+        copyMetadataKey(source, selected, "selected_worker_type");
+        copyMetadataKey(source, selected, "selected_model_tier");
+        copyMetadataKey(source, selected, "execution_role");
+        copyMetadataKey(source, selected, "why_selected");
+        copyMetadataKey(source, selected, "preferred_worker_hint");
+        copyMetadataKey(source, selected, "learning_hint_applied");
+        copyMetadataKey(source, selected, "fallback_reason");
+        copyMetadataKey(source, selected, "route_source");
+        copyMetadataKey(source, selected, "model_mode");
+        copyMetadataKey(source, selected, "orchestration_stage");
+        copyMetadataKey(source, selected, "planner_worker");
+        copyMetadataKey(source, selected, "executor_worker");
+        copyMetadataKey(source, selected, "target_worker");
         copyMetadataKey(source, selected, "tool_name");
         copyMetadataKey(source, selected, "tool_success");
         copyMetadataKey(source, selected, "tool_summary");
@@ -537,6 +839,10 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "next_round_instruction");
         copyMetadataKey(source, selected, "tool_round_index");
         copyMetadataKey(source, selected, "declared_round_count");
+        copyMetadataKey(source, selected, "max_tool_rounds");
+        copyMetadataKey(source, selected, "tool_chain_step_count");
+        copyMetadataKey(source, selected, "tool_chain_termination_reason");
+        copyMetadataKey(source, selected, "tool_chain_trace");
         return selected;
     }
 
@@ -545,6 +851,18 @@ public class ControlNodeGraph {
         if (value != null) {
             target.put(key, value);
         }
+    }
+
+    private String workerMetadata(Worker worker, String key) {
+        if (worker == null || worker.metadata() == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = worker.metadata().get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : value.toString();
     }
 
     private void emitEvent(Task task, String eventType, String summary) {
@@ -563,4 +881,10 @@ public class ControlNodeGraph {
         }
         return metadata;
     }
+
+    private record OrchestrationJudgment(
+        Task task,
+        com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+        com.agentcloud.judgment.model.CompletionDecision completionDecision
+    ) {}
 }

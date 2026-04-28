@@ -21,19 +21,19 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("config_present", true, "backend_reachable", true),
-            Map.of(), false, true));
+            Map.of("model_tier", "tool", "primary_role", "tool_executor"), false, true));
         register(new Worker("codex", "codex",
             List.of("coding", "reading", "ops"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(), false, true));
+            Map.of("model_tier", "strong", "primary_role", "planner_executor"), false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(), true, true));
+            Map.of("model_tier", "small", "primary_role", "executor"), true, true));
     }
 
     public void register(Worker worker) {

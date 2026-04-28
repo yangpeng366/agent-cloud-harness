@@ -6,6 +6,7 @@ const state = {
     selectedTaskId: null,
     followupParentTaskId: null,
     liveFlow: null,
+    experimentSummary: null,
     toastTimer: null,
     pollingTimer: null
 };
@@ -39,6 +40,7 @@ const dom = {
     continuitySummary: document.getElementById("continuitySummary"),
     continuityChips: document.getElementById("continuityChips"),
     routeBox: document.getElementById("routeBox"),
+    experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
     artifactList: document.getElementById("artifactList"),
     toolList: document.getElementById("toolList"),
@@ -169,7 +171,9 @@ async function loadTasks() {
 }
 
 async function loadSelectedTask(taskId, loud) {
-    state.liveFlow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    const flow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    state.liveFlow = flow;
+    state.experimentSummary = await loadTaskExperimentSummary(taskId, flow);
     state.selectedTaskId = taskId;
     renderTimeline();
     renderInspector();
@@ -256,7 +260,10 @@ async function onTaskActionClick(event) {
     }
 
     const action = button.dataset.taskAction;
-    await api(`/api/v1/tasks/${encodeURIComponent(state.selectedTaskId)}/${action}`);
+    await api(`/api/v1/tasks/${encodeURIComponent(state.selectedTaskId)}/${action}`, {
+        method: "POST",
+        body: "{}"
+    });
     await loadTasks();
     await loadSelectedTask(state.selectedTaskId, false);
     showToast(`已执行 ${action}`);
@@ -480,6 +487,7 @@ function renderInspector() {
         dom.continuitySummary.innerHTML = emptyState("暂无任务详情");
         dom.continuityChips.innerHTML = "";
         dom.routeBox.innerHTML = emptyState("暂无路由信息");
+        dom.experimentSummary.innerHTML = emptyState("当前任务不属于 experiment batch。");
         dom.decisionList.innerHTML = emptyState("暂无 judgment");
         dom.artifactList.innerHTML = emptyState("暂无 artifact");
         dom.toolList.innerHTML = emptyState("暂无 tool trace");
@@ -493,17 +501,30 @@ function renderInspector() {
     const routePreview = flow?.route_preview || flow?.routePreview;
     const runtimeContext = flow?.runtime_context || flow?.runtimeContext || {};
     const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
+    const experimentRun = experimentRunView(flow);
     const artifacts = runtimeContext.recent_artifacts || runtimeContext.recentArtifacts || [];
     const decisions = runtimeContext.recent_decisions || runtimeContext.recentDecisions || [];
     const tools = flow?.tool_invocations || flow?.toolInvocations || [];
     const latestPacket = flow?.latest_packet || flow?.latestPacket;
+    const experimentMode = firstNonBlank(
+        experimentRun.model_mode,
+        experimentRun.modelMode,
+        task.metadata?.model_mode,
+        task.metadata?.modelMode,
+        "ad hoc"
+    );
+    const toolFacts = toolChainFacts(flow, tools);
+    const toolLabel = toolChainLabel(flow, tools);
+    const toolSummary = toolChainNarrative(flow, tools);
 
     dom.inspectorTitle.textContent = task.title || task.id;
     dom.taskOverview.innerHTML = [
         overviewCard("状态", task.status),
         overviewCard("控制节点", task.control_node || task.controlNode || "intake"),
         overviewCard("当前 worker", task.assigned_worker || task.assignedWorker || "unassigned"),
-        overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none")
+        overviewCard("实验模式", humanizeToken(experimentMode) || experimentMode),
+        overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none"),
+        overviewCard("Tool chain", toolLabel || "none")
     ].join("");
     dom.chainContext.innerHTML = renderChainContext(task);
 
@@ -525,17 +546,8 @@ function renderInspector() {
     ];
     dom.continuityChips.innerHTML = chips.length > 0 ? chips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("") : emptyState("当前 active context 没有额外 hint。");
 
-    dom.routeBox.innerHTML = routePreview ? `
-        <div class="route-box">
-            <div class="artifact-item__meta">
-                <span class="task-badge">${escapeHtml(routePreview.selected_worker || routePreview.selectedWorker || "unassigned")}</span>
-                <span>${escapeHtml(routePreview.route_source || routePreview.routeSource || "router")}</span>
-                <span>${escapeHtml(routePreview.task_type || routePreview.taskType || "general")}</span>
-            </div>
-            <p>${escapeHtml(routePreview.route_reason || routePreview.routeReason || "")}</p>
-            <p class="mono">${escapeHtml((routePreview.candidate_workers || routePreview.candidateWorkers || []).join(", "))}</p>
-        </div>
-    ` : emptyState("暂无 route preview");
+    dom.routeBox.innerHTML = renderRouteBox(flow, task);
+    dom.experimentSummary.innerHTML = renderExperimentSummary(flow, state.experimentSummary);
 
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
@@ -564,8 +576,7 @@ function renderInspector() {
         `).join("")
         : emptyState("暂无 artifact");
 
-    dom.toolList.innerHTML = tools.length > 0
-        ? tools.map((tool) => `
+    const toolCards = tools.map((tool) => `
             <div class="tool-item">
                 <div class="tool-item__meta">
                     <span class="task-badge" data-tone="${tool.success ? "active" : "failed"}">${tool.success ? "success" : "failed"}</span>
@@ -575,8 +586,11 @@ function renderInspector() {
                 </div>
                 <p>${escapeHtml(preview(tool.result_summary || tool.resultSummary || "", 220))}</p>
             </div>
-        `).join("")
-        : emptyState("当前任务还没有 tool trace");
+        `);
+    if (toolSummary) {
+        toolCards.unshift(renderToolChainSummaryCard(toolFacts, toolLabel, toolSummary));
+    }
+    dom.toolList.innerHTML = toolCards.length > 0 ? toolCards.join("") : emptyState("当前任务还没有 tool trace");
 
     dom.rawJson.textContent = JSON.stringify(flow, null, 2);
     setTaskActionState(true);
@@ -636,14 +650,14 @@ function buildAssistantMessage(task, flow) {
 
 function buildAssistantSignals(task, flow) {
     const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
-    const routePreview = flow?.route_preview || flow?.routePreview || {};
     const latestPacket = flow?.latest_packet || flow?.latestPacket || {};
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment || {};
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment || {};
     const signals = [
         valueLine("action", judgmentTrace.recommended_action || judgmentTrace.recommendedAction || executionJudgment.metadata?.action),
         valueLine("completion", completionJudgment.metadata?.completion_status || completionJudgment.metadata?.status),
-        valueLine("route", routePreview.selected_worker || routePreview.selectedWorker),
+        valueLine("route", routeSignal(flow)),
+        valueLine("tools", toolChainLabel(flow)),
         valueLine("packet", latestPacket.active_task_summary || latestPacket.activeTaskSummary)
     ].filter(Boolean);
     return signals.slice(0, 4);
@@ -723,6 +737,446 @@ function followupSourceTask() {
 function latestOutput(flow) {
     const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
     return judgmentTrace.latest_output || judgmentTrace.latestOutput || null;
+}
+
+function experimentRunView(flow) {
+    return flow?.experiment_run || flow?.experimentRun || {};
+}
+
+function experimentRunMetadata(flow) {
+    const experimentRun = experimentRunView(flow);
+    return experimentRun.metadata || {};
+}
+
+async function loadTaskExperimentSummary(taskId, flow) {
+    const experimentRun = experimentRunView(flow);
+    const experimentName = firstNonBlank(
+        experimentRun.experiment_name,
+        experimentRun.experimentName
+    );
+    if (!experimentName) {
+        return null;
+    }
+    try {
+        return await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/experiment_summary`);
+    } catch (error) {
+        console.warn("experiment summary unavailable", error);
+        return null;
+    }
+}
+
+function renderRouteBox(flow, task) {
+    const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const experimentRun = experimentRunView(flow);
+    const metadata = experimentRunMetadata(flow);
+    const selectedWorker = firstNonBlank(
+        routePreview.selected_worker,
+        routePreview.selectedWorker,
+        task?.assigned_worker,
+        task?.assignedWorker,
+        "unassigned"
+    );
+    const routeSource = firstNonBlank(
+        routePreview.route_source,
+        routePreview.routeSource,
+        metadata.route_source,
+        metadata.routeSource,
+        "router"
+    );
+    const taskType = firstNonBlank(
+        routePreview.task_type,
+        routePreview.taskType,
+        experimentRun.task_type,
+        experimentRun.taskType,
+        task?.metadata?.task_type,
+        task?.metadata?.taskType,
+        "general"
+    );
+    const modelMode = firstNonBlank(
+        experimentRun.model_mode,
+        experimentRun.modelMode,
+        metadata.model_mode,
+        metadata.modelMode
+    );
+    const preferredWorkerHint = firstNonBlank(
+        routePreview.preferred_worker_hint,
+        routePreview.preferredWorkerHint,
+        metadata.preferred_worker_hint,
+        metadata.preferredWorkerHint
+    );
+    const fallbackReason = firstNonBlank(
+        metadata.fallback_reason,
+        metadata.fallbackReason
+    );
+    const learningHintApplied = booleanValue(
+        routePreview.learning_hint_applied,
+        routePreview.learningHintApplied,
+        metadata.learning_hint_applied,
+        metadata.learningHintApplied
+    );
+    const candidateWorkers = normalizeTextList(
+        routePreview.candidate_workers,
+        routePreview.candidateWorkers
+    );
+    const routeReason = firstNonBlank(
+        routePreview.route_reason,
+        routePreview.routeReason,
+        fallbackReason
+    );
+    const routeChips = [
+        modelMode ? `mode: ${humanizeToken(modelMode) || modelMode}` : null,
+        preferredWorkerHint ? `hint: ${preferredWorkerHint}` : null,
+        learningHintApplied === true ? "learning: applied" : null,
+        learningHintApplied === false ? "learning: observed, not applied" : null
+    ].filter(Boolean);
+    if (!selectedWorker && !routeReason && candidateWorkers.length === 0 && routeChips.length === 0) {
+        return emptyState("暂无 route preview");
+    }
+    return `
+        <div class="route-box">
+            <div class="artifact-item__meta">
+                <span class="task-badge">${escapeHtml(selectedWorker)}</span>
+                <span>${escapeHtml(routeSource)}</span>
+                <span>${escapeHtml(taskType)}</span>
+            </div>
+            ${routeReason ? `<p>${escapeHtml(routeReason)}</p>` : ""}
+            ${candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(candidateWorkers.join(", "))}</p>` : ""}
+            ${routeChips.length > 0 ? `
+                <div class="chip-group experiment-summary__chips">
+                    ${routeChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
+                </div>
+            ` : ""}
+        </div>
+    `;
+}
+
+function renderExperimentSummary(flow, summary) {
+    const experimentRun = experimentRunView(flow);
+    const metadata = experimentRunMetadata(flow);
+    const experimentName = firstNonBlank(
+        experimentRun.experiment_name,
+        experimentRun.experimentName,
+        metadata.experiment_name,
+        metadata.experimentName
+    );
+    if (!experimentName) {
+        return emptyState("当前任务不属于 experiment batch。");
+    }
+
+    const currentMode = firstNonBlank(
+        experimentRun.model_mode,
+        experimentRun.modelMode,
+        metadata.model_mode,
+        metadata.modelMode,
+        "orchestrated"
+    );
+    const taskCaseKey = firstNonBlank(
+        experimentRun.task_case_key,
+        experimentRun.taskCaseKey,
+        metadata.task_case_key,
+        metadata.taskCaseKey
+    );
+    const acceptanceResult = firstNonBlank(
+        experimentRun.acceptance_result,
+        experimentRun.acceptanceResult,
+        "not_evaluated"
+    );
+    const taskLengthBucket = firstNonBlank(
+        experimentRun.task_length_bucket,
+        experimentRun.taskLengthBucket,
+        metadata.task_length_bucket,
+        metadata.taskLengthBucket,
+        "unspecified"
+    );
+    const modeSummaries = summary?.mode_summaries || summary?.modeSummaries || [];
+    const supportedModes = summary?.supported_modes || summary?.supportedModes || [];
+    const caseComparisons = summary?.case_comparisons || summary?.caseComparisons || [];
+    const currentCase = taskCaseKey
+        ? caseComparisons.find((item) => firstNonBlank(item.task_case_key, item.taskCaseKey) === taskCaseKey)
+        : null;
+    const summaryChips = [
+        `mode: ${humanizeToken(currentMode) || currentMode}`,
+        taskCaseKey ? `case: ${taskCaseKey}` : null,
+        `acceptance: ${humanizeToken(acceptanceResult) || acceptanceResult}`,
+        `bucket: ${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
+        summary ? `runs: ${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)}` : null
+    ].filter(Boolean);
+    return `
+        <div class="experiment-summary">
+            <div class="artifact-item__meta">
+                <span class="task-badge">${escapeHtml(experimentName)}</span>
+                <span>${escapeHtml(firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "current task"))}</span>
+            </div>
+            <div class="chip-group experiment-summary__chips">
+                ${summaryChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
+            </div>
+            ${summary ? `
+                <div class="experiment-summary__grid">
+                    ${modeSummaries.map((mode) => renderExperimentModeCard(mode, currentMode)).join("")}
+                </div>
+                ${currentCase ? `
+                    <div class="experiment-summary__case-grid">
+                        ${(supportedModes.length > 0 ? supportedModes : Object.keys(currentCase.runs_by_mode || currentCase.runsByMode || {}))
+                            .map((mode) => renderExperimentCaseCard(mode, currentCase, currentMode))
+                            .join("")}
+                    </div>
+                ` : emptyState("当前 task case 还没有三种 mode 对比。")}
+            ` : `
+                ${emptyState("实验 run 已识别，但聚合 summary 暂时不可用。")}
+            `}
+        </div>
+    `;
+}
+
+function renderExperimentModeCard(modeSummary, currentMode) {
+    const modelMode = firstNonBlank(modeSummary?.model_mode, modeSummary?.modelMode, "unknown");
+    const acceptanceRate = numberOrNull(modeSummary?.acceptance_rate, modeSummary?.acceptanceRate) ?? 0;
+    const completionRate = numberOrNull(modeSummary?.completion_rate, modeSummary?.completionRate) ?? 0;
+    const learningHintAppliedRate = numberOrNull(
+        modeSummary?.learning_hint_applied_rate,
+        modeSummary?.learningHintAppliedRate
+    ) ?? 0;
+    const averageToolChainStepCount = numberOrNull(
+        modeSummary?.average_tool_chain_step_count,
+        modeSummary?.averageToolChainStepCount
+    ) ?? 0;
+    const routeSourceCounts = modeSummary?.route_source_counts || modeSummary?.routeSourceCounts || {};
+    const isCurrent = modelMode === currentMode ? " is-current" : "";
+    return `
+        <div class="experiment-mode-card${isCurrent}">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${modelMode === currentMode ? "active" : "default"}">${escapeHtml(modelMode)}</span>
+                <span>${escapeHtml(String(numberOrNull(modeSummary?.run_count, modeSummary?.runCount) ?? 0))} runs</span>
+                <span>${escapeHtml(formatRate(acceptanceRate))} accept</span>
+            </div>
+            <strong>${escapeHtml(`${formatRate(completionRate)} done · ${formatRate(learningHintAppliedRate)} learned hint applied`)}</strong>
+            <p>${escapeHtml(`${formatDecimal(averageToolChainStepCount)} avg tool steps · ${summarizeCountMap(routeSourceCounts)}`)}</p>
+        </div>
+    `;
+}
+
+function renderExperimentCaseCard(mode, caseComparison, currentMode) {
+    const runsByMode = caseComparison?.runs_by_mode || caseComparison?.runsByMode || {};
+    const run = runsByMode[mode];
+    const isCurrent = mode === currentMode ? " is-current" : "";
+    if (!run) {
+        return `
+            <div class="experiment-case-card${isCurrent}">
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${mode === currentMode ? "active" : "default"}">${escapeHtml(mode)}</span>
+                </div>
+                <strong>missing</strong>
+                <p>当前 case 还没有这个 mode 的 run。</p>
+            </div>
+        `;
+    }
+    const completionStatus = firstNonBlank(run.completion_status, run.completionStatus, "active");
+    const acceptanceResult = firstNonBlank(run.acceptance_result, run.acceptanceResult, "not_evaluated");
+    return `
+        <div class="experiment-case-card${isCurrent}">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${mode === currentMode ? "active" : "default"}">${escapeHtml(mode)}</span>
+                <span>${escapeHtml(humanizeToken(completionStatus) || completionStatus)}</span>
+            </div>
+            <strong>${escapeHtml(humanizeToken(acceptanceResult) || acceptanceResult)}</strong>
+            <p>${escapeHtml(`steps ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} · cost ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
+        </div>
+    `;
+}
+
+function routeSignal(flow) {
+    const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const metadata = experimentRunMetadata(flow);
+    const worker = firstNonBlank(
+        routePreview.selected_worker,
+        routePreview.selectedWorker,
+        metadata.assigned_worker,
+        metadata.assignedWorker
+    );
+    const source = firstNonBlank(
+        routePreview.route_source,
+        routePreview.routeSource,
+        metadata.route_source,
+        metadata.routeSource
+    );
+    if (!worker) {
+        return null;
+    }
+    return source ? `${worker} via ${humanizeToken(source) || source}` : worker;
+}
+
+function toolChainFacts(flow, tools = []) {
+    const metadata = experimentRunMetadata(flow);
+    const stepCount = numericValue(
+        metadata.tool_chain_step_count,
+        metadata.toolChainStepCount
+    ) ?? maxToolStepIndex(tools);
+    const terminationReason = firstNonBlank(
+        metadata.tool_chain_termination_reason,
+        metadata.toolChainTerminationReason
+    );
+    const traceSummary = firstNonBlank(
+        metadata.tool_chain_trace_summary,
+        metadata.toolChainTraceSummary
+    );
+    const toolExecutionMode = firstNonBlank(
+        metadata.tool_execution_mode,
+        metadata.toolExecutionMode
+    );
+    const toolNames = normalizeTextList(
+        metadata.tool_chain_tools,
+        metadata.toolChainTools,
+        tools.map((tool) => tool.tool_name || tool.toolName)
+    );
+    return {
+        stepCount,
+        terminationReason,
+        traceSummary,
+        toolExecutionMode,
+        toolNames
+    };
+}
+
+function toolChainLabel(flow, tools = []) {
+    const facts = toolChainFacts(flow, tools);
+    const parts = [
+        facts.stepCount ? formatCount(facts.stepCount, "step") : null,
+        facts.terminationReason ? humanizeToken(facts.terminationReason) : null,
+        !facts.terminationReason && facts.toolExecutionMode ? humanizeToken(facts.toolExecutionMode) : null
+    ].filter(Boolean);
+    return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function toolChainNarrative(flow, tools = []) {
+    const facts = toolChainFacts(flow, tools);
+    if (facts.traceSummary) {
+        return facts.traceSummary.replace(/_/g, " ");
+    }
+    const label = toolChainLabel(flow, tools);
+    if (!label && facts.toolNames.length === 0) {
+        return null;
+    }
+    if (facts.toolNames.length === 0) {
+        return label;
+    }
+    return [label, facts.toolNames.map(humanizeToken).join(" -> ")].filter(Boolean).join(" · ");
+}
+
+function renderToolChainSummaryCard(facts, label, summary) {
+    const metaParts = [
+        label,
+        facts.toolNames.length > 0 ? facts.toolNames.map(humanizeToken).join(", ") : null
+    ].filter(Boolean);
+    return `
+        <div class="tool-item">
+            <div class="tool-item__meta">
+                <span class="task-badge" data-tone="auto">summary</span>
+                ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
+            </div>
+            <p>${escapeHtml(preview(summary, 220))}</p>
+        </div>
+    `;
+}
+
+function numericValue(...values) {
+    for (const value of values) {
+        const number = Number(value);
+        if (Number.isFinite(number) && number > 0) {
+            return number;
+        }
+    }
+    return null;
+}
+
+function numberOrNull(...values) {
+    for (const value of values) {
+        const number = Number(value);
+        if (Number.isFinite(number)) {
+            return number;
+        }
+    }
+    return null;
+}
+
+function booleanValue(...values) {
+    for (const value of values) {
+        if (value === true || value === "true") {
+            return true;
+        }
+        if (value === false || value === "false") {
+            return false;
+        }
+    }
+    return null;
+}
+
+function formatRate(value) {
+    const number = numberOrNull(value);
+    if (number === null) {
+        return "0%";
+    }
+    const percent = number * 100;
+    return Number.isInteger(percent) ? `${percent.toFixed(0)}%` : `${percent.toFixed(1)}%`;
+}
+
+function formatDecimal(value, digits = 1) {
+    const number = numberOrNull(value);
+    if (number === null) {
+        return digits === 0 ? "0" : (0).toFixed(digits);
+    }
+    return number.toFixed(digits);
+}
+
+function summarizeCountMap(map) {
+    const entries = Object.entries(map || {})
+        .filter(([, count]) => numberOrNull(count) !== null)
+        .sort((left, right) => {
+            const countDiff = Number(right[1]) - Number(left[1]);
+            if (countDiff !== 0) {
+                return countDiff;
+            }
+            return String(left[0]).localeCompare(String(right[0]));
+        });
+    if (entries.length === 0) {
+        return "no route sample";
+    }
+    return entries.slice(0, 3)
+        .map(([key, count]) => `${humanizeToken(key) || key} ${count}`)
+        .join(" · ");
+}
+
+function maxToolStepIndex(tools = []) {
+    let max = 0;
+    tools.forEach((tool) => {
+        const step = numericValue(tool.metadata?.step_index, tool.metadata?.stepIndex);
+        if (step && step > max) {
+            max = step;
+        }
+    });
+    return max > 0 ? max : null;
+}
+
+function normalizeTextList(...values) {
+    for (const value of values) {
+        if (Array.isArray(value)) {
+            const items = value
+                .map((item) => typeof item === "string" ? item.trim() : "")
+                .filter(Boolean);
+            if (items.length > 0) {
+                return [...new Set(items)];
+            }
+        }
+    }
+    return [];
+}
+
+function humanizeToken(value) {
+    const text = firstNonBlank(value);
+    return text ? text.replace(/_/g, " ") : null;
+}
+
+function formatCount(value, noun) {
+    return `${value} ${noun}${value === 1 ? "" : "s"}`;
 }
 
 function valueLine(label, value) {

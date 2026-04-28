@@ -1,6 +1,7 @@
 package com.agentcloud.model;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -63,6 +64,13 @@ public record Task(
         return new Task(id, sessionId, parentTaskId, title, status, priority,
             createdAt, Instant.now(), startedAt, completedAt, ownerRole, summary, goal, nextStep,
             assignedWorker, node, waitingReason, metadata);
+    }
+
+    public Task withMetadata(Map<String, Object> newMetadata) {
+        Map<String, Object> copied = newMetadata == null ? null : new LinkedHashMap<>(newMetadata);
+        return new Task(id, sessionId, parentTaskId, title, status, priority,
+            createdAt, Instant.now(), startedAt, completedAt, ownerRole, summary, goal, nextStep,
+            assignedWorker, controlNode, waitingReason, copied);
     }
 
     public Task withWaitingReason(String reason) {

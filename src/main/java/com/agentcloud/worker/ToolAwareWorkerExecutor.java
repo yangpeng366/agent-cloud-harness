@@ -19,12 +19,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,7 @@ import java.util.regex.Pattern;
 public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ToolAwareWorkerExecutor.class);
     private static final ObjectMapper MAPPER = JsonMapper.MAPPER;
+    private static final int MAX_TOOL_ROUNDS = 3;
     private static final Pattern ROUND_INSTRUCTION_PATTERN =
         Pattern.compile("(?im)^Round\\s+(\\d+)\\s*:\\s*(.+)$");
 
@@ -69,8 +73,23 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return fallbackExecutor.executeOneRound(context, workerId);
         }
 
-        long startMs = System.currentTimeMillis();
         TaskToolState toolStateBefore = inspectTaskToolState(context);
+        if (shouldUseLegacySingleToolPath(toolStateBefore)) {
+            return executeSingleToolRound(context, worker, toolStateBefore);
+        }
+        return executeMultiToolRound(context, worker, toolStateBefore);
+    }
+
+    private boolean shouldUseLegacySingleToolPath(TaskToolState toolState) {
+        return toolState == null
+            || toolState.declaredRoundCount() > 0
+            || requiresCurrentRoundWrite(toolState);
+    }
+
+    private WorkerExecutionResult executeSingleToolRound(TaskRuntimeContext context,
+                                                         Worker worker,
+                                                         TaskToolState toolStateBefore) {
+        long startMs = System.currentTimeMillis();
         boolean currentRoundRequiresWrite = requiresCurrentRoundWrite(toolStateBefore);
         if (currentRoundRequiresWrite && !instructionSuggestsFileRead(toolStateBefore.currentRoundInstruction())) {
             log.info("Current round requires grounded write, skipping planning and going direct auto-write. task={} worker={}",
@@ -91,7 +110,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             }
             return delegateWithMetadata(
                 context,
-                workerId,
+                worker.workerId(),
                 "planned_no_tool_fallback",
                 Map.of(
                     "tool_aware_executor", true,
@@ -160,8 +179,149 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             grounded.suggestedNextStep(),
             grounded.confidence(),
             grounded.tokenUsage(),
-            totalDurationMs,
-            metadata
+                totalDurationMs,
+                metadata
+            );
+    }
+
+    private WorkerExecutionResult executeMultiToolRound(TaskRuntimeContext context,
+                                                        Worker worker,
+                                                        TaskToolState initialToolState) {
+        long startMs = System.currentTimeMillis();
+        TaskToolState currentToolState = initialToolState;
+        TaskToolState lastToolStateBefore = initialToolState;
+        TaskToolState lastToolStateAfter = initialToolState;
+        ToolPlan lastPlan = null;
+        ToolExecutionOutcome lastOutcome = null;
+        List<ToolChainStep> toolChain = new ArrayList<>();
+        String terminationReason = "planner_no_additional_tool";
+
+        for (int stepIndex = 1; stepIndex <= MAX_TOOL_ROUNDS; stepIndex++) {
+            ToolPlan plan = planTool(context, worker, currentToolState);
+            if (!toolChain.isEmpty()) {
+                toolChain = updateLastWhyNextStep(
+                    toolChain,
+                    firstNonBlank(plan.reason(), "continue with another grounded tool step")
+                );
+            }
+
+            if (!plan.needsTool() || plan.toolName().isBlank()) {
+                if (toolChain.isEmpty()) {
+                    return delegateWithMetadata(
+                        context,
+                        worker.workerId(),
+                        "planned_no_tool_fallback",
+                        Map.of(
+                            "tool_aware_executor", true,
+                            "tool_execution_mode", "multi_tool_round",
+                            "tool_plan_reason", plan.reason(),
+                            "tool_plan_raw", truncate(plan.rawResponse(), 1200),
+                            "max_tool_rounds", MAX_TOOL_ROUNDS,
+                            "tool_chain_step_count", 0,
+                            "tool_chain_termination_reason", "planner_no_additional_tool"
+                        )
+                    );
+                }
+                terminationReason = "planner_no_additional_tool";
+                toolChain = updateLastWhyNextStep(
+                    toolChain,
+                    firstNonBlank(plan.reason(), "planner requested finalization")
+                );
+                break;
+            }
+
+            String repeatedGuardReason = repeatedToolGuardReason(plan, toolChain);
+            if (!repeatedGuardReason.isBlank()) {
+                if (toolChain.isEmpty()) {
+                    return delegateWithMetadata(
+                        context,
+                        worker.workerId(),
+                        "repeated_tool_guard_fallback",
+                        Map.of(
+                            "tool_aware_executor", true,
+                            "tool_execution_mode", "multi_tool_round",
+                            "tool_plan_reason", plan.reason(),
+                            "tool_plan_raw", truncate(plan.rawResponse(), 1200),
+                            "max_tool_rounds", MAX_TOOL_ROUNDS,
+                            "tool_chain_step_count", 0,
+                            "tool_chain_termination_reason", "repeated_tool_guard"
+                        )
+                    );
+                }
+                terminationReason = "repeated_tool_guard";
+                toolChain = updateLastWhyNextStep(toolChain, repeatedGuardReason);
+                break;
+            }
+
+            lastToolStateBefore = currentToolState;
+            ToolExecutionOutcome outcome = invokeTool(context, worker, plan, "multi_tool_round", stepIndex);
+            TaskToolState toolStateAfter = inspectTaskToolState(context);
+
+            toolChain.add(new ToolChainStep(
+                stepIndex,
+                plan.toolName(),
+                plan.toolArguments(),
+                outcome.result().summary(),
+                plan.reason(),
+                "",
+                outcome.result().success(),
+                outcome.elapsedMs(),
+                truncate(outcome.result().output(), 1200)
+            ));
+
+            lastPlan = plan;
+            lastOutcome = outcome;
+            lastToolStateAfter = toolStateAfter;
+            currentToolState = toolStateAfter;
+
+            String noProgressReason = noProgressGuardReason(plan, outcome, lastToolStateBefore, lastToolStateAfter);
+            if (!noProgressReason.isBlank()) {
+                terminationReason = "no_progress_guard";
+                toolChain = updateLastWhyNextStep(toolChain, noProgressReason);
+                break;
+            }
+
+            if (stepIndex == MAX_TOOL_ROUNDS) {
+                terminationReason = "max_tool_rounds_reached";
+                toolChain = updateLastWhyNextStep(toolChain, "stop: max_tool_rounds reached");
+                break;
+            }
+        }
+
+        if (toolChain.isEmpty() || lastPlan == null || lastOutcome == null) {
+            return delegateWithMetadata(
+                context,
+                worker.workerId(),
+                "multi_tool_empty_chain_fallback",
+                Map.of(
+                    "tool_aware_executor", true,
+                    "tool_execution_mode", "multi_tool_round",
+                    "max_tool_rounds", MAX_TOOL_ROUNDS,
+                    "tool_chain_step_count", 0,
+                    "tool_chain_termination_reason", terminationReason
+                )
+            );
+        }
+
+        long totalDurationMs = System.currentTimeMillis() - startMs;
+        WorkerExecutionResult finalized = finalizeMultiToolResult(
+            context,
+            worker,
+            toolChain,
+            lastToolStateBefore,
+            lastToolStateAfter,
+            totalDurationMs
+        );
+        return attachMultiToolMetadata(
+            worker,
+            finalized,
+            toolChain,
+            initialToolState,
+            lastPlan,
+            lastOutcome,
+            lastToolStateAfter,
+            terminationReason,
+            totalDurationMs
         );
     }
 
@@ -183,6 +343,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private ToolExecutionOutcome invokeTool(TaskRuntimeContext context, Worker worker, ToolPlan plan) {
+        return invokeTool(context, worker, plan, "single_tool_round", null);
+    }
+
+    private ToolExecutionOutcome invokeTool(TaskRuntimeContext context,
+                                            Worker worker,
+                                            ToolPlan plan,
+                                            String executionMode,
+                                            Integer stepIndex) {
         ToolRequest request = new ToolRequest(
             context.task().sessionId(),
             context.task().id(),
@@ -195,7 +363,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         ToolResult result;
         LinkedHashMap<String, Object> traceMetadata = new LinkedHashMap<>();
         traceMetadata.put("planning_reason", plan.reason());
-        traceMetadata.put("tool_execution_mode", "single_tool_round");
+        traceMetadata.put("tool_execution_mode", firstNonBlank(executionMode, "single_tool_round"));
+        traceMetadata.put("selected_tool", plan.toolName());
+        traceMetadata.put("selected_args", plan.toolArguments());
+        traceMetadata.put("why_selected", plan.reason());
+        if (stepIndex != null && stepIndex > 0) {
+            traceMetadata.put("tool_chain_step_index", stepIndex);
+        }
 
         try {
             toolPolicy.ensureToolAllowed(worker, plan.toolName());
@@ -212,6 +386,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
 
         int elapsedMs = (int) (System.currentTimeMillis() - startedAt);
+        traceMetadata.put("result_summary", result.summary());
+        traceMetadata.put("tool_success", result.success());
         toolInvocationDao.insert(new ToolInvocationRecord(
             IdGenerator.newId("tool"),
             context.task().sessionId(),
@@ -651,6 +827,321 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private WorkerExecutionResult finalizeMultiToolResult(TaskRuntimeContext context,
+                                                          Worker worker,
+                                                          List<ToolChainStep> toolChain,
+                                                          TaskToolState toolStateBefore,
+                                                          TaskToolState toolStateAfter,
+                                                          long totalDurationMs) {
+        try {
+            String raw = llmClient.chat(
+                buildMultiToolFinalizationSystemPrompt(worker),
+                buildMultiToolFinalizationUserPrompt(context, worker, toolChain, toolStateBefore, toolStateAfter)
+            );
+            WorkerExecutionResult parsed = parseExecutionResult(raw, totalDurationMs);
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(parsed.metadata());
+            metadata.put("tool_finalize_raw", truncate(raw, 1200));
+            return new WorkerExecutionResult(
+                parsed.summary(),
+                parsed.outputText(),
+                parsed.producedArtifact(),
+                parsed.artifactTitle(),
+                parsed.artifactContent(),
+                parsed.suggestedNextStep(),
+                parsed.confidence(),
+                parsed.tokenUsage(),
+                totalDurationMs,
+                metadata
+            );
+        } catch (Exception e) {
+            ToolChainStep lastStep = toolChain.get(toolChain.size() - 1);
+            log.warn("Multi-tool finalization failed, using synthetic fallback. task={} worker={} reason={}",
+                context.task().id(), worker.workerId(), e.getMessage());
+            String output = formatToolChainTrace(toolChain);
+            String summary = firstNonBlank(
+                lastStep.resultSummary(),
+                "已完成多步工具链执行，使用直接回退摘要。"
+            );
+            return new WorkerExecutionResult(
+                summary,
+                truncate(output, 1200),
+                false,
+                "",
+                "",
+                defaultNextStep(toolStateAfter, toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()),
+                "medium",
+                0,
+                totalDurationMs,
+                Map.of("parser", "multi_tool_direct_fallback")
+            );
+        }
+    }
+
+    private WorkerExecutionResult attachMultiToolMetadata(Worker worker,
+                                                          WorkerExecutionResult finalized,
+                                                          List<ToolChainStep> toolChain,
+                                                          TaskToolState initialToolState,
+                                                          ToolPlan lastPlan,
+                                                          ToolExecutionOutcome lastOutcome,
+                                                          TaskToolState finalToolState,
+                                                          String terminationReason,
+                                                          long totalDurationMs) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
+        boolean outputFileRequired = finalToolState.outputFilePath() != null && !finalToolState.outputFilePath().isBlank();
+        boolean fileBackedArtifact = hasSuccessfulWrite(toolChain)
+            && finalToolState.outputFileExists()
+            && outputFileStateChanged(initialToolState, finalToolState);
+
+        metadata.put("tool_aware_executor", true);
+        metadata.put("tool_execution_mode", "multi_tool_round");
+        metadata.put("max_tool_rounds", MAX_TOOL_ROUNDS);
+        metadata.put("tool_name", lastPlan.toolName());
+        metadata.put("tool_plan_reason", lastPlan.reason());
+        metadata.put("tool_arguments", lastPlan.toolArguments());
+        metadata.put("tool_success", lastOutcome.result().success());
+        metadata.put("tool_summary", lastOutcome.result().summary());
+        metadata.put("tool_elapsed_ms", lastOutcome.elapsedMs());
+        metadata.put("tool_output_preview", truncate(lastOutcome.result().output(), 500));
+        metadata.put("tool_round_index", finalToolState.totalToolCount());
+        metadata.put("declared_round_count", finalToolState.declaredRoundCount());
+        metadata.put("output_file_path", finalToolState.outputFilePath());
+        metadata.put("output_file_exists", finalToolState.outputFileExists());
+        metadata.put("output_file_size", finalToolState.outputFileSize());
+        metadata.put("file_backed_artifact", fileBackedArtifact);
+        metadata.put("tool_chain_step_count", toolChain.size());
+        metadata.put("tool_chain_termination_reason", terminationReason);
+        metadata.put("tool_chain_trace", toToolChainTraceMetadata(toolChain));
+        if (!worker.toolScope().isEmpty()) {
+            metadata.put("tool_scope", worker.toolScope());
+        }
+
+        String groundedOutput = mergeGroundedOutput(
+            buildMultiToolGroundedPrefix(toolChain, finalToolState, terminationReason, outputFileRequired, fileBackedArtifact),
+            finalized.outputText(),
+            finalized.artifactContent()
+        );
+
+        String suggestedNextStep = firstNonBlank(
+            finalized.suggestedNextStep(),
+            defaultNextStep(finalToolState, outputFileRequired)
+        );
+        String artifactContent = finalized.artifactContent();
+        if (fileBackedArtifact && (artifactContent == null || artifactContent.isBlank())) {
+            artifactContent = loadExistingOutputFile(finalToolState.outputFilePath(), 1600);
+        }
+
+        return new WorkerExecutionResult(
+            finalized.summary(),
+            groundedOutput,
+            fileBackedArtifact || finalized.producedArtifact(),
+            fileBackedArtifact
+                ? firstNonBlank(finalized.artifactTitle(), fileName(finalToolState.outputFilePath()))
+                : finalized.artifactTitle(),
+            artifactContent,
+            suggestedNextStep,
+            normalizeMultiToolConfidence(finalized.confidence(), terminationReason),
+            finalized.tokenUsage(),
+            totalDurationMs,
+            metadata
+        );
+    }
+
+    private String buildMultiToolFinalizationSystemPrompt(Worker worker) {
+        return "You are a tool-enabled execution worker. Worker ID: " + worker.workerId() + ". "
+            + "You already completed a short grounded tool chain. Produce the current-round result using only the provided tool evidence. "
+            + "Return a JSON object containing exactly these fields: "
+            + "summary (string), output_text (string), produced_artifact (boolean), "
+            + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
+            + "confidence (high|medium|low). "
+            + "Do not invent actions that are not present in the tool chain trace. "
+            + "If a grounded output file exists, you may mark produced_artifact=true. "
+            + "If the tool chain stopped because of repetition, failure, or max rounds, say so clearly. "
+            + "Keep summary concise, output_text under 1200 characters, artifact_content under 1600 characters. "
+            + "No markdown, no extra text.";
+    }
+
+    private String buildMultiToolFinalizationUserPrompt(TaskRuntimeContext context,
+                                                        Worker worker,
+                                                        List<ToolChainStep> toolChain,
+                                                        TaskToolState toolStateBefore,
+                                                        TaskToolState toolStateAfter) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(buildTaskPrompt(context));
+        sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
+        if (!worker.toolScope().isEmpty()) {
+            sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
+        }
+        sb.append("\nMax Tool Rounds: ").append(MAX_TOOL_ROUNDS);
+        sb.append("\nTool Chain Trace:\n").append(formatToolChainTrace(toolChain));
+        if (toolStateBefore.outputFilePath() != null && !toolStateBefore.outputFilePath().isBlank()) {
+            sb.append("\nExpected Output File: ").append(toolStateBefore.outputFilePath());
+        }
+        if (toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()) {
+            sb.append("\nOutput File Exists After Chain: ").append(toolStateAfter.outputFileExists());
+            sb.append("\nOutput File Size After Chain: ").append(toolStateAfter.outputFileSize());
+            String existingFile = loadExistingOutputFile(toolStateAfter.outputFilePath(), 8000);
+            if (!existingFile.isBlank()) {
+                sb.append("\nExisting Output File Content:\n").append(existingFile);
+            }
+        }
+        sb.append("\nProduce the grounded result for this multi-step tool chain now.");
+        return sb.toString();
+    }
+
+    private String formatToolChainTrace(List<ToolChainStep> toolChain) {
+        if (toolChain == null || toolChain.isEmpty()) {
+            return "(no tool chain)";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (ToolChainStep step : toolChain) {
+            sb.append("- Step ").append(step.stepIndex())
+                .append(": ").append(step.selectedTool())
+                .append(" success=").append(step.success())
+                .append(" elapsedMs=").append(step.elapsedMs())
+                .append("\n  Why Selected: ").append(firstNonBlank(step.whySelected(), "(empty)"))
+                .append("\n  Args: ").append(truncate(JsonMapper.toJson(step.arguments()), 300))
+                .append("\n  Result Summary: ").append(firstNonBlank(step.resultSummary(), "(empty)"));
+            if (step.outputPreview() != null && !step.outputPreview().isBlank()) {
+                sb.append("\n  Output Preview: ").append(truncate(step.outputPreview(), 500));
+            }
+            if (step.whyNextStep() != null && !step.whyNextStep().isBlank()) {
+                sb.append("\n  Why Next Step: ").append(step.whyNextStep());
+            }
+            sb.append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private List<ToolChainStep> updateLastWhyNextStep(List<ToolChainStep> toolChain, String whyNextStep) {
+        if (toolChain == null || toolChain.isEmpty()) {
+            return toolChain;
+        }
+        List<ToolChainStep> updated = new ArrayList<>(toolChain);
+        ToolChainStep last = updated.get(updated.size() - 1);
+        updated.set(updated.size() - 1, last.withWhyNextStep(whyNextStep));
+        return updated;
+    }
+
+    private String repeatedToolGuardReason(ToolPlan plan, List<ToolChainStep> toolChain) {
+        String nextFingerprint = toolPlanFingerprint(plan.toolName(), plan.toolArguments());
+        for (ToolChainStep priorStep : toolChain) {
+            String priorFingerprint = toolPlanFingerprint(priorStep.selectedTool(), priorStep.arguments());
+            if (nextFingerprint.equals(priorFingerprint)) {
+                return "stop: repeated_tool_guard, repeated " + plan.toolName() + " with the same arguments";
+            }
+        }
+        return "";
+    }
+
+    private String noProgressGuardReason(ToolPlan plan,
+                                         ToolExecutionOutcome outcome,
+                                         TaskToolState toolStateBefore,
+                                         TaskToolState toolStateAfter) {
+        if (outcome == null || outcome.result() == null) {
+            return "stop: no_progress_guard, missing tool result";
+        }
+        if (!outcome.result().success()) {
+            return "stop: no_progress_guard, tool failed: " + firstNonBlank(outcome.result().summary(), plan.toolName());
+        }
+        if (outcome.result().summary().isBlank() && outcome.result().output().isBlank()) {
+            return "stop: no_progress_guard, tool returned an empty result";
+        }
+        if ("write_file".equals(plan.toolName())
+            && !toolStateBefore.outputFilePath().isBlank()
+            && !toolStateAfter.outputFilePath().isBlank()
+            && toolStateBefore.outputFileExists() == toolStateAfter.outputFileExists()
+            && toolStateBefore.outputFileSize() == toolStateAfter.outputFileSize()
+            && toolStateBefore.outputFileFingerprint().equals(toolStateAfter.outputFileFingerprint())) {
+            return "stop: no_progress_guard, write_file did not change the output file";
+        }
+        return "";
+    }
+
+    private String buildMultiToolGroundedPrefix(List<ToolChainStep> toolChain,
+                                                TaskToolState toolState,
+                                                String terminationReason,
+                                                boolean outputFileRequired,
+                                                boolean fileBackedArtifact) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("The tool-aware worker completed ").append(toolChain.size())
+            .append(" grounded tool step");
+        if (toolChain.size() != 1) {
+            sb.append("s");
+        }
+        sb.append(".");
+        if ("max_tool_rounds_reached".equals(terminationReason)) {
+            sb.append(" The round stopped because it reached max_tool_rounds=").append(MAX_TOOL_ROUNDS).append(".");
+        } else if ("repeated_tool_guard".equals(terminationReason)) {
+            sb.append(" The round stopped because the next planned tool call repeated an earlier step.");
+        } else if ("no_progress_guard".equals(terminationReason)) {
+            sb.append(" The round stopped because the latest tool step made no usable progress.");
+        } else if ("planner_no_additional_tool".equals(terminationReason)) {
+            sb.append(" The planner requested finalization after the current evidence.");
+        }
+        if (fileBackedArtifact) {
+            sb.append(" A grounded output file is present.");
+        } else if (outputFileRequired && !toolState.outputFileExists()) {
+            sb.append(" The expected output file is still missing.");
+        }
+        return sb.toString();
+    }
+
+    private boolean hasSuccessfulWrite(List<ToolChainStep> toolChain) {
+        if (toolChain == null || toolChain.isEmpty()) {
+            return false;
+        }
+        for (ToolChainStep step : toolChain) {
+            if (step.success() && "write_file".equals(step.selectedTool())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean outputFileStateChanged(TaskToolState before, TaskToolState after) {
+        if (before == null || after == null) {
+            return false;
+        }
+        return before.outputFileExists() != after.outputFileExists()
+            || before.outputFileSize() != after.outputFileSize()
+            || !before.outputFileFingerprint().equals(after.outputFileFingerprint())
+            || !before.outputFilePath().equals(after.outputFilePath());
+    }
+
+    private List<Map<String, Object>> toToolChainTraceMetadata(List<ToolChainStep> toolChain) {
+        List<Map<String, Object>> trace = new ArrayList<>();
+        if (toolChain == null) {
+            return trace;
+        }
+        for (ToolChainStep step : toolChain) {
+            LinkedHashMap<String, Object> item = new LinkedHashMap<>();
+            item.put("step_index", step.stepIndex());
+            item.put("selected_tool", step.selectedTool());
+            item.put("args", step.arguments());
+            item.put("result_summary", step.resultSummary());
+            item.put("why_selected", step.whySelected());
+            item.put("why_next_step", step.whyNextStep());
+            item.put("success", step.success());
+            item.put("elapsed_ms", step.elapsedMs());
+            if (step.outputPreview() != null && !step.outputPreview().isBlank()) {
+                item.put("output_preview", step.outputPreview());
+            }
+            trace.add(item);
+        }
+        return trace;
+    }
+
+    private String toolPlanFingerprint(String toolName, Map<String, Object> arguments) {
+        return firstNonBlank(toolName, "(none)") + "::" + JsonMapper.toJson(arguments == null ? Map.of() : arguments);
+    }
+
+    private String normalizeMultiToolConfidence(String confidence, String terminationReason) {
+        if ("no_progress_guard".equals(terminationReason) || "repeated_tool_guard".equals(terminationReason)) {
+            return "low";
+        }
+        return firstNonBlank(confidence, "medium");
+    }
+
     private ToolPlan parseToolPlan(String raw) {
         String safeRaw = raw == null ? "" : raw.trim();
         if (safeRaw.isBlank()) {
@@ -972,12 +1463,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         String outputFilePath = metadataString(context.task().metadata(), "output_file");
         boolean outputFileExists = false;
         long outputFileSize = 0L;
+        String outputFileFingerprint = "";
         if (outputFilePath != null && !outputFilePath.isBlank()) {
             try {
                 Path outputPath = Path.of(outputFilePath).toAbsolutePath().normalize();
                 outputFileExists = Files.exists(outputPath);
                 if (outputFileExists) {
                     outputFileSize = Files.size(outputPath);
+                    outputFileFingerprint = fileFingerprint(outputPath);
                 }
                 outputFilePath = outputPath.toString();
             } catch (InvalidPathException | IOException e) {
@@ -1006,6 +1499,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             outputFilePath,
             outputFileExists,
             outputFileSize,
+            outputFileFingerprint,
             invocations.size(),
             successfulToolCount,
             successfulReadCount,
@@ -1119,6 +1613,26 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             sb.append("\n");
         }
         return sb.toString().trim();
+    }
+
+    private String fileFingerprint(Path path) {
+        if (path == null || !Files.exists(path) || !Files.isRegularFile(path)) {
+            return "";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (InputStream input = Files.newInputStream(path)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = input.read(buffer)) > 0) {
+                    digest.update(buffer, 0, read);
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (Exception e) {
+            log.warn("Failed to compute file fingerprint. path={} reason={}", path, e.getMessage());
+            return "";
+        }
     }
 
     private String summaryForCurrentRound(ToolPlan plan,
@@ -1388,6 +1902,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         String outputFilePath,
         boolean outputFileExists,
         long outputFileSize,
+        String outputFileFingerprint,
         int totalToolCount,
         int successfulToolCount,
         int successfulReadCount,
@@ -1401,6 +1916,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     ) {
         private TaskToolState {
             if (outputFilePath == null) outputFilePath = "";
+            if (outputFileFingerprint == null) outputFileFingerprint = "";
             if (lastToolName == null) lastToolName = "";
             if (recentToolTrace == null || recentToolTrace.isBlank()) recentToolTrace = "(no prior tool rounds)";
             if (currentRoundInstruction == null) currentRoundInstruction = "";
@@ -1436,6 +1952,41 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             if (confidence == null || confidence.isBlank()) confidence = "medium";
             if (rawResponse == null) rawResponse = "";
             if (failureReason == null) failureReason = "";
+        }
+    }
+
+    private record ToolChainStep(
+        int stepIndex,
+        String selectedTool,
+        Map<String, Object> arguments,
+        String resultSummary,
+        String whySelected,
+        String whyNextStep,
+        boolean success,
+        int elapsedMs,
+        String outputPreview
+    ) {
+        private ToolChainStep {
+            if (selectedTool == null) selectedTool = "";
+            if (arguments == null) arguments = Map.of();
+            if (resultSummary == null) resultSummary = "";
+            if (whySelected == null) whySelected = "";
+            if (whyNextStep == null) whyNextStep = "";
+            if (outputPreview == null) outputPreview = "";
+        }
+
+        private ToolChainStep withWhyNextStep(String updatedWhyNextStep) {
+            return new ToolChainStep(
+                stepIndex,
+                selectedTool,
+                arguments,
+                resultSummary,
+                whySelected,
+                updatedWhyNextStep,
+                success,
+                elapsedMs,
+                outputPreview
+            );
         }
     }
 }

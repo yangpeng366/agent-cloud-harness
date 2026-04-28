@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -54,12 +55,7 @@ public class ConsolidationService {
             .limit(5)
             .toList();
 
-        List<String> openQuestions = decisions.stream()
-            .map(Decision::rationale)
-            .filter(this::looksOpenQuestion)
-            .distinct()
-            .limit(3)
-            .toList();
+        List<String> openQuestions = collectOpenQuestions(task, decisions);
 
         List<String> keyConstraints = collectKeyConstraints(task);
 
@@ -95,7 +91,20 @@ public class ConsolidationService {
         }
 
         // Step 5: Integration - 输出 refined packet + world model delta
-        Map<String, Object> refinedPacket = new HashMap<>();
+        Map<String, Object> refinedPacket = new LinkedHashMap<>();
+        refinedPacket.put("packet_type", "checkpoint_refined_packet");
+        refinedPacket.put("packet_version", "1.0");
+        refinedPacket.put("machine_readable_first", true);
+        refinedPacket.put("task_identity", buildTaskIdentity(task));
+        refinedPacket.put("current_objective", firstNonBlank(task.goal(), task.nextStep(), task.title()));
+        refinedPacket.put("current_status", task.status());
+        refinedPacket.put("current_node", task.controlNode());
+        refinedPacket.put("assigned_worker", task.assignedWorker());
+        refinedPacket.put("latest_summary", resolveLatestSummary(task, artifacts, decisions));
+        refinedPacket.put("next_step", task.nextStep());
+        refinedPacket.put("blockers", resolveBlockers(task, decisions));
+        refinedPacket.put("recent_artifacts", artifacts.stream().limit(5).map(this::toArtifactRef).toList());
+        refinedPacket.put("recent_decisions", decisions.stream().limit(5).map(this::toDecisionRef).toList());
         refinedPacket.put("task_id", task.id());
         refinedPacket.put("trigger", triggerType);
         refinedPacket.put("key_decisions", keyDecisions);
@@ -144,6 +153,81 @@ public class ConsolidationService {
             addIfPresent(constraints, valueLine("source", task.metadata().get("source")));
         }
         return constraints.stream().distinct().limit(5).toList();
+    }
+
+    private List<String> collectOpenQuestions(Task task, List<Decision> decisions) {
+        List<String> items = new ArrayList<>(metadataStringList(task.metadata(), "open_questions"));
+        decisions.stream()
+            .map(decision -> metadataString(decision.metadata(), "open_question"))
+            .filter(value -> value != null && !value.isBlank())
+            .forEach(items::add);
+        decisions.stream()
+            .map(Decision::rationale)
+            .filter(this::looksOpenQuestion)
+            .forEach(items::add);
+        return items.stream().distinct().limit(3).toList();
+    }
+
+    private List<String> resolveBlockers(Task task, List<Decision> decisions) {
+        List<String> items = new ArrayList<>(metadataStringList(task.metadata(), "blockers"));
+        addIfPresent(items, task.waitingReason());
+        if ("paused".equalsIgnoreCase(task.status())) {
+            items.add("task_paused");
+        }
+        if ("waiting_human".equalsIgnoreCase(task.status())) {
+            items.add("awaiting_human_confirmation");
+        }
+        decisions.stream()
+            .map(decision -> metadataString(decision.metadata(), "blocker"))
+            .filter(value -> value != null && !value.isBlank())
+            .forEach(items::add);
+        return items.stream().distinct().limit(5).toList();
+    }
+
+    private PacketTaskIdentity buildTaskIdentity(Task task) {
+        return new PacketTaskIdentity(
+            task.id(),
+            task.sessionId(),
+            task.parentTaskId(),
+            task.title(),
+            metadataString(task.metadata(), "task_type")
+        );
+    }
+
+    private PacketArtifactRef toArtifactRef(Artifact artifact) {
+        return new PacketArtifactRef(
+            artifact.artifactType(),
+            artifact.title(),
+            artifact.summary(),
+            artifact.createdAt() != null ? artifact.createdAt().toString() : null
+        );
+    }
+
+    private PacketDecisionRef toDecisionRef(Decision decision) {
+        return new PacketDecisionRef(
+            decision.decisionType(),
+            decision.summary(),
+            decision.rationale(),
+            decision.createdAt() != null ? decision.createdAt().toString() : null
+        );
+    }
+
+    private String resolveLatestSummary(Task task, List<Artifact> artifacts, List<Decision> decisions) {
+        return firstNonBlank(
+            task.summary(),
+            artifacts.stream()
+                .map(artifact -> firstNonBlank(artifact.summary(), artifact.title()))
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null),
+            decisions.stream()
+                .map(Decision::summary)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null),
+            task.goal(),
+            task.title()
+        );
     }
 
     private String buildConsolidationSummary(Task task, int decisionCount, int artifactCount, int eventCount,
@@ -215,6 +299,34 @@ public class ConsolidationService {
 
     private String valueLine(String key, Object value) {
         return value == null || value.toString().isBlank() ? null : key + "=" + value;
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object raw = metadata.get(key);
+        if (raw instanceof List<?> values) {
+            List<String> items = new ArrayList<>();
+            for (Object value : values) {
+                if (value != null && !value.toString().isBlank()) {
+                    items.add(value.toString());
+                }
+            }
+            return items;
+        }
+        if (raw != null && !raw.toString().isBlank()) {
+            return List.of(raw.toString());
+        }
+        return List.of();
     }
 
     private void addIfPresent(List<String> items, String value) {

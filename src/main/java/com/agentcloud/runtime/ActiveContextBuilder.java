@@ -156,11 +156,21 @@ public class ActiveContextBuilder {
             if (task.priority() != null && !task.priority().isBlank()) {
                 items.add("priority=" + task.priority());
             }
-            if (task.assignedWorker() != null && !task.assignedWorker().isBlank()) {
-                items.add("assigned_worker=" + task.assignedWorker());
+            String assignedWorker = firstNonBlank(
+                task.assignedWorker(),
+                packet != null ? packet.assignedWorker() : null
+            );
+            if (assignedWorker != null && !assignedWorker.isBlank()) {
+                items.add("assigned_worker=" + assignedWorker);
             }
             if (task.waitingReason() != null && !task.waitingReason().isBlank()) {
                 items.add("waiting_reason=" + task.waitingReason());
+            }
+            if (packet != null && packet.currentStatus() != null && !packet.currentStatus().isBlank()) {
+                items.add("packet_status=" + packet.currentStatus());
+            }
+            if (packet != null && packet.currentNode() != null && !packet.currentNode().isBlank()) {
+                items.add("packet_node=" + packet.currentNode());
             }
             if (task.metadata() != null) {
                 Object intent = task.metadata().get("intent");
@@ -189,6 +199,9 @@ public class ActiveContextBuilder {
             List<String> items = new ArrayList<>();
             if (task.nextStep() == null || task.nextStep().isBlank()) {
                 items.add("next_step_not_yet_clear");
+            }
+            if (packet != null && packet.openQuestions() != null) {
+                items.addAll(packet.openQuestions());
             }
             if (packet != null && packet.nextStep() != null && !packet.nextStep().isBlank()) {
                 items.add(packet.nextStep());
@@ -235,6 +248,7 @@ public class ActiveContextBuilder {
                 );
             }
             return firstNonBlank(
+                packet != null ? packet.latestSummary() : null,
                 packet != null ? packet.activeTaskSummary() : null,
                 packet != null ? packet.decisionSummary() : null,
                 packet != null ? packet.artifactSummary() : null,
@@ -246,6 +260,9 @@ public class ActiveContextBuilder {
         private String resolveContinuitySource(Task task, ResumePacket packet, Checkpoint checkpoint, boolean terminalTask) {
             if (terminalTask && task.summary() != null && !task.summary().isBlank()) {
                 return "task summary";
+            }
+            if (packet != null && packet.latestSummary() != null && !packet.latestSummary().isBlank()) {
+                return "latest resume packet latest_summary";
             }
             if (packet != null && packet.activeTaskSummary() != null && !packet.activeTaskSummary().isBlank()) {
                 return "latest resume packet active_task_summary";

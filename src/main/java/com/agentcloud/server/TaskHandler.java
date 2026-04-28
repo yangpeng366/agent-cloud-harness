@@ -1,7 +1,9 @@
 package com.agentcloud.server;
 
+import com.agentcloud.engine.ExperimentMatrixService;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.model.*;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -14,10 +16,16 @@ import java.util.Map;
 class TaskHandler implements HttpHandler {
     private static final Logger log = LoggerFactory.getLogger(TaskHandler.class);
     private final TaskService svc;
+    private final ExperimentMatrixService experimentMatrixService;
     private final ObjectMapper mapper;
 
     TaskHandler(TaskService svc, ObjectMapper mapper) {
+        this(svc, null, mapper);
+    }
+
+    TaskHandler(TaskService svc, ExperimentMatrixService experimentMatrixService, ObjectMapper mapper) {
         this.svc = svc;
+        this.experimentMatrixService = experimentMatrixService;
         this.mapper = mapper;
     }
 
@@ -30,8 +38,21 @@ class TaskHandler implements HttpHandler {
 
             if ("POST".equals(method) && path.equals("/api/v1/tasks")) {
                 TaskCreateRequest req = mapper.readValue(NioHttpServer.readBody(ex), TaskCreateRequest.class);
-                Task t = svc.createTask(req);
+                Task t = svc.createTask(req, requestMetadata("POST", path, false));
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(t));
+            } else if ("POST".equals(method) && path.matches("/api/v1/tasks/[^/]+/(pause|resume|continue|escalate)")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                String action = NioHttpServer.pathVar(ex, 5);
+                Map<String, Object> body = readJsonBodyAsMap(ex);
+                Map<String, Object> actionMetadata = requestMetadata("POST", path, false);
+                TaskControlResult result = switch (action) {
+                    case "pause" -> svc.pauseTask(id, stringValue(body, "reason", "manual pause via API"), actionMetadata);
+                    case "resume" -> svc.resumeTask(id, actionMetadata);
+                    case "continue" -> svc.continueTask(id, actionMetadata);
+                    case "escalate" -> svc.escalateTask(id, stringValue(body, "reason", "manual escalation via API"), actionMetadata);
+                    default -> throw new IllegalArgumentException("unsupported control action");
+                };
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
             } else if ("GET".equals(method) && path.equals("/api/v1/tasks")) {
                 Map<String, String> params = parseQuery(query);
                 String status = params.get("status") != null ? params.get("status") : params.get("state");
@@ -59,6 +80,20 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var flow = svc.getLiveFlow(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(flow));
+                } else if (path.endsWith("/experiment_run")) {
+                    var run = svc.getExperimentRun(id);
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(run));
+                } else if (path.endsWith("/experiment_summary")) {
+                    if (experimentMatrixService == null) {
+                        throw new IllegalStateException("experiment matrix service unavailable");
+                    }
+                    var run = svc.getExperimentRun(id);
+                    if (run == null || run.experimentName() == null || run.experimentName().isBlank()) {
+                        NioHttpServer.sendNotFound(ex);
+                    } else {
+                        var summary = experimentMatrixService.summarizeExperiment(run.experimentName());
+                        NioHttpServer.sendJson(ex, 200, ApiResponse.ok(summary));
+                    }
                 } else if (path.endsWith("/tool_trace")) {
                     Map<String, String> params = parseQuery(query);
                     int limit = parseLimit(params.get("limit"));
@@ -70,41 +105,51 @@ class TaskHandler implements HttpHandler {
                     var packet = svc.getHandoffPacket(id, target);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(packet));
                 } else if (path.endsWith("/pause")) {
-                    var result = svc.pauseTask(id, "manual pause via API");
+                    NioHttpServer.markDeprecatedWriteRoute(ex, "POST", path);
+                    var result = svc.pauseTask(id, "manual pause via API", requestMetadata("GET", path, true));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
                 } else if (path.endsWith("/resume")) {
-                    var result = svc.resumeTask(id);
+                    NioHttpServer.markDeprecatedWriteRoute(ex, "POST", path);
+                    var result = svc.resumeTask(id, requestMetadata("GET", path, true));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
                 } else if (path.endsWith("/continue")) {
-                    var result = svc.continueTask(id);
+                    NioHttpServer.markDeprecatedWriteRoute(ex, "POST", path);
+                    var result = svc.continueTask(id, requestMetadata("GET", path, true));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
                 } else if (path.endsWith("/escalate")) {
-                    var result = svc.escalateTask(id, "manual escalation via API");
+                    NioHttpServer.markDeprecatedWriteRoute(ex, "POST", path);
+                    var result = svc.escalateTask(id, "manual escalation via API", requestMetadata("GET", path, true));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
                 } else {
                     Task t = svc.getTask(id);
-                    if (t == null) NioHttpServer.sendJson(ex, 404, ApiResponse.error("404", "not found"));
+                    if (t == null) NioHttpServer.sendNotFound(ex);
                     else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(t));
                 }
             } else if ("POST".equals(method) && path.matches("/api/v1/tasks/[^/]+/handoff")) {
                 String id = NioHttpServer.pathVar(ex, 4);
-                Map<String, Object> body = mapper.readValue(NioHttpServer.readBody(ex), Map.class);
+                Map<String, Object> body = readJsonBodyAsMap(ex);
                 String target = body.getOrDefault("target_worker", "codex").toString();
-                HandoffResult result = svc.handoffTask(id, target);
+                HandoffResult result = svc.handoffTask(id, target, requestMetadata("POST", path, false));
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
             } else if ("POST".equals(method) && path.matches("/api/v1/tasks/[^/]+/state")) {
                 String id = NioHttpServer.pathVar(ex, 4);
-                Map<String, Object> body = mapper.readValue(NioHttpServer.readBody(ex), Map.class);
+                Map<String, Object> body = readJsonBodyAsMap(ex);
                 String state = body.getOrDefault("state", "active").toString();
                 String reason = body.getOrDefault("reason", "api update").toString();
-                Task t = svc.updateTaskState(id, state, reason);
+                Task t = svc.updateTaskState(id, state, reason, requestMetadata("POST", path, false));
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(t));
             } else {
-                NioHttpServer.sendJson(ex, 405, ApiResponse.error("405", "method not allowed"));
+                NioHttpServer.sendMethodNotAllowed(ex);
             }
+        } catch (JsonProcessingException e) {
+            log.warn("TaskHandler invalid json: {}", e.getOriginalMessage());
+            NioHttpServer.sendMalformedJson(ex);
+        } catch (IllegalArgumentException e) {
+            log.warn("TaskHandler validation error: {}", e.getMessage());
+            NioHttpServer.sendIllegalArgument(ex, e);
         } catch (Exception e) {
             log.error("TaskHandler error", e);
-            NioHttpServer.sendJson(ex, 500, ApiResponse.error("500", e.getMessage()));
+            NioHttpServer.sendInternalError(ex);
         }
     }
 
@@ -125,5 +170,32 @@ class TaskHandler implements HttpHandler {
         } catch (Exception ignored) {
             return 5;
         }
+    }
+
+    private Map<String, Object> readJsonBodyAsMap(HttpExchange ex) throws IOException {
+        String body = NioHttpServer.readBody(ex);
+        if (body == null || body.isBlank()) {
+            return Map.of();
+        }
+        return mapper.readValue(body, Map.class);
+    }
+
+    private Map<String, Object> requestMetadata(String method, String path, boolean legacyControlRoute) {
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("requested_via", "http_api");
+        metadata.put("request_method", method);
+        metadata.put("request_path", path);
+        if (legacyControlRoute) {
+            metadata.put("legacy_control_route", true);
+        }
+        return metadata;
+    }
+
+    private String stringValue(Map<String, Object> body, String key, String fallback) {
+        if (body == null || key == null || key.isBlank()) {
+            return fallback;
+        }
+        Object value = body.get(key);
+        return value == null || value.toString().isBlank() ? fallback : value.toString();
     }
 }

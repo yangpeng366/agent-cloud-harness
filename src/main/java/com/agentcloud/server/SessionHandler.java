@@ -4,6 +4,7 @@ import com.agentcloud.engine.SessionService;
 import com.agentcloud.model.SessionMessageCreateRequest;
 import com.agentcloud.model.ApiResponse;
 import com.agentcloud.model.Session;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
@@ -33,7 +34,19 @@ class SessionHandler implements HttpHandler {
             if ("POST".equals(method) && path.equals("/api/v1/sessions")) {
                 Map<String, Object> body = mapper.readValue(NioHttpServer.readBody(ex), Map.class);
                 String title = body.getOrDefault("title", "untitled").toString();
-                Session s = svc.createSession(title);
+                Session s = svc.createSession(title, requestMetadata("POST", path, false));
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
+            } else if ("POST".equals(method) && path.matches("/api/v1/sessions/[^/]+/pause")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                Session s = svc.pauseSession(id, requestMetadata("POST", path, false));
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
+            } else if ("POST".equals(method) && path.matches("/api/v1/sessions/[^/]+/resume")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                Session s = svc.resumeSession(id, requestMetadata("POST", path, false));
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
+            } else if ("POST".equals(method) && path.matches("/api/v1/sessions/[^/]+/close")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                Session s = svc.closeSession(id, requestMetadata("POST", path, false));
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
             } else if ("GET".equals(method) && path.equals("/api/v1/sessions")) {
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(svc.listSessions()));
@@ -51,22 +64,28 @@ class SessionHandler implements HttpHandler {
                     String taskId = params.get("task_id");
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(svc.listMessages(id, limit, taskId)));
                 } else if (path.endsWith("/close")) {
-                    Session s = svc.closeSession(id);
+                    NioHttpServer.markDeprecatedWriteRoute(ex, "POST", path);
+                    Session s = svc.closeSession(id, requestMetadata("GET", path, true));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
-                } else {
+                } else if (path.matches("/api/v1/sessions/[^/]+")) {
                     Session s = svc.getSession(id);
-                    if (s == null) NioHttpServer.sendJson(ex, 404, ApiResponse.error("404", "not found"));
+                    if (s == null) NioHttpServer.sendNotFound(ex);
                     else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(s));
+                } else {
+                    NioHttpServer.sendMethodNotAllowed(ex);
                 }
             } else {
-                NioHttpServer.sendJson(ex, 405, ApiResponse.error("405", "method not allowed"));
+                NioHttpServer.sendMethodNotAllowed(ex);
             }
+        } catch (JsonProcessingException e) {
+            log.warn("SessionHandler invalid json: {}", e.getOriginalMessage());
+            NioHttpServer.sendMalformedJson(ex);
         } catch (IllegalArgumentException e) {
             log.warn("SessionHandler validation error: {}", e.getMessage());
-            NioHttpServer.sendJson(ex, 400, ApiResponse.error("400", e.getMessage()));
+            NioHttpServer.sendIllegalArgument(ex, e);
         } catch (Exception e) {
             log.error("SessionHandler error", e);
-            NioHttpServer.sendJson(ex, 500, ApiResponse.error("500", e.getMessage()));
+            NioHttpServer.sendInternalError(ex);
         }
     }
 
@@ -87,5 +106,16 @@ class SessionHandler implements HttpHandler {
         } catch (Exception ignored) {
             return 50;
         }
+    }
+
+    private Map<String, Object> requestMetadata(String method, String path, boolean legacyControlRoute) {
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("requested_via", "http_api");
+        metadata.put("request_method", method);
+        metadata.put("request_path", path);
+        if (legacyControlRoute) {
+            metadata.put("legacy_control_route", true);
+        }
+        return metadata;
     }
 }

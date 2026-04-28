@@ -15,13 +15,15 @@ Agent Cloud Harness 是一个面向多智能体协作场景的轻量控制平面
 | 类别 | 技术 | 版本 | 备注 |
 |------|------|------|------|
 | 后端语言 | Java | 21 | `pom.xml` 启用了 `--enable-preview` |
-| 前端框架 | N/A | N/A | 本项目未发现前端代码 |
+| 前端框架 | Vanilla JS + CSS | N/A | 内置 `/console/` 与 `/dialogue/` 静态页面 |
 | 数据库 | SQLite | 3.46.0.0 驱动 | 通过 Jdbi + HikariCP 访问 |
 | 缓存 | N/A | N/A | 本项目未发现相关内容 |
 | 搜索引擎 | N/A | N/A | 本项目未发现相关内容 |
 | 消息队列 | N/A | N/A | 本项目未发现相关内容 |
 | 容器化 | N/A | N/A | 本项目未发现 Docker/K8S 文件 |
 | CI/CD | N/A | N/A | 本项目未发现流水线配置 |
+| LLM 适配 | OpenAI 兼容协议 | N/A | 通过 `llm/OpenAiCompatibleClient` 调用 |
+| 测试框架 | JUnit Jupiter | 5.11.0 | 已有 20+ 测试类覆盖核心链路 |
 | 其他 | Jackson / SLF4J / Logback / JDK HttpServer | 2.17.2 / 2.0.13 / 1.5.6 | JSON、日志、HTTP 接入 |
 
 ### 2.2 技术栈约束规则
@@ -49,9 +51,12 @@ agent-cloud-harness/
 │       │   └── store/               # DB 初始化、Mapper、DAO
 │       └── resources/
 │           ├── schema.sql           # SQLite 表结构与索引
-│           └── logback.xml          # 日志配置
+│           ├── logback.xml          # 日志配置
+│           └── web/
+│               ├── console/         # Web Console 前端
+│               └── dialogue/        # Dialogue 前端
 ├── target/                          # Maven 构建产物
-├── docs/                            # 逆向分析生成的维护文档
+├── docs/                            # 维护文档
 ├── pom.xml                          # Maven 构建与依赖配置
 ├── dependency-reduced-pom.xml       # Shade 产物缩减 POM
 ├── server.out.log                   # 服务标准输出日志样本
@@ -104,12 +109,14 @@ agent-cloud-harness/
 
 | 层级 | 目录/命名空间 | 职责 | 典型类/文件 |
 |------|-------------|------|------------|
-| 接入层 | `src/main/java/com/agentcloud/server` | 暴露 HTTP API、解析请求、序列化响应 | `NioHttpServer`, `TaskHandler` |
-| 应用层 | `src/main/java/com/agentcloud/engine` | 编排任务生命周期、会话管理、技能注册 | `TaskService`, `SessionService`, `ControlNodeGraph` |
-| 路由与记忆层 | `src/main/java/com/agentcloud/engine/router`, `engine/memory` | Worker 选择、续跑包构建、上下文重建 | `WorkerRouter`, `PacketBuilder` |
-| 工具执行层 | `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool` | 统一 worker 执行入口、tool-aware 执行器、受控本地文件工具 | `WorkerExecutorRouter`, `ToolAwareWorkerExecutor`, `ToolPolicy` |
-| 数据层 | `src/main/java/com/agentcloud/store` | 初始化数据库、DAO 查询与写入、行映射 | `DatabaseManager`, `TaskDao` |
-| 领域模型层 | `src/main/java/com/agentcloud/model` | 定义 API 与存储共享的数据结构 | `Task`, `Session`, `Checkpoint` |
+| 接入层 | `src/main/java/com/agentcloud/server` | 暴露 HTTP API、解析请求、序列化响应、静态资源服务 | `NioHttpServer`, `TaskHandler`, `WebConsoleHandler` |
+| 应用层 | `src/main/java/com/agentcloud/engine` | 编排任务生命周期、会话管理、技能注册、实验矩阵 | `TaskService`, `SessionService`, `ControlNodeGraph`, `ExperimentMatrixService` |
+| 运行时与判断层 | `src/main/java/com/agentcloud/runtime`, `src/main/java/com/agentcloud/judgment` | 组装单轮执行上下文、Active Context 构建、执行/完成判断 | `TaskRuntimeContextBuilder`, `ActiveContextBuilder`, `PromptBasedJudgmentService` |
+| 路由与记忆层 | `src/main/java/com/agentcloud/engine/router`, `engine/memory` | Worker 选择（含 learning memory）、续跑包构建、上下文重建 | `WorkerRouter`, `PacketBuilder`, `LearningMemoryService` |
+| 工具执行层 | `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool` | 统一 worker 执行入口、tool-aware 多步执行器、受控本地文件工具 | `WorkerExecutorRouter`, `ToolAwareWorkerExecutor`, `ToolPolicy` |
+| LLM 适配层 | `src/main/java/com/agentcloud/llm` | 统一 LLM 调用客户端与配置 | `OpenAiCompatibleClient`, `LlmConfig` |
+| 数据层 | `src/main/java/com/agentcloud/store` | 初始化数据库、DAO 查询与写入、行映射 | `DatabaseManager`, `TaskDao`, `LearningMemoryDao` |
+| 领域模型层 | `src/main/java/com/agentcloud/model` | 定义 API 与存储共享的数据结构 | `Task`, `Session`, `Checkpoint`, `LearningMemory` |
 
 ## 5. 模块清单
 
@@ -167,23 +174,57 @@ agent-cloud-harness/
 ### 5.5 Worker 执行与工具模块
 
 - **目录**: `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool`
-- **职责**: 该模块负责把“选中 worker 后如何执行一轮”正式收口。`WorkerExecutorRouter` 会根据 worker 合同在普通执行器和 tool-aware 执行器之间分流；`ToolAwareWorkerExecutor` 当前实现了一版最小双阶段协议，先让 LLM 判断是否需要单次工具调用，再基于工具结果收敛最终输出。`ToolPolicy` 和本地文件工具则负责把副作用限制在声明式 scope 内，并把工具调用沉淀到 `tool_invocations`。
+- **职责**: 该模块负责把“选中 worker 后如何执行一轮”正式收口。`WorkerExecutorRouter` 会根据 worker 合同在普通执行器和 tool-aware 执行器之间分流；`ToolAwareWorkerExecutor` 当前已支持最小多步工具链，在单轮内执行最多 3 步 `planning -> invoke -> ... -> finalization`，并带 `repeated_tool_guard` 与 `no_progress_guard` 终止保护。`ToolPolicy` 和本地文件工具则负责把副作用限制在声明式 scope 内，并把工具调用沉淀到 `tool_invocations`。
 - **核心类/函数**:
   - `WorkerExecutorRouter.executeOneRound` — 按 `suggest_only` 与 `tool_capabilities` 选择执行路径。
-  - `ToolAwareWorkerExecutor.executeOneRound` — 执行 `planning -> invoke -> finalization`。
+  - `ToolAwareWorkerExecutor.executeOneRound` — 执行最多 3 步的 `planning -> invoke` 工具链，并在收敛后生成最终结果。
   - `ToolPolicy.resolveAllowedPath` — 校验访问路径必须落在 worker 声明的 scope 内。
   - `ListFilesTool` / `SearchTextTool` / `ReadFileTool` / `WriteFileTool` — 第一版受控本地文件工具。
 - **对外提供**: 单轮 worker 执行门面、最小工具执行能力、工具调用轨迹。
 - **依赖**: `llm`, `engine/router`, `store`, `model`
 
-### 5.6 存储模块
+### 5.6 运行时上下文与 Judgment 模块
+
+- **目录**: `src/main/java/com/agentcloud/runtime`, `src/main/java/com/agentcloud/judgment`
+- **职责**: `runtime` 负责把任务当前可见的 event、decision、artifact、packet、checkpoint、learning memory 组装成单轮执行所需的 `TaskRuntimeContext`，并从中提炼 `ActiveContext`（工作记忆）。`judgment` 则在此基础上做执行中判断（execution judgment）和完成后判断（completion judgment），输出下一步推荐动作。
+- **入口文件**: `src/main/java/com/agentcloud/runtime/TaskRuntimeContextBuilder.java`, `src/main/java/com/agentcloud/judgment/PromptBasedJudgmentService.java`
+- **核心类/函数**:
+  - `TaskRuntimeContextBuilder.build` — 汇总多表数据生成运行时上下文。
+  - `ActiveContextBuilder.build` — 从运行时上下文中提取关键决策、产物、阻塞项、开放问题等。
+  - `PromptBasedJudgmentService.judgeExecution/judgeCompletion` — 基于 LLM 的判断实现。
+- **对外提供**: 运行时上下文构建、Active Context、执行/完成判断。
+- **依赖**: `store`, `model`, `llm`
+
+### 5.7 LLM 适配模块
+
+- **目录**: `src/main/java/com/agentcloud/llm`
+- **职责**: 为上层提供统一的 LLM 调用接口，当前实现为 OpenAI 兼容协议。配置优先从环境变量 / 系统属性读取，未配置时以 `available=false` 降级运行。
+- **入口文件**: `src/main/java/com/agentcloud/llm/OpenAiCompatibleClient.java`
+- **核心类/函数**:
+  - `OpenAiCompatibleClient.complete` — 发起 chat completion 请求。
+  - `LlmConfig` — 读取 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 等配置。
+- **对外提供**: LLM 调用能力。
+- **依赖**: 仅 Jackson / JDK HTTP Client
+
+### 5.8 实验与评估模块
+
+- **目录**: `src/main/java/com/agentcloud/engine`
+- **职责**: 为 tool-aware execution 和 orchestration 提供可量化的 baseline 比较能力。`ExperimentRunService` 在任务生命周期中自动收集指标并落盘；`ExperimentMatrixService` 支持按内置 case catalog 批量创建三种模式（`strong_only` / `small_only` / `orchestrated`）的可比较 run。
+- **入口文件**: `src/main/java/com/agentcloud/engine/ExperimentMatrixService.java`
+- **核心类/函数**:
+  - `ExperimentRunService.createOrUpdateRun` — 任务推进时自动写 experiment_runs。
+  - `ExperimentMatrixService.createMatrixRuns` — 按 case + mode 批量创建任务。
+- **对外提供**: 实验指标持久化、矩阵批量运行、汇总查询。
+- **依赖**: `store`, `model`, `engine`
+
+### 5.9 存储模块
 
 - **目录**: `src/main/java/com/agentcloud/store`, `src/main/resources`
-- **职责**: 该模块负责数据库初始化、类型映射、SQL Object DAO 定义和 schema 管理。它为上层提供稳定的会话、任务、决策、产物、事件、关系、技能、checkpoint 持久化接口。项目当前所有状态都落在单个本地 SQLite 文件中，因此该模块直接影响数据可靠性和并发特性。
+- **职责**: 该模块负责数据库初始化、类型映射、SQL Object DAO 定义和 schema 管理。它为上层提供稳定的会话、任务、决策、产物、事件、关系、技能、checkpoint、learning memory、tool invocation、experiment run、session message 持久化接口。项目当前所有状态都落在单个本地 SQLite 文件中。
 - **入口文件**: `src/main/java/com/agentcloud/store/DatabaseManager.java`
 - **核心类/函数**:
   - `DatabaseManager` — 创建数据源、注册 mapper、执行 `schema.sql`。
-  - `*Dao` — 针对每个实体提供注解 SQL 查询与写入。
+  - `*Dao` — 针对每个实体提供注解 SQL 查询与写入（15+ 个 DAO）。
   - `Mappers` / `JsonMapper` / `InstantArgumentFactory` — 处理数据库类型转换。
 - **对外提供**: SQLite 持久化与表结构。
 - **依赖**: SQLite JDBC, Jdbi, HikariCP
@@ -197,12 +238,20 @@ agent-cloud-harness/
     cli/Main
        |
        +----> server ----> engine ----> store
+                       |      |
+                       |      +----> engine/router
+                       |      |
+                       |      +----> engine/memory ----> store
+                       |      |
+                       |      +----> runtime ----> store
+                       |      |
+                       |      +----> judgment ----> llm
+                       |      |
+                       |      +----> worker ----> tool ----> llm
+                       |      |
+                       |      +----> model
                        |
-                       +----> engine/router
-                       |
-                       +----> engine/memory ----> store
-                       |
-                       +----> model
+                       +----> llm
 
     图例: `---->` 表示编译期/运行期依赖方向。
 
@@ -216,15 +265,19 @@ agent-cloud-harness/
     TaskHandler --> TaskService --> ControlNodeGraph --> WorkerRouter
         |                |                 |                |
         |                |                 v                |
+        |                |     TaskRuntimeContextBuilder    |
+        |                |                 |                |
         |                |          PacketBuilder           |
+        |                |                 |                |
+        |                |          JudgmentService         |
         |                |                 |                |
         |                +------------> ConsolidationService
         |                                  |
         +----------------------------------v
-                          [SQLite sessions/tasks/events/tool_invocations/...]
+         [SQLite sessions/tasks/events/tool_invocations/learning_memories/...]
         ^
         |
-    [JSON 响应]
+    [JSON 响应 / 静态页面]
 
 ## 7. 构建与部署
 
@@ -264,7 +317,7 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 
 | 指标 | 数值 |
 |------|------|
-| 源代码文件数 | 45 |
-| 主要语言分布 | Java: 43, XML: 1, SQL: 1 |
-| 测试文件数 | 0 |
-| 最近活跃度 | 当前工作区无 `.git`，无法从本地获取提交历史 |
+| 源代码文件数 | 103（Java） |
+| 主要语言分布 | Java: 103, XML: 1, SQL: 1, JS/CSS/HTML: 4 |
+| 测试文件数 | 27（JUnit 5） |
+| 最近活跃度 | feat: add continuity runtime, tool-aware execution, and dialogue workspace |

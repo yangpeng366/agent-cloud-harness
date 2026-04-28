@@ -1,6 +1,8 @@
 package com.agentcloud.server;
 
 import com.agentcloud.engine.ConsolidationService;
+import com.agentcloud.engine.ExperimentMatrixService;
+import com.agentcloud.engine.ExperimentRunService;
 import com.agentcloud.engine.LearningMemoryService;
 import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
@@ -15,10 +17,12 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Map;
 
 public class NioHttpServer {
     private static final Logger log = LoggerFactory.getLogger(NioHttpServer.class);
+    static final String LEGACY_WRITE_ROUTE_SUNSET = "Thu, 31 Dec 2026 23:59:59 GMT";
     static final ObjectMapper SHARED_MAPPER = createSharedMapper();
     private final int port;
     private final TaskService taskService;
@@ -27,13 +31,17 @@ public class NioHttpServer {
     private final SkillRegistry skillRegistry;
     private final ConsolidationService consolidation;
     private final LearningMemoryService learningMemoryService;
+    private final ExperimentRunService experimentRunService;
+    private final ExperimentMatrixService experimentMatrixService;
     private final ObjectMapper mapper;
     private final ClassLoader appClassLoader;
     private HttpServer server;
 
     public NioHttpServer(int port, TaskService taskService, SessionService sessionService,
                          WorkerRegistry workerRegistry, SkillRegistry skillRegistry,
-                         ConsolidationService consolidation, LearningMemoryService learningMemoryService) {
+                         ConsolidationService consolidation, LearningMemoryService learningMemoryService,
+                         ExperimentRunService experimentRunService,
+                         ExperimentMatrixService experimentMatrixService) {
         this.port = port;
         this.taskService = taskService;
         this.sessionService = sessionService;
@@ -41,6 +49,8 @@ public class NioHttpServer {
         this.skillRegistry = skillRegistry;
         this.consolidation = consolidation;
         this.learningMemoryService = learningMemoryService;
+        this.experimentRunService = experimentRunService;
+        this.experimentMatrixService = experimentMatrixService;
         this.mapper = SHARED_MAPPER;
         this.appClassLoader = NioHttpServer.class.getClassLoader();
     }
@@ -55,16 +65,18 @@ public class NioHttpServer {
                 redirect(exchange, "/dialogue/");
                 return;
             }
-            sendJson(exchange, 404, Map.of("success", false, "code", "404", "message", "not found"));
+            sendNotFound(exchange);
         });
         server.createContext("/dialogue", new WebConsoleHandler("/dialogue", "web/dialogue"));
         server.createContext("/console", new WebConsoleHandler("/console", "web/console"));
-        server.createContext("/api/v1/tasks", new TaskHandler(taskService, mapper));
+        server.createContext("/api/v1/tasks", new TaskHandler(taskService, experimentMatrixService, mapper));
         server.createContext("/api/v1/sessions", new SessionHandler(sessionService, mapper));
         server.createContext("/api/v1/workers", new WorkerHandler(workerRegistry, mapper));
         server.createContext("/api/v1/skills", new SkillHandler(skillRegistry, mapper));
         server.createContext("/api/v1/checkpoints", new CheckpointHandler(consolidation, mapper));
         server.createContext("/api/v1/learning_memories", new LearningMemoryHandler(learningMemoryService));
+        server.createContext("/api/v1/experiment_runs", new ExperimentRunHandler(taskService, experimentRunService));
+        server.createContext("/api/v1/experiment_matrix", new ExperimentMatrixHandler(experimentMatrixService, mapper));
         server.createContext("/api/v1/health", exchange -> {
             sendJson(exchange, 200, Map.of("status", "up", "virtual_threads", true, "version", "0.2.0"));
         });
@@ -122,6 +134,56 @@ public class NioHttpServer {
         ex.close();
     }
 
+    static void sendApiError(HttpExchange ex, int status, String code, String message) throws IOException {
+        sendJson(ex, status, Map.of(
+            "success", false,
+            "code", code,
+            "message", message
+        ));
+    }
+
+    static void sendInternalError(HttpExchange ex) throws IOException {
+        sendApiError(ex, 500, "500", "internal error");
+    }
+
+    static void sendBadRequest(HttpExchange ex, String message) throws IOException {
+        sendApiError(ex, 400, "400", message);
+    }
+
+    static void sendMalformedJson(HttpExchange ex) throws IOException {
+        sendBadRequest(ex, "invalid json body");
+    }
+
+    static void sendNotFound(HttpExchange ex) throws IOException {
+        sendApiError(ex, 404, "404", "not found");
+    }
+
+    static void sendMethodNotAllowed(HttpExchange ex) throws IOException {
+        sendApiError(ex, 405, "405", "method not allowed");
+    }
+
+    static void sendIllegalArgument(HttpExchange ex, IllegalArgumentException error) throws IOException {
+        String message = error == null ? "bad request" : error.getMessage();
+        if (isNotFoundMessage(message)) {
+            sendNotFound(ex);
+            return;
+        }
+        sendBadRequest(ex, message == null || message.isBlank() ? "bad request" : message);
+    }
+
+    static void markDeprecatedWriteRoute(HttpExchange ex, String replacementMethod, String replacementPath) {
+        String normalizedMethod = replacementMethod == null || replacementMethod.isBlank() ? "POST" : replacementMethod;
+        String normalizedPath = replacementPath == null || replacementPath.isBlank() ? "/" : replacementPath;
+        ex.getResponseHeaders().set("Deprecation", "true");
+        ex.getResponseHeaders().set("Sunset", LEGACY_WRITE_ROUTE_SUNSET);
+        ex.getResponseHeaders().set("Link",
+            "<" + normalizedPath + ">; rel=\"alternate\"; title=\"Use " + normalizedMethod + "\"");
+        ex.getResponseHeaders().set("Warning",
+            "299 agent-cloud-harness \"Deprecated write-via-GET route. Use "
+                + normalizedMethod + " " + normalizedPath + "\"");
+        ex.getResponseHeaders().set("X-AgentCloud-Replacement-Method", normalizedMethod);
+    }
+
     static String readBody(HttpExchange ex) throws IOException {
         return new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
     }
@@ -136,5 +198,12 @@ public class NioHttpServer {
         ex.getResponseHeaders().set("Location", location);
         ex.sendResponseHeaders(302, -1);
         ex.close();
+    }
+
+    private static boolean isNotFoundMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return false;
+        }
+        return message.trim().toLowerCase(Locale.ROOT).endsWith("not found");
     }
 }
