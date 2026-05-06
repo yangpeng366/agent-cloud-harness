@@ -1,6 +1,7 @@
 package com.agentcloud.worker;
 
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.llm.LlmImageInput;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -33,7 +34,10 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("active_context_only", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("active_context_only", result.metadata().get("prompt_mode"));
         assertEquals(false, result.metadata().get("mounted_context_injected"));
+        assertEquals(false, result.metadata().get("mounted_render_used"));
+        assertEquals(1, result.metadata().get("mounted_pinned_count"));
         assertEquals(1, llmClient.chatCalls);
     }
 
@@ -47,8 +51,11 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("mounted_context_shadow", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_shadow", result.metadata().get("prompt_mode"));
         assertEquals(true, result.metadata().get("mounted_context_rendered"));
         assertEquals(false, result.metadata().get("mounted_context_injected"));
+        assertEquals(true, result.metadata().get("mounted_render_used"));
+        assertEquals(1, result.metadata().get("mounted_non_empty_panel_count"));
     }
 
     @Test
@@ -65,7 +72,25 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertTrue(llmClient.lastUserPrompt.contains("compat_mode=task_runtime_context_preserved"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("mounted_context_primary", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
         assertEquals(true, result.metadata().get("mounted_context_injected"));
+        assertEquals(true, result.metadata().get("mounted_render_used"));
+        assertEquals(1, result.metadata().get("mounted_pinned_count"));
+    }
+
+    @Test
+    void executeOneRoundPassesResolvedImageInputsToLlm() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContextWithImageInputs(), "codex");
+
+        assertEquals(2, llmClient.lastImageInputs.size());
+        assertEquals("D:\\gitAll\\open\\20260506-141826.png", llmClient.lastImageInputs.get(0).path());
+        assertEquals("image/png", llmClient.lastImageInputs.get(0).mediaType());
+        assertEquals("D:\\gitAll\\open\\20260506-141916.jpg", llmClient.lastImageInputs.get(1).path());
+        assertEquals(true, result.metadata().get("image_input_used"));
+        assertEquals(2, result.metadata().get("image_input_count"));
     }
 
     private TaskRuntimeContext runtimeContext(String promptRenderingMode) {
@@ -148,6 +173,52 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         );
     }
 
+    private TaskRuntimeContext runtimeContextWithImageInputs() {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("task_type", "coding");
+        metadata.put("intent", "Turn the image mockup into code.");
+        metadata.put("image_inputs", List.of(
+            Map.of("path", "D:\\gitAll\\open\\20260506-141826.png", "media_type", "image/png"),
+            "D:\\gitAll\\open\\20260506-141916.jpg"
+        ));
+        Task task = new Task(
+            "task_vision_1",
+            "session_1",
+            null,
+            "vision prompt",
+            "active",
+            "high",
+            Instant.parse("2026-05-06T06:30:00Z"),
+            Instant.parse("2026-05-06T06:30:00Z"),
+            null,
+            null,
+            null,
+            "summary",
+            "根据图片生成前后端代码",
+            "先理解设计图",
+            "codex",
+            "continue",
+            null,
+            metadata
+        );
+        ActiveContext activeContext = new ActiveContext(
+            "Vision task",
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            "",
+            "Task Focus: vision prompt",
+            12
+        );
+        return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, MountedContextView.empty(task.id()));
+    }
+
     private String responseJson() {
         return """
             {"summary":"ok","output_text":"done","produced_artifact":false,"artifact_title":"","artifact_content":"","suggested_next_step":"","confidence":"high"}
@@ -158,6 +229,7 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         private final String response;
         private int chatCalls;
         private String lastUserPrompt = "";
+        private List<LlmImageInput> lastImageInputs = List.of();
 
         private RecordingLlmClient(String response) {
             this.response = response.strip();
@@ -167,6 +239,14 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         public String chat(String systemPrompt, String userPrompt) {
             chatCalls++;
             lastUserPrompt = userPrompt;
+            return response;
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
+            chatCalls++;
+            lastUserPrompt = userPrompt;
+            lastImageInputs = imageInputs == null ? List.of() : List.copyOf(imageInputs);
             return response;
         }
     }

@@ -107,4 +107,58 @@ class MountedContextPromptRendererTest {
         assertFalse(sparsePrompt.contains("Archive Handles (0)"));
         assertFalse(sparsePrompt.contains("Mounted Context Selection Trace:"));
     }
+
+    @Test
+    void renderBoundsDensePanelsAndTruncatesLongPreview() {
+        String longSummary = "这是一个很长的 mounted context 摘要，用来验证 renderer 会做 preview 截断，并且不会把整段长文本原样灌进 prompt。"
+            .repeat(6);
+        MountedContextView denseView = new MountedContextView(
+            null,
+            "task_dense",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.EVIDENCE,
+                    "Evidence",
+                    List.of(
+                        object("artifact_1", "Artifact 1", longSummary, ContextRetentionState.HOT_RAW),
+                        object("artifact_2", "Artifact 2", "第二条证据", ContextRetentionState.WARM_SUMMARY),
+                        object("artifact_3", "Artifact 3", "第三条证据", ContextRetentionState.WARM_SUMMARY),
+                        object("artifact_4", "Artifact 4", "第四条证据，不应该完整展开", ContextRetentionState.COLD_CAPSULE)
+                    )
+                )
+            ),
+            List.of("first", "  ", longSummary)
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(denseView);
+
+        assertTrue(prompt.contains("Evidence (4)"));
+        assertTrue(prompt.contains("... +1 more"));
+        assertTrue(prompt.contains("artifact/hot_raw/Artifact 1"));
+        assertTrue(prompt.contains("Mounted Context Selection Trace:"));
+        assertTrue(prompt.contains("first"));
+        assertFalse(prompt.contains("null"));
+        assertFalse(prompt.contains("Artifact 4 ->"));
+        assertTrue(prompt.contains("..."));
+    }
+
+    private ContextObject object(String id,
+                                 String title,
+                                 String summary,
+                                 ContextRetentionState retentionState) {
+        return new ContextObject(
+            id,
+            "/sessions/s1/tasks/task_dense/" + id,
+            ContextObjectType.ARTIFACT,
+            "",
+            title,
+            summary,
+            "",
+            Instant.parse("2026-05-06T06:10:00Z"),
+            retentionState,
+            List.of(),
+            List.of(),
+            Map.of()
+        );
+    }
 }

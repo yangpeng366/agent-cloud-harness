@@ -6,4 +6,8 @@ target/
 .idea/
 .vscode/
 .tmp/
+*.db
+*.db-journal
+hs_err_pid*
+replay_pid*
 target/

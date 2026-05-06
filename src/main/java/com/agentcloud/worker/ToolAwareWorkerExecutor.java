@@ -3,10 +3,13 @@ package com.agentcloud.worker;
 import com.agentcloud.engine.IdGenerator;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.llm.LlmImageInput;
+import com.agentcloud.llm.LlmImageInputResolver;
 import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.model.Worker;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.store.JsonMapper;
@@ -91,6 +94,17 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return fallbackExecutor.executeOneRound(context, workerId);
         }
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.task());
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
+            context,
+            renderingMode,
+            renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : ""
+        );
+        log.info("Tool-aware prompt mode selected. task={}, worker={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
+            context.task().id(),
+            worker.workerId(),
+            metrics.promptMode(),
+            metrics.mountedRenderUsed(),
+            metrics.panelCount());
 
         TaskToolState toolStateBefore = inspectTaskToolState(context);
         if (shouldUseLegacySingleToolPath(toolStateBefore)) {
@@ -353,9 +367,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                               TaskToolState toolState,
                               PromptRenderingMode renderingMode) {
         try {
+            List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
             String raw = llmClient.chat(
                 buildPlanningSystemPrompt(worker),
-                buildPlanningUserPrompt(context, worker, toolState, renderingMode)
+                buildPlanningUserPrompt(context, worker, toolState, renderingMode),
+                imageInputs
             );
             ToolPlan parsed = parseToolPlan(raw);
             log.info("Tool planning completed. task={} worker={} needsTool={} tool={}",
@@ -785,9 +801,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                   TaskToolState toolStateBefore,
                                                   ToolPlan originalPlan) {
         try {
+            List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
             String raw = llmClient.chat(
                 buildAutoWriteSystemPrompt(worker),
-                buildAutoWriteUserPrompt(context, worker, toolStateBefore, originalPlan)
+                buildAutoWriteUserPrompt(context, worker, toolStateBefore, originalPlan),
+                imageInputs
             );
             AutoWriteDraft parsed = parseAutoWriteDraft(raw);
             log.info("Auto write generation completed. task={} worker={} contentLength={}",
@@ -1534,17 +1552,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (result.metadata() != null) {
             metadata.putAll(result.metadata());
         }
-        metadata.put("prompt_rendering_mode", renderingMode.wireName());
-        boolean mountedRendered = renderingMode.shouldRenderMountedPrompt();
-        String mountedPrompt = mountedRendered ? mountedContextPromptRenderer.render(context) : "";
-        metadata.put("mounted_context_rendered", mountedRendered);
-        metadata.put("mounted_context_injected", renderingMode.shouldInjectMountedPrompt() && !mountedPrompt.isBlank());
-        metadata.put("mounted_context_panel_count", context.mountedContextView() != null
-            ? context.mountedContextView().panels().size()
-            : 0);
-        metadata.put("mounted_context_selection_trace_count", context.mountedContextView() != null
-            ? context.mountedContextView().selectionTrace().size()
-            : 0);
+        String mountedPrompt = renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : "";
+        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt).toMetadata());
+        List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
+        metadata.put("image_input_count", imageInputs.size());
+        metadata.put("image_input_used", !imageInputs.isEmpty());
         return new WorkerExecutionResult(
             result.summary(),
             result.outputText(),

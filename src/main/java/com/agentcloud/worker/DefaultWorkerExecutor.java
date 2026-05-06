@@ -1,11 +1,14 @@
 package com.agentcloud.worker;
 
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.llm.LlmImageInput;
+import com.agentcloud.llm.LlmImageInputResolver;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -46,14 +49,26 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
 
         String systemPrompt = buildSystemPrompt(context, workerId);
         String userPrompt = buildUserPrompt(context, renderingMode);
+        List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
 
-        String raw = llmClient.chat(systemPrompt, userPrompt);
+        String raw = llmClient.chat(systemPrompt, userPrompt, imageInputs);
         long durationMs = System.currentTimeMillis() - startMs;
         WorkerExecutionResult result = parseExecutionResult(raw, durationMs);
-        WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context);
+        WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context, imageInputs);
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
+            context,
+            renderingMode,
+            renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : ""
+        );
 
-        log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}",
-            context.task().id(), workerId, enriched.outputText().length(), durationMs);
+        log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
+            context.task().id(),
+            workerId,
+            enriched.outputText().length(),
+            durationMs,
+            metrics.promptMode(),
+            metrics.mountedRenderUsed(),
+            metrics.panelCount());
 
         return enriched;
     }
@@ -175,22 +190,16 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
 
     private WorkerExecutionResult attachRenderingMetadata(WorkerExecutionResult result,
                                                           PromptRenderingMode renderingMode,
-                                                          TaskRuntimeContext context) {
+                                                          TaskRuntimeContext context,
+                                                          List<LlmImageInput> imageInputs) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         if (result.metadata() != null) {
             metadata.putAll(result.metadata());
         }
-        metadata.put("prompt_rendering_mode", renderingMode.wireName());
-        boolean mountedRendered = renderingMode.shouldRenderMountedPrompt();
-        String mountedPrompt = mountedRendered ? mountedContextPromptRenderer.render(context) : "";
-        metadata.put("mounted_context_rendered", mountedRendered);
-        metadata.put("mounted_context_injected", renderingMode.shouldInjectMountedPrompt() && !mountedPrompt.isBlank());
-        metadata.put("mounted_context_panel_count", context.mountedContextView() != null
-            ? context.mountedContextView().panels().size()
-            : 0);
-        metadata.put("mounted_context_selection_trace_count", context.mountedContextView() != null
-            ? context.mountedContextView().selectionTrace().size()
-            : 0);
+        String mountedPrompt = renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : "";
+        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt).toMetadata());
+        metadata.put("image_input_count", imageInputs == null ? 0 : imageInputs.size());
+        metadata.put("image_input_used", imageInputs != null && !imageInputs.isEmpty());
         return new WorkerExecutionResult(
             result.summary(),
             result.outputText(),

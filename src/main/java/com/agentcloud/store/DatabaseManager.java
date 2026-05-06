@@ -13,6 +13,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.stream.Collectors;
 
 public class DatabaseManager implements AutoCloseable {
@@ -72,9 +73,29 @@ public class DatabaseManager implements AutoCloseable {
                     }
                 }
             });
+            applyCompatibilityMigrations();
         } catch (Exception e) {
             throw new RuntimeException("Failed to init schema", e);
         }
+    }
+
+    private void applyCompatibilityMigrations() {
+        jdbi.useHandle(handle -> {
+            if (!tableHasColumn(handle, "tool_invocations", "execution_id")) {
+                handle.execute("ALTER TABLE tool_invocations ADD COLUMN execution_id TEXT");
+                log.info("Applied compatibility migration: tool_invocations.execution_id");
+            }
+        });
+    }
+
+    private boolean tableHasColumn(org.jdbi.v3.core.Handle handle, String tableName, String columnName) {
+        List<String> columns = handle.createQuery("PRAGMA table_info(" + tableName + ")")
+            .mapToMap()
+            .list()
+            .stream()
+            .map(row -> String.valueOf(row.get("name")))
+            .toList();
+        return columns.stream().anyMatch(columnName::equalsIgnoreCase);
     }
 
     public Jdbi jdbi() { return jdbi; }

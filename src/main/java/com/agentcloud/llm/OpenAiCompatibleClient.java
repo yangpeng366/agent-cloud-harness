@@ -7,12 +7,17 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,15 +44,24 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public String chat(String systemPrompt, String userPrompt) {
-        return send("default", config.model(), systemPrompt, userPrompt);
+        return send("default", config.model(), systemPrompt, userPrompt, List.of());
+    }
+
+    @Override
+    public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
+        return send("default", config.model(), systemPrompt, userPrompt, imageInputs);
     }
 
     @Override
     public String review(String systemPrompt, String userPrompt) {
-        return send("review", config.reviewModel(), systemPrompt, userPrompt);
+        return send("review", config.reviewModel(), systemPrompt, userPrompt, List.of());
     }
 
-    private String send(String channel, String model, String systemPrompt, String userPrompt) {
+    private String send(String channel,
+                        String model,
+                        String systemPrompt,
+                        String userPrompt,
+                        List<LlmImageInput> imageInputs) {
         if (!config.available()) {
             log.warn("LLM not configured (missing OPENAI_API_KEY), returning empty response");
             return "";
@@ -55,9 +69,9 @@ public class OpenAiCompatibleClient implements LlmClient {
 
         try {
             if ("responses".equals(config.wireApi())) {
-                return sendResponses(channel, model, systemPrompt, userPrompt);
+                return sendResponses(channel, model, systemPrompt, userPrompt, imageInputs);
             }
-            return sendChatCompletions(channel, model, systemPrompt, userPrompt);
+            return sendChatCompletions(channel, model, systemPrompt, userPrompt, imageInputs);
 
         } catch (Exception e) {
             log.error("LLM chat failed", e);
@@ -65,7 +79,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         }
     }
 
-    private String sendChatCompletions(String channel, String model, String systemPrompt, String userPrompt) throws Exception {
+    private String sendChatCompletions(String channel,
+                                       String model,
+                                       String systemPrompt,
+                                       String userPrompt,
+                                       List<LlmImageInput> imageInputs) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", model);
         if (config.maxTokens() != null && config.maxTokens() > 0) {
@@ -79,7 +97,17 @@ public class OpenAiCompatibleClient implements LlmClient {
 
         ObjectNode userMsg = messages.addObject();
         userMsg.put("role", "user");
-        userMsg.put("content", userPrompt);
+        if (imageInputs == null || imageInputs.isEmpty()) {
+            userMsg.put("content", userPrompt);
+        } else {
+            ArrayNode userContent = userMsg.putArray("content");
+            ObjectNode textItem = userContent.addObject();
+            textItem.put("type", "text");
+            textItem.put("text", userPrompt);
+            for (LlmImageInput imageInput : imageInputs) {
+                appendChatCompletionImage(userContent, imageInput);
+            }
+        }
 
         return sendJsonRequest(
             "chat_completions",
@@ -91,11 +119,28 @@ public class OpenAiCompatibleClient implements LlmClient {
         );
     }
 
-    private String sendResponses(String channel, String model, String systemPrompt, String userPrompt) throws Exception {
+    private String sendResponses(String channel,
+                                 String model,
+                                 String systemPrompt,
+                                 String userPrompt,
+                                 List<LlmImageInput> imageInputs) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", model);
         body.put("instructions", systemPrompt);
-        body.put("input", userPrompt);
+        if (imageInputs == null || imageInputs.isEmpty()) {
+            body.put("input", userPrompt);
+        } else {
+            ArrayNode input = body.putArray("input");
+            ObjectNode userMessage = input.addObject();
+            userMessage.put("role", "user");
+            ArrayNode content = userMessage.putArray("content");
+            ObjectNode textItem = content.addObject();
+            textItem.put("type", "input_text");
+            textItem.put("text", userPrompt);
+            for (LlmImageInput imageInput : imageInputs) {
+                appendResponsesImage(content, imageInput);
+            }
+        }
         if (config.maxTokens() != null && config.maxTokens() > 0) {
             body.put("max_output_tokens", config.maxTokens());
         }
@@ -108,6 +153,61 @@ public class OpenAiCompatibleClient implements LlmClient {
             candidateUrls("responses"),
             this::extractResponsesText
         );
+    }
+
+    private void appendChatCompletionImage(ArrayNode userContent, LlmImageInput imageInput) throws IOException {
+        String imageUrl = toDataUrl(imageInput);
+        if (imageUrl.isBlank()) {
+            return;
+        }
+        ObjectNode imageItem = userContent.addObject();
+        imageItem.put("type", "image_url");
+        ObjectNode imageUrlNode = imageItem.putObject("image_url");
+        imageUrlNode.put("url", imageUrl);
+    }
+
+    private void appendResponsesImage(ArrayNode content, LlmImageInput imageInput) throws IOException {
+        String imageUrl = toDataUrl(imageInput);
+        if (imageUrl.isBlank()) {
+            return;
+        }
+        ObjectNode imageItem = content.addObject();
+        imageItem.put("type", "input_image");
+        imageItem.put("image_url", imageUrl);
+    }
+
+    private String toDataUrl(LlmImageInput imageInput) throws IOException {
+        if (imageInput == null || imageInput.path() == null || imageInput.path().isBlank()) {
+            return "";
+        }
+        Path path = Paths.get(imageInput.path()).toAbsolutePath().normalize();
+        byte[] bytes = Files.readAllBytes(path);
+        String mediaType = resolveMediaType(path, imageInput.mediaType());
+        return "data:" + mediaType + ";base64," + Base64.getEncoder().encodeToString(bytes);
+    }
+
+    private String resolveMediaType(Path path, String explicitMediaType) throws IOException {
+        if (explicitMediaType != null && !explicitMediaType.isBlank()) {
+            return explicitMediaType;
+        }
+        String detected = Files.probeContentType(path);
+        if (detected != null && !detected.isBlank()) {
+            return detected;
+        }
+        String name = path.getFileName() == null ? "" : path.getFileName().toString().toLowerCase();
+        if (name.endsWith(".png")) {
+            return "image/png";
+        }
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (name.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (name.endsWith(".gif")) {
+            return "image/gif";
+        }
+        return "application/octet-stream";
     }
 
     private String sendJsonRequest(String wireApi,

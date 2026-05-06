@@ -2,6 +2,7 @@ package com.agentcloud.worker;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.llm.LlmImageInput;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.ToolInvocationRecord;
@@ -336,12 +337,105 @@ class ToolAwareWorkerExecutorMultiStepTest {
             sessionDao.insert(Session.create(task.sessionId(), "mounted planning", "active"));
             taskDao.insert(task);
 
-            executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+            WorkerExecutionResult result = executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
 
             assertTrue(llmClient.firstUserPrompt.contains("Mounted Context:"));
             assertTrue(llmClient.firstUserPrompt.contains("Pinned (1)"));
             assertTrue(llmClient.firstUserPrompt.contains("constraint/pinned/Constraints"));
             assertTrue(llmClient.firstUserPrompt.contains("Mounted Context Selection Trace:"));
+            assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
+            assertEquals(true, result.metadata().get("mounted_render_used"));
+            assertEquals(1, result.metadata().get("mounted_pinned_count"));
+        }
+    }
+
+    @Test
+    void planningPromptPassesResolvedImageInputsToLlm() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-image-workspace"));
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-image.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-image",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this test.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_image",
+                "session_multi_image",
+                null,
+                "planning prompt image",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T07:00:00Z"),
+                Instant.parse("2026-05-06T07:00:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Ensure tool planning sees image inputs.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Read the image mockup before deciding tool use.",
+                    "image_inputs", List.of(
+                        Map.of("path", "D:\\gitAll\\open\\20260506-141826.png", "media_type", "image/png"),
+                        "D:\\gitAll\\open\\20260506-141916.jpg"
+                    )
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "image planning", "active"));
+            taskDao.insert(task);
+
+            WorkerExecutionResult result = executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+
+            assertEquals(2, llmClient.firstImageInputs.size());
+            assertEquals("D:\\gitAll\\open\\20260506-141826.png", llmClient.firstImageInputs.get(0).path());
+            assertEquals("image/png", llmClient.firstImageInputs.get(0).mediaType());
+            assertEquals("D:\\gitAll\\open\\20260506-141916.jpg", llmClient.firstImageInputs.get(1).path());
+            assertEquals(true, result.metadata().get("image_input_used"));
+            assertEquals(2, result.metadata().get("image_input_count"));
         }
     }
 
@@ -419,10 +513,13 @@ class ToolAwareWorkerExecutorMultiStepTest {
             sessionDao.insert(Session.create(task.sessionId(), "active-only planning", "active"));
             taskDao.insert(task);
 
-            executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+            WorkerExecutionResult result = executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
 
             assertFalse(llmClient.firstUserPrompt.contains("Mounted Context:"));
             assertTrue(llmClient.firstUserPrompt.contains("Active Context:"));
+            assertEquals("active_context_only", result.metadata().get("prompt_mode"));
+            assertEquals(false, result.metadata().get("mounted_render_used"));
+            assertEquals(1, result.metadata().get("mounted_pinned_count"));
         }
     }
 
@@ -484,10 +581,16 @@ class ToolAwareWorkerExecutorMultiStepTest {
             }
             return responses.remove();
         }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
+            return chat(systemPrompt, userPrompt);
+        }
     }
 
     private static final class CapturingSequencedLlmClient extends SequencedLlmClient {
         private String firstUserPrompt = "";
+        private List<LlmImageInput> firstImageInputs = List.of();
         private boolean captured;
 
         private CapturingSequencedLlmClient(List<String> responses) {
@@ -495,12 +598,13 @@ class ToolAwareWorkerExecutorMultiStepTest {
         }
 
         @Override
-        public String chat(String systemPrompt, String userPrompt) {
+        public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
             if (!captured) {
                 firstUserPrompt = userPrompt;
+                firstImageInputs = imageInputs == null ? List.of() : List.copyOf(imageInputs);
                 captured = true;
             }
-            return super.chat(systemPrompt, userPrompt);
+            return super.chat(systemPrompt, userPrompt, imageInputs);
         }
     }
 }

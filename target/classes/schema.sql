@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS tasks (
   FOREIGN KEY(session_id) REFERENCES sessions(id)
 );
 
+CREATE TABLE IF NOT EXISTS session_messages (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT,
+  role TEXT NOT NULL,
+  message_type TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
@@ -141,9 +154,100 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   FOREIGN KEY(task_id) REFERENCES tasks(id)
 );
 
+CREATE TABLE IF NOT EXISTS learning_memories (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  memory_type TEXT NOT NULL,        -- routing_preference | context_retention_hint | completion_pattern | worker_heuristic
+  state TEXT NOT NULL,              -- candidate | reinforced | stable_hint
+  hint_key TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  confidence_score REAL,
+  reinforcement_count INTEGER NOT NULL DEFAULT 1,
+  evidence_json TEXT,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS tool_invocations (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  worker_id TEXT NOT NULL,
+  execution_id TEXT,
+  tool_name TEXT NOT NULL,
+  arguments_json TEXT,
+  result_summary TEXT,
+  status TEXT,
+  success INTEGER NOT NULL,
+  elapsed_ms INTEGER,
+  touched_paths_json TEXT,
+  created_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS experiment_runs (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL UNIQUE,
+  experiment_name TEXT,
+  task_case_key TEXT,
+  task_title TEXT NOT NULL,
+  task_type TEXT,
+  task_length_bucket TEXT,
+  model_mode TEXT NOT NULL,
+  total_steps INTEGER NOT NULL DEFAULT 0,
+  completion_status TEXT NOT NULL,
+  acceptance_result TEXT,
+  total_cost REAL NOT NULL DEFAULT 0,
+  strong_model_cost_ratio REAL,
+  handoff_count INTEGER NOT NULL DEFAULT 0,
+  resume_count INTEGER NOT NULL DEFAULT 0,
+  human_gate_count INTEGER NOT NULL DEFAULT 0,
+  failure_reason TEXT,
+  recovery_success INTEGER,
+  final_artifact_quality_note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  provider_display_name TEXT,
+  worker_role TEXT,
+  selected_worker_id TEXT,
+  selected_model_tier TEXT,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_ms INTEGER,
+  summary TEXT,
+  last_event_type TEXT,
+  artifact_count INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_tasks_session_status_updated
 ON tasks(session_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_session_messages_session_created
+ON session_messages(session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_session_messages_task_created
+ON session_messages(task_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_decisions_session_task_created
 ON decisions(session_id, task_id, created_at);
@@ -168,3 +272,27 @@ ON skills(ready, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_checkpoints_task_created
 ON checkpoints(task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_learning_memories_task_created
+ON learning_memories(task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_learning_memories_type_hint
+ON learning_memories(memory_type, hint_key, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_task_created
+ON tool_invocations(task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_tool_invocations_session_task_created
+ON tool_invocations(session_id, task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_runs_experiment_case
+ON experiment_runs(experiment_name, task_case_key, model_mode, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_experiment_runs_task_length
+ON experiment_runs(task_length_bucket, model_mode, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_started
+ON agent_runs(task_id, started_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_provider_started
+ON agent_runs(provider_id, started_at);

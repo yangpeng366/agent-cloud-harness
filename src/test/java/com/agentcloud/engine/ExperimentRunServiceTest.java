@@ -109,14 +109,19 @@ class ExperimentRunServiceTest {
                 null,
                 null,
                 "Execution worker produced the requested draft.",
-                Map.of(
-                    "selected_model_tier", "small",
-                    "selected_worker", "kimi",
-                    "route_source", "learning_memory",
-                    "preferred_worker_hint", "kimi",
-                    "learning_hint_applied", true,
-                    "fallback_reason", "hint matched candidate set",
-                    "latest_worker_metadata", Map.of(
+                Map.ofEntries(
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("route_source", "learning_memory"),
+                    Map.entry("preferred_worker_hint", "kimi"),
+                    Map.entry("learning_hint_applied", true),
+                    Map.entry("fallback_reason", "hint matched candidate set"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("image_input_count", 2),
+                    Map.entry("image_input_used", true),
+                    Map.entry("latest_worker_metadata", Map.of(
                         "execution_status", "blocked",
                         "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"),
                         "unfinished_items", List.of("manual_review"),
@@ -127,7 +132,7 @@ class ExperimentRunServiceTest {
                             Map.of("tool_chain_step_index", 1, "tool_name", "read_file"),
                             Map.of("tool_chain_step_index", 2, "tool_name", "write_file")
                         )
-                    )
+                    ))
                 )
             ));
             toolInvocationDao.insert(new ToolInvocationRecord(
@@ -245,6 +250,11 @@ class ExperimentRunServiceTest {
             assertEquals("kimi", run.metadata().get("preferred_worker_hint"));
             assertEquals(Boolean.TRUE, run.metadata().get("learning_hint_applied"));
             assertEquals("hint matched candidate set", run.metadata().get("fallback_reason"));
+            assertEquals("mounted_context_primary", run.metadata().get("prompt_mode"));
+            assertEquals(Boolean.TRUE, run.metadata().get("mounted_render_used"));
+            assertEquals(7, ((Number) run.metadata().get("mounted_context_panel_count")).intValue());
+            assertEquals(2, ((Number) run.metadata().get("image_input_count")).intValue());
+            assertEquals(Boolean.TRUE, run.metadata().get("image_input_used"));
             assertEquals("multi_tool_round", run.metadata().get("tool_execution_mode"));
             assertEquals(2, ((Number) run.metadata().get("tool_chain_step_count")).intValue());
             assertEquals("planner_no_additional_tool", run.metadata().get("tool_chain_termination_reason"));

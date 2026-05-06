@@ -59,16 +59,21 @@ class ControlNodeGraphActionResolutionTest {
         Method method = ControlNodeGraph.class.getDeclaredMethod("selectLatestWorkerMetadata", Map.class);
         method.setAccessible(true);
 
-        Map<String, Object> selected = (Map<String, Object>) method.invoke(graph, Map.of(
-            "selected_worker", "kimi-local-doc",
-            "selected_model_tier", "small",
-            "execution_role", "executor",
-            "why_selected", "selected by capability match",
-            "preferred_worker_hint", "kimi-local-doc",
-            "learning_hint_applied", true,
-            "fallback_reason", "fallback to any ready worker",
-            "route_source", "learning_memory",
-            "ignored", "should not leak"
+        Map<String, Object> selected = (Map<String, Object>) method.invoke(graph, Map.ofEntries(
+            Map.entry("image_input_count", 2),
+            Map.entry("image_input_used", true),
+            Map.entry("prompt_mode", "mounted_context_primary"),
+            Map.entry("mounted_render_used", true),
+            Map.entry("mounted_context_panel_count", 7),
+            Map.entry("selected_worker", "kimi-local-doc"),
+            Map.entry("selected_model_tier", "small"),
+            Map.entry("execution_role", "executor"),
+            Map.entry("why_selected", "selected by capability match"),
+            Map.entry("preferred_worker_hint", "kimi-local-doc"),
+            Map.entry("learning_hint_applied", true),
+            Map.entry("fallback_reason", "fallback to any ready worker"),
+            Map.entry("route_source", "learning_memory"),
+            Map.entry("ignored", "should not leak")
         ));
 
         assertEquals("kimi-local-doc", selected.get("selected_worker"));
@@ -79,6 +84,11 @@ class ControlNodeGraphActionResolutionTest {
         assertEquals(Boolean.TRUE, selected.get("learning_hint_applied"));
         assertEquals("fallback to any ready worker", selected.get("fallback_reason"));
         assertEquals("learning_memory", selected.get("route_source"));
+        assertEquals(2, selected.get("image_input_count"));
+        assertEquals(Boolean.TRUE, selected.get("image_input_used"));
+        assertEquals("mounted_context_primary", selected.get("prompt_mode"));
+        assertEquals(Boolean.TRUE, selected.get("mounted_render_used"));
+        assertEquals(7, selected.get("mounted_context_panel_count"));
         assertTrue(!selected.containsKey("ignored"));
     }
 

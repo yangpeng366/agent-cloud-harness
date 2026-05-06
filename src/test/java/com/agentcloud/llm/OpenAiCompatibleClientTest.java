@@ -5,16 +5,24 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenAiCompatibleClientTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void chatUsesChatCompletionsWithDefaultModel() throws Exception {
@@ -73,6 +81,78 @@ class OpenAiCompatibleClientTest {
             assertEquals("review system", body.path("instructions").asText());
             assertEquals("review user", body.path("input").asText());
             assertEquals(654, body.path("max_output_tokens").asInt());
+        }
+    }
+
+    @Test
+    void chatWithImagesUsesResponsesInputImageContent() throws Exception {
+        Path imagePath = tempDir.resolve("input.png");
+        Files.write(imagePath, new byte[]{(byte) 0x89, 'P', 'N', 'G'});
+
+        try (StubServer server = new StubServer("""
+            {"output":[{"type":"message","content":[{"type":"output_text","text":"vision ok"}]}]}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "responses",
+                30,
+                1,
+                222
+            );
+
+            OpenAiCompatibleClient client = new OpenAiCompatibleClient(config);
+            String response = client.chat(
+                "system prompt",
+                "user prompt",
+                List.of(new LlmImageInput(imagePath.toString(), "image/png"))
+            );
+
+            assertEquals("vision ok", response);
+            JsonNode body = server.lastRequestBodyAsJson();
+            JsonNode content = body.path("input").get(0).path("content");
+            assertEquals("input_text", content.get(0).path("type").asText());
+            assertEquals("user prompt", content.get(0).path("text").asText());
+            assertEquals("input_image", content.get(1).path("type").asText());
+            assertTrue(content.get(1).path("image_url").asText().startsWith("data:image/png;base64,"));
+        }
+    }
+
+    @Test
+    void chatWithImagesUsesChatCompletionsImageUrlContent() throws Exception {
+        Path imagePath = tempDir.resolve("input.jpg");
+        Files.write(imagePath, new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF});
+
+        try (StubServer server = new StubServer("""
+            {"choices":[{"message":{"content":"done"}}]}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "chat_completions",
+                30,
+                1,
+                111
+            );
+
+            OpenAiCompatibleClient client = new OpenAiCompatibleClient(config);
+            String response = client.chat(
+                "system prompt",
+                "user prompt",
+                List.of(new LlmImageInput(imagePath.toString(), "image/jpeg"))
+            );
+
+            assertEquals("done", response);
+            JsonNode body = server.lastRequestBodyAsJson();
+            JsonNode content = body.path("messages").get(1).path("content");
+            assertEquals("text", content.get(0).path("type").asText());
+            assertEquals("user prompt", content.get(0).path("text").asText());
+            assertEquals("image_url", content.get(1).path("type").asText());
+            assertTrue(content.get(1).path("image_url").path("url").asText().startsWith("data:image/jpeg;base64,"));
         }
     }
 
