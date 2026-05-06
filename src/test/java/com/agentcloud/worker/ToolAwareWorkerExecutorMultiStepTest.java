@@ -25,6 +25,7 @@ import com.agentcloud.tool.SearchTextTool;
 import com.agentcloud.tool.ToolPolicy;
 import com.agentcloud.tool.ToolRegistry;
 import com.agentcloud.tool.WriteFileTool;
+import com.agentcloud.tool.WriteFilesTool;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -84,6 +85,7 @@ class ToolAwareWorkerExecutorMultiStepTest {
                 "{\"needs_tool\":true,\"tool_name\":\"search_text\",\"tool_arguments\":{\"path\":\".\",\"query\":\"TODO\"},\"reason\":\"find the relevant reference file first\"}",
                 "{\"needs_tool\":true,\"tool_name\":\"read_file\",\"tool_arguments\":{\"path\":\"notes.txt\"},\"reason\":\"read the matched note before writing\"}",
                 "{\"needs_tool\":true,\"tool_name\":\"write_file\",\"tool_arguments\":{\"path\":\"result.md\",\"content\":\"Final grounded answer\\n\"},\"reason\":\"write the grounded answer to the output file\"}",
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"the grounded file already exists, finalize now\"}",
                 "{\"summary\":\"completed grounded write\",\"output_text\":\"final answer prepared\",\"produced_artifact\":true,\"artifact_title\":\"result.md\",\"artifact_content\":\"\",\"suggested_next_step\":\"\",\"confidence\":\"high\"}"
             ));
 
@@ -139,7 +141,7 @@ class ToolAwareWorkerExecutorMultiStepTest {
             assertTrue(result.producedArtifact());
             assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
             assertEquals(3, ((Number) result.metadata().get("tool_chain_step_count")).intValue());
-            assertEquals("max_tool_rounds_reached", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("planner_no_additional_tool", result.metadata().get("tool_chain_termination_reason"));
             assertTrue(Files.exists(outputFile));
             assertEquals("Final grounded answer\n", Files.readString(outputFile));
 
@@ -160,6 +162,347 @@ class ToolAwareWorkerExecutorMultiStepTest {
             assertEquals(Set.of(1, 2, 3), stepIndexes);
             assertTrue(invocations.stream().allMatch(record ->
                 "multi_tool_round".equals(record.metadata().get("tool_execution_mode"))));
+        }
+    }
+
+    @Test
+    void treatsDirectoryBackedWriteFilesOutputAsGroundedArtifact() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-dir"));
+        Path outputDir = workspace.resolve("site-out");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-dir.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-dir",
+                "codex",
+                List.of("coding"),
+                List.of("write_files"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new WriteFilesTool(workerRegistry, toolPolicy));
+
+            SequencedLlmClient llmClient = new SequencedLlmClient(List.of(
+                """
+                {"needs_tool":true,"tool_name":"write_files","tool_arguments":{"base_path":"site-out","files":[{"path":"index.html","content":"<h1>Demo</h1>"},{"path":"assets/app.js","content":"console.log('ok');"}],"overwrite":true},"reason":"create the directory-backed grounded artifact in one step"}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"the output directory now contains the required grounded files"}
+                """,
+                """
+                {"summary":"completed directory grounded write","output_text":"site bundle prepared","produced_artifact":true,"artifact_title":"site-out","artifact_content":"","suggested_next_step":"","confidence":"high"}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_dir_1",
+                "session_multi_dir_1",
+                null,
+                "grounded directory artifact",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create a small site bundle in the output directory",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Create the grounded output directory with the required files.",
+                    "output_dir", outputDir.toString()
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool directory", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals(1, ((Number) result.metadata().get("tool_chain_step_count")).intValue());
+            assertEquals("planner_no_additional_tool", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals(Boolean.TRUE, result.metadata().get("output_dir_required"));
+            assertEquals(Boolean.TRUE, result.metadata().get("output_dir_exists"));
+            assertEquals(Boolean.TRUE, result.metadata().get("grounded_output_present"));
+            assertEquals(Boolean.TRUE, result.metadata().get("directory_backed_artifact"));
+            assertTrue(Files.exists(outputDir.resolve("index.html")));
+            assertTrue(Files.exists(outputDir.resolve("assets").resolve("app.js")));
+
+            Object rawTrace = result.metadata().get("tool_chain_trace");
+            assertInstanceOf(List.class, rawTrace);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> trace = (List<Map<String, Object>>) rawTrace;
+            assertEquals(1, trace.size());
+            assertEquals("write_files", trace.get(0).get("selected_tool"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(1, invocations.size());
+            assertEquals("write_files", invocations.get(0).toolName());
+        }
+    }
+
+    @Test
+    void initialNoToolPlanForDirectoryTaskTriggersLightweightProbeBeforeWrite() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-probe"));
+        Path outputDir = workspace.resolve("demo-project");
+        Files.writeString(workspace.resolve("brief.txt"), "Build a small grounded demo bundle.\n");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-probe.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-probe",
+                "codex",
+                List.of("coding"),
+                List.of("list_files", "write_files"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ListFilesTool(workerRegistry, toolPolicy))
+                .register(new WriteFilesTool(workerRegistry, toolPolicy));
+
+            SequencedLlmClient llmClient = new SequencedLlmClient(List.of(
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"Need a quick workspace check before deciding the grounded bundle layout."}
+                """,
+                """
+                {"needs_tool":true,"tool_name":"write_files","tool_arguments":{"base_path":"demo-project","files":[{"path":"README.md","content":"# Demo Project\\n"},{"path":"src/main.js","content":"console.log('demo');\\n"}],"overwrite":true},"reason":"Now write the grounded directory bundle."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"The grounded directory bundle is now present."}
+                """,
+                """
+                {"summary":"completed directory bundle after probe","output_text":"probe then grounded write finished","produced_artifact":true,"artifact_title":"demo-project","artifact_content":"","suggested_next_step":"","confidence":"high"}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_probe",
+                "session_multi_probe",
+                null,
+                "directory probe",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create the grounded demo directory after a lightweight probe.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Create the grounded output directory with the required files.",
+                    "output_dir", outputDir.toString()
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool probe", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals(2, ((Number) result.metadata().get("tool_chain_step_count")).intValue());
+            assertEquals("planner_no_additional_tool", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals(Boolean.TRUE, result.metadata().get("grounded_output_present"));
+            assertTrue(Files.exists(outputDir.resolve("README.md")));
+            assertTrue(Files.exists(outputDir.resolve("src").resolve("main.js")));
+
+            Object rawTrace = result.metadata().get("tool_chain_trace");
+            assertInstanceOf(List.class, rawTrace);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> trace = (List<Map<String, Object>>) rawTrace;
+            assertEquals(2, trace.size());
+            assertEquals("list_files", trace.get(0).get("selected_tool"));
+            assertEquals("write_files", trace.get(1).get("selected_tool"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(2, invocations.size());
+            assertEquals("list_files", invocations.get(1).toolName());
+            assertEquals("write_files", invocations.get(0).toolName());
+        }
+    }
+
+    @Test
+    void probeThenNoToolStillAutoWritesDirectoryBundle() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-probe-auto"));
+        Path outputDir = workspace.resolve("demo-project");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-probe-auto.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-probe-auto",
+                "codex",
+                List.of("coding"),
+                List.of("list_files", "write_files"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ListFilesTool(workerRegistry, toolPolicy))
+                .register(new WriteFilesTool(workerRegistry, toolPolicy));
+
+            SequencedLlmClient llmClient = new SequencedLlmClient(List.of(
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"Run one quick directory probe first."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"Enough evidence collected; produce the bundle now."}
+                """,
+                """
+                {"summary":"auto generated directory demo bundle","base_path":"demo-project","files":[{"path":"index.html","content":"<!doctype html><html><body><h1>Auto Demo</h1><script src=\\"app.js\\"></script></body></html>"},{"path":"app.js","content":"console.log('auto bundle');\\n"}],"suggested_next_step":"","confidence":"high"}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_probe_auto",
+                "session_multi_probe_auto",
+                null,
+                "directory probe auto write",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create the grounded demo directory after a lightweight probe.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Create the grounded output directory with the required files.",
+                    "output_dir", outputDir.toString(),
+                    "image_inputs", List.of("D:\\gitAll\\open\\20260506-141916.jpg")
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool probe auto", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals("auto_grounded_directory_write", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("generated", result.metadata().get("auto_write_generation_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("grounded_output_present"));
+            assertEquals(Boolean.TRUE, result.metadata().get("directory_backed_artifact"));
+            assertTrue(Files.exists(outputDir.resolve("index.html")));
+            assertTrue(Files.exists(outputDir.resolve("app.js")));
+
+            Object rawTrace = result.metadata().get("tool_chain_trace");
+            assertInstanceOf(List.class, rawTrace);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> trace = (List<Map<String, Object>>) rawTrace;
+            assertEquals(2, trace.size());
+            assertEquals("list_files", trace.get(0).get("selected_tool"));
+            assertEquals("write_files", trace.get(1).get("selected_tool"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(2, invocations.size());
+            assertEquals("write_files", invocations.get(0).toolName());
         }
     }
 
@@ -194,6 +537,7 @@ class ToolAwareWorkerExecutorMultiStepTest {
             SequencedLlmClient llmClient = new SequencedLlmClient(List.of(
                 "{\"needs_tool\":true,\"tool_name\":\"search_text\",\"tool_arguments\":{\"path\":\".\",\"query\":\"TODO\"},\"reason\":\"scan the workspace first\"}",
                 "{\"needs_tool\":true,\"tool_name\":\"search_text\",\"tool_arguments\":{\"path\":\".\",\"query\":\"TODO\"},\"reason\":\"run the same search again\"}",
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"stop after the repeated search guard\"}",
                 "{\"summary\":\"stopped on repeated search\",\"output_text\":\"search trace kept for inspection\",\"produced_artifact\":false,\"artifact_title\":\"\",\"artifact_content\":\"\",\"suggested_next_step\":\"adjust the query before trying again\",\"confidence\":\"medium\"}"
             ));
 
@@ -430,10 +774,10 @@ class ToolAwareWorkerExecutorMultiStepTest {
 
             WorkerExecutionResult result = executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
 
-            assertEquals(2, llmClient.firstImageInputs.size());
-            assertEquals("D:\\gitAll\\open\\20260506-141826.png", llmClient.firstImageInputs.get(0).path());
-            assertEquals("image/png", llmClient.firstImageInputs.get(0).mediaType());
-            assertEquals("D:\\gitAll\\open\\20260506-141916.jpg", llmClient.firstImageInputs.get(1).path());
+            assertTrue(llmClient.firstUserPrompt.contains("Image Inputs Available: 2"));
+            assertTrue(llmClient.firstUserPrompt.contains("D:\\gitAll\\open\\20260506-141826.png"));
+            assertTrue(llmClient.firstUserPrompt.contains("D:\\gitAll\\open\\20260506-141916.jpg"));
+            assertEquals(0, llmClient.firstImageInputs.size());
             assertEquals(true, result.metadata().get("image_input_used"));
             assertEquals(2, result.metadata().get("image_input_count"));
         }
@@ -605,6 +949,16 @@ class ToolAwareWorkerExecutorMultiStepTest {
                 captured = true;
             }
             return super.chat(systemPrompt, userPrompt, imageInputs);
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt) {
+            if (!captured) {
+                firstUserPrompt = userPrompt;
+                firstImageInputs = List.of();
+                captured = true;
+            }
+            return super.chat(systemPrompt, userPrompt);
         }
     }
 }

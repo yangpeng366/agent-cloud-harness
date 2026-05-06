@@ -284,7 +284,7 @@ class ToolAwareWorkerExecutorMultiToolTest {
             assertEquals(1, trace.size());
             assertEquals("write_file", trace.get(0).get("selected_tool"));
             assertTrue(String.valueOf(trace.get(0).get("why_next_step")).contains("no_progress_guard"));
-            assertTrue(String.valueOf(trace.get(0).get("why_next_step")).contains("write_file did not change the output file"));
+            assertTrue(String.valueOf(trace.get(0).get("why_next_step")).contains("write_file did not change the grounded output"));
 
             List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask("task-multi-tool", 10);
             assertEquals(1, invocations.size());

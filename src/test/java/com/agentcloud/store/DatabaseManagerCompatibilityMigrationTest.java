@@ -18,7 +18,7 @@ class DatabaseManagerCompatibilityMigrationTest {
     Path tempDir;
 
     @Test
-    void addsExecutionIdColumnToLegacyToolInvocationsTable() throws Exception {
+    void addsMissingColumnsToLegacyToolInvocationsTable() throws Exception {
         Path dbPath = tempDir.resolve("legacy-tool-invocations.db");
         try (var connection = DriverManager.getConnection("jdbc:sqlite:" + dbPath.toAbsolutePath())) {
             connection.createStatement().execute("""
@@ -30,10 +30,8 @@ class DatabaseManagerCompatibilityMigrationTest {
                   tool_name TEXT NOT NULL,
                   arguments_json TEXT,
                   result_summary TEXT,
-                  status TEXT,
                   success INTEGER NOT NULL,
                   elapsed_ms INTEGER,
-                  touched_paths_json TEXT,
                   created_at TEXT NOT NULL,
                   metadata_json TEXT
                 )
@@ -61,6 +59,8 @@ class DatabaseManagerCompatibilityMigrationTest {
 
             ToolInvocationRecord inserted = dao.listByTask("task_1", 10).getFirst();
             assertEquals("exec_1", inserted.executionId());
+            assertEquals("succeeded", inserted.status());
+            assertEquals(List.of(".tmp/demo.txt"), inserted.touchedPaths());
         }
     }
 }

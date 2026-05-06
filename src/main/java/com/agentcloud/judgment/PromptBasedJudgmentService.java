@@ -156,7 +156,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- Optional post-run QA, optional verification, or 'mark task complete' should not by themselves force partially_done.\n");
         sb.append("- If latest worker metadata says more_declared_rounds_remain=true, do not mark the task done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, do not mark the task done.\n");
-        sb.append("- For file-writing tasks, do not infer that the current round performed the final grounded write unless latest worker metadata explicitly shows tool_name=write_file or tool_name=patch_file together with file_backed_artifact=true, or clearly shows the output file already exists and the current round is only a verification/closeout step.\n");
+        sb.append("- For grounded-output tasks, do not infer that the current round performed the final grounded write unless latest worker metadata explicitly shows a grounded write tool together with grounded_output_present=true, or clearly shows the expected output already exists and the current round is only a verification/closeout step.\n");
         appendMountedContext(sb, context, renderingMode);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null
@@ -217,7 +217,13 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendMetadataLine(sb, metadata, "output_file_required");
         appendMetadataLine(sb, metadata, "output_file_path");
         appendMetadataLine(sb, metadata, "output_file_exists");
+        appendMetadataLine(sb, metadata, "output_dir_required");
+        appendMetadataLine(sb, metadata, "output_dir_path");
+        appendMetadataLine(sb, metadata, "output_dir_exists");
+        appendMetadataLine(sb, metadata, "output_dir_entry_count");
         appendMetadataLine(sb, metadata, "file_backed_artifact");
+        appendMetadataLine(sb, metadata, "directory_backed_artifact");
+        appendMetadataLine(sb, metadata, "grounded_output_present");
         appendMetadataLine(sb, metadata, "grounding_mode");
         appendMetadataLine(sb, metadata, "more_declared_rounds_remain");
         appendMetadataLine(sb, metadata, "current_round_requires_write");

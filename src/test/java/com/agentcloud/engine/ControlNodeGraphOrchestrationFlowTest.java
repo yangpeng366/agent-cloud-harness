@@ -10,6 +10,7 @@ import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.Worker;
 import com.agentcloud.runtime.ActiveContextBuilder;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
@@ -26,13 +27,17 @@ import com.agentcloud.worker.WorkerExecutor;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ControlNodeGraphOrchestrationFlowTest {
@@ -139,6 +144,151 @@ class ControlNodeGraphOrchestrationFlowTest {
         }
     }
 
+    @Test
+    void continueAutoRunsSchedulerAgainUntilGroundedOutputAppears() throws Exception {
+        Path outputFile = tempDir.resolve("auto-continue-result.txt");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("auto-continue-flow.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_auto_continue", "auto continue flow", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "tool-auto",
+                "codex",
+                List.of("coding"),
+                List.of("read_file", "write_file"),
+                List.of(tempDir.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                outputFile,
+                List.of(
+                    new WorkerExecutionResult(
+                        "inspected requirements",
+                        "looked at the current task state",
+                        false,
+                        "",
+                        "",
+                        "write the grounded output file next",
+                        "medium",
+                        0,
+                        10L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("output_file_required", true),
+                            Map.entry("output_file_path", outputFile.toString()),
+                            Map.entry("output_file_exists", false),
+                            Map.entry("file_backed_artifact", true),
+                            Map.entry("grounded_output_present", false),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "wrote grounded output",
+                        "the result file is now on disk",
+                        true,
+                        "auto-continue-result.txt",
+                        "Auto-continued grounded output.",
+                        "mark the task complete",
+                        "high",
+                        0,
+                        12L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("output_file_required", true),
+                            Map.entry("output_file_path", outputFile.toString()),
+                            Map.entry("output_file_exists", true),
+                            Map.entry("output_file_size", 31),
+                            Map.entry("file_backed_artifact", true),
+                            Map.entry("grounded_output_present", true),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_auto_continue",
+                "session_auto_continue",
+                null,
+                "auto continue grounded output",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Produce a grounded result file.",
+                null,
+                "tool-auto",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Use tool rounds until the grounded output exists.",
+                    "output_file", outputFile.toString()
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+            List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            assertEquals(2, workerExecutor.callCount());
+            assertTrue(Files.exists(outputFile));
+            assertEquals("done", finalTask.status());
+            assertEquals("done", persisted.status());
+            assertEquals("end", persisted.controlNode());
+            assertEquals("tool-auto", persisted.assignedWorker());
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_continue_burst_count")));
+            assertFalse(artifacts.isEmpty());
+            assertTrue(artifacts.stream().anyMatch(artifact ->
+                artifact.metadata().get("latest_worker_metadata") instanceof Map<?, ?> latest
+                    && "true".equalsIgnoreCase(String.valueOf(latest.get("grounded_output_present")))
+            ));
+        }
+    }
+
     private static String metadataString(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
             return null;
@@ -176,6 +326,38 @@ class ControlNodeGraphOrchestrationFlowTest {
                 15L,
                 Map.of("parser", "json")
             );
+        }
+    }
+
+    private static final class SequencedWorkerExecutor implements WorkerExecutor {
+        private final Path outputFile;
+        private final Queue<WorkerExecutionResult> results;
+        private int callCount;
+
+        private SequencedWorkerExecutor(Path outputFile, List<WorkerExecutionResult> results) {
+            this.outputFile = outputFile;
+            this.results = new ArrayDeque<>(results);
+        }
+
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            callCount++;
+            WorkerExecutionResult result = results.poll();
+            if (result == null) {
+                throw new AssertionError("unexpected worker execution call " + callCount);
+            }
+            if (callCount == 2) {
+                try {
+                    java.nio.file.Files.writeString(outputFile, "Auto-continued grounded output.");
+                } catch (java.io.IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            return result;
+        }
+
+        private int callCount() {
+            return callCount;
         }
     }
 
@@ -219,6 +401,54 @@ class ControlNodeGraphOrchestrationFlowTest {
                 "high",
                 "executor output satisfies the task goal",
                 "Mark the task complete."
+            );
+        }
+    }
+
+    private static final class AutoContinueJudgmentService implements JudgmentService {
+        @Override
+        public ExecutionDecision judgeExecution(JudgmentContext context) {
+            boolean grounded = Boolean.parseBoolean(
+                String.valueOf(context.latestWorkerMetadata().getOrDefault("grounded_output_present", false))
+            );
+            if (!grounded) {
+                return new ExecutionDecision(
+                    "continue",
+                    "grounded output is still missing",
+                    "Run another tool round to produce the required output.",
+                    false,
+                    false,
+                    null
+                );
+            }
+            return new ExecutionDecision(
+                "continue",
+                "grounded output exists now",
+                "Complete the task.",
+                false,
+                false,
+                null
+            );
+        }
+
+        @Override
+        public CompletionDecision judgeCompletion(JudgmentContext context) {
+            boolean grounded = Boolean.parseBoolean(
+                String.valueOf(context.latestWorkerMetadata().getOrDefault("grounded_output_present", false))
+            );
+            if (!grounded) {
+                return new CompletionDecision(
+                    "partially_done",
+                    "medium",
+                    "worker has not produced the grounded output yet",
+                    "Continue tool execution."
+                );
+            }
+            return new CompletionDecision(
+                "done",
+                "high",
+                "grounded output exists and satisfies the task",
+                "Complete the task."
             );
         }
     }

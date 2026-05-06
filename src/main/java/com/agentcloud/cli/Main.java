@@ -30,6 +30,7 @@ import com.agentcloud.tool.ShellTool;
 import com.agentcloud.tool.ToolPolicy;
 import com.agentcloud.tool.ToolRegistry;
 import com.agentcloud.tool.WriteFileTool;
+import com.agentcloud.tool.WriteFilesTool;
 import com.agentcloud.worker.DefaultWorkerExecutor;
 import com.agentcloud.worker.ToolAwareWorkerExecutor;
 import com.agentcloud.worker.WorkerExecutor;
@@ -113,6 +114,7 @@ public class Main {
             .register(new ReadFileTool(workerRegistry, toolPolicy))
             .register(new SearchTextTool(workerRegistry, toolPolicy))
             .register(new WriteFileTool(workerRegistry, toolPolicy))
+            .register(new WriteFilesTool(workerRegistry, toolPolicy))
             .register(new PatchFileTool(workerRegistry, toolPolicy))
             .register(new GitTool(workerRegistry, toolPolicy))
             .register(new ShellTool(workerRegistry, toolPolicy))

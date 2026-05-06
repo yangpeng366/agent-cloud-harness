@@ -47,7 +47,9 @@ import java.util.regex.Pattern;
 public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ToolAwareWorkerExecutor.class);
     private static final ObjectMapper MAPPER = JsonMapper.MAPPER;
-    private static final int MAX_TOOL_ROUNDS = 3;
+    private static final int DEFAULT_MAX_TOOL_ROUNDS = 4;
+    private static final int DIRECTORY_TASK_MAX_TOOL_ROUNDS = 8;
+    private static final int IMAGE_DIRECTORY_TASK_MAX_TOOL_ROUNDS = 10;
     private static final Pattern ROUND_INSTRUCTION_PATTERN =
         Pattern.compile("(?im)^Round\\s+(\\d+)\\s*:\\s*(.+)$");
 
@@ -121,6 +123,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             || requiresCurrentRoundWrite(toolState);
     }
 
+    private int resolveMaxToolRounds(TaskRuntimeContext context, TaskToolState toolState) {
+        if (toolState != null && toolState.outputDirRequired()) {
+            return hasImageInputs(context) ? IMAGE_DIRECTORY_TASK_MAX_TOOL_ROUNDS : DIRECTORY_TASK_MAX_TOOL_ROUNDS;
+        }
+        if (toolState != null && toolState.outputFileRequired()) {
+            return DEFAULT_MAX_TOOL_ROUNDS;
+        }
+        return DEFAULT_MAX_TOOL_ROUNDS;
+    }
+
+    private boolean hasImageInputs(TaskRuntimeContext context) {
+        return context != null && !LlmImageInputResolver.resolve(context).isEmpty();
+    }
+
     private WorkerExecutionResult executeSingleToolRound(TaskRuntimeContext context,
                                                          Worker worker,
                                                          TaskToolState toolStateBefore,
@@ -191,9 +207,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("tool_output_preview", truncate(outcome.result().output(), 500));
         metadata.put("tool_round_index", toolStateAfter.totalToolCount());
         metadata.put("declared_round_count", toolStateAfter.declaredRoundCount());
-        metadata.put("output_file_path", toolStateAfter.outputFilePath());
-        metadata.put("output_file_exists", toolStateAfter.outputFileExists());
-        metadata.put("output_file_size", toolStateAfter.outputFileSize());
+        appendGroundedOutputMetadata(metadata, toolStateAfter);
         if (toolStateBefore.currentRoundInstruction() != null && !toolStateBefore.currentRoundInstruction().isBlank()) {
             metadata.put("current_round_instruction", toolStateBefore.currentRoundInstruction());
         }
@@ -225,6 +239,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                         TaskToolState initialToolState,
                                                         PromptRenderingMode renderingMode) {
         long startMs = System.currentTimeMillis();
+        int maxToolRounds = resolveMaxToolRounds(context, initialToolState);
         TaskToolState currentToolState = initialToolState;
         TaskToolState lastToolStateBefore = initialToolState;
         TaskToolState lastToolStateAfter = initialToolState;
@@ -233,7 +248,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         List<ToolChainStep> toolChain = new ArrayList<>();
         String terminationReason = "planner_no_additional_tool";
 
-        for (int stepIndex = 1; stepIndex <= MAX_TOOL_ROUNDS; stepIndex++) {
+        for (int stepIndex = 1; stepIndex <= maxToolRounds; stepIndex++) {
             ToolPlan plan = planTool(context, worker, currentToolState, renderingMode);
             if (!toolChain.isEmpty()) {
                 toolChain = updateLastWhyNextStep(
@@ -244,27 +259,52 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
             if (!plan.needsTool() || plan.toolName().isBlank()) {
                 if (toolChain.isEmpty()) {
-                    return delegateWithMetadata(
-                        context,
-                        worker.workerId(),
-                        "planned_no_tool_fallback",
-                        Map.of(
-                            "tool_aware_executor", true,
-                            "tool_execution_mode", "multi_tool_round",
-                            "tool_plan_reason", plan.reason(),
-                            "tool_plan_raw", truncate(plan.rawResponse(), 1200),
-                            "max_tool_rounds", MAX_TOOL_ROUNDS,
-                            "tool_chain_step_count", 0,
-                            "tool_chain_termination_reason", "planner_no_additional_tool"
-                        )
-                    );
+                    ToolPlan syntheticProbePlan = buildInitialProbePlan(worker, currentToolState, plan);
+                    if (syntheticProbePlan != null) {
+                        log.info("Planner returned no initial tool; executing lightweight probe instead. task={} worker={} tool={}",
+                            context.task().id(), worker.workerId(), syntheticProbePlan.toolName());
+                        plan = syntheticProbePlan;
+                    } else {
+                        return delegateWithMetadata(
+                            context,
+                            worker.workerId(),
+                            "planned_no_tool_fallback",
+                            Map.of(
+                                "tool_aware_executor", true,
+                                "tool_execution_mode", "multi_tool_round",
+                                "tool_plan_reason", plan.reason(),
+                                "tool_plan_raw", truncate(plan.rawResponse(), 1200),
+                                "max_tool_rounds", maxToolRounds,
+                                "tool_chain_step_count", 0,
+                                "tool_chain_termination_reason", "planner_no_additional_tool"
+                            ),
+                            currentToolState
+                        );
+                    }
                 }
-                terminationReason = "planner_no_additional_tool";
-                toolChain = updateLastWhyNextStep(
-                    toolChain,
-                    firstNonBlank(plan.reason(), "planner requested finalization")
-                );
-                break;
+                if (!toolChain.isEmpty() && !plan.needsTool()) {
+                    if (shouldAutoGroundDirectoryWrite(worker, currentToolState)) {
+                        WorkerExecutionResult autoWriteResult = autoGroundedDirectoryWriteFallback(
+                            context,
+                            worker,
+                            currentToolState,
+                            plan,
+                            toolChain,
+                            stepIndex,
+                            maxToolRounds,
+                            startMs
+                        );
+                        if (autoWriteResult != null) {
+                            return autoWriteResult;
+                        }
+                    }
+                    terminationReason = "planner_no_additional_tool";
+                    toolChain = updateLastWhyNextStep(
+                        toolChain,
+                        firstNonBlank(plan.reason(), "planner requested finalization")
+                    );
+                    break;
+                }
             }
 
             String repeatedGuardReason = repeatedToolGuardReason(plan, toolChain);
@@ -279,10 +319,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                             "tool_execution_mode", "multi_tool_round",
                             "tool_plan_reason", plan.reason(),
                             "tool_plan_raw", truncate(plan.rawResponse(), 1200),
-                            "max_tool_rounds", MAX_TOOL_ROUNDS,
+                            "max_tool_rounds", maxToolRounds,
                             "tool_chain_step_count", 0,
                             "tool_chain_termination_reason", "repeated_tool_guard"
-                        )
+                        ),
+                        currentToolState
                     );
                 }
                 terminationReason = "repeated_tool_guard";
@@ -318,7 +359,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 break;
             }
 
-            if (stepIndex == MAX_TOOL_ROUNDS) {
+            if (stepIndex == maxToolRounds) {
                 terminationReason = "max_tool_rounds_reached";
                 toolChain = updateLastWhyNextStep(toolChain, "stop: max_tool_rounds reached");
                 break;
@@ -333,10 +374,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 Map.of(
                     "tool_aware_executor", true,
                     "tool_execution_mode", "multi_tool_round",
-                    "max_tool_rounds", MAX_TOOL_ROUNDS,
+                    "max_tool_rounds", maxToolRounds,
                     "tool_chain_step_count", 0,
                     "tool_chain_termination_reason", terminationReason
-                )
+                ),
+                currentToolState
             );
         }
 
@@ -357,6 +399,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             lastPlan,
             lastOutcome,
             lastToolStateAfter,
+            maxToolRounds,
             terminationReason,
             totalDurationMs
         );
@@ -367,11 +410,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                               TaskToolState toolState,
                               PromptRenderingMode renderingMode) {
         try {
-            List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
             String raw = llmClient.chat(
                 buildPlanningSystemPrompt(worker),
-                buildPlanningUserPrompt(context, worker, toolState, renderingMode),
-                imageInputs
+                buildPlanningUserPrompt(context, worker, toolState, renderingMode)
             );
             ToolPlan parsed = parseToolPlan(raw);
             log.info("Tool planning completed. task={} worker={} needsTool={} tool={}",
@@ -501,17 +542,16 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                        TaskToolState toolStateAfter,
                                                        long totalDurationMs) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
-        boolean outputFileRequired = toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank();
-        boolean fileBackedArtifact = isGroundedWriteTool(plan.toolName())
-            && outcome.result().success()
-            && toolStateAfter.outputFileExists();
+        boolean groundedArtifact = isGroundedArtifactProduced(plan.toolName(), outcome.result().success(), toolStateAfter);
         boolean moreDeclaredRoundsRemain = toolStateAfter.currentRoundInstruction() != null
             && !toolStateAfter.currentRoundInstruction().isBlank();
         boolean currentRoundRequiresWrite = requiresCurrentRoundWrite(toolStateBefore);
-        boolean missingRequiredCurrentRoundWrite = currentRoundRequiresWrite && !fileBackedArtifact;
+        boolean missingRequiredCurrentRoundWrite = currentRoundRequiresWrite && !groundedArtifact;
 
-        metadata.put("output_file_required", outputFileRequired);
-        metadata.put("file_backed_artifact", fileBackedArtifact);
+        appendGroundedOutputMetadata(metadata, toolStateAfter);
+        metadata.put("file_backed_artifact", groundedArtifact && toolStateAfter.outputFileExists());
+        metadata.put("directory_backed_artifact", groundedArtifact && toolStateAfter.outputDirExists());
+        metadata.put("grounded_output_present", groundedArtifact);
         metadata.put("more_declared_rounds_remain", moreDeclaredRoundsRemain);
         metadata.put("current_round_requires_write", currentRoundRequiresWrite);
         metadata.put("missing_required_current_round_write", missingRequiredCurrentRoundWrite);
@@ -520,15 +560,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             moreDeclaredRoundsRemain ? toolStateAfter.currentRoundInstruction() : null,
             missingRequiredCurrentRoundWrite ? requiredWriteNextStep(toolStateBefore, toolStateAfter) : null,
             finalized.suggestedNextStep(),
-            defaultNextStep(toolStateAfter, outputFileRequired)
+            defaultNextStep(toolStateAfter)
         );
 
         String groundedPrefix = buildGroundedPrefix(
             plan,
             toolStateBefore,
             toolStateAfter,
-            outputFileRequired,
-            fileBackedArtifact,
+            groundedArtifact,
             moreDeclaredRoundsRemain,
             missingRequiredCurrentRoundWrite
         );
@@ -537,22 +576,16 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (moreDeclaredRoundsRemain) {
             metadata.put("grounding_mode", "remaining_declared_rounds");
             String summary = firstNonBlank(
-                summaryForCurrentRound(plan, fileBackedArtifact, toolStateBefore, toolStateAfter),
+                summaryForCurrentRound(plan, groundedArtifact, toolStateBefore, toolStateAfter),
                 finalized.summary(),
                 outcome.result().summary()
             );
-            String artifactTitle = fileBackedArtifact
-                ? firstNonBlank(finalized.artifactTitle(), fileName(toolStateAfter.outputFilePath()))
-                : "";
-            String artifactContent = fileBackedArtifact
-                ? resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter.outputFilePath(), 1600)
-                : finalized.artifactContent();
             return new WorkerExecutionResult(
                 summary,
                 groundedOutput,
-                fileBackedArtifact,
-                artifactTitle,
-                artifactContent,
+                groundedArtifact,
+                firstNonBlank(finalized.artifactTitle(), groundedArtifactTitle(toolStateAfter)),
+                groundedArtifact ? resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter, 1600) : finalized.artifactContent(),
                 suggestedNextStep,
                 "medium",
                 finalized.tokenUsage(),
@@ -564,7 +597,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (missingRequiredCurrentRoundWrite) {
             metadata.put("grounding_mode", "missing_required_current_round_write");
             String summary = firstNonBlank(
-                "本轮尚未执行当前轮要求的文件写入，不能视为终稿完成。",
+                "本轮尚未执行当前轮要求的 grounded 输出写入，不能视为完成。",
                 finalized.summary(),
                 outcome.result().summary()
             );
@@ -582,12 +615,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             );
         }
 
-        if (outputFileRequired && !toolStateAfter.outputFileExists()) {
-            metadata.put("grounding_mode", "awaiting_output_file");
+        if (toolStateAfter.outputRequired() && !toolStateAfter.groundedOutputExists()) {
+            metadata.put("grounding_mode", toolStateAfter.outputDirRequired()
+                ? "awaiting_output_dir"
+                : "awaiting_output_file");
             String summary = firstNonBlank(
-                outcome.result().success()
-                    ? "当前轮已完成，但目标文章文件尚未落盘。"
-                    : "当前轮工具调用失败，目标文章文件尚未落盘。",
+                awaitingGroundedOutputSummary(toolStateAfter, outcome.result().success()),
                 finalized.summary(),
                 outcome.result().summary()
             );
@@ -605,14 +638,16 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             );
         }
 
-        if (fileBackedArtifact) {
-            metadata.put("grounding_mode", "file_backed_artifact");
+        if (groundedArtifact) {
+            metadata.put("grounding_mode", toolStateAfter.outputDirRequired()
+                ? "directory_backed_artifact"
+                : "file_backed_artifact");
             return new WorkerExecutionResult(
                 finalized.summary(),
                 groundedOutput,
                 true,
-                firstNonBlank(finalized.artifactTitle(), fileName(toolStateAfter.outputFilePath())),
-                resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter.outputFilePath(), 1600),
+                firstNonBlank(finalized.artifactTitle(), groundedArtifactTitle(toolStateAfter)),
+                resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter, 1600),
                 suggestedNextStep,
                 finalized.confidence(),
                 finalized.tokenUsage(),
@@ -642,23 +677,21 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("tool_name", plan.toolName());
         metadata.put("tool_arguments", plan.toolArguments());
 
-        boolean wroteFile = isGroundedWriteTool(plan.toolName()) && outcome.result().success();
-        String writtenPath = firstNonBlank(
-            stringValue(outcome.result().metadata().get("path")),
-            stringValue(outcome.request().arguments().get("path"))
-        );
-        String artifactContent = wroteFile
-            ? firstNonBlank(
-                loadExistingOutputFile(writtenPath, 1200),
-                truncate(stringValue(outcome.request().arguments().get("content")), 1200)
-            )
+        TaskToolState toolStateAfter = taskToolStateFromOutcome(outcome);
+        boolean groundedArtifact = isGroundedArtifactProduced(plan.toolName(), outcome.result().success(), toolStateAfter);
+        appendGroundedOutputMetadata(metadata, toolStateAfter);
+        metadata.put("file_backed_artifact", groundedArtifact && toolStateAfter.outputFileExists());
+        metadata.put("directory_backed_artifact", groundedArtifact && toolStateAfter.outputDirExists());
+        metadata.put("grounded_output_present", groundedArtifact);
+        String artifactContent = groundedArtifact
+            ? resolvedGroundedArtifactContent("", plan, outcome, toolStateAfter, 1200)
             : "";
         String output = firstNonBlank(outcome.result().output(), outcome.result().summary());
         return new WorkerExecutionResult(
             outcome.result().summary(),
             truncate(output, 1200),
-            wroteFile,
-            wroteFile ? writtenPath : "",
+            groundedArtifact,
+            groundedArtifact ? groundedArtifactTitle(toolStateAfter) : "",
             artifactContent,
             outcome.result().success() ? "" : "Inspect tool failure and adjust path or arguments.",
             outcome.result().success() ? "medium" : "low",
@@ -672,10 +705,19 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                        String workerId,
                                                        String mode,
                                                        Map<String, Object> extraMetadata) {
+        return delegateWithMetadata(context, workerId, mode, extraMetadata, null);
+    }
+
+    private WorkerExecutionResult delegateWithMetadata(TaskRuntimeContext context,
+                                                       String workerId,
+                                                       String mode,
+                                                       Map<String, Object> extraMetadata,
+                                                       TaskToolState toolState) {
         WorkerExecutionResult delegated = fallbackExecutor.executeOneRound(context, workerId);
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(delegated.metadata());
         metadata.put("tool_aware_executor", true);
         metadata.put("tool_execution_mode", mode);
+        appendDelegatedToolStateMetadata(metadata, toolState);
         metadata.putAll(extraMetadata);
         return new WorkerExecutionResult(
             delegated.summary(),
@@ -796,6 +838,103 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private WorkerExecutionResult autoGroundedDirectoryWriteFallback(TaskRuntimeContext context,
+                                                                     Worker worker,
+                                                                     TaskToolState toolStateBefore,
+                                                                     ToolPlan originalPlan,
+                                                                     List<ToolChainStep> priorToolChain,
+                                                                     int nextStepIndex,
+                                                                     int maxToolRounds,
+                                                                     long startMs) {
+        AutoWriteFilesDraft draft = generateAutoWriteFilesDraft(context, worker, toolStateBefore, originalPlan);
+        if (draft.basePath().isBlank() || draft.files().isEmpty()) {
+            return null;
+        }
+
+        LinkedHashMap<String, Object> writeArguments = new LinkedHashMap<>();
+        writeArguments.put("base_path", draft.basePath());
+        writeArguments.put("files", draft.files());
+        writeArguments.put("overwrite", true);
+        ToolPlan syntheticWritePlan = new ToolPlan(
+            true,
+            "write_files",
+            writeArguments,
+            "auto_grounded_directory_write",
+            firstNonBlank(originalPlan.rawResponse(), draft.rawResponse())
+        );
+
+        ToolExecutionOutcome outcome = invokeTool(context, worker, syntheticWritePlan, "multi_tool_round", nextStepIndex);
+        TaskToolState toolStateAfter = inspectTaskToolState(context);
+        List<ToolChainStep> toolChain = new ArrayList<>(priorToolChain == null ? List.of() : priorToolChain);
+        toolChain = updateLastWhyNextStep(
+            toolChain,
+            firstNonBlank(originalPlan.reason(), "planner returned no additional tool before auto directory write")
+        );
+        toolChain.add(new ToolChainStep(
+            nextStepIndex,
+            "write_files",
+            writeArguments,
+            outcome.result().summary(),
+            firstNonBlank(draft.summary(), "auto generated directory grounded write"),
+            "stop: auto directory grounded write completed",
+            outcome.result().success(),
+            outcome.elapsedMs(),
+            truncate(outcome.result().output(), 1200)
+        ));
+
+        long totalDurationMs = System.currentTimeMillis() - startMs;
+        WorkerExecutionResult generated = new WorkerExecutionResult(
+            firstNonBlank(draft.summary(), outcome.result().summary(), "已自动生成并写入目录型 grounded 输出。"),
+            "",
+            outcome.result().success(),
+            fileName(toolStateAfter.outputDirPath()),
+            "",
+            firstNonBlank(draft.suggestedNextStep(), toolStateAfter.currentRoundInstruction()),
+            draft.confidence(),
+            0,
+            totalDurationMs,
+            Map.of(
+                "parser", "auto_write_files_generation",
+                "auto_write_files_raw", truncate(draft.rawResponse(), 1200),
+                "auto_write_original_plan_reason", originalPlan.reason(),
+                "auto_write_original_plan_raw", truncate(originalPlan.rawResponse(), 1200),
+                "auto_write_file_count", draft.files().size()
+            )
+        );
+
+        WorkerExecutionResult finalized = attachMultiToolMetadata(
+            worker,
+            generated,
+            toolChain,
+            toolStateBefore,
+            syntheticWritePlan,
+            outcome,
+            toolStateAfter,
+            maxToolRounds,
+            "auto_grounded_directory_write",
+            totalDurationMs
+        );
+
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
+        metadata.put("auto_write_generation_mode", autoWriteFilesGenerationMode(draft));
+        metadata.put("auto_write_used_images", !LlmImageInputResolver.resolve(context).isEmpty());
+        return new WorkerExecutionResult(
+            finalized.summary(),
+            finalized.outputText(),
+            finalized.producedArtifact(),
+            finalized.artifactTitle(),
+            finalized.artifactContent(),
+            finalized.suggestedNextStep(),
+            finalized.confidence(),
+            finalized.executionStatus(),
+            finalized.evidenceRefs(),
+            finalized.unfinishedItems(),
+            finalized.tokenUsage(),
+            finalized.durationMs(),
+            metadata
+        );
+    }
+
     private AutoWriteDraft generateAutoWriteDraft(TaskRuntimeContext context,
                                                   Worker worker,
                                                   TaskToolState toolStateBefore,
@@ -827,6 +966,37 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
     }
 
+    private AutoWriteFilesDraft generateAutoWriteFilesDraft(TaskRuntimeContext context,
+                                                            Worker worker,
+                                                            TaskToolState toolStateBefore,
+                                                            ToolPlan originalPlan) {
+        try {
+            List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
+            String raw = llmClient.chat(
+                buildAutoWriteFilesSystemPrompt(worker),
+                buildAutoWriteFilesUserPrompt(context, worker, toolStateBefore, originalPlan),
+                imageInputs
+            );
+            AutoWriteFilesDraft parsed = parseAutoWriteFilesDraft(raw, toolStateBefore.outputDirPath());
+            log.info("Auto write-files generation completed. task={} worker={} fileCount={}",
+                context.task().id(), worker.workerId(), parsed.files().size());
+            return parsed;
+        } catch (Exception e) {
+            log.warn("Auto write-files generation failed. task={} worker={} reason={}",
+                context.task().id(), worker.workerId(), e.getMessage());
+            return new AutoWriteFilesDraft(
+                "",
+                "",
+                List.of(),
+                "",
+                "low",
+                "",
+                firstNonBlank(e.getClass().getSimpleName(), "generation_failed")
+                    + ": " + firstNonBlank(e.getMessage(), "unknown error")
+            );
+        }
+    }
+
     private WorkerExecutionResult missingRequiredWriteWithoutTool(TaskRuntimeContext context,
                                                                   TaskToolState toolStateBefore,
                                                                   ToolPlan plan,
@@ -848,11 +1018,10 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("tool_execution_mode", firstNonBlank(executionMode, "planned_no_tool_required_write"));
         metadata.put("tool_plan_reason", plan.reason());
         metadata.put("tool_plan_raw", truncate(plan.rawResponse(), 1200));
-        metadata.put("output_file_required", !toolStateBefore.outputFilePath().isBlank());
-        metadata.put("output_file_path", toolStateBefore.outputFilePath());
-        metadata.put("output_file_exists", toolStateBefore.outputFileExists());
-        metadata.put("output_file_size", toolStateBefore.outputFileSize());
+        appendGroundedOutputMetadata(metadata, toolStateBefore);
         metadata.put("file_backed_artifact", false);
+        metadata.put("directory_backed_artifact", false);
+        metadata.put("grounded_output_present", false);
         metadata.put("grounding_mode", "missing_required_current_round_write");
         metadata.put("current_round_requires_write", true);
         metadata.put("missing_required_current_round_write", true);
@@ -872,13 +1041,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             new ToolPlan(false, "", Map.of(), plan.reason(), plan.rawResponse()),
             toolStateBefore,
             toolStateBefore,
-            !toolStateBefore.outputFilePath().isBlank(),
             false,
             false,
             true
         );
         return new WorkerExecutionResult(
-            "本轮要求写文件，但 planning 未触发 grounded write tool，不能视为完成。",
+            "本轮要求写 grounded 输出，但 planning 未触发对应写入工具，不能视为完成。",
             groundedOutput,
             false,
             "",
@@ -935,7 +1103,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 false,
                 "",
                 "",
-                defaultNextStep(toolStateAfter, toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()),
+                defaultNextStep(toolStateAfter),
                 "medium",
                 0,
                 totalDurationMs,
@@ -951,17 +1119,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                           ToolPlan lastPlan,
                                                           ToolExecutionOutcome lastOutcome,
                                                           TaskToolState finalToolState,
+                                                          int maxToolRounds,
                                                           String terminationReason,
                                                           long totalDurationMs) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
-        boolean outputFileRequired = finalToolState.outputFilePath() != null && !finalToolState.outputFilePath().isBlank();
-        boolean fileBackedArtifact = hasSuccessfulWrite(toolChain)
-            && finalToolState.outputFileExists()
-            && outputFileStateChanged(initialToolState, finalToolState);
+        boolean groundedOutputChanged = groundedOutputStateChanged(initialToolState, finalToolState);
+        boolean groundedArtifact = hasSuccessfulWrite(toolChain)
+            && finalToolState.groundedOutputExists()
+            && groundedOutputChanged;
+        boolean fileBackedArtifact = groundedArtifact && finalToolState.outputFileExists();
+        boolean directoryBackedArtifact = groundedArtifact && finalToolState.outputDirExists();
 
         metadata.put("tool_aware_executor", true);
         metadata.put("tool_execution_mode", "multi_tool_round");
-        metadata.put("max_tool_rounds", MAX_TOOL_ROUNDS);
+        metadata.put("max_tool_rounds", maxToolRounds);
         metadata.put("tool_name", lastPlan.toolName());
         metadata.put("tool_plan_reason", lastPlan.reason());
         metadata.put("tool_arguments", lastPlan.toolArguments());
@@ -971,10 +1142,10 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("tool_output_preview", truncate(lastOutcome.result().output(), 500));
         metadata.put("tool_round_index", finalToolState.totalToolCount());
         metadata.put("declared_round_count", finalToolState.declaredRoundCount());
-        metadata.put("output_file_path", finalToolState.outputFilePath());
-        metadata.put("output_file_exists", finalToolState.outputFileExists());
-        metadata.put("output_file_size", finalToolState.outputFileSize());
+        appendGroundedOutputMetadata(metadata, finalToolState);
         metadata.put("file_backed_artifact", fileBackedArtifact);
+        metadata.put("directory_backed_artifact", directoryBackedArtifact);
+        metadata.put("grounded_output_present", groundedArtifact);
         metadata.put("tool_chain_step_count", toolChain.size());
         metadata.put("tool_chain_termination_reason", terminationReason);
         metadata.put("tool_chain_trace", toToolChainTraceMetadata(toolChain));
@@ -983,26 +1154,26 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
 
         String groundedOutput = mergeGroundedOutput(
-            buildMultiToolGroundedPrefix(toolChain, finalToolState, terminationReason, outputFileRequired, fileBackedArtifact),
+            buildMultiToolGroundedPrefix(toolChain, finalToolState, terminationReason, groundedArtifact, maxToolRounds),
             finalized.outputText(),
             finalized.artifactContent()
         );
 
         String suggestedNextStep = firstNonBlank(
             finalized.suggestedNextStep(),
-            defaultNextStep(finalToolState, outputFileRequired)
+            defaultNextStep(finalToolState)
         );
         String artifactContent = finalized.artifactContent();
-        if (fileBackedArtifact && (artifactContent == null || artifactContent.isBlank())) {
-            artifactContent = loadExistingOutputFile(finalToolState.outputFilePath(), 1600);
+        if (groundedArtifact && (artifactContent == null || artifactContent.isBlank())) {
+            artifactContent = resolvedGroundedArtifactContent(artifactContent, lastPlan, lastOutcome, finalToolState, 1600);
         }
 
         return new WorkerExecutionResult(
             finalized.summary(),
             groundedOutput,
-            fileBackedArtifact || finalized.producedArtifact(),
-            fileBackedArtifact
-                ? firstNonBlank(finalized.artifactTitle(), fileName(finalToolState.outputFilePath()))
+            groundedArtifact || finalized.producedArtifact(),
+            groundedArtifact
+                ? firstNonBlank(finalized.artifactTitle(), groundedArtifactTitle(finalToolState))
                 : finalized.artifactTitle(),
             artifactContent,
             suggestedNextStep,
@@ -1024,7 +1195,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
             + "confidence (high|medium|low). "
             + "Do not invent actions that are not present in the tool chain trace. "
-            + "If a grounded output file exists, you may mark produced_artifact=true. "
+            + "If a grounded output already exists as a file or directory, you may mark produced_artifact=true. "
             + "If the tool chain stopped because of repetition, failure, or max rounds, say so clearly. "
             + "Keep summary concise, output_text under 1200 characters, artifact_content under 1600 characters. "
             + "No markdown, no extra text.";
@@ -1041,19 +1212,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
         }
-        sb.append("\nMax Tool Rounds: ").append(MAX_TOOL_ROUNDS);
+        sb.append("\nMax Tool Rounds: ").append(resolveMaxToolRounds(context, toolStateBefore));
         sb.append("\nTool Chain Trace:\n").append(formatToolChainTrace(toolChain));
-        if (toolStateBefore.outputFilePath() != null && !toolStateBefore.outputFilePath().isBlank()) {
-            sb.append("\nExpected Output File: ").append(toolStateBefore.outputFilePath());
-        }
-        if (toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()) {
-            sb.append("\nOutput File Exists After Chain: ").append(toolStateAfter.outputFileExists());
-            sb.append("\nOutput File Size After Chain: ").append(toolStateAfter.outputFileSize());
-            String existingFile = loadExistingOutputFile(toolStateAfter.outputFilePath(), 8000);
-            if (!existingFile.isBlank()) {
-                sb.append("\nExisting Output File Content:\n").append(existingFile);
-            }
-        }
+        appendGroundedOutputState(sb, toolStateBefore, toolStateAfter, 8000);
         sb.append("\nProduce the grounded result for this multi-step tool chain now.");
         return sb.toString();
     }
@@ -1117,12 +1278,10 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return "stop: no_progress_guard, tool returned an empty result";
         }
         if (isGroundedWriteTool(plan.toolName())
-            && !toolStateBefore.outputFilePath().isBlank()
-            && !toolStateAfter.outputFilePath().isBlank()
-            && toolStateBefore.outputFileExists() == toolStateAfter.outputFileExists()
-            && toolStateBefore.outputFileSize() == toolStateAfter.outputFileSize()
-            && toolStateBefore.outputFileFingerprint().equals(toolStateAfter.outputFileFingerprint())) {
-            return "stop: no_progress_guard, " + plan.toolName() + " did not change the output file";
+            && toolStateBefore.outputRequired()
+            && toolStateAfter.outputRequired()
+            && !groundedOutputStateChanged(toolStateBefore, toolStateAfter)) {
+            return "stop: no_progress_guard, " + plan.toolName() + " did not change the grounded output";
         }
         return "";
     }
@@ -1130,8 +1289,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private String buildMultiToolGroundedPrefix(List<ToolChainStep> toolChain,
                                                 TaskToolState toolState,
                                                 String terminationReason,
-                                                boolean outputFileRequired,
-                                                boolean fileBackedArtifact) {
+                                                boolean groundedArtifact,
+                                                int maxToolRounds) {
         StringBuilder sb = new StringBuilder();
         sb.append("The tool-aware worker completed ").append(toolChain.size())
             .append(" grounded tool step");
@@ -1140,7 +1299,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
         sb.append(".");
         if ("max_tool_rounds_reached".equals(terminationReason)) {
-            sb.append(" The round stopped because it reached max_tool_rounds=").append(MAX_TOOL_ROUNDS).append(".");
+            sb.append(" The round stopped because it reached max_tool_rounds=").append(maxToolRounds).append(".");
         } else if ("repeated_tool_guard".equals(terminationReason)) {
             sb.append(" The round stopped because the next planned tool call repeated an earlier step.");
         } else if ("no_progress_guard".equals(terminationReason)) {
@@ -1148,10 +1307,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         } else if ("planner_no_additional_tool".equals(terminationReason)) {
             sb.append(" The planner requested finalization after the current evidence.");
         }
-        if (fileBackedArtifact) {
-            sb.append(" A grounded output file is present.");
-        } else if (outputFileRequired && !toolState.outputFileExists()) {
-            sb.append(" The expected output file is still missing.");
+        if (groundedArtifact) {
+            sb.append(toolState.outputDirExists()
+                ? " A grounded output directory is present."
+                : " A grounded output file is present.");
+        } else if (toolState.outputRequired() && !toolState.groundedOutputExists()) {
+            sb.append(toolState.outputDirRequired()
+                ? " The expected output directory is still missing or empty."
+                : " The expected output file is still missing.");
         }
         return sb.toString();
     }
@@ -1168,14 +1331,18 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return false;
     }
 
-    private boolean outputFileStateChanged(TaskToolState before, TaskToolState after) {
+    private boolean groundedOutputStateChanged(TaskToolState before, TaskToolState after) {
         if (before == null || after == null) {
             return false;
         }
         return before.outputFileExists() != after.outputFileExists()
             || before.outputFileSize() != after.outputFileSize()
             || !before.outputFileFingerprint().equals(after.outputFileFingerprint())
-            || !before.outputFilePath().equals(after.outputFilePath());
+            || !before.outputFilePath().equals(after.outputFilePath())
+            || before.outputDirExists() != after.outputDirExists()
+            || before.outputDirEntryCount() != after.outputDirEntryCount()
+            || !before.outputDirFingerprint().equals(after.outputDirFingerprint())
+            || !before.outputDirPath().equals(after.outputDirPath());
     }
 
     private List<Map<String, Object>> toToolChainTraceMetadata(List<ToolChainStep> toolChain) {
@@ -1320,15 +1487,72 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
     }
 
+    private AutoWriteFilesDraft parseAutoWriteFilesDraft(String raw, String defaultBasePath) {
+        String safeRaw = raw == null ? "" : raw.trim();
+        if (safeRaw.isBlank()) {
+            return new AutoWriteFilesDraft("", firstNonBlank(defaultBasePath), List.of(), "", "low", safeRaw, "empty_response");
+        }
+
+        try {
+            JsonNode json = MAPPER.readTree(safeRaw);
+            String basePath = json.path("base_path").asText("");
+            List<Map<String, Object>> files = new ArrayList<>();
+            JsonNode filesNode = json.path("files");
+            if (filesNode.isArray()) {
+                for (JsonNode item : filesNode) {
+                    String path = item.path("path").asText("");
+                    if (path.isBlank()) {
+                        continue;
+                    }
+                    LinkedHashMap<String, Object> file = new LinkedHashMap<>();
+                    file.put("path", path);
+                    file.put("content", item.path("content").asText(""));
+                    files.add(file);
+                }
+            }
+            return new AutoWriteFilesDraft(
+                json.path("summary").asText(""),
+                firstNonBlank(basePath, defaultBasePath),
+                List.copyOf(files),
+                json.path("suggested_next_step").asText(""),
+                json.path("confidence").asText("medium"),
+                safeRaw,
+                files.isEmpty() ? "empty_files" : ""
+            );
+        } catch (Exception e) {
+            log.warn("Failed to parse auto-write-files JSON output: {}", e.getMessage());
+            return new AutoWriteFilesDraft(
+                "",
+                firstNonBlank(defaultBasePath),
+                List.of(),
+                "",
+                "low",
+                safeRaw,
+                "parse_failed: " + firstNonBlank(e.getMessage(), e.getClass().getSimpleName())
+            );
+        }
+    }
+
     private String buildAutoWriteSystemPrompt(Worker worker) {
-        return "You are a grounded file-writing worker. Worker ID: " + worker.workerId() + ". "
-            + "The planner failed to select a grounded write tool, but the current round still requires a grounded write to the expected output file. "
+        return "You are a grounded output-writing worker. Worker ID: " + worker.workerId() + ". "
+            + "The planner failed to select a grounded write tool, but the current round still requires a grounded write to the expected output artifact. "
             + "Generate the exact full file content that should be written for the current round only. "
             + "Return a JSON object with exactly these fields: "
             + "summary (string), artifact_title (string), content (string), suggested_next_step (string), confidence (high|medium|low). "
             + "The content field must contain the exact text to write into the target file, with no markdown fences and no explanation outside JSON. "
             + "If this is the final round, suggested_next_step should be empty. "
             + "Preserve useful existing material, improve weak sections, and satisfy the explicit current round instruction.";
+    }
+
+    private String buildAutoWriteFilesSystemPrompt(Worker worker) {
+        return "You are a grounded directory output-writing worker. Worker ID: " + worker.workerId() + ". "
+            + "The planner stopped before selecting the final directory write, but the task still requires a grounded output directory. "
+            + "Generate the concrete multi-file bundle that should now be written. "
+            + "Return a JSON object with exactly these fields: "
+            + "summary (string), base_path (string), files (array), suggested_next_step (string), confidence (high|medium|low). "
+            + "Each files entry must be an object with path (relative string) and content (full exact text). "
+            + "Use files only for the minimum runnable project structure needed to satisfy the task. "
+            + "Do not include markdown fences or any explanation outside JSON.";
     }
 
     private String buildPlanningSystemPrompt(Worker worker) {
@@ -1345,15 +1569,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             sb.append("Tool usage guide:\n").append(toolGuide).append("\n");
         }
         sb.append("If the task intent contains explicit Round N instructions, follow the current round instruction and do not skip future rounds. ");
-        sb.append("If the current round instruction explicitly requires writing, overwriting, patching, or updating the expected output file, ");
+        sb.append("If the current round instruction explicitly requires writing, overwriting, patching, or updating the expected grounded output, ");
         sb.append("you must return needs_tool=true and select ").append(groundedWriteTools).append(" for that grounded write. ");
+        sb.append("If a grounded output is required but still missing and you need repository or file context first, ");
+        sb.append("use a lightweight inspection tool such as list_files, read_file, or search_text before returning needs_tool=false. ");
         if (registeredTools.contains("write_file")) {
             sb.append("Use write_file when you already know the exact full content to write. ");
+        }
+        if (registeredTools.contains("write_files")) {
+            sb.append("Use write_files when the task needs creating or updating multiple files under one allowed base directory. ");
         }
         if (registeredTools.contains("patch_file")) {
             sb.append("Use patch_file when you can anchor a targeted replacement with exact old_text and new_text. ");
         }
-        sb.append("Do not return needs_tool=false for a round that still requires a grounded file write. ");
+        sb.append("Do not return needs_tool=false for a round that still requires a grounded output write. ");
         sb.append("Return a JSON object with exactly these fields: ");
         sb.append("needs_tool (boolean), tool_name (string), tool_arguments (object), reason (string). ");
         sb.append("If no tool is required, set needs_tool to false, tool_name to empty string, and tool_arguments to {}. ");
@@ -1379,16 +1608,27 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             sb.append("\nNext Declared Round: ").append(toolState.nextRoundInstruction());
         }
         sb.append("\nCurrent Round Requires Write: ").append(requiresCurrentRoundWrite(toolState));
+        sb.append("\nGrounded Output Present: ").append(toolState.groundedOutputExists());
         sb.append("\nPrior Successful Tool Rounds: ").append(toolState.successfulToolCount());
+        List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
+        sb.append("\nImage Inputs Available: ").append(imageInputs.size());
+        if (!imageInputs.isEmpty()) {
+            sb.append("\nImage Input Paths:");
+            for (LlmImageInput imageInput : imageInputs) {
+                sb.append("\n- ").append(firstNonBlank(imageInput.path(), "(inline image)"));
+            }
+        }
         sb.append("\nPrior Tool Trace:\n").append(toolState.recentToolTrace());
-        if (toolState.outputFilePath() != null && !toolState.outputFilePath().isBlank()) {
-            sb.append("\nExpected Output File: ").append(toolState.outputFilePath());
-            sb.append("\nOutput File Exists: ").append(toolState.outputFileExists());
-            sb.append("\nOutput File Size: ").append(toolState.outputFileSize());
+        appendExpectedGroundedOutput(sb, toolState);
+        if (toolState.outputRequired() && !toolState.groundedOutputExists() && toolState.successfulToolCount() == 0) {
+            sb.append("\nIf you still need repository context before writing, inspect it now with list_files, read_file, or search_text instead of returning needs_tool=false.");
         }
         sb.append("\nDecide whether you need exactly one tool call before producing the current-round answer.");
         if (registeredTools.contains("write_file")) {
             sb.append(" Use write_file only when you already know the exact full content to write.");
+        }
+        if (registeredTools.contains("write_files")) {
+            sb.append(" Use write_files when one directory-backed artifact needs several files to be created together.");
         }
         if (registeredTools.contains("patch_file")) {
             sb.append(" Use patch_file only when you can make an exact targeted replacement.");
@@ -1420,10 +1660,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (!carryForwardNotes.isBlank()) {
             sb.append("\nCarry-Forward Notes From Prior Rounds:\n").append(carryForwardNotes);
         }
-        if (toolState.outputFilePath() != null && !toolState.outputFilePath().isBlank()) {
-            sb.append("\nExpected Output File: ").append(toolState.outputFilePath());
-            sb.append("\nOutput File Exists: ").append(toolState.outputFileExists());
-            sb.append("\nOutput File Size: ").append(toolState.outputFileSize());
+        appendExpectedGroundedOutput(sb, toolState);
+        if (toolState.outputFileRequired()) {
             String existingFile = loadExistingOutputFile(toolState.outputFilePath(), 12000);
             if (!existingFile.isBlank()) {
                 sb.append("\nExisting Output File Content:\n").append(existingFile);
@@ -1434,6 +1672,31 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return sb.toString();
     }
 
+    private String buildAutoWriteFilesUserPrompt(TaskRuntimeContext context,
+                                                 Worker worker,
+                                                 TaskToolState toolState,
+                                                 ToolPlan originalPlan) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context.task())));
+        sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
+        if (!worker.toolScope().isEmpty()) {
+            sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
+        }
+        sb.append("\nPlanner Returned No Additional Tool: true");
+        sb.append("\nOriginal Planning Reason: ").append(firstNonBlank(originalPlan.reason(), "(empty)"));
+        sb.append("\nGrounded Output Directory Required: ").append(toolState.outputDirRequired());
+        sb.append("\nPrior Tool Trace:\n").append(truncate(toolState.recentToolTrace(), 2000));
+        String carryForwardNotes = extractCarryForwardNotes(context, 5000);
+        if (!carryForwardNotes.isBlank()) {
+            sb.append("\nCarry-Forward Notes From Prior Rounds:\n").append(carryForwardNotes);
+        }
+        appendExpectedGroundedOutput(sb, toolState);
+        sb.append("\nCreate the minimal runnable directory-backed artifact now.");
+        sb.append("\nUse base_path: ").append(toolState.outputDirPath());
+        sb.append("\nAll file paths in files[] must be relative to base_path.");
+        return sb.toString();
+    }
+
     private String buildFinalizationSystemPrompt(Worker worker) {
         return "You are a tool-enabled execution worker. Worker ID: " + worker.workerId() + ". "
             + "You already received one tool result. Produce the current-round result, not the whole task unless the provided evidence proves the whole task is complete. "
@@ -1441,12 +1704,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "summary (string), output_text (string), produced_artifact (boolean), "
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
             + "confidence (high|medium|low). "
-            + "Ground every claim in the provided tool result and file state. "
-            + "Never claim that a file was written unless the current tool is "
+            + "Ground every claim in the provided tool result and grounded output state. "
+            + "Never claim that a grounded output was written unless the current tool is "
             + groundedWriteToolHint(registeredToolCapabilities(worker))
             + " and Tool Success is true. "
             + "If a declared future round remains, explicitly say the overall task is not complete yet and set suggested_next_step to that next round. "
-            + "If an output file is required and it does not exist after this round, produced_artifact must be false. "
+            + "If a grounded output is required and it does not exist after this round, produced_artifact must be false. "
             + "Keep summary concise, output_text under 1200 characters, artifact_content under 1600 characters, "
             + "and mention tool failure clearly if the tool did not succeed. No markdown, no extra text.";
     }
@@ -1476,11 +1739,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         sb.append("\nTool Success: ").append(outcome.result().success());
         sb.append("\nTool Summary: ").append(outcome.result().summary());
         sb.append("\nTool Metadata: ").append(JsonMapper.toJson(outcome.result().metadata()));
-        if (toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()) {
-            sb.append("\nExpected Output File: ").append(toolStateAfter.outputFilePath());
-            sb.append("\nOutput File Exists After Tool: ").append(toolStateAfter.outputFileExists());
-            sb.append("\nOutput File Size After Tool: ").append(toolStateAfter.outputFileSize());
-        }
+        appendGroundedOutputState(sb, toolStateBefore, toolStateAfter, 6000);
         if (!outcome.result().output().isBlank()) {
             sb.append("\nTool Output:\n").append(truncate(outcome.result().output(), 6000));
         }
@@ -1628,6 +1887,213 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return "generated";
     }
 
+    private String autoWriteFilesGenerationMode(AutoWriteFilesDraft draft) {
+        if (draft == null) {
+            return "unknown";
+        }
+        if (!draft.failureReason().isBlank()) {
+            int separator = draft.failureReason().indexOf(':');
+            return separator > 0
+                ? draft.failureReason().substring(0, separator).trim()
+                : draft.failureReason().trim();
+        }
+        if (draft.rawResponse().isBlank()) {
+            return "empty_response";
+        }
+        if (draft.files().isEmpty()) {
+            return "empty_files";
+        }
+        return "generated";
+    }
+
+    private void appendGroundedOutputMetadata(Map<String, Object> metadata, TaskToolState toolState) {
+        if (metadata == null || toolState == null) {
+            return;
+        }
+        metadata.put("output_file_required", toolState.outputFileRequired());
+        metadata.put("output_file_path", toolState.outputFilePath());
+        metadata.put("output_file_exists", toolState.outputFileExists());
+        metadata.put("output_file_size", toolState.outputFileSize());
+        metadata.put("output_dir_required", toolState.outputDirRequired());
+        metadata.put("output_dir_path", toolState.outputDirPath());
+        metadata.put("output_dir_exists", toolState.outputDirExists());
+        metadata.put("output_dir_entry_count", toolState.outputDirEntryCount());
+    }
+
+    private void appendDelegatedToolStateMetadata(Map<String, Object> metadata, TaskToolState toolState) {
+        if (metadata == null || toolState == null) {
+            return;
+        }
+        appendGroundedOutputMetadata(metadata, toolState);
+        metadata.put("tool_round_index", toolState.totalToolCount());
+        metadata.put("declared_round_count", toolState.declaredRoundCount());
+        metadata.put("grounded_output_present", toolState.groundedOutputExists());
+        metadata.put("file_backed_artifact", toolState.outputFileExists());
+        metadata.put("directory_backed_artifact", toolState.outputDirExists() && toolState.outputDirEntryCount() > 0);
+        if (!toolState.currentRoundInstruction().isBlank()) {
+            metadata.put("current_round_instruction", toolState.currentRoundInstruction());
+        }
+        if (!toolState.nextRoundInstruction().isBlank()) {
+            metadata.put("next_round_instruction", toolState.nextRoundInstruction());
+        }
+    }
+
+    private boolean isGroundedArtifactProduced(String toolName, boolean toolSuccess, TaskToolState toolStateAfter) {
+        return toolSuccess
+            && isGroundedWriteTool(toolName)
+            && toolStateAfter != null
+            && toolStateAfter.groundedOutputExists();
+    }
+
+    private String groundedArtifactTitle(TaskToolState toolState) {
+        if (toolState == null) {
+            return "";
+        }
+        if (toolState.outputDirRequired()) {
+            return fileName(toolState.outputDirPath());
+        }
+        if (toolState.outputFileRequired()) {
+            return fileName(toolState.outputFilePath());
+        }
+        return "";
+    }
+
+    private String awaitingGroundedOutputSummary(TaskToolState toolState, boolean toolSuccess) {
+        if (toolState == null) {
+            return toolSuccess ? "尚未产生 grounded 输出。" : "工具执行失败，且尚未产生 grounded 输出。";
+        }
+        if (toolState.outputDirRequired()) {
+            return toolSuccess
+                ? "本轮已执行工具，但目标输出目录仍为空或尚未创建。"
+                : "工具执行失败，目标输出目录仍为空或尚未创建。";
+        }
+        return toolSuccess
+            ? "本轮已执行工具，但目标输出文件仍未生成。"
+            : "工具执行失败，目标输出文件仍未生成。";
+    }
+
+    private TaskToolState taskToolStateFromOutcome(ToolExecutionOutcome outcome) {
+        if (outcome == null || outcome.result() == null) {
+            return new TaskToolState("", false, 0L, "", "", false, 0, "", 0, 0, 0, 0, "", "(no prior tool rounds)", 0, 0, "", "");
+        }
+        String outputFilePath = firstNonBlank(
+            stringValue(outcome.result().metadata().get("output_file_path")),
+            stringValue(outcome.result().metadata().get("path")),
+            stringValue(outcome.request().arguments().get("path"))
+        );
+        String outputDirPath = firstNonBlank(
+            stringValue(outcome.result().metadata().get("output_dir_path")),
+            stringValue(outcome.request().arguments().get("base_path"))
+        );
+        return buildGroundedOutputState(outputFilePath, outputDirPath);
+    }
+
+    private TaskToolState buildGroundedOutputState(String outputFilePath, String outputDirPath) {
+        boolean outputFileExists = false;
+        long outputFileSize = 0L;
+        String outputFileFingerprint = "";
+        boolean outputDirExists = false;
+        int outputDirEntryCount = 0;
+        String outputDirFingerprint = "";
+        if (outputFilePath != null && !outputFilePath.isBlank()) {
+            try {
+                Path outputPath = Path.of(outputFilePath).toAbsolutePath().normalize();
+                outputFileExists = Files.exists(outputPath);
+                if (outputFileExists) {
+                    outputFileSize = Files.size(outputPath);
+                    outputFileFingerprint = fileFingerprint(outputPath);
+                }
+                outputFilePath = outputPath.toString();
+            } catch (InvalidPathException | IOException e) {
+                log.warn("Failed to inspect grounded output file state. path={} reason={}", outputFilePath, e.getMessage());
+            }
+        }
+        if (outputDirPath != null && !outputDirPath.isBlank()) {
+            try {
+                Path outputPath = Path.of(outputDirPath).toAbsolutePath().normalize();
+                outputDirExists = Files.exists(outputPath) && Files.isDirectory(outputPath);
+                if (outputDirExists) {
+                    outputDirEntryCount = countDirectoryEntries(outputPath);
+                    outputDirFingerprint = directoryFingerprint(outputPath);
+                }
+                outputDirPath = outputPath.toString();
+            } catch (InvalidPathException | IOException e) {
+                log.warn("Failed to inspect grounded output dir state. path={} reason={}", outputDirPath, e.getMessage());
+            }
+        }
+        return new TaskToolState(
+            firstNonBlank(outputFilePath),
+            outputFileExists,
+            outputFileSize,
+            outputFileFingerprint,
+            firstNonBlank(outputDirPath),
+            outputDirExists,
+            outputDirEntryCount,
+            outputDirFingerprint,
+            0,
+            0,
+            0,
+            0,
+            "",
+            "(no prior tool rounds)",
+            0,
+            0,
+            "",
+            ""
+        );
+    }
+
+    private void appendExpectedGroundedOutput(StringBuilder sb, TaskToolState toolState) {
+        if (sb == null || toolState == null) {
+            return;
+        }
+        if (toolState.outputFileRequired()) {
+            sb.append("\nExpected Output File: ").append(toolState.outputFilePath());
+            sb.append("\nOutput File Exists: ").append(toolState.outputFileExists());
+            sb.append("\nOutput File Size: ").append(toolState.outputFileSize());
+        }
+        if (toolState.outputDirRequired()) {
+            sb.append("\nExpected Output Directory: ").append(toolState.outputDirPath());
+            sb.append("\nOutput Directory Exists: ").append(toolState.outputDirExists());
+            sb.append("\nOutput Directory Entry Count: ").append(toolState.outputDirEntryCount());
+            String existingDirectory = loadExistingOutputDirectory(toolState.outputDirPath(), 4000);
+            if (!existingDirectory.isBlank()) {
+                sb.append("\nExisting Output Directory Entries:\n").append(existingDirectory);
+            }
+        }
+    }
+
+    private void appendGroundedOutputState(StringBuilder sb,
+                                           TaskToolState toolStateBefore,
+                                           TaskToolState toolStateAfter,
+                                           int maxChars) {
+        if (sb == null) {
+            return;
+        }
+        if (toolStateBefore != null) {
+            appendExpectedGroundedOutput(sb, toolStateBefore);
+        }
+        if (toolStateAfter == null) {
+            return;
+        }
+        if (toolStateAfter.outputFileRequired()) {
+            sb.append("\nOutput File Exists After Tool: ").append(toolStateAfter.outputFileExists());
+            sb.append("\nOutput File Size After Tool: ").append(toolStateAfter.outputFileSize());
+            String existingFile = loadExistingOutputFile(toolStateAfter.outputFilePath(), maxChars);
+            if (!existingFile.isBlank()) {
+                sb.append("\nExisting Output File Content:\n").append(existingFile);
+            }
+        }
+        if (toolStateAfter.outputDirRequired()) {
+            sb.append("\nOutput Directory Exists After Tool: ").append(toolStateAfter.outputDirExists());
+            sb.append("\nOutput Directory Entry Count After Tool: ").append(toolStateAfter.outputDirEntryCount());
+            String existingDirectory = loadExistingOutputDirectory(toolStateAfter.outputDirPath(), maxChars);
+            if (!existingDirectory.isBlank()) {
+                sb.append("\nExisting Output Directory Entries:\n").append(existingDirectory);
+            }
+        }
+    }
+
     private TaskToolState inspectTaskToolState(TaskRuntimeContext context) {
         List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(context.task().id(), 20);
         int successfulToolCount = 0;
@@ -1649,23 +2115,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
 
         String outputFilePath = metadataString(context.task().metadata(), "output_file");
-        boolean outputFileExists = false;
-        long outputFileSize = 0L;
-        String outputFileFingerprint = "";
-        if (outputFilePath != null && !outputFilePath.isBlank()) {
-            try {
-                Path outputPath = Path.of(outputFilePath).toAbsolutePath().normalize();
-                outputFileExists = Files.exists(outputPath);
-                if (outputFileExists) {
-                    outputFileSize = Files.size(outputPath);
-                    outputFileFingerprint = fileFingerprint(outputPath);
-                }
-                outputFilePath = outputPath.toString();
-            } catch (InvalidPathException | IOException e) {
-                log.warn("Failed to inspect output file state. task={} path={} reason={}",
-                    context.task().id(), outputFilePath, e.getMessage());
-            }
-        }
+        String outputDirPath = metadataString(context.task().metadata(), "output_dir");
+        TaskToolState groundedOutputState = buildGroundedOutputState(outputFilePath, outputDirPath);
 
         int declaredRoundCount = countDeclaredRounds(context.task());
         int currentRoundIndex = successfulToolCount + 1;
@@ -1684,10 +2135,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
 
         return new TaskToolState(
-            outputFilePath,
-            outputFileExists,
-            outputFileSize,
-            outputFileFingerprint,
+            groundedOutputState.outputFilePath(),
+            groundedOutputState.outputFileExists(),
+            groundedOutputState.outputFileSize(),
+            groundedOutputState.outputFileFingerprint(),
+            groundedOutputState.outputDirPath(),
+            groundedOutputState.outputDirExists(),
+            groundedOutputState.outputDirEntryCount(),
+            groundedOutputState.outputDirFingerprint(),
             invocations.size(),
             successfulToolCount,
             successfulReadCount,
@@ -1824,20 +2279,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private String summaryForCurrentRound(ToolPlan plan,
-                                          boolean fileBackedArtifact,
+                                          boolean groundedArtifact,
                                           TaskToolState toolStateBefore,
                                           TaskToolState toolStateAfter) {
         if ("read_file".equals(plan.toolName()) && instructionSuggestsFileWrite(toolStateBefore.currentRoundInstruction())) {
-            return "本轮仅完成了读取或分析，尚未执行当前轮要求的文件写入。";
+            return "本轮仅完成了读取或分析，尚未执行当前轮要求的 grounded 输出写入。";
         }
         if ("read_file".equals(plan.toolName())) {
             return "已完成当前轮参考资料读取与整理，整体任务仍需继续。";
         }
-        if (fileBackedArtifact && toolStateAfter.currentRoundInstruction() != null && !toolStateAfter.currentRoundInstruction().isBlank()) {
-            return "已完成当前轮文件写入，整体任务仍需继续下一轮。";
+        if (groundedArtifact && toolStateAfter.currentRoundInstruction() != null && !toolStateAfter.currentRoundInstruction().isBlank()) {
+            return "已完成当前轮 grounded 输出写入，整体任务仍需继续下一轮。";
         }
-        if (fileBackedArtifact) {
-            return "已完成当前轮文件写入。";
+        if (groundedArtifact) {
+            return "已完成当前轮 grounded 输出写入。";
         }
         if (toolStateBefore.currentRoundInstruction() != null && !toolStateBefore.currentRoundInstruction().isBlank()) {
             return "已完成当前轮目标，整体任务仍需继续。";
@@ -1848,8 +2303,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private String buildGroundedPrefix(ToolPlan plan,
                                        TaskToolState toolStateBefore,
                                        TaskToolState toolStateAfter,
-                                       boolean outputFileRequired,
-                                       boolean fileBackedArtifact,
+                                       boolean groundedArtifact,
                                        boolean moreDeclaredRoundsRemain,
                                        boolean missingRequiredCurrentRoundWrite) {
         StringBuilder sb = new StringBuilder();
@@ -1859,20 +2313,24 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 sb.append(" Next step: ").append(toolStateAfter.currentRoundInstruction()).append(".");
             }
         } else if (missingRequiredCurrentRoundWrite) {
-            sb.append("The current round has not performed the required grounded file write yet.");
+            sb.append("The current round has not performed the required grounded output write yet.");
             if ("read_file".equals(plan.toolName())) {
                 sb.append(" This round only completed reading and analysis.");
             }
             if (toolStateBefore.currentRoundInstruction() != null && !toolStateBefore.currentRoundInstruction().isBlank()) {
                 sb.append(" Required current-round action: ").append(toolStateBefore.currentRoundInstruction()).append(".");
             }
-        } else if (outputFileRequired && !toolStateAfter.outputFileExists()) {
-            sb.append("The required output file has not been written yet.");
+        } else if (toolStateAfter.outputRequired() && !toolStateAfter.groundedOutputExists()) {
+            sb.append(toolStateAfter.outputDirRequired()
+                ? "The required output directory has not been created yet."
+                : "The required output file has not been written yet.");
             if ("read_file".equals(plan.toolName())) {
                 sb.append(" This round only completed reading and analysis.");
             }
-        } else if (fileBackedArtifact) {
-            sb.append("The output file exists and is grounded by a successful grounded write tool call.");
+        } else if (groundedArtifact) {
+            sb.append(toolStateAfter.outputDirExists()
+                ? "The output directory exists and is grounded by a successful grounded write tool call."
+                : "The output file exists and is grounded by a successful grounded write tool call.");
         }
         return sb.toString();
     }
@@ -1888,13 +2346,15 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return groundedPrefix + "\n\n" + mainBody;
     }
 
-    private String defaultNextStep(TaskToolState toolState, boolean outputFileRequired) {
+    private String defaultNextStep(TaskToolState toolState) {
         if (toolState.currentRoundInstruction() != null && !toolState.currentRoundInstruction().isBlank()) {
             return toolState.currentRoundInstruction();
         }
-        if (outputFileRequired && (toolState.outputFilePath() != null && !toolState.outputFilePath().isBlank())
-            && !toolState.outputFileExists()) {
+        if (toolState.outputFileRequired() && !toolState.outputFileExists()) {
             return "Write the next article version to '" + toolState.outputFilePath() + "'.";
+        }
+        if (toolState.outputDirRequired() && !toolState.groundedOutputExists()) {
+            return "Create or update the grounded output under '" + toolState.outputDirPath() + "'.";
         }
         return "";
     }
@@ -1903,17 +2363,90 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (toolStateBefore.currentRoundInstruction() != null && !toolStateBefore.currentRoundInstruction().isBlank()) {
             return toolStateBefore.currentRoundInstruction();
         }
-        if (toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()) {
+        if (toolStateAfter.outputFileRequired()) {
             return "Use write_file or patch_file to update the required article version at '" + toolStateAfter.outputFilePath() + "'.";
         }
-        return "Use write_file or patch_file to complete the required current-round file update.";
+        if (toolStateAfter.outputDirRequired()) {
+            return "Use write_files, write_file, or patch_file to create the required grounded output under '" + toolStateAfter.outputDirPath() + "'.";
+        }
+        return "Use a grounded write tool to complete the required current-round update.";
     }
 
     private boolean requiresCurrentRoundWrite(TaskToolState toolState) {
         return toolState != null
-            && toolState.outputFilePath() != null
-            && !toolState.outputFilePath().isBlank()
+            && toolState.outputRequired()
             && instructionSuggestsFileWrite(toolState.currentRoundInstruction());
+    }
+
+    private boolean shouldAutoGroundDirectoryWrite(Worker worker, TaskToolState toolState) {
+        if (worker == null || toolState == null) {
+            return false;
+        }
+        if (!toolState.outputDirRequired() || toolState.groundedOutputExists()) {
+            return false;
+        }
+        return registeredToolCapabilities(worker).contains("write_files");
+    }
+
+    private ToolPlan buildInitialProbePlan(Worker worker, TaskToolState toolState, ToolPlan originalPlan) {
+        if (worker == null || toolState == null || !toolState.outputRequired() || toolState.groundedOutputExists()) {
+            return null;
+        }
+        if (toolState.successfulToolCount() > 0) {
+            return null;
+        }
+        List<String> registeredTools = registeredToolCapabilities(worker);
+        if (!registeredTools.contains("list_files")) {
+            return null;
+        }
+        String probePath = initialProbePath(worker, toolState);
+        if (probePath.isBlank()) {
+            return null;
+        }
+        LinkedHashMap<String, Object> arguments = new LinkedHashMap<>();
+        arguments.put("path", probePath);
+        arguments.put("recursive", false);
+        arguments.put("max_entries", 80);
+        return new ToolPlan(
+            true,
+            "list_files",
+            arguments,
+            "planner returned no tool before any successful scope inspection; run a lightweight directory probe first",
+            firstNonBlank(originalPlan.rawResponse(), originalPlan.reason())
+        );
+    }
+
+    private String initialProbePath(Worker worker, TaskToolState toolState) {
+        if (worker == null || worker.toolScope() == null || worker.toolScope().isEmpty()) {
+            return "";
+        }
+        try {
+            Path scopeRoot = Path.of(worker.toolScope().get(0)).toAbsolutePath().normalize();
+            Path candidate = scopeRoot;
+            if (toolState.outputDirRequired()) {
+                Path outputDir = Path.of(toolState.outputDirPath()).toAbsolutePath().normalize();
+                Path preferred = outputDir.getParent();
+                if (preferred != null && preferred.startsWith(scopeRoot)) {
+                    candidate = preferred;
+                } else if (outputDir.startsWith(scopeRoot)) {
+                    candidate = outputDir;
+                }
+            } else if (toolState.outputFileRequired()) {
+                Path outputFile = Path.of(toolState.outputFilePath()).toAbsolutePath().normalize();
+                Path preferred = outputFile.getParent();
+                if (preferred != null && preferred.startsWith(scopeRoot)) {
+                    candidate = preferred;
+                }
+            }
+            if (!candidate.startsWith(scopeRoot)) {
+                candidate = scopeRoot;
+            }
+            Path relative = scopeRoot.relativize(candidate);
+            return relative.toString().isBlank() ? "." : relative.toString();
+        } catch (InvalidPathException e) {
+            log.warn("Failed to resolve initial probe path. worker={} reason={}", worker.workerId(), e.getMessage());
+            return ".";
+        }
     }
 
     private boolean instructionSuggestsFileWrite(String instruction) {
@@ -2008,7 +2541,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private boolean isGroundedWriteTool(String toolName) {
-        return "write_file".equals(toolName) || "patch_file".equals(toolName);
+        return "write_file".equals(toolName) || "write_files".equals(toolName) || "patch_file".equals(toolName);
     }
 
     private String groundedWriteToolHint(List<String> registeredTools) {
@@ -2016,12 +2549,24 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return "a grounded write tool";
         }
         boolean supportsWrite = registeredTools.contains("write_file");
+        boolean supportsWriteFiles = registeredTools.contains("write_files");
         boolean supportsPatch = registeredTools.contains("patch_file");
-        if (supportsWrite && supportsPatch) {
-            return "write_file or patch_file";
+        if ((supportsWrite || supportsWriteFiles) && supportsPatch) {
+            if (supportsWrite && supportsWriteFiles) {
+                return "write_file, write_files, or patch_file";
+            }
+            return supportsWrite
+                ? "write_file or patch_file"
+                : "write_files or patch_file";
+        }
+        if (supportsWrite && supportsWriteFiles) {
+            return "write_file or write_files";
         }
         if (supportsWrite) {
             return "write_file";
+        }
+        if (supportsWriteFiles) {
+            return "write_files";
         }
         if (supportsPatch) {
             return "patch_file";
@@ -2032,22 +2577,30 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private String resolvedGroundedArtifactContent(String currentArtifactContent,
                                                    ToolPlan plan,
                                                    ToolExecutionOutcome outcome,
-                                                   String outputFilePath,
+                                                   TaskToolState toolState,
                                                    int maxChars) {
-        String resolvedPath = firstNonBlank(
-            outputFilePath,
-            stringValue(outcome.result().metadata().get("path")),
-            stringValue(outcome.request().arguments().get("path"))
-        );
-        String artifactContent = firstNonBlank(
-            currentArtifactContent,
-            loadExistingOutputFile(resolvedPath, maxChars)
-        );
+        String artifactContent = currentArtifactContent == null ? "" : currentArtifactContent;
+        if (!artifactContent.isBlank()) {
+            return artifactContent;
+        }
+        if (toolState.outputDirRequired()) {
+            artifactContent = loadExistingOutputDirectory(toolState.outputDirPath(), maxChars);
+        } else {
+            String resolvedPath = firstNonBlank(
+                toolState.outputFilePath(),
+                stringValue(outcome.result().metadata().get("path")),
+                stringValue(outcome.request().arguments().get("path"))
+            );
+            artifactContent = loadExistingOutputFile(resolvedPath, maxChars);
+        }
         if (!artifactContent.isBlank()) {
             return artifactContent;
         }
         if ("write_file".equals(plan.toolName())) {
             return truncate(stringValue(outcome.request().arguments().get("content")), maxChars);
+        }
+        if ("write_files".equals(plan.toolName())) {
+            return truncate(JsonMapper.toJson(outcome.request().arguments().get("files")), maxChars);
         }
         return "";
     }
@@ -2090,6 +2643,79 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return content.substring(0, maxChars) + "\n...[truncated]";
         } catch (IOException | InvalidPathException e) {
             log.warn("Failed to load existing output file. path={} reason={}", path, e.getMessage());
+            return "";
+        }
+    }
+
+    private String loadExistingOutputDirectory(String path, int maxChars) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        try {
+            Path dir = Path.of(path).toAbsolutePath().normalize();
+            if (!Files.exists(dir) || !Files.isDirectory(dir)) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            try (var stream = Files.walk(dir)) {
+                List<Path> paths = stream
+                    .filter(Files::isRegularFile)
+                    .limit(20)
+                    .toList();
+                for (Path file : paths) {
+                    if (sb.length() > 0) {
+                        sb.append("\n");
+                    }
+                    sb.append("- ").append(dir.relativize(file)).append(" (").append(Files.size(file)).append(" bytes)");
+                    if (sb.length() >= maxChars) {
+                        break;
+                    }
+                }
+            }
+            return truncate(sb.toString(), maxChars);
+        } catch (IOException | InvalidPathException e) {
+            log.warn("Failed to load existing output directory. path={} reason={}", path, e.getMessage());
+            return "";
+        }
+    }
+
+    private int countDirectoryEntries(Path directory) throws IOException {
+        if (directory == null || !Files.exists(directory) || !Files.isDirectory(directory)) {
+            return 0;
+        }
+        try (var stream = Files.walk(directory)) {
+            return (int) stream
+                .filter(Files::isRegularFile)
+                .limit(Integer.MAX_VALUE)
+                .count();
+        }
+    }
+
+    private String directoryFingerprint(Path directory) {
+        if (directory == null || !Files.exists(directory) || !Files.isDirectory(directory)) {
+            return "";
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            try (var stream = Files.walk(directory)) {
+                List<Path> files = stream
+                    .filter(Files::isRegularFile)
+                    .sorted()
+                    .limit(200)
+                    .toList();
+                for (Path file : files) {
+                    String relative = directory.relativize(file).toString().replace('\\', '/');
+                    digest.update(relative.getBytes(StandardCharsets.UTF_8));
+                    digest.update(Long.toString(Files.size(file)).getBytes(StandardCharsets.UTF_8));
+                    String fingerprint = fileFingerprint(file);
+                    if (!fingerprint.isBlank()) {
+                        digest.update(fingerprint.getBytes(StandardCharsets.UTF_8));
+                    }
+                }
+            }
+            return HexFormat.of().formatHex(digest.digest());
+        } catch (Exception e) {
+            log.warn("Failed to compute directory fingerprint. path={} reason={}", directory, e.getMessage());
             return "";
         }
     }
@@ -2145,6 +2771,10 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         boolean outputFileExists,
         long outputFileSize,
         String outputFileFingerprint,
+        String outputDirPath,
+        boolean outputDirExists,
+        int outputDirEntryCount,
+        String outputDirFingerprint,
         int totalToolCount,
         int successfulToolCount,
         int successfulReadCount,
@@ -2159,10 +2789,28 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         private TaskToolState {
             if (outputFilePath == null) outputFilePath = "";
             if (outputFileFingerprint == null) outputFileFingerprint = "";
+            if (outputDirPath == null) outputDirPath = "";
+            if (outputDirFingerprint == null) outputDirFingerprint = "";
             if (lastToolName == null) lastToolName = "";
             if (recentToolTrace == null || recentToolTrace.isBlank()) recentToolTrace = "(no prior tool rounds)";
             if (currentRoundInstruction == null) currentRoundInstruction = "";
             if (nextRoundInstruction == null) nextRoundInstruction = "";
+        }
+
+        private boolean outputFileRequired() {
+            return !outputFilePath.isBlank();
+        }
+
+        private boolean outputDirRequired() {
+            return !outputDirPath.isBlank();
+        }
+
+        private boolean outputRequired() {
+            return outputFileRequired() || outputDirRequired();
+        }
+
+        private boolean groundedOutputExists() {
+            return outputFileExists || (outputDirExists && outputDirEntryCount > 0);
         }
     }
 
@@ -2197,12 +2845,40 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
     }
 
+    private record AutoWriteFilesDraft(
+        String summary,
+        String basePath,
+        List<Map<String, Object>> files,
+        String suggestedNextStep,
+        String confidence,
+        String rawResponse,
+        String failureReason
+    ) {
+        private AutoWriteFilesDraft {
+            if (summary == null) summary = "";
+            if (basePath == null) basePath = "";
+            if (files == null) files = List.of();
+            if (suggestedNextStep == null) suggestedNextStep = "";
+            if (confidence == null || confidence.isBlank()) confidence = "medium";
+            if (rawResponse == null) rawResponse = "";
+            if (failureReason == null) failureReason = "";
+        }
+    }
+
     private List<String> extractTouchedPaths(Map<String, Object> arguments, Map<String, Object> traceMetadata) {
         List<String> touchedPaths = new ArrayList<>();
         addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("path"));
         addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("file_path"));
         addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("output_path"));
+        addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("base_path"));
         addTouchedPath(touchedPaths, traceMetadata == null ? null : traceMetadata.get("output_file_path"));
+        addTouchedPath(touchedPaths, traceMetadata == null ? null : traceMetadata.get("output_dir_path"));
+        Object writtenPaths = traceMetadata == null ? null : traceMetadata.get("written_paths");
+        if (writtenPaths instanceof List<?> paths) {
+            for (Object candidate : paths) {
+                addTouchedPath(touchedPaths, candidate);
+            }
+        }
         return touchedPaths;
     }
 

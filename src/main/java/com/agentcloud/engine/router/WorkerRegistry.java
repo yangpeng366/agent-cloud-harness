@@ -103,7 +103,7 @@ public class WorkerRegistry {
 
     private static List<String> defaultCodexToolCapabilities() {
         List<String> tools = new ArrayList<>(List.of(
-            "list_files", "read_file", "search_text", "write_file", "patch_file"
+            "list_files", "read_file", "search_text", "write_file", "write_files", "patch_file"
         ));
         tools.addAll(HostToolAvailability.supportedCommandToolCapabilities());
         return List.copyOf(tools);

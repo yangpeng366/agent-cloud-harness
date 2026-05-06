@@ -81,11 +81,21 @@ public class DatabaseManager implements AutoCloseable {
 
     private void applyCompatibilityMigrations() {
         jdbi.useHandle(handle -> {
-            if (!tableHasColumn(handle, "tool_invocations", "execution_id")) {
-                handle.execute("ALTER TABLE tool_invocations ADD COLUMN execution_id TEXT");
-                log.info("Applied compatibility migration: tool_invocations.execution_id");
-            }
+            ensureColumn(handle, "tool_invocations", "execution_id", "TEXT");
+            ensureColumn(handle, "tool_invocations", "status", "TEXT");
+            ensureColumn(handle, "tool_invocations", "touched_paths_json", "TEXT");
         });
+    }
+
+    private void ensureColumn(org.jdbi.v3.core.Handle handle,
+                              String tableName,
+                              String columnName,
+                              String columnDefinition) {
+        if (tableHasColumn(handle, tableName, columnName)) {
+            return;
+        }
+        handle.execute("ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + columnDefinition);
+        log.info("Applied compatibility migration: {}.{}", tableName, columnName);
     }
 
     private boolean tableHasColumn(org.jdbi.v3.core.Handle handle, String tableName, String columnName) {

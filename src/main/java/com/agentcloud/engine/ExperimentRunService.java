@@ -1504,7 +1504,13 @@ public class ExperimentRunService {
         copyMetadata(source, target, "output_file_path");
         copyMetadata(source, target, "output_file_exists");
         copyMetadata(source, target, "output_file_size");
+        copyMetadata(source, target, "output_dir_required");
+        copyMetadata(source, target, "output_dir_path");
+        copyMetadata(source, target, "output_dir_exists");
+        copyMetadata(source, target, "output_dir_entry_count");
         copyMetadata(source, target, "file_backed_artifact");
+        copyMetadata(source, target, "directory_backed_artifact");
+        copyMetadata(source, target, "grounded_output_present");
         copyMetadata(source, target, "grounding_mode");
         copyMetadata(source, target, "more_declared_rounds_remain");
         copyMetadata(source, target, "current_round_requires_write");

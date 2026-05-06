@@ -393,12 +393,18 @@ public class ControlNodeGraph {
             case "continue" -> {
                 Task moved = task.withControlNode("scheduler");
                 taskDao.updateState(moved);
+                if (shouldAutoContinueTask(moved, latestWorkerMetadata, executionResult, resolvedAction)) {
+                    yield schedulerNode(incrementAutoContinueBurst(moved));
+                }
                 yield moved;
             }
             default -> {
                 log.warn("[Continue] unknown action {}, fallback to scheduler", execDecision.action());
                 Task moved = task.withControlNode("scheduler");
                 taskDao.updateState(moved);
+                if (shouldAutoContinueTask(moved, latestWorkerMetadata, executionResult, "continue")) {
+                    yield schedulerNode(incrementAutoContinueBurst(moved));
+                }
                 yield moved;
             }
         };
@@ -783,6 +789,42 @@ public class ControlNodeGraph {
             && isExecutionStage(orchestrationStage(task));
     }
 
+    private boolean shouldAutoContinueTask(Task task,
+                                           Map<String, Object> latestWorkerMetadata,
+                                           WorkerExecutionResult executionResult,
+                                           String resolvedAction) {
+        if (task == null || latestWorkerMetadata == null || latestWorkerMetadata.isEmpty()) {
+            return false;
+        }
+        if (!"continue".equalsIgnoreCase(firstNonBlank(resolvedAction, ""))) {
+            return false;
+        }
+        if (!Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("tool_aware_executor")))) {
+            return false;
+        }
+        if (!"multi_tool_round".equalsIgnoreCase(stringValue(latestWorkerMetadata.get("tool_execution_mode")))) {
+            return false;
+        }
+        String terminationReason = stringValue(latestWorkerMetadata.get("tool_chain_termination_reason"));
+        if ("repeated_tool_guard".equalsIgnoreCase(terminationReason)
+            || "no_progress_guard".equalsIgnoreCase(terminationReason)) {
+            return false;
+        }
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("more_declared_rounds_remain")))) {
+            return false;
+        }
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("missing_required_current_round_write")))) {
+            return false;
+        }
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("grounded_output_present")))) {
+            return false;
+        }
+        if (!isGroundedOutputRequired(latestWorkerMetadata)) {
+            return false;
+        }
+        return autoContinueBurstCount(task) < autoContinueBurstLimit(task, executionResult, latestWorkerMetadata);
+    }
+
     private boolean isOrchestrated(Task task) {
         return "orchestrated".equalsIgnoreCase(metadataString(task != null ? task.metadata() : null, "model_mode"));
     }
@@ -800,6 +842,38 @@ public class ControlNodeGraph {
 
     private boolean isExecutionStage(String stage) {
         return stage != null && stage.toLowerCase().startsWith("execution");
+    }
+
+    private boolean isGroundedOutputRequired(Map<String, Object> metadata) {
+        return Boolean.parseBoolean(stringValue(metadata.get("output_file_required")))
+            || Boolean.parseBoolean(stringValue(metadata.get("output_dir_required")));
+    }
+
+    private int autoContinueBurstCount(Task task) {
+        String value = metadataString(task != null ? task.metadata() : null, "auto_continue_burst_count");
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private int autoContinueBurstLimit(Task task,
+                                       WorkerExecutionResult executionResult,
+                                       Map<String, Object> latestWorkerMetadata) {
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("output_dir_required")))) {
+            return Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("image_input_used"))) ? 3 : 2;
+        }
+        return 1;
+    }
+
+    private Task incrementAutoContinueBurst(Task task) {
+        return withMetadataEntries(task,
+            "auto_continue_burst_count", autoContinueBurstCount(task) + 1
+        );
     }
 
     private String resolveSelectionScope(Task task, String executionRole) {
@@ -976,7 +1050,13 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "output_file_path");
         copyMetadataKey(source, selected, "output_file_exists");
         copyMetadataKey(source, selected, "output_file_size");
+        copyMetadataKey(source, selected, "output_dir_required");
+        copyMetadataKey(source, selected, "output_dir_path");
+        copyMetadataKey(source, selected, "output_dir_exists");
+        copyMetadataKey(source, selected, "output_dir_entry_count");
         copyMetadataKey(source, selected, "file_backed_artifact");
+        copyMetadataKey(source, selected, "directory_backed_artifact");
+        copyMetadataKey(source, selected, "grounded_output_present");
         copyMetadataKey(source, selected, "grounding_mode");
         copyMetadataKey(source, selected, "more_declared_rounds_remain");
         copyMetadataKey(source, selected, "current_round_requires_write");
