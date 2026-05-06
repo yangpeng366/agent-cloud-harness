@@ -2,6 +2,25 @@
 
 ## 1. HTTP API 清单
 
+### Hardness phase-1 观测面与当前代码对齐
+
+当前 API 不只是 CRUD 外壳，而是已经暴露出一部分 hardness phase-1 所需的观测面：
+
+- `runtime_context` 暴露了当前 worker round / judgment round 会消费的上下文裁剪结果，其中既包含兼容旧面的 `active_context`，也包含更显式的 `mounted_context_view`
+- `judgment_trace` 暴露了 execution/completion judgment 与推荐动作
+- `tool_trace` 暴露了真实持久化的工具调用轨迹
+- `live_flow` 聚合了 task / packet / route / runtime / judgment / checkpoint / learning memory / tool trace / experiment run
+- `harness_trace` 则进一步把这些信号压成更适合 outer-loop 演进与复盘的诊断视图
+
+因此从 hardness 方案角度看，当前 API 真实状态更接近：
+
+- 已有 `ToolInvocationRecord` 观测面
+- 已有 checkpoint / packet / runtime context 观测面
+- 已有 judgment 观测面
+- 但尚未显式暴露统一的 `WorkerExecutionEnvelope`、`RuntimeFactSet`、`ContinuationAction` 作为一等 API 对象
+
+也就是说：**观测能力已经存在，但 contract 仍主要散落在多个 view / trace 接口中。**
+
 ### 1.1 SessionHandler
 
 | 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |
@@ -28,11 +47,12 @@
 | GET | `/api/v1/tasks/{id}/packet` | 获取最近 resume packet | 路径参数 `id` | `ResumePacket \| null` | 否 |
 | GET | `/api/v1/tasks/{id}/refresh_packet` | 重新生成并保存 resume packet | 路径参数 `id` | `ResumePacket` | 否 |
 | GET | `/api/v1/tasks/{id}/select_worker` | 获取当前任务路由决策 | 路径参数 `id` | `RouteResult` | 否 |
-| GET | `/api/v1/tasks/{id}/runtime_context` | 查看当前运行时上下文与 active context | 路径参数 `id` | `TaskRuntimeContext` | 否 |
+| GET | `/api/v1/tasks/{id}/runtime_context` | 查看当前运行时上下文、active context 与 mounted context 视图 | 路径参数 `id` | `TaskRuntimeContext` | 否 |
 | GET | `/api/v1/tasks/{id}/judgment_trace` | 查看最近一次 execution/completion judgment 诊断视图 | 路径参数 `id` | `JudgmentTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/live_flow` | 聚合查看 live flow 诊断面 | Query: `limit` | `TaskLiveFlowView` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_run` | 查看该任务最新 experiment run 指标快照 | 路径参数 `id` | `ExperimentRunRecord` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_summary` | 以当前任务所属 `experiment_name` 为键，查看整组 matrix 汇总与 case 对比 | 路径参数 `id` | `ExperimentMatrixSummary` | 否 |
+| GET | `/api/v1/tasks/{id}/harness_trace` | 查看面向 AHE 复盘的压缩 Harness 执行轨迹 | Query: `limit` | `HarnessTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/tool_trace` | 查看最近工具调用轨迹 | Query: `limit` | `ToolInvocationRecord[]` | 否 |
 | GET | `/api/v1/tasks/{id}/handoff_packet` | 预览移交 packet | Query: `target_worker` | `HandoffPacketView` | 否 |
 | POST | `/api/v1/tasks/{id}/pause` | 暂停任务 | JSON: `reason?` | `TaskControlResult` | 否 |
@@ -78,6 +98,58 @@
 - `synthesized_context`
 
 其中 `latest_checkpoint` 会把最近一次 consolidation 的 `checkpoint_type / consolidation_summary / refined_packet / world_model_delta` 一并带出，当前 active context 也会消费其中的 `key_decisions`、`key_artifacts`、`open_questions`、`next_candidates`、`repeated_failure_hints`。
+
+同一个 `TaskRuntimeContext` 现在还会携带 `mounted_context_view`，用于把 runtime surface 进一步整理成更稳定的 panel/object 结构。当前稳定字段至少包括：
+
+- `task_id`
+- `panels`
+- `selection_trace`
+
+其中 `panels` 会按固定 panel 名称输出：
+
+- `pinned`
+- `active`
+- `ancestor`
+- `sibling`
+- `evidence`
+- `index`
+- `archive_handles`
+
+每个 panel 下的 `objects` 至少包含：
+
+- `type`
+- `path`
+- `parent_path`
+- `title`
+- `summary`
+- `content_preview`
+- `retention_state`
+- `metadata`
+
+当前 mounted context 的消费面分成两类：
+
+- 始终消费的 runtime / policy 面：
+  `TaskRuntimeContextBuilder` 会稳定构建 `mounted_context_view`，`LearningMemoryService` 的 `context_retention_hint` 候选提取与 retention evidence 也会优先读取它
+- 受 rollout seam 控制的 prompt 面：
+  `DefaultWorkerExecutor` 的 execution prompt、`ToolAwareWorkerExecutor` 的 planning / finalization prompt、`PromptBasedJudgmentService` 的 execution / completion judgment prompt
+
+当前 prompt rollout 通过 task metadata 控制，识别键依次为：
+
+- `prompt_rendering_mode`
+- `mounted_context_mode`（兼容别名）
+
+当前稳定模式值为：
+
+- `active_context_only`：默认模式，仅注入既有 `Active Context`，不渲染 mounted prompt
+- `mounted_context_shadow`：计算 mounted prompt 摘要并把模式 / panel count / selection trace count 写入 worker metadata，但不注入 prompt
+- `mounted_context_primary`：把 mounted prompt 摘要注入 execution / planning / judgment prompt，同时保留 `Active Context` 兼容面
+
+当前 learning memory 的 phase-2 语义也已经有了比较明确的分层：
+
+- `routing_preference`：由运行期 handoff judgment 强化，并直接反哺 `WorkerRouter.selectWorker()`
+- `context_retention_hint`：由 checkpoint / completion signal 强化，并直接回流 `TaskRuntimeContextBuilder -> ActiveContextBuilder`
+- `completion_pattern`：记录非 `done` 完成态与 alignment 证据，当前主要通过 `/learning_memories` 与 `live_flow` 暴露，供人工审计与后续策略收敛
+- `worker_heuristic`：记录低置信度 worker 输出与 follow-up 信号，当前主要通过 `/learning_memories` 与 `live_flow` 暴露，供人工审计与后续策略收敛
 
 `GET /api/v1/tasks/{id}/judgment_trace` 当前会聚合：
 
@@ -234,6 +306,48 @@
 - `task_id`：可选，把消息附着到某个 task，供 `/dialogue/` 的 Related Messages 与消息转任务草稿能力消费
 - `metadata`：记录 `source_surface`、`created_via`、`mirrored_from` 等页面来源信息；后端补写的 assistant 回执还会带 `trigger`、`summary_preview`、`next_step`、`completion_status`、`judgment_action` 等执行信号
 
+`GET /api/v1/tasks/{id}/tool_trace` 当前返回的是已经真实落库的 `ToolInvocationRecord[]`，字段至少包括：
+
+- `id`
+- `session_id`
+- `task_id`
+- `worker_id`
+- `tool_name`
+- `arguments`
+- `result_summary`
+- `success`
+- `elapsed_ms`
+- `created_at`
+- `metadata`
+
+从 hardness phase-1 方案视角看，这意味着：
+
+- `ToolInvocationRecord` 已经不是 blueprint，而是现有 API 和持久化对象
+- 当前更主要的下一步不是“先造 tool trace”，而是增强它，例如补更显式的 `execution_id / status / touched_paths`，并让它更直接进入 runtime fact aggregation 与 continuation judgment
+
+`GET /api/v1/tasks/{id}/harness_trace` 返回面向 AHE / Harness 演进复盘的压缩视图，聚合 live flow、tool trace、judgment trace、agent run 相关信息。当前稳定字段至少包含：
+
+- `task_id`
+- `task_status`
+- `control_node`
+- `assigned_worker`
+- `execution_status`
+- `evidence_refs`
+- `unfinished_items`
+- `recommended_action`
+- `recommended_next_step`
+- `route_preview`
+- `experiment_run`
+- `agent_run`
+- `execution_judgment`
+- `completion_judgment`
+- `tool_invocations`
+- `agent_run_events`
+- `agent_artifacts`
+- `harness_metadata`
+
+其中 `recommended_action` / `recommended_next_step` 对齐 `JudgmentTraceView` 的推荐动作命名。`harness_metadata` 会合并 experiment run 的轻量元数据，并补充 `tool_invocation_count / agent_run_event_count / agent_artifact_count`。若轻量运行环境未注入 `runtime_context_builder`，judgment 字段可为空，但接口仍应返回 200 与可用的 trace 数据。
+
 `GET /api/v1/tasks/{id}/tool_trace` 当前直接返回最近的 `tool_invocations`，每条记录至少包含：
 
 - `tool_name`
@@ -290,6 +404,24 @@
 - `tool_scope`：当前 worker 被允许访问的根目录集合
 - `suggest_only`：若为 `true`，即使声明了能力也不会进入 tool-aware 执行路径
 - `ready`：worker readiness 总开关
+- 当前只要声明了任意 `tool_capabilities`，就必须同时提供至少一个 `tool_scope`
+
+当前服务端接受的内置 `tool_capabilities` 名称包括：
+
+- 文件类：`list_files`、`read_file`、`search_text`、`write_file`、`patch_file`
+- 命令类：`git`、`shell`、`powershell`、`cmd`
+
+这些工具的当前约束边界是：
+
+- `tool_scope` 仍然是所有文件类工具的根目录边界
+- `write_file` 适合整文件写入，`patch_file` 适合基于 `old_text/new_text` 的锚定式局部改写
+- `git` 仅允许受控只读子命令
+- `git/shell/powershell/cmd` 都会先做宿主机真实可执行性探测；若不可用，服务端不会接受对应 capability 注册，内置 `codex` worker 也不会默认宣称该能力
+- `shell`、`powershell`、`cmd` 会同时受工作目录约束、超时、输出长度上限与危险命令片段拦截
+- `powershell/cmd` 仍然只在 Windows 宿主可注册；即使是 Windows，也还要求对应可执行文件真实存在
+- 这批命令工具属于“受控本地命令”，不是强沙箱；当前定位仍然是本地或受控环境 harness
+- `GET /api/v1/workers/{id}/readiness` 的 `checks` 现在同时包含依赖项和 `tool:<name>` 形式的宿主工具检查；若某项命令工具不可用，`reason` 会直接返回稳定原因文案
+- `GET /api/v1/workers` 与 `POST /api/v1/workers` 返回的 `Worker.metadata.host_tool_availability` 会回填该 worker 已声明命令工具的宿主探测结果
 
 ### 1.4 SkillHandler
 
@@ -312,6 +444,24 @@
 |------|------|------|---------|---------|------|
 | GET | `/api/v1/learning_memories` | 按 `task_id` 或 `memory_type` 查询学习记忆 | Query: `task_id?`, `memory_type?`, `limit?` | `LearningMemory[]` | 否 |
 | GET | `/api/v1/learning_memories/{taskId}` | 查询某个任务的学习记忆 | 路径参数 `taskId`，Query: `limit?` | `LearningMemory[]` | 否 |
+
+`LearningMemory` 当前稳定字段包括：
+
+- `memory_type`
+- `state`
+- `hint_key`
+- `summary`
+- `confidence_score`
+- `reinforcement_count`
+- `evidence`
+- `metadata`
+
+其中 `memory_type` 当前至少包括：
+
+- `routing_preference`
+- `context_retention_hint`
+- `completion_pattern`
+- `worker_heuristic`
 
 ### 1.7 ExperimentRunHandler
 

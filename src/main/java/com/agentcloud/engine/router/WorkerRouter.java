@@ -40,7 +40,7 @@ public class WorkerRouter {
         boolean readyFallback = capable.isEmpty();
         String fallbackReason = null;
         if (capable.isEmpty()) {
-            capable = registry.listAll().stream().filter(Worker::ready).toList();
+            capable = registry.listReady();
             fallbackReason = "no ready worker advertised taskType=" + taskType + ", fallback to any ready worker";
         }
         if (preferredModelTier != null) {
@@ -86,7 +86,7 @@ public class WorkerRouter {
                 int matchB = (int) b.capabilities().stream().filter(c -> c.equals(taskType)).count();
                 return Integer.compare(matchA, matchB);
             })
-            .orElse(capable.isEmpty() ? null : capable.get(0));
+            .orElse(null);
 
         if (selected == null) {
             return routeResult(task.id(), null, List.of(), "no capable worker found",
@@ -169,6 +169,7 @@ public class WorkerRouter {
             selected != null ? selected.workerType() : null,
             metadataString(selected != null ? selected.metadata() : null, "model_tier"),
             metadataString(selected != null ? selected.metadata() : null, "primary_role"),
+            null,
             routeReason,
             blankToNull(fallbackReason)
         );
@@ -228,6 +229,7 @@ public class WorkerRouter {
         String selectedWorkerType,
         String selectedModelTier,
         String selectedExecutionRole,
+        String selectionScope,
         String whySelected,
         String fallbackReason
     ) {}

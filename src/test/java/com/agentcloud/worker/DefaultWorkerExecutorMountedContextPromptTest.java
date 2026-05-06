@@ -1,0 +1,173 @@
+package com.agentcloud.worker;
+
+import com.agentcloud.llm.LlmClient;
+import com.agentcloud.model.Task;
+import com.agentcloud.runtime.ActiveContext;
+import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.ContextObjectType;
+import com.agentcloud.runtime.context.ContextRetentionState;
+import com.agentcloud.runtime.context.MountedContextPanel;
+import com.agentcloud.runtime.context.MountedContextPanelName;
+import com.agentcloud.runtime.context.MountedContextView;
+import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class DefaultWorkerExecutorMountedContextPromptTest {
+
+    @Test
+    void executeOneRoundDefaultsToActiveContextOnly() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContext(null), "codex");
+
+        assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
+        assertEquals("active_context_only", result.metadata().get("prompt_rendering_mode"));
+        assertEquals(false, result.metadata().get("mounted_context_injected"));
+        assertEquals(1, llmClient.chatCalls);
+    }
+
+    @Test
+    void executeOneRoundShadowModeKeepsMountedContextOutOfPrompt() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContext("mounted_context_shadow"), "codex");
+
+        assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
+        assertEquals("mounted_context_shadow", result.metadata().get("prompt_rendering_mode"));
+        assertEquals(true, result.metadata().get("mounted_context_rendered"));
+        assertEquals(false, result.metadata().get("mounted_context_injected"));
+    }
+
+    @Test
+    void executeOneRoundPrimaryModeInjectsMountedContextIntoPrompt() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContext("mounted_context_primary"), "codex");
+
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Pinned (1)"));
+        assertTrue(llmClient.lastUserPrompt.contains("constraint/pinned/Constraints"));
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context Selection Trace:"));
+        assertTrue(llmClient.lastUserPrompt.contains("compat_mode=task_runtime_context_preserved"));
+        assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_rendering_mode"));
+        assertEquals(true, result.metadata().get("mounted_context_injected"));
+    }
+
+    private TaskRuntimeContext runtimeContext(String promptRenderingMode) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("task_type", "coding");
+        metadata.put("intent", "Use the mounted context surface.");
+        if (promptRenderingMode != null) {
+            metadata.put("prompt_rendering_mode", promptRenderingMode);
+        }
+        Task task = new Task(
+            "task_1",
+            "session_1",
+            null,
+            "mounted context prompt",
+            "active",
+            "high",
+            Instant.parse("2026-05-06T06:30:00Z"),
+            Instant.parse("2026-05-06T06:30:00Z"),
+            null,
+            null,
+            null,
+            "summary",
+            "验证 mounted context 进入 prompt",
+            "继续推进",
+            "codex",
+            "continue",
+            null,
+            metadata
+        );
+        ActiveContext activeContext = new ActiveContext(
+            "Mounted context prompt",
+            List.of("priority=high"),
+            List.of("[runtime_context_built] mounted context 已生成"),
+            List.of("继续推进"),
+            List.of("artifact summary"),
+            List.of("是否切换 judgment?"),
+            List.of("补 prompt 测试"),
+            List.of("不要破坏兼容性"),
+            List.of("保留关键约束"),
+            List.of("budget=12"),
+            "summary",
+            "Task Focus: mounted context prompt",
+            12
+        );
+        MountedContextView mountedView = new MountedContextView(
+            null,
+            task.id(),
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(new ContextObject(
+                        "constraints",
+                        "/sessions/session_1/tasks/task_1",
+                        ContextObjectType.CONSTRAINT,
+                        "",
+                        "Constraints",
+                        "保持兼容，不要破坏旧执行链",
+                        "",
+                        Instant.parse("2026-05-06T06:31:00Z"),
+                        ContextRetentionState.PINNED,
+                        List.of(),
+                        List.of(),
+                        Map.of()
+                    ))
+                )
+            ),
+            List.of("compat_mode=task_runtime_context_preserved")
+        );
+        return new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            activeContext,
+            mountedView
+        );
+    }
+
+    private String responseJson() {
+        return """
+            {"summary":"ok","output_text":"done","produced_artifact":false,"artifact_title":"","artifact_content":"","suggested_next_step":"","confidence":"high"}
+            """;
+    }
+
+    private static final class RecordingLlmClient implements LlmClient {
+        private final String response;
+        private int chatCalls;
+        private String lastUserPrompt = "";
+
+        private RecordingLlmClient(String response) {
+            this.response = response.strip();
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt) {
+            chatCalls++;
+            lastUserPrompt = userPrompt;
+            return response;
+        }
+    }
+}

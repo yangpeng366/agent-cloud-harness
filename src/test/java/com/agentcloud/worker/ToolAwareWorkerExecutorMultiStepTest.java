@@ -6,7 +6,14 @@ import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.model.Worker;
+import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.ContextObjectType;
+import com.agentcloud.runtime.context.ContextRetentionState;
+import com.agentcloud.runtime.context.MountedContextPanel;
+import com.agentcloud.runtime.context.MountedContextPanelName;
+import com.agentcloud.runtime.context.MountedContextView;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
@@ -22,7 +29,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -250,7 +259,218 @@ class ToolAwareWorkerExecutorMultiStepTest {
         }
     }
 
-    private static final class SequencedLlmClient implements LlmClient {
+    @Test
+    void planningPromptIncludesMountedContextSurface() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-mounted-workspace"));
+        Files.writeString(workspace.resolve("notes.txt"), "Reference note.\n");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-mounted.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-mounted",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this test.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_mounted",
+                "session_multi_mounted",
+                null,
+                "planning prompt mounted",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T06:50:00Z"),
+                Instant.parse("2026-05-06T06:50:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Ensure tool planning sees mounted context.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Inspect mounted context before deciding tool use.",
+                    "prompt_rendering_mode", "mounted_context_primary"
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "mounted planning", "active"));
+            taskDao.insert(task);
+
+            executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+
+            assertTrue(llmClient.firstUserPrompt.contains("Mounted Context:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Pinned (1)"));
+            assertTrue(llmClient.firstUserPrompt.contains("constraint/pinned/Constraints"));
+            assertTrue(llmClient.firstUserPrompt.contains("Mounted Context Selection Trace:"));
+        }
+    }
+
+    @Test
+    void planningPromptDefaultsToActiveContextOnlyMode() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-active-only-workspace"));
+        Files.writeString(workspace.resolve("notes.txt"), "Reference note.\n");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-active-only.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-active-only",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this test.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_active_only",
+                "session_multi_active_only",
+                null,
+                "planning prompt active only",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T06:55:00Z"),
+                Instant.parse("2026-05-06T06:55:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Ensure default planning prompt keeps mounted context behind the seam.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of("intent", "Inspect active context before deciding tool use.")
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "active-only planning", "active"));
+            taskDao.insert(task);
+
+            executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+
+            assertFalse(llmClient.firstUserPrompt.contains("Mounted Context:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Active Context:"));
+        }
+    }
+
+    private TaskRuntimeContext mountedRuntimeContext(Task task) {
+        ActiveContext activeContext = new ActiveContext(
+            "Mounted planning",
+            List.of("priority=high"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            "",
+            "Task Focus: mounted planning",
+            12
+        );
+        MountedContextView mountedView = new MountedContextView(
+            null,
+            task.id(),
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(new ContextObject(
+                        "constraints",
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id(),
+                        ContextObjectType.CONSTRAINT,
+                        "",
+                        "Constraints",
+                        "先看 mounted context，再决定是否用工具",
+                        "",
+                        Instant.parse("2026-05-06T06:51:00Z"),
+                        ContextRetentionState.PINNED,
+                        List.of(),
+                        List.of(),
+                        Map.of()
+                    ))
+                )
+            ),
+            List.of("compat_mode=task_runtime_context_preserved")
+        );
+        return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, mountedView);
+    }
+
+    private static class SequencedLlmClient implements LlmClient {
         private final Queue<String> responses;
 
         private SequencedLlmClient(List<String> responses) {
@@ -263,6 +483,24 @@ class ToolAwareWorkerExecutorMultiStepTest {
                 throw new IllegalStateException("No LLM response left for prompt: " + systemPrompt);
             }
             return responses.remove();
+        }
+    }
+
+    private static final class CapturingSequencedLlmClient extends SequencedLlmClient {
+        private String firstUserPrompt = "";
+        private boolean captured;
+
+        private CapturingSequencedLlmClient(List<String> responses) {
+            super(responses);
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt) {
+            if (!captured) {
+                firstUserPrompt = userPrompt;
+                captured = true;
+            }
+            return super.chat(systemPrompt, userPrompt);
         }
     }
 }

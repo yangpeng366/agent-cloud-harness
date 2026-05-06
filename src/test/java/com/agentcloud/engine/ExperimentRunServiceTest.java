@@ -78,7 +78,11 @@ class ExperimentRunServiceTest {
                     "model_mode", "orchestrated",
                     "experiment_name", "baseline-min",
                     "task_case_key", "case-001",
-                    "task_length_bucket", "long"
+                    "task_length_bucket", "long",
+                    "planner_worker", "codex",
+                    "planner_model_tier", "strong",
+                    "executor_worker", "kimi",
+                    "executor_model_tier", "small"
                 )
             );
             taskDao.insert(task);
@@ -113,6 +117,9 @@ class ExperimentRunServiceTest {
                     "learning_hint_applied", true,
                     "fallback_reason", "hint matched candidate set",
                     "latest_worker_metadata", Map.of(
+                        "execution_status", "blocked",
+                        "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"),
+                        "unfinished_items", List.of("manual_review"),
                         "tool_execution_mode", "multi_tool_round",
                         "tool_chain_step_count", 2,
                         "tool_chain_termination_reason", "planner_no_additional_tool",
@@ -128,11 +135,14 @@ class ExperimentRunServiceTest {
                 sessionId,
                 taskId,
                 "kimi",
+                "exec_write_file",
                 "write_file",
                 Map.of("path", "draft.txt"),
                 "Draft written.",
+                "succeeded",
                 true,
                 42,
+                List.of("draft.txt"),
                 Instant.now(),
                 Map.of("tool_execution_mode", "single_tool_round")
             ));
@@ -174,6 +184,24 @@ class ExperimentRunServiceTest {
                 sessionId,
                 taskId,
                 Instant.now(),
+                "execution_judgment",
+                "Execution judgment: done",
+                "Executor output is ready for final review.",
+                "medium",
+                null,
+                Map.of(
+                    "action", "done",
+                    "next_step", "handoff to strong evaluator",
+                    "needs_checkpoint", false,
+                    "needs_human", false,
+                    "selected_worker", "kimi"
+                )
+            ));
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                sessionId,
+                taskId,
+                Instant.now(),
                 "completion_judgment",
                 "Completion judgment: done",
                 "Acceptance criteria satisfied.",
@@ -182,7 +210,12 @@ class ExperimentRunServiceTest {
                 Map.of(
                     "status", "done",
                     "alignment_level", "high",
-                    "evaluation_result", "done:high"
+                    "evaluation_result", "done:high",
+                    "evaluation_reason", "strong evaluator accepted the delegated output",
+                    "evaluator_role", "strong_evaluator",
+                    "evaluator_model_tier", "strong",
+                    "evaluator_reason", "orchestrated mode uses strong-tier judgment to review delegated execution output",
+                    "orchestration_closed_loop_observed", true
                 )
             ));
 
@@ -218,6 +251,91 @@ class ExperimentRunServiceTest {
             assertEquals("2 steps · planner_no_additional_tool · read_file -> write_file",
                 run.metadata().get("tool_chain_trace_summary"));
             assertEquals(List.of("read_file", "write_file"), run.metadata().get("tool_chain_tools"));
+            assertEquals("strong_evaluator", run.metadata().get("evaluator_role"));
+            assertEquals("strong", run.metadata().get("evaluator_model_tier"));
+            assertEquals("strong evaluator accepted the delegated output", run.metadata().get("evaluation_reason"));
+            assertEquals("done", run.metadata().get("execution_judgment_action"));
+            assertEquals("handoff to strong evaluator", run.metadata().get("execution_judgment_next_step"));
+            assertEquals(Boolean.FALSE, run.metadata().get("execution_judgment_needs_checkpoint"));
+            assertEquals(Boolean.FALSE, run.metadata().get("execution_judgment_needs_human"));
+            assertEquals("done", run.metadata().get("completion_judgment_status"));
+            assertEquals("high", run.metadata().get("completion_alignment_level"));
+            assertEquals(Boolean.TRUE, run.metadata().get("has_route_evidence"));
+            assertEquals(Boolean.TRUE, run.metadata().get("has_execution_judgment"));
+            assertEquals(Boolean.TRUE, run.metadata().get("has_completion_judgment"));
+            assertEquals(Boolean.TRUE, run.metadata().get("has_closed_loop_evidence_chain"));
+            assertEquals("route=learning_memory:kimi -> exec=done -> completion=done:high",
+                run.metadata().get("judgment_evidence_chain"));
+            assertEquals(
+                "route=present | execution_judgment=present | completion_judgment=present"
+                    + " | closed_loop_evidence_chain=complete | route_signal=learning_memory:kimi"
+                    + " | exec_action=done | completion=done:high"
+                    + " | tool_chain=2 steps · planner_no_additional_tool · read_file -> write_file"
+                    + " | orchestration=codex -> kimi -> strong_evaluator(strong) [closed_loop]",
+                run.metadata().get("closed_loop_proof_summary")
+            );
+            @SuppressWarnings("unchecked")
+            Map<String, Object> closedLoopEvidence = (Map<String, Object>) run.metadata().get("closed_loop_evidence");
+            assertEquals("complete", closedLoopEvidence.get("chain_status"));
+            assertEquals(Boolean.TRUE, closedLoopEvidence.get("has_route_evidence"));
+            assertEquals(Boolean.TRUE, closedLoopEvidence.get("has_execution_judgment"));
+            assertEquals(Boolean.TRUE, closedLoopEvidence.get("has_completion_judgment"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> routeEvidence = (Map<String, Object>) closedLoopEvidence.get("route");
+            assertEquals("learning_memory", routeEvidence.get("route_source"));
+            assertEquals("kimi", routeEvidence.get("selected_worker"));
+            assertEquals("small", routeEvidence.get("selected_model_tier"));
+            assertEquals(Boolean.TRUE, routeEvidence.get("learning_hint_applied"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> workerExecutionEvidence =
+                (Map<String, Object>) closedLoopEvidence.get("worker_execution");
+            assertEquals("blocked", workerExecutionEvidence.get("execution_status"));
+            assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"),
+                workerExecutionEvidence.get("evidence_refs"));
+            assertEquals(List.of("manual_review"), workerExecutionEvidence.get("unfinished_items"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> executionJudgmentEvidence =
+                (Map<String, Object>) closedLoopEvidence.get("execution_judgment");
+            assertEquals("done", executionJudgmentEvidence.get("action"));
+            assertEquals("handoff to strong evaluator", executionJudgmentEvidence.get("next_step"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> completionJudgmentEvidence =
+                (Map<String, Object>) closedLoopEvidence.get("completion_judgment");
+            assertEquals("done", completionJudgmentEvidence.get("status"));
+            assertEquals("high", completionJudgmentEvidence.get("alignment_level"));
+            assertEquals("strong_evaluator", completionJudgmentEvidence.get("evaluator_role"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> toolChainEvidence = (Map<String, Object>) closedLoopEvidence.get("tool_chain");
+            assertEquals("multi_tool_round", toolChainEvidence.get("execution_mode"));
+            assertEquals(2, ((Number) toolChainEvidence.get("step_count")).intValue());
+            assertEquals(List.of("read_file", "write_file"), toolChainEvidence.get("tool_names"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> orchestrationEvidence = (Map<String, Object>) closedLoopEvidence.get("orchestration");
+            assertEquals("codex", orchestrationEvidence.get("planner_worker"));
+            assertEquals("kimi", orchestrationEvidence.get("executor_worker"));
+            assertEquals(Boolean.TRUE, orchestrationEvidence.get("closed_loop_observed"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tracePointers = (Map<String, Object>) closedLoopEvidence.get("trace_pointers");
+            assertEquals(taskId, tracePointers.get("task_id"));
+            assertEquals(sessionId, tracePointers.get("session_id"));
+            assertTrue(((String) tracePointers.get("worker_artifact_id")).startsWith("art_"));
+            assertTrue(((String) tracePointers.get("execution_judgment_id")).startsWith("dec_"));
+            assertTrue(((String) tracePointers.get("completion_judgment_id")).startsWith("dec_"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> taskSurfaceRefs = (Map<String, Object>) closedLoopEvidence.get("task_surface_refs");
+            assertEquals(taskId, taskSurfaceRefs.get("task_id"));
+            assertEquals("/api/v1/tasks/" + taskId + "/live_flow", taskSurfaceRefs.get("live_flow_path"));
+            assertEquals("/api/v1/tasks/" + taskId + "/runtime_context", taskSurfaceRefs.get("runtime_context_path"));
+            assertEquals("/api/v1/tasks/" + taskId + "/harness_trace", taskSurfaceRefs.get("harness_trace_path"));
+            assertEquals("/api/v1/tasks/" + taskId + "/judgment_trace", taskSurfaceRefs.get("judgment_trace_path"));
+            assertEquals("/api/v1/tasks/" + taskId + "/tool_trace", taskSurfaceRefs.get("tool_trace_path"));
+            assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"), run.metadata().get("evidence_refs"));
+            assertEquals(List.of("manual_review"), run.metadata().get("unfinished_items"));
+            assertEquals(1, ((List<?>) tracePointers.get("tool_invocation_ids")).size());
+            assertEquals(1, ((List<?>) tracePointers.get("tool_execution_ids")).size());
+            assertEquals(Boolean.TRUE, run.metadata().get("orchestration_closed_loop_observed"));
+            assertEquals("codex -> kimi -> strong_evaluator(strong) [closed_loop]",
+                run.metadata().get("orchestration_proof_summary"));
         }
     }
 
@@ -327,10 +445,19 @@ class ExperimentRunServiceTest {
                 "ok",
                 now,
                 now,
-                Map.of(
-                    "tool_execution_mode", "multi_tool_round",
-                    "tool_chain_step_count", 2,
-                    "tool_chain_termination_reason", "planner_no_additional_tool"
+                Map.ofEntries(
+                    Map.entry("route_source", "learning_memory"),
+                    Map.entry("orchestration_closed_loop_observed", true),
+                    Map.entry("execution_judgment_action", "done"),
+                    Map.entry("completion_judgment_status", "done"),
+                    Map.entry("completion_alignment_level", "high"),
+                    Map.entry("has_route_evidence", true),
+                    Map.entry("has_execution_judgment", true),
+                    Map.entry("has_completion_judgment", true),
+                    Map.entry("has_closed_loop_evidence_chain", true),
+                    Map.entry("tool_execution_mode", "multi_tool_round"),
+                    Map.entry("tool_chain_step_count", 2),
+                    Map.entry("tool_chain_termination_reason", "planner_no_additional_tool")
                 )
             ));
             experimentRunDao.upsert(new ExperimentRunRecord(
@@ -358,6 +485,10 @@ class ExperimentRunServiceTest {
                 now.plusSeconds(1),
                 Map.of(
                     "tool_execution_mode", "multi_tool_round",
+                    "has_route_evidence", false,
+                    "has_execution_judgment", false,
+                    "has_completion_judgment", false,
+                    "has_closed_loop_evidence_chain", false,
                     "tool_chain_step_count", 4,
                     "tool_chain_termination_reason", "repeated_tool_guard"
                 )
@@ -387,6 +518,10 @@ class ExperimentRunServiceTest {
                 now.plusSeconds(2),
                 Map.of(
                     "tool_execution_mode", "single_tool_round",
+                    "has_route_evidence", true,
+                    "has_execution_judgment", false,
+                    "has_completion_judgment", false,
+                    "has_closed_loop_evidence_chain", false,
                     "tool_chain_step_count", 1
                 )
             ));
@@ -425,6 +560,266 @@ class ExperimentRunServiceTest {
                 1,
                 10
             ).stream().map(ExperimentRunRecord::taskId).toList());
+            assertEquals(List.of("task_2"), service.listRuns(
+                "baseline-filters",
+                null,
+                null,
+                null,
+                "failed",
+                "rejected",
+                true,
+                null,
+                10
+            ).stream().map(ExperimentRunRecord::taskId).toList());
+            assertEquals(List.of("task_3", "task_1"), service.listRuns(
+                "baseline-filters",
+                null,
+                null,
+                null,
+                "done",
+                "accepted",
+                false,
+                null,
+                10
+            ).stream().map(ExperimentRunRecord::taskId).toList());
+            assertEquals(List.of("task_1"), service.listRuns(
+                "baseline-filters",
+                null,
+                null,
+                "orchestrated",
+                null,
+                null,
+                null,
+                null,
+                "learning_memory",
+                true,
+                10
+            ).stream().map(ExperimentRunRecord::taskId).toList());
+            assertEquals(List.of("task_1"), service.listRuns(
+                "baseline-filters",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                true,
+                true,
+                true,
+                10
+            ).stream().map(ExperimentRunRecord::taskId).toList());
+        }
+    }
+
+    @Test
+    void summarizeRunsAggregatesGoalOutcomeMetrics() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("experiment-run-summary.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
+
+            ExperimentRunService service = new ExperimentRunService(
+                experimentRunDao,
+                decisionDao,
+                artifactDao,
+                eventDao,
+                toolInvocationDao
+            );
+
+            Instant now = Instant.now();
+            sessionDao.insert(Session.create("session_1", "summary one", "active"));
+            sessionDao.insert(Session.create("session_2", "summary two", "active"));
+            taskDao.insert(new Task(
+                "task_1",
+                "session_1",
+                null,
+                "accepted run",
+                "done",
+                "high",
+                now,
+                now,
+                now,
+                now,
+                null,
+                "ok",
+                "summarize eval",
+                null,
+                "kimi",
+                "end",
+                null,
+                Map.of("task_type", "coding")
+            ));
+            taskDao.insert(new Task(
+                "task_2",
+                "session_2",
+                null,
+                "rejected run",
+                "failed",
+                "high",
+                now,
+                now,
+                now,
+                now,
+                null,
+                "retry",
+                "summarize eval",
+                null,
+                "codex",
+                "end",
+                "guard tripped",
+                Map.of("task_type", "coding")
+            ));
+            experimentRunDao.upsert(new ExperimentRunRecord(
+                "xrun_summary_1",
+                "session_1",
+                "task_1",
+                "baseline-summary",
+                "case-001",
+                "accepted run",
+                "coding",
+                "medium",
+                "orchestrated",
+                3,
+                "done",
+                "accepted",
+                1.2,
+                0.5,
+                1,
+                1,
+                0,
+                null,
+                Boolean.TRUE,
+                "ok",
+                now,
+                now,
+                Map.of(
+                    "tool_execution_mode", "multi_tool_round",
+                    "route_source", "learning_memory",
+                    "orchestration_closed_loop_observed", true,
+                    "execution_judgment_action", "done",
+                    "completion_judgment_status", "done",
+                    "completion_alignment_level", "high",
+                    "has_route_evidence", true,
+                    "has_execution_judgment", true,
+                    "has_completion_judgment", true,
+                    "has_closed_loop_evidence_chain", true
+                )
+            ));
+            experimentRunDao.upsert(new ExperimentRunRecord(
+                "xrun_summary_2",
+                "session_2",
+                "task_2",
+                "baseline-summary",
+                "case-002",
+                "rejected run",
+                "coding",
+                "long",
+                "small_only",
+                5,
+                "failed",
+                "rejected",
+                0.8,
+                0.0,
+                2,
+                0,
+                1,
+                "guard tripped",
+                Boolean.FALSE,
+                "retry",
+                now,
+                now.plusSeconds(1),
+                Map.of(
+                    "tool_execution_mode", "multi_tool_round",
+                    "route_source", "capability_match",
+                    "execution_judgment_action", "escalate",
+                    "completion_judgment_status", "misaligned",
+                    "completion_alignment_level", "low",
+                    "has_route_evidence", true,
+                    "has_execution_judgment", true,
+                    "has_completion_judgment", true,
+                    "has_closed_loop_evidence_chain", true
+                )
+            ));
+
+            var summary = service.summarizeRuns(
+                "baseline-summary",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            assertEquals(2, summary.runCount());
+            assertEquals(1, summary.completionStatusCounts().get("done"));
+            assertEquals(1, summary.completionStatusCounts().get("failed"));
+            assertEquals(1, summary.acceptanceResultCounts().get("accepted"));
+            assertEquals(1, summary.acceptanceResultCounts().get("rejected"));
+            assertEquals(1, summary.modelModeCounts().get("orchestrated"));
+            assertEquals(1, summary.modelModeCounts().get("small_only"));
+            assertEquals(1, summary.routeSourceCounts().get("learning_memory"));
+            assertEquals(1, summary.routeSourceCounts().get("capability_match"));
+            assertEquals(1, summary.failureReasonCount());
+            assertEquals(1, summary.recoverySuccessCount());
+            assertEquals(1, summary.orchestrationClosedLoopObservedCount());
+            assertEquals(1, summary.orchestratedRunCount());
+            assertEquals(0, summary.runsWithTracePointersCount());
+            assertEquals(0, summary.runsWithJudgmentTracePointersCount());
+            assertEquals(0, summary.runsWithTaskSurfaceRefsCount());
+            assertEquals(0, summary.runsWithJudgmentSurfaceRefsCount());
+            assertEquals(0, summary.runsWithToolTraceSurfaceRefsCount());
+            assertEquals(3, summary.handoffCount());
+            assertEquals(1, summary.resumeCount());
+            assertEquals(1, summary.humanGateCount());
+            assertEquals(2.0, summary.totalCost(), 0.001);
+            assertEquals(1.0, summary.averageCost(), 0.001);
+            assertEquals(0.25, summary.averageStrongModelCostRatio(), 0.001);
+
+            var closedLoopOnly = service.summarizeRuns(
+                "baseline-summary",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "learning_memory",
+                null,
+                true,
+                true,
+                true,
+                true,
+                null,
+                null,
+                null,
+                null
+            );
+            assertEquals(1, closedLoopOnly.runCount());
+            assertEquals(1, closedLoopOnly.runsWithRouteEvidenceCount());
+            assertEquals(1, closedLoopOnly.runsWithExecutionJudgmentCount());
+            assertEquals(1, closedLoopOnly.runsWithCompletionJudgmentCount());
+            assertEquals(1, closedLoopOnly.runsWithClosedLoopEvidenceChainCount());
+            assertEquals(0, closedLoopOnly.runsWithTracePointersCount());
+            assertEquals(0, closedLoopOnly.runsWithJudgmentTracePointersCount());
+            assertEquals(0, closedLoopOnly.runsWithTaskSurfaceRefsCount());
+            assertEquals(0, closedLoopOnly.runsWithJudgmentSurfaceRefsCount());
+            assertEquals(0, closedLoopOnly.runsWithToolTraceSurfaceRefsCount());
+            assertEquals(1, closedLoopOnly.routeSourceCounts().get("learning_memory"));
         }
     }
 }

@@ -4,13 +4,18 @@ import com.agentcloud.llm.LlmClient;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptRenderer;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,26 +26,36 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(DefaultWorkerExecutor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final LlmClient llmClient;
+    private final MountedContextPromptRenderer mountedContextPromptRenderer;
 
     public DefaultWorkerExecutor(LlmClient llmClient) {
+        this(llmClient, new MountedContextPromptRenderer());
+    }
+
+    DefaultWorkerExecutor(LlmClient llmClient, MountedContextPromptRenderer mountedContextPromptRenderer) {
         this.llmClient = llmClient;
+        this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
+            ? new MountedContextPromptRenderer()
+            : mountedContextPromptRenderer;
     }
 
     @Override
     public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
         long startMs = System.currentTimeMillis();
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.task());
 
         String systemPrompt = buildSystemPrompt(context, workerId);
-        String userPrompt = buildUserPrompt(context);
+        String userPrompt = buildUserPrompt(context, renderingMode);
 
         String raw = llmClient.chat(systemPrompt, userPrompt);
         long durationMs = System.currentTimeMillis() - startMs;
         WorkerExecutionResult result = parseExecutionResult(raw, durationMs);
+        WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context);
 
         log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}",
-            context.task().id(), workerId, result.outputText().length(), durationMs);
+            context.task().id(), workerId, enriched.outputText().length(), durationMs);
 
-        return result;
+        return enriched;
     }
 
     private String buildSystemPrompt(TaskRuntimeContext context, String workerId) {
@@ -77,7 +92,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             + "No markdown, no extra text.";
     }
 
-    private String buildUserPrompt(TaskRuntimeContext context) {
+    private String buildUserPrompt(TaskRuntimeContext context, PromptRenderingMode renderingMode) {
         var t = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(t.title()).append("\n");
@@ -103,6 +118,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         } else if ("orchestrated".equalsIgnoreCase(modelMode) && isExecutionStage(orchestrationStage)) {
             sb.append("Execution Contract: execute the delegated next step before proposing broader replans.\n");
         }
+        appendMountedContext(sb, context, renderingMode);
         if (context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
             sb.append("\nActive Context:\n");
             sb.append(context.activeContext().synthesizedContext()).append("\n");
@@ -133,10 +149,63 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                     sb.append("\n");
                 }
             }
+
+            if (context.recentMessages() != null && !context.recentMessages().isEmpty()) {
+                sb.append("\nRecent Messages:\n");
+                for (String line : formatRecentMessages(context.recentMessages(), 6)) {
+                    sb.append("- ").append(line).append("\n");
+                }
+            }
         }
 
         sb.append("\nPlease execute the task and provide your output.");
         return sb.toString();
+    }
+
+    private void appendMountedContext(StringBuilder sb, TaskRuntimeContext context, PromptRenderingMode renderingMode) {
+        if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
+            return;
+        }
+        String mountedPrompt = mountedContextPromptRenderer.render(context);
+        if (mountedPrompt.isBlank()) {
+            return;
+        }
+        sb.append("\n").append(mountedPrompt);
+    }
+
+    private WorkerExecutionResult attachRenderingMetadata(WorkerExecutionResult result,
+                                                          PromptRenderingMode renderingMode,
+                                                          TaskRuntimeContext context) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (result.metadata() != null) {
+            metadata.putAll(result.metadata());
+        }
+        metadata.put("prompt_rendering_mode", renderingMode.wireName());
+        boolean mountedRendered = renderingMode.shouldRenderMountedPrompt();
+        String mountedPrompt = mountedRendered ? mountedContextPromptRenderer.render(context) : "";
+        metadata.put("mounted_context_rendered", mountedRendered);
+        metadata.put("mounted_context_injected", renderingMode.shouldInjectMountedPrompt() && !mountedPrompt.isBlank());
+        metadata.put("mounted_context_panel_count", context.mountedContextView() != null
+            ? context.mountedContextView().panels().size()
+            : 0);
+        metadata.put("mounted_context_selection_trace_count", context.mountedContextView() != null
+            ? context.mountedContextView().selectionTrace().size()
+            : 0);
+        return new WorkerExecutionResult(
+            result.summary(),
+            result.outputText(),
+            result.producedArtifact(),
+            result.artifactTitle(),
+            result.artifactContent(),
+            result.suggestedNextStep(),
+            result.confidence(),
+            result.executionStatus(),
+            result.evidenceRefs(),
+            result.unfinishedItems(),
+            result.tokenUsage(),
+            result.durationMs(),
+            metadata
+        );
     }
 
     private String metadataString(Map<String, Object> metadata, String key) {
@@ -161,10 +230,45 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         return stage.toLowerCase().startsWith("execution");
     }
 
+    private List<String> readStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item != null && !item.asText("").isBlank()) {
+                items.add(item.asText());
+            }
+        }
+        return List.copyOf(items);
+    }
+
+    private List<String> formatRecentMessages(List<SessionMessage> messages, int limit) {
+        if (messages == null || messages.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        List<String> lines = new ArrayList<>();
+        int start = Math.max(0, messages.size() - limit);
+        for (int index = start; index < messages.size(); index++) {
+            SessionMessage message = messages.get(index);
+            if (message == null || message.content() == null || message.content().isBlank()) {
+                continue;
+            }
+            String role = message.role() == null || message.role().isBlank() ? "message" : message.role();
+            String type = message.messageType() == null || message.messageType().isBlank() ? "" : " [" + message.messageType() + "]";
+            String content = message.content().replaceAll("\\s+", " ").trim();
+            if (content.length() > 240) {
+                content = content.substring(0, 240) + "...";
+            }
+            lines.add(role + type + ": " + content);
+        }
+        return lines;
+    }
+
     private WorkerExecutionResult parseExecutionResult(String raw, long durationMs) {
         String safeRaw = raw == null ? "" : raw.trim();
         if (safeRaw.isBlank()) {
-            return new WorkerExecutionResult("", "", false, "", "", "", "low", 0, durationMs, Map.of("parser", "empty"));
+            return new WorkerExecutionResult("", "", false, "", "", "", "low", "empty", List.of(), List.of(), 0, durationMs, Map.of("parser", "empty"));
         }
 
         try {
@@ -176,6 +280,9 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             String artifactContent = json.path("artifact_content").asText("");
             String suggestedNextStep = json.path("suggested_next_step").asText("");
             String confidence = json.path("confidence").asText("medium");
+            String executionStatus = json.path("execution_status").asText("completed");
+            List<String> evidenceRefs = readStringList(json.path("evidence_refs"));
+            List<String> unfinishedItems = readStringList(json.path("unfinished_items"));
 
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("parser", "json");
@@ -187,6 +294,9 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 artifactContent,
                 suggestedNextStep,
                 confidence,
+                executionStatus,
+                evidenceRefs,
+                unfinishedItems,
                 0,
                 durationMs,
                 metadata
@@ -202,6 +312,9 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 "",
                 "",
                 "medium",
+                "unknown",
+                List.of(),
+                List.of(),
                 0,
                 durationMs,
                 Map.of("parser", "raw_text")

@@ -12,10 +12,18 @@ public record ExecutionDecision(
     String nextStep,
     boolean needsCheckpoint,
     boolean needsHuman,
-    String targetWorker
+    String targetWorker,
+    String retryDecision,
+    String escalationDecision
 ) {
     public ExecutionDecision {
         if (action == null) action = "continue";
         if (reason == null) reason = "";
+        if (retryDecision == null) retryDecision = "";
+        if (escalationDecision == null) escalationDecision = "";
+    }
+
+    public ExecutionDecision(String action, String reason, String nextStep, boolean needsCheckpoint, boolean needsHuman, String targetWorker) {
+        this(action, reason, nextStep, needsCheckpoint, needsHuman, targetWorker, "", "");
     }
 }

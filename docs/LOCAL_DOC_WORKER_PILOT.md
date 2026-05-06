@@ -12,10 +12,11 @@
 
 当前实现边界：
 
-- 每轮最多一次工具调用
-- 已开放工具：`list_files`、`search_text`、`read_file`、`write_file`
+- 单轮最多 3 步工具链调用
+- 本试点建议开放：`list_files`、`search_text`、`read_file`、`write_file`、`patch_file`
 - 工具访问范围受 `tool_scope` 限制
-- `write_file` 当前支持整文件写入与可选 append，不支持 patch
+- `write_file` 适合整文件落稿，`patch_file` 适合锚定式局部改写
+- `shell` 若宿主机存在平台默认 shell 则可用；`git/powershell/cmd` 也都要先通过宿主机真实可执行性探测，其中 `powershell/cmd` 仍仅 Windows 宿主可用，但本试点默认都不授予
 
 ## 2. 前置条件
 
@@ -66,7 +67,7 @@
 - `worker_id = kimi-local-doc`
 - `worker_type = kimi`
 - `task_type = local_doc`
-- `tool_capabilities = ["list_files","search_text","read_file","write_file"]`
+- `tool_capabilities = ["list_files","search_text","read_file","write_file","patch_file"]`
 - `suggest_only = false`
 
 ## 5. 手工调用方式
@@ -78,7 +79,7 @@ $worker = @{
   worker_id = 'kimi-local-doc'
   worker_type = 'kimi'
   capabilities = @('local_doc', 'doc', 'research')
-  tool_capabilities = @('list_files', 'search_text', 'read_file', 'write_file')
+  tool_capabilities = @('list_files', 'search_text', 'read_file', 'write_file', 'patch_file')
   tool_scope = @('D:\BaiduSyncdisk\Obsidian Vault\当前项目\02_项目推进\agent-cloud-architecture')
   suggest_only = $false
   ready = $true
@@ -151,7 +152,7 @@ Invoke-RestMethod -Uri "http://localhost:18080/api/v1/tasks/{taskId}/judgment_tr
 
 1. `task.assigned_worker = kimi-local-doc`
 2. `/tool_trace` 返回至少一条 `tool_invocations`
-3. `tool_name` 是 `list_files`、`search_text`、`read_file` 或 `write_file`
+3. `tool_name` 是 `list_files`、`search_text`、`read_file`、`write_file` 或 `patch_file`
 4. `success = true`
 5. 目标目录下出现 `pilot-summary.md` 或你指定的输出文件
 6. `/live_flow` 能同时看到 judgment 与 tool trace
@@ -192,10 +193,11 @@ Invoke-RestMethod -Uri "http://localhost:18080/api/v1/tasks/{taskId}/judgment_tr
 ### Q4: 命中了工具但结果仍然很差
 
 这是当前版本的预期限制之一。  
-第一版只支持“单工具单轮”，还没有：
+当前版本仍有这些限制：
 
 - 多工具规划
-- patch 级写回
 - continuation 驱动的多轮 thread bridge
+
+但单轮内已经支持最多 3 步工具链，也支持 `patch_file` 级别的局部写回。
 
 这个试点的目标是先验证“受控工具能力层 + 可观测性”本身已经打通。

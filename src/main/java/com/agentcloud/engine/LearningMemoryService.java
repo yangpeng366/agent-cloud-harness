@@ -5,6 +5,8 @@ import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.model.LearningMemory;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.store.LearningMemoryDao;
 import com.agentcloud.worker.WorkerExecutionResult;
 import org.slf4j.Logger;
@@ -158,38 +160,49 @@ public class LearningMemoryService {
 
     private void captureContextRetentionHint(Task task, TaskRuntimeContext runtimeContext,
                                              ExecutionDecision executionDecision, CompletionDecision completionDecision) {
-        if (runtimeContext == null || runtimeContext.activeContext() == null) {
+        if (runtimeContext == null) {
             return;
         }
         if (!executionDecision.needsCheckpoint() && !isRetentionSignal(completionDecision.status())) {
             return;
         }
 
-        String retainedItem = firstMeaningfulContextItem(runtimeContext);
-        if (retainedItem == null) {
+        ContextRetentionHintCandidate retainedItem = firstMeaningfulContextItem(runtimeContext);
+        if (retainedItem == null || retainedItem.item() == null || retainedItem.item().isBlank()) {
             return;
         }
 
         String taskType = taskType(task);
-        String normalized = normalizeHintKey(retainedItem);
+        String normalized = normalizeHintKey(retainedItem.item());
         if (normalized.isBlank()) {
             return;
         }
 
         String hintKey = "context:" + taskType + ":" + normalized;
-        String summary = "Task type " + taskType + " may need to retain context item: " + shorten(retainedItem, 120);
+        String summary = "Task type " + taskType + " may need to retain context item: " + shorten(retainedItem.item(), 120);
 
         Map<String, Object> evidence = new LinkedHashMap<>();
         evidence.put("task_title", task.title());
         evidence.put("task_type", taskType);
-        evidence.put("retained_item", retainedItem);
+        evidence.put("retained_item", retainedItem.item());
+        evidence.put("retained_source", retainedItem.source());
         evidence.put("completion_status", completionDecision.status());
         evidence.put("alignment_level", completionDecision.alignmentLevel());
         evidence.put("execution_action", executionDecision.action());
+        putIfNotBlank(evidence, "mounted_context_panel", retainedItem.panel());
+        putIfNotBlank(evidence, "mounted_context_retention_state", retainedItem.retentionState());
+        putIfNotBlank(evidence, "mounted_context_object_type", retainedItem.objectType());
+        putIfNotBlank(evidence, "mounted_context_object_path", retainedItem.objectPath());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("source", "active_context");
+        metadata.put("source", retainedItem.source());
         metadata.put("category", "context_retention_hint");
+        putIfNotBlank(metadata, "mounted_context_panel", retainedItem.panel());
+        putIfNotBlank(metadata, "mounted_context_retention_state", retainedItem.retentionState());
+        putIfNotBlank(metadata, "mounted_context_object_type", retainedItem.objectType());
+        if ("mounted_context".equals(retainedItem.source()) && runtimeContext.mountedContextView() != null) {
+            metadata.put("mounted_context_selection_trace_count", runtimeContext.mountedContextView().selectionTrace().size());
+        }
 
         reinforceOrInsert(task, "context_retention_hint", hintKey, summary, 0.58d, evidence, metadata);
     }
@@ -244,23 +257,100 @@ public class LearningMemoryService {
         };
     }
 
-    private String firstMeaningfulContextItem(TaskRuntimeContext runtimeContext) {
+    private ContextRetentionHintCandidate firstMeaningfulContextItem(TaskRuntimeContext runtimeContext) {
+        ContextRetentionHintCandidate mountedCandidate = firstMeaningfulMountedContextItem(runtimeContext);
+        if (mountedCandidate != null) {
+            return mountedCandidate;
+        }
+
+        if (runtimeContext.activeContext() == null) {
+            return null;
+        }
+
         String item = firstNonBlank(runtimeContext.activeContext().openQuestions());
         if (item != null) {
-            return item;
+            return new ContextRetentionHintCandidate(item, "active_context", null, null, null, null);
         }
         item = firstNonBlank(runtimeContext.activeContext().constraints());
         if (item != null) {
-            return item;
+            return new ContextRetentionHintCandidate(item, "active_context", null, null, null, null);
         }
         item = firstNonBlank(runtimeContext.activeContext().keyDecisions());
         if (item != null) {
-            return item;
+            return new ContextRetentionHintCandidate(item, "active_context", null, null, null, null);
         }
-        return firstNonBlank(runtimeContext.activeContext().keyArtifacts());
+        item = firstNonBlank(runtimeContext.activeContext().keyArtifacts());
+        if (item != null) {
+            return new ContextRetentionHintCandidate(item, "active_context", null, null, null, null);
+        }
+        return null;
+    }
+
+    private ContextRetentionHintCandidate firstMeaningfulMountedContextItem(TaskRuntimeContext runtimeContext) {
+        if (runtimeContext == null || runtimeContext.mountedContextView() == null) {
+            return null;
+        }
+
+        ContextRetentionHintCandidate candidate = firstMeaningfulMountedContextItem(
+            runtimeContext.mountedContextView().objects(MountedContextPanelName.PINNED),
+            MountedContextPanelName.PINNED
+        );
+        if (candidate != null) {
+            return candidate;
+        }
+
+        candidate = firstMeaningfulMountedContextItem(
+            runtimeContext.mountedContextView().objects(MountedContextPanelName.ACTIVE),
+            MountedContextPanelName.ACTIVE
+        );
+        if (candidate != null) {
+            return candidate;
+        }
+
+        return firstMeaningfulMountedContextItem(
+            runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE),
+            MountedContextPanelName.EVIDENCE
+        );
+    }
+
+    private ContextRetentionHintCandidate firstMeaningfulMountedContextItem(List<ContextObject> objects,
+                                                                            MountedContextPanelName panelName) {
+        if (objects == null || objects.isEmpty()) {
+            return null;
+        }
+        for (ContextObject object : objects) {
+            if (object == null) {
+                continue;
+            }
+            String item = firstNonBlankString(object.summary(), object.contentPreview());
+            if (item == null || item.isBlank()) {
+                continue;
+            }
+            return new ContextRetentionHintCandidate(
+                item,
+                "mounted_context",
+                panelName != null ? panelName.wireName() : null,
+                object.retentionState() != null ? object.retentionState().wireName() : null,
+                object.type() != null ? object.type().wireName() : null,
+                object.path()
+            );
+        }
+        return null;
     }
 
     private String firstNonBlank(Iterable<String> values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String firstNonBlankString(String... values) {
         if (values == null) {
             return null;
         }
@@ -284,6 +374,13 @@ public class LearningMemoryService {
             return value;
         }
         return value.substring(0, maxLength) + "...";
+    }
+
+    private void putIfNotBlank(Map<String, Object> target, String key, String value) {
+        if (target == null || key == null || key.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        target.put(key, value);
     }
 
     private int compareMemoryPriority(LearningMemory left, LearningMemory right) {
@@ -331,4 +428,13 @@ public class LearningMemoryService {
             default -> 0;
         };
     }
+
+    private record ContextRetentionHintCandidate(
+        String item,
+        String source,
+        String panel,
+        String retentionState,
+        String objectType,
+        String objectPath
+    ) {}
 }

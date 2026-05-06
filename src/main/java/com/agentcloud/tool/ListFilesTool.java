@@ -25,6 +25,16 @@ public class ListFilesTool extends AbstractLocalFileTool {
     }
 
     @Override
+    public String description() {
+        return "List files or directories under an allowed path.";
+    }
+
+    @Override
+    public String argumentContract() {
+        return "{\"path\":\".\",\"recursive\":false,\"max_entries\":100}";
+    }
+
+    @Override
     public ToolResult invoke(ToolRequest request) throws IOException {
         Path root = resolvePath(request, false, true);
         boolean recursive = booleanArg(request.arguments(), "recursive", false);

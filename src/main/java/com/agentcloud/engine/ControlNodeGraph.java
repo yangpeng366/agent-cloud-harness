@@ -37,6 +37,7 @@ public class ControlNodeGraph {
     private final ArtifactDao artifactDao;
     private final DecisionDao decisionDao;
     private final LearningMemoryService learningMemoryService;
+    private final AgentRunService agentRunService;
 
     public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
                             ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
@@ -45,6 +46,19 @@ public class ControlNodeGraph {
                             JudgmentService judgmentService,
                             ArtifactDao artifactDao, DecisionDao decisionDao,
                             LearningMemoryService learningMemoryService) {
+        this(taskDao, eventDao, sessionDao, packetDao, router, packetBuilder, consolidation,
+            workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
+            learningMemoryService, null);
+    }
+
+    public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
+                            ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
+                            ConsolidationService consolidation,
+                            WorkerExecutor workerExecutor, TaskRuntimeContextBuilder runtimeContextBuilder,
+                            JudgmentService judgmentService,
+                            ArtifactDao artifactDao, DecisionDao decisionDao,
+                            LearningMemoryService learningMemoryService,
+                            AgentRunService agentRunService) {
         this.taskDao = taskDao;
         this.eventDao = eventDao;
         this.sessionDao = sessionDao;
@@ -58,6 +72,7 @@ public class ControlNodeGraph {
         this.artifactDao = artifactDao;
         this.decisionDao = decisionDao;
         this.learningMemoryService = learningMemoryService;
+        this.agentRunService = agentRunService;
     }
 
     public Task enter(Task task) {
@@ -115,12 +130,36 @@ public class ControlNodeGraph {
             log.info("[Scheduler] task={} building runtime context for worker={}", task.id(), task.assignedWorker());
             TaskRuntimeContext ctx = runtimeContextBuilder.build(task);
             log.info("[Scheduler] task={} executing one round with worker={}", task.id(), task.assignedWorker());
-            executionResult = workerExecutor.executeOneRound(ctx, task.assignedWorker());
+            Instant runStartedAt = Instant.now();
+            AgentRunRecord agentRun = null;
+            try {
+                executionResult = workerExecutor.executeOneRound(ctx, task.assignedWorker());
+                agentRun = recordCompletedAgentRun(task, route, selectedWorker, executionResult, runStartedAt, Instant.now());
+            } catch (RuntimeException e) {
+                AgentRunRecord failedRun = recordFailedAgentRun(task, route, selectedWorker, runStartedAt, Instant.now(), e);
+                emitEvent(task, "worker_round_failed",
+                    "Worker round failed. worker=" + task.assignedWorker()
+                        + " errorType=" + e.getClass().getSimpleName(),
+                    metadataOf(
+                        "control_node", "worker_round_failed",
+                        "agent_run_id", failedRun != null ? failedRun.runId() : null,
+                        "provider_id", failedRun != null ? failedRun.providerId() : null,
+                        "selected_worker", task.assignedWorker(),
+                        "error_type", e.getClass().getSimpleName()
+                    ));
+                throw e;
+            }
 
             emitEvent(task, "worker_round",
                 "Worker round completed. worker=" + task.assignedWorker()
                     + " outputLength=" + executionResult.outputText().length()
-                    + " durationMs=" + executionResult.durationMs());
+                    + " durationMs=" + executionResult.durationMs(),
+                metadataOf(
+                    "control_node", "worker_round",
+                    "agent_run_id", agentRun != null ? agentRun.runId() : null,
+                    "provider_id", agentRun != null ? agentRun.providerId() : null,
+                    "selected_worker", task.assignedWorker()
+                ));
 
             // 将输出写入 artifact
             if (hasMeaningfulOutput(executionResult)) {
@@ -141,6 +180,9 @@ public class ControlNodeGraph {
                     buildWorkerArtifactMetadata(
                         executionResult,
                         "worker_id", task.assignedWorker(),
+                        "agent_run_id", agentRun != null ? agentRun.runId() : null,
+                        "provider_id", agentRun != null ? agentRun.providerId() : null,
+                        "agent_run_status", agentRun != null ? agentRun.status() : null,
                         "selected_worker", task.assignedWorker(),
                         "selected_worker_type", selectedWorkerType,
                         "selected_model_tier", selectedModelTier,
@@ -159,6 +201,9 @@ public class ControlNodeGraph {
                         "duration_ms", executionResult.durationMs(),
                         "confidence", executionResult.confidence(),
                         "suggested_next_step", executionResult.suggestedNextStep(),
+                        "execution_status", executionResult.executionStatus(),
+                        "evidence_refs", executionResult.evidenceRefs(),
+                        "unfinished_items", executionResult.unfinishedItems(),
                         "output_text", executionResult.outputText(),
                         "artifact_content", executionResult.artifactContent(),
                         "parser", executionResult.metadata().getOrDefault("parser", "unknown")
@@ -210,6 +255,7 @@ public class ControlNodeGraph {
             selectedWorkerId != null ? "task assigned to worker=" + selectedWorkerId : null
         );
         String fallbackReason = stringValue(latestWorkerMetadata.get("fallback_reason"));
+        String selectionScope = resolveSelectionScope(task, executionRole);
         JudgmentContext jctx = new JudgmentContext(task, ctx, latestOutput, null, latestWorkerMetadata);
 
         // Execution Judgment
@@ -221,6 +267,10 @@ public class ControlNodeGraph {
         task = orchestrationJudgment.task();
         execDecision = orchestrationJudgment.executionDecision();
         completionDecision = orchestrationJudgment.completionDecision();
+        String evaluatorRole = resolveEvaluatorRole(task);
+        String evaluatorModelTier = resolveEvaluatorModelTier(task);
+        String evaluatorReason = resolveEvaluatorReason(task, completionDecision.reason());
+        boolean orchestrationClosedLoopObserved = isOrchestrationClosedLoopObserved(task, selectedModelTier);
         log.info("[Continue] task={} executionDecision action={} reason={}",
             task.id(), execDecision.action(), execDecision.reason());
         log.info("[Continue] task={} completionDecision status={} alignment={} reason={}",
@@ -240,12 +290,18 @@ public class ControlNodeGraph {
                 "selected_worker", selectedWorkerId,
                 "selected_model_tier", selectedModelTier,
                 "execution_role", executionRole,
+                "selection_scope", selectionScope,
                 "why_selected", whySelected,
                 "fallback_reason", fallbackReason,
+                "evaluator_role", evaluatorRole,
+                "evaluator_model_tier", evaluatorModelTier,
+                "evaluator_reason", resolveEvaluatorReason(task, execDecision.reason()),
                 "next_step", firstNonBlank(execDecision.nextStep(), executionResult != null ? executionResult.suggestedNextStep() : null),
                 "needs_checkpoint", execDecision.needsCheckpoint(),
                 "needs_human", execDecision.needsHuman(),
-                "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker())
+                "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker()),
+                "retry_decision", execDecision.retryDecision(),
+                "escalation_decision", execDecision.escalationDecision()
             )
         );
         decisionDao.insert(judgmentRecord);
@@ -262,12 +318,20 @@ public class ControlNodeGraph {
                 "selected_worker", selectedWorkerId,
                 "selected_model_tier", selectedModelTier,
                 "execution_role", executionRole,
+                "selection_scope", selectionScope,
                 "why_selected", whySelected,
                 "fallback_reason", fallbackReason,
                 "status", completionDecision.status(),
                 "alignment_level", completionDecision.alignmentLevel(),
                 "suggested_next_action", completionDecision.suggestedNextAction(),
-                "evaluation_result", completionDecision.status() + ":" + completionDecision.alignmentLevel()
+                "evaluation_result", completionDecision.status() + ":" + completionDecision.alignmentLevel(),
+                "evaluation_reason", completionDecision.reason(),
+                "evaluator_role", evaluatorRole,
+                "evaluator_model_tier", evaluatorModelTier,
+                "evaluator_reason", evaluatorReason,
+                "orchestration_closed_loop_observed", orchestrationClosedLoopObserved,
+                "retry_decision", execDecision.retryDecision(),
+                "escalation_decision", execDecision.escalationDecision()
             )
         );
         decisionDao.insert(completionRecord);
@@ -738,6 +802,69 @@ public class ControlNodeGraph {
         return stage != null && stage.toLowerCase().startsWith("execution");
     }
 
+    private String resolveSelectionScope(Task task, String executionRole) {
+        if (isOrchestrated(task)) {
+            String stage = orchestrationStage(task);
+            if (isPlannerStage(stage)) {
+                return "planner";
+            }
+            if (isExecutionStage(stage)) {
+                return "executor";
+            }
+            if ("completed".equalsIgnoreCase(stage)) {
+                return "evaluator";
+            }
+        }
+        String normalizedRole = firstNonBlank(executionRole, "executor");
+        if ("planner".equalsIgnoreCase(normalizedRole) || normalizedRole.toLowerCase().contains("planner")) {
+            return "planner";
+        }
+        return "executor";
+    }
+
+    private String resolveEvaluatorRole(Task task) {
+        return isOrchestrated(task) ? "strong_evaluator" : "evaluator";
+    }
+
+    private String resolveEvaluatorModelTier(Task task) {
+        return isOrchestrated(task) ? "strong" : firstNonBlank(
+            metadataString(task != null ? task.metadata() : null, "review_model_tier"),
+            metadataString(task != null ? task.metadata() : null, "planner_model_tier"),
+            "strong"
+        );
+    }
+
+    private String resolveEvaluatorReason(Task task, String decisionReason) {
+        if (isOrchestrated(task)) {
+            return firstNonBlank(
+                "orchestrated mode uses strong-tier judgment to review delegated execution output",
+                decisionReason
+            );
+        }
+        return firstNonBlank(
+            decisionReason,
+            "judgment service reviewed the latest worker output"
+        );
+    }
+
+    private boolean isOrchestrationClosedLoopObserved(Task task, String selectedModelTier) {
+        if (!isOrchestrated(task)) {
+            return false;
+        }
+        String plannerWorker = metadataString(task.metadata(), "planner_worker");
+        String executorWorker = metadataString(task.metadata(), "executor_worker");
+        String executorModelTier = firstNonBlank(
+            metadataString(task.metadata(), "executor_model_tier"),
+            selectedModelTier
+        );
+        return plannerWorker != null
+            && !plannerWorker.isBlank()
+            && executorWorker != null
+            && !executorWorker.isBlank()
+            && "small".equalsIgnoreCase(executorModelTier)
+            && "strong".equalsIgnoreCase(resolveEvaluatorModelTier(task));
+    }
+
     private String normalizeAlignment(String alignmentLevel) {
         String normalized = firstNonBlank(alignmentLevel, "medium");
         return "low".equalsIgnoreCase(normalized) ? "medium" : normalized;
@@ -861,13 +988,43 @@ public class ControlNodeGraph {
         return value == null ? null : value.toString();
     }
 
+    private AgentRunRecord recordCompletedAgentRun(Task task, WorkerRouter.RouteResult route, Worker selectedWorker,
+                                                   WorkerExecutionResult result, Instant startedAt, Instant endedAt) {
+        if (agentRunService == null) {
+            return null;
+        }
+        try {
+            return agentRunService.recordCompletedWorkerRun(task, route, selectedWorker, result, startedAt, endedAt);
+        } catch (Exception e) {
+            log.warn("Failed to record agent run for task {}", task != null ? task.id() : null, e);
+            return null;
+        }
+    }
+
+    private AgentRunRecord recordFailedAgentRun(Task task, WorkerRouter.RouteResult route, Worker selectedWorker,
+                                                Instant startedAt, Instant endedAt, RuntimeException error) {
+        if (agentRunService == null) {
+            return null;
+        }
+        try {
+            return agentRunService.recordFailedWorkerRun(task, route, selectedWorker, startedAt, endedAt, error);
+        } catch (Exception e) {
+            log.warn("Failed to record failed agent run for task {}", task != null ? task.id() : null, e);
+            return null;
+        }
+    }
+
     private String stringValue(Object value) {
         return value == null ? null : value.toString();
     }
 
     private void emitEvent(Task task, String eventType, String summary) {
+        emitEvent(task, eventType, summary, Map.of("control_node", eventType));
+    }
+
+    private void emitEvent(Task task, String eventType, String summary, Map<String, Object> payload) {
         eventDao.insert(new Event(IdGenerator.newId("evt"), task.sessionId(), task.id(), Instant.now(),
-            eventType, "control_node", null, summary, Map.of("control_node", eventType)));
+            eventType, "control_node", null, summary, payload != null ? payload : Map.of("control_node", eventType)));
     }
 
     private Map<String, Object> metadataOf(Object... entries) {

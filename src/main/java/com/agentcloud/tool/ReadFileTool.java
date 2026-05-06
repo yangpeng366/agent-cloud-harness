@@ -25,6 +25,16 @@ public class ReadFileTool extends AbstractLocalFileTool {
     }
 
     @Override
+    public String description() {
+        return "Read a UTF-8 text file from an allowed path.";
+    }
+
+    @Override
+    public String argumentContract() {
+        return "{\"path\":\"README.md\",\"max_bytes\":65536}";
+    }
+
+    @Override
     public ToolResult invoke(ToolRequest request) throws IOException {
         Path file = resolvePath(request, false, false);
         int maxBytes = intArg(request.arguments(), "max_bytes", 64 * 1024, 256 * 1024);

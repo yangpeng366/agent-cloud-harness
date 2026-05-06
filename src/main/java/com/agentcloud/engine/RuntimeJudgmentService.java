@@ -1,6 +1,8 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.model.ContinuationAction;
+import com.agentcloud.runtime.model.ContinuationDecision;
 
 import java.util.Map;
 
@@ -10,38 +12,38 @@ import java.util.Map;
  */
 public class RuntimeJudgmentService {
 
-    public TaskDecision judge(Task task) {
+    public ContinuationDecision judge(Task task) {
         if (task == null) {
-            return new TaskDecision("halt", "task missing", null);
+            return ContinuationDecision.of(ContinuationAction.HALT, "task missing", null);
         }
         if ("paused".equals(task.status())) {
-            return new TaskDecision("pause", "task already paused", null);
+            return ContinuationDecision.of(ContinuationAction.PAUSE, "task already paused", null);
         }
         if ("waiting_human".equals(task.status())) {
-            return new TaskDecision("escalate", "task already waiting for human input", null);
+            return ContinuationDecision.of(ContinuationAction.ESCALATE, "task already waiting for human input", null);
         }
 
         Map<String, Object> metadata = task.metadata();
         if (metadata == null || metadata.isEmpty()) {
-            return new TaskDecision("continue", "no special transition signal", null);
+            return ContinuationDecision.of(ContinuationAction.CONTINUE, "no special transition signal", null);
         }
 
         if (isTrue(metadata.get("auto_halt"))) {
-            return new TaskDecision("halt", "metadata.auto_halt=true", null);
+            return ContinuationDecision.of(ContinuationAction.HALT, "metadata.auto_halt=true", null);
         }
         if (isTrue(metadata.get("pause_requested"))) {
-            return new TaskDecision("pause", "metadata.pause_requested=true", null);
+            return ContinuationDecision.of(ContinuationAction.PAUSE, "metadata.pause_requested=true", null);
         }
         if (isTrue(metadata.get("requires_human_confirmation"))) {
-            return new TaskDecision("escalate", "metadata.requires_human_confirmation=true", null);
+            return ContinuationDecision.of(ContinuationAction.ESCALATE, "metadata.requires_human_confirmation=true", null);
         }
 
         String targetWorker = asString(metadata.get("target_worker"));
         if (targetWorker != null && !targetWorker.isBlank() && !targetWorker.equals(task.assignedWorker())) {
-            return new TaskDecision("handoff", "metadata.target_worker requests reassignment", targetWorker);
+            return ContinuationDecision.of(ContinuationAction.HANDOFF, "metadata.target_worker requests reassignment", targetWorker);
         }
 
-        return new TaskDecision("continue", "default continue path", null);
+        return ContinuationDecision.of(ContinuationAction.CONTINUE, "default continue path", null);
     }
 
     private boolean isTrue(Object value) {
@@ -53,6 +55,4 @@ public class RuntimeJudgmentService {
     private String asString(Object value) {
         return value == null ? null : value.toString();
     }
-
-    public record TaskDecision(String action, String reason, String targetWorker) {}
 }

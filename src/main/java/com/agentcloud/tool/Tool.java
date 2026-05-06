@@ -6,5 +6,13 @@ package com.agentcloud.tool;
 public interface Tool {
     String name();
 
+    default String description() {
+        return "";
+    }
+
+    default String argumentContract() {
+        return "";
+    }
+
     ToolResult invoke(ToolRequest request) throws Exception;
 }

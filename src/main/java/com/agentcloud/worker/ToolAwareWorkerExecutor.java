@@ -5,7 +5,10 @@ import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.model.Worker;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptRenderer;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.store.JsonMapper;
 import com.agentcloud.store.ToolInvocationDao;
 import com.agentcloud.tool.Tool;
@@ -51,6 +54,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private final ToolInvocationDao toolInvocationDao;
     private final LlmClient llmClient;
     private final WorkerExecutor fallbackExecutor;
+    private final MountedContextPromptRenderer mountedContextPromptRenderer;
 
     public ToolAwareWorkerExecutor(WorkerRegistry workerRegistry,
                                    ToolRegistry toolRegistry,
@@ -58,12 +62,26 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                    ToolInvocationDao toolInvocationDao,
                                    LlmClient llmClient,
                                    WorkerExecutor fallbackExecutor) {
+        this(workerRegistry, toolRegistry, toolPolicy, toolInvocationDao, llmClient, fallbackExecutor,
+            new MountedContextPromptRenderer());
+    }
+
+    ToolAwareWorkerExecutor(WorkerRegistry workerRegistry,
+                                   ToolRegistry toolRegistry,
+                                   ToolPolicy toolPolicy,
+                                   ToolInvocationDao toolInvocationDao,
+                                   LlmClient llmClient,
+                                   WorkerExecutor fallbackExecutor,
+                                   MountedContextPromptRenderer mountedContextPromptRenderer) {
         this.workerRegistry = workerRegistry;
         this.toolRegistry = toolRegistry;
         this.toolPolicy = toolPolicy;
         this.toolInvocationDao = toolInvocationDao;
         this.llmClient = llmClient;
         this.fallbackExecutor = fallbackExecutor;
+        this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
+            ? new MountedContextPromptRenderer()
+            : mountedContextPromptRenderer;
     }
 
     @Override
@@ -72,12 +90,15 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (worker == null) {
             return fallbackExecutor.executeOneRound(context, workerId);
         }
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.task());
 
         TaskToolState toolStateBefore = inspectTaskToolState(context);
         if (shouldUseLegacySingleToolPath(toolStateBefore)) {
-            return executeSingleToolRound(context, worker, toolStateBefore);
+            return withPromptRenderingMetadata(executeSingleToolRound(context, worker, toolStateBefore, renderingMode),
+                context, renderingMode);
         }
-        return executeMultiToolRound(context, worker, toolStateBefore);
+        return withPromptRenderingMetadata(executeMultiToolRound(context, worker, toolStateBefore, renderingMode),
+            context, renderingMode);
     }
 
     private boolean shouldUseLegacySingleToolPath(TaskToolState toolState) {
@@ -88,7 +109,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
     private WorkerExecutionResult executeSingleToolRound(TaskRuntimeContext context,
                                                          Worker worker,
-                                                         TaskToolState toolStateBefore) {
+                                                         TaskToolState toolStateBefore,
+                                                         PromptRenderingMode renderingMode) {
         long startMs = System.currentTimeMillis();
         boolean currentRoundRequiresWrite = requiresCurrentRoundWrite(toolStateBefore);
         if (currentRoundRequiresWrite && !instructionSuggestsFileRead(toolStateBefore.currentRoundInstruction())) {
@@ -103,7 +125,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             );
         }
 
-        ToolPlan plan = planTool(context, worker, toolStateBefore);
+        ToolPlan plan = planTool(context, worker, toolStateBefore, renderingMode);
         if (!plan.needsTool() || plan.toolName().isBlank()) {
             if (currentRoundRequiresWrite) {
                 return autoGroundedWriteFallback(context, worker, toolStateBefore, plan, startMs);
@@ -186,7 +208,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
     private WorkerExecutionResult executeMultiToolRound(TaskRuntimeContext context,
                                                         Worker worker,
-                                                        TaskToolState initialToolState) {
+                                                        TaskToolState initialToolState,
+                                                        PromptRenderingMode renderingMode) {
         long startMs = System.currentTimeMillis();
         TaskToolState currentToolState = initialToolState;
         TaskToolState lastToolStateBefore = initialToolState;
@@ -197,7 +220,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         String terminationReason = "planner_no_additional_tool";
 
         for (int stepIndex = 1; stepIndex <= MAX_TOOL_ROUNDS; stepIndex++) {
-            ToolPlan plan = planTool(context, worker, currentToolState);
+            ToolPlan plan = planTool(context, worker, currentToolState, renderingMode);
             if (!toolChain.isEmpty()) {
                 toolChain = updateLastWhyNextStep(
                     toolChain,
@@ -325,11 +348,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
     }
 
-    private ToolPlan planTool(TaskRuntimeContext context, Worker worker, TaskToolState toolState) {
+    private ToolPlan planTool(TaskRuntimeContext context,
+                              Worker worker,
+                              TaskToolState toolState,
+                              PromptRenderingMode renderingMode) {
         try {
             String raw = llmClient.chat(
                 buildPlanningSystemPrompt(worker),
-                buildPlanningUserPrompt(context, worker, toolState)
+                buildPlanningUserPrompt(context, worker, toolState, renderingMode)
             );
             ToolPlan parsed = parseToolPlan(raw);
             log.info("Tool planning completed. task={} worker={} needsTool={} tool={}",
@@ -388,16 +414,23 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         int elapsedMs = (int) (System.currentTimeMillis() - startedAt);
         traceMetadata.put("result_summary", result.summary());
         traceMetadata.put("tool_success", result.success());
+        String toolInvocationId = IdGenerator.newId("tool");
+        String executionId = context.task().id() + ":" + worker.workerId() + ":" + toolInvocationId;
+        String toolStatus = result.success() ? "succeeded" : "failed";
+        List<String> touchedPaths = extractTouchedPaths(request.arguments(), traceMetadata);
         toolInvocationDao.insert(new ToolInvocationRecord(
-            IdGenerator.newId("tool"),
+            toolInvocationId,
             context.task().sessionId(),
             context.task().id(),
             worker.workerId(),
+            executionId,
             plan.toolName(),
             request.arguments(),
             result.summary(),
+            toolStatus,
             result.success(),
             elapsedMs,
+            touchedPaths,
             Instant.now(),
             traceMetadata
         ));
@@ -430,6 +463,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 parsed.artifactContent(),
                 parsed.suggestedNextStep(),
                 parsed.confidence(),
+                parsed.executionStatus(),
+                parsed.evidenceRefs(),
+                parsed.unfinishedItems(),
                 parsed.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -450,7 +486,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                        long totalDurationMs) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
         boolean outputFileRequired = toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank();
-        boolean fileBackedArtifact = "write_file".equals(plan.toolName())
+        boolean fileBackedArtifact = isGroundedWriteTool(plan.toolName())
             && outcome.result().success()
             && toolStateAfter.outputFileExists();
         boolean moreDeclaredRoundsRemain = toolStateAfter.currentRoundInstruction() != null
@@ -493,7 +529,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 ? firstNonBlank(finalized.artifactTitle(), fileName(toolStateAfter.outputFilePath()))
                 : "";
             String artifactContent = fileBackedArtifact
-                ? firstNonBlank(finalized.artifactContent(), stringValue(outcome.request().arguments().get("content")))
+                ? resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter.outputFilePath(), 1600)
                 : finalized.artifactContent();
             return new WorkerExecutionResult(
                 summary,
@@ -560,7 +596,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 groundedOutput,
                 true,
                 firstNonBlank(finalized.artifactTitle(), fileName(toolStateAfter.outputFilePath())),
-                firstNonBlank(finalized.artifactContent(), stringValue(outcome.request().arguments().get("content"))),
+                resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter.outputFilePath(), 1600),
                 suggestedNextStep,
                 finalized.confidence(),
                 finalized.tokenUsage(),
@@ -590,14 +626,24 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("tool_name", plan.toolName());
         metadata.put("tool_arguments", plan.toolArguments());
 
-        boolean wroteFile = "write_file".equals(plan.toolName()) && outcome.result().success();
+        boolean wroteFile = isGroundedWriteTool(plan.toolName()) && outcome.result().success();
+        String writtenPath = firstNonBlank(
+            stringValue(outcome.result().metadata().get("path")),
+            stringValue(outcome.request().arguments().get("path"))
+        );
+        String artifactContent = wroteFile
+            ? firstNonBlank(
+                loadExistingOutputFile(writtenPath, 1200),
+                truncate(stringValue(outcome.request().arguments().get("content")), 1200)
+            )
+            : "";
         String output = firstNonBlank(outcome.result().output(), outcome.result().summary());
         return new WorkerExecutionResult(
             outcome.result().summary(),
             truncate(output, 1200),
             wroteFile,
-            wroteFile ? stringValue(outcome.request().arguments().get("path")) : "",
-            wroteFile ? truncate(stringValue(outcome.request().arguments().get("content")), 1200) : "",
+            wroteFile ? writtenPath : "",
+            artifactContent,
             outcome.result().success() ? "" : "Inspect tool failure and adjust path or arguments.",
             outcome.result().success() ? "medium" : "low",
             0,
@@ -814,7 +860,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             true
         );
         return new WorkerExecutionResult(
-            "本轮要求写文件，但 planning 未触发 write_file，不能视为完成。",
+            "本轮要求写文件，但 planning 未触发 grounded write tool，不能视为完成。",
             groundedOutput,
             false,
             "",
@@ -849,6 +895,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 parsed.artifactContent(),
                 parsed.suggestedNextStep(),
                 parsed.confidence(),
+                parsed.executionStatus(),
+                parsed.evidenceRefs(),
+                parsed.unfinishedItems(),
                 parsed.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -940,6 +989,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             artifactContent,
             suggestedNextStep,
             normalizeMultiToolConfidence(finalized.confidence(), terminationReason),
+            finalized.executionStatus(),
+            finalized.evidenceRefs(),
+            finalized.unfinishedItems(),
             finalized.tokenUsage(),
             totalDurationMs,
             metadata
@@ -966,7 +1018,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                         TaskToolState toolStateBefore,
                                                         TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context));
+        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task())));
         sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1046,13 +1098,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (outcome.result().summary().isBlank() && outcome.result().output().isBlank()) {
             return "stop: no_progress_guard, tool returned an empty result";
         }
-        if ("write_file".equals(plan.toolName())
+        if (isGroundedWriteTool(plan.toolName())
             && !toolStateBefore.outputFilePath().isBlank()
             && !toolStateAfter.outputFilePath().isBlank()
             && toolStateBefore.outputFileExists() == toolStateAfter.outputFileExists()
             && toolStateBefore.outputFileSize() == toolStateAfter.outputFileSize()
             && toolStateBefore.outputFileFingerprint().equals(toolStateAfter.outputFileFingerprint())) {
-            return "stop: no_progress_guard, write_file did not change the output file";
+            return "stop: no_progress_guard, " + plan.toolName() + " did not change the output file";
         }
         return "";
     }
@@ -1091,7 +1143,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return false;
         }
         for (ToolChainStep step : toolChain) {
-            if (step.success() && "write_file".equals(step.selectedTool())) {
+            if (step.success() && isGroundedWriteTool(step.selectedTool())) {
                 return true;
             }
         }
@@ -1181,6 +1233,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 json.path("artifact_content").asText(""),
                 json.path("suggested_next_step").asText(""),
                 json.path("confidence").asText("medium"),
+                json.path("execution_status").asText("completed"),
+                readStringList(json.path("evidence_refs")),
+                readStringList(json.path("unfinished_items")),
                 0,
                 durationMs,
                 metadata
@@ -1201,6 +1256,19 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 Map.of("parser", "raw_text")
             );
         }
+    }
+
+    private List<String> readStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<String> items = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item != null && !item.asText("").isBlank()) {
+                items.add(item.asText());
+            }
+        }
+        return List.copyOf(items);
     }
 
     private AutoWriteDraft parseAutoWriteDraft(String raw) {
@@ -1236,7 +1304,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
     private String buildAutoWriteSystemPrompt(Worker worker) {
         return "You are a grounded file-writing worker. Worker ID: " + worker.workerId() + ". "
-            + "The planner failed to select write_file, but the current round still requires a grounded write to the expected output file. "
+            + "The planner failed to select a grounded write tool, but the current round still requires a grounded write to the expected output file. "
             + "Generate the exact full file content that should be written for the current round only. "
             + "Return a JSON object with exactly these fields: "
             + "summary (string), artifact_title (string), content (string), suggested_next_step (string), confidence (high|medium|low). "
@@ -1246,25 +1314,43 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildPlanningSystemPrompt(Worker worker) {
-        return "You are a tool-planning worker. Worker ID: " + worker.workerId() + ". "
-            + "Decide the next grounded tool call for the current round only. "
-            + "Available tools: " + toolRegistry.listToolNames() + ". "
-            + "Allowed tools for this worker: " + worker.toolCapabilities() + ". "
-            + "Allowed path scope: " + worker.toolScope() + ". "
-            + "If the task intent contains explicit Round N instructions, follow the current round instruction and do not skip future rounds. "
-            + "If the current round instruction explicitly requires writing, overwriting, patching, or updating the expected output file, "
-            + "you must return needs_tool=true and tool_name=write_file for that grounded write. "
-            + "Do not return needs_tool=false for a round that still requires a grounded file write. "
-            + "Return a JSON object with exactly these fields: "
-            + "needs_tool (boolean), tool_name (string), tool_arguments (object), reason (string). "
-            + "If no tool is required, set needs_tool to false, tool_name to empty string, and tool_arguments to {}. "
-            + "Use at most one tool. Prefer relative paths inside the allowed scope. No markdown, no extra text.";
+        List<String> registeredTools = registeredToolCapabilities(worker);
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a tool-planning worker. Worker ID: ").append(worker.workerId()).append(". ");
+        sb.append("Decide the next grounded tool call for the current round only. ");
+        sb.append("Available tools: ").append(toolRegistry.listToolNames()).append(". ");
+        sb.append("Allowed registered tools for this worker: ").append(registeredTools).append(". ");
+        sb.append("Allowed working scope: ").append(worker.toolScope()).append(". ");
+        String toolGuide = toolRegistry.describeTools(registeredTools);
+        String groundedWriteTools = groundedWriteToolHint(registeredTools);
+        if (!toolGuide.isBlank()) {
+            sb.append("Tool usage guide:\n").append(toolGuide).append("\n");
+        }
+        sb.append("If the task intent contains explicit Round N instructions, follow the current round instruction and do not skip future rounds. ");
+        sb.append("If the current round instruction explicitly requires writing, overwriting, patching, or updating the expected output file, ");
+        sb.append("you must return needs_tool=true and select ").append(groundedWriteTools).append(" for that grounded write. ");
+        if (registeredTools.contains("write_file")) {
+            sb.append("Use write_file when you already know the exact full content to write. ");
+        }
+        if (registeredTools.contains("patch_file")) {
+            sb.append("Use patch_file when you can anchor a targeted replacement with exact old_text and new_text. ");
+        }
+        sb.append("Do not return needs_tool=false for a round that still requires a grounded file write. ");
+        sb.append("Return a JSON object with exactly these fields: ");
+        sb.append("needs_tool (boolean), tool_name (string), tool_arguments (object), reason (string). ");
+        sb.append("If no tool is required, set needs_tool to false, tool_name to empty string, and tool_arguments to {}. ");
+        sb.append("Use at most one tool. Prefer relative paths inside the allowed scope. No markdown, no extra text.");
+        return sb.toString();
     }
 
-    private String buildPlanningUserPrompt(TaskRuntimeContext context, Worker worker, TaskToolState toolState) {
+    private String buildPlanningUserPrompt(TaskRuntimeContext context,
+                                           Worker worker,
+                                           TaskToolState toolState,
+                                           PromptRenderingMode renderingMode) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context));
-        sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
+        List<String> registeredTools = registeredToolCapabilities(worker);
+        sb.append(buildTaskPrompt(context, true, renderingMode));
+        sb.append("\n\nWorker Tool Capabilities: ").append(registeredTools);
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
         }
@@ -1283,7 +1369,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             sb.append("\nOutput File Size: ").append(toolState.outputFileSize());
         }
         sb.append("\nDecide whether you need exactly one tool call before producing the current-round answer.");
-        sb.append(" Use write_file only when you already know the exact content to write.");
+        if (registeredTools.contains("write_file")) {
+            sb.append(" Use write_file only when you already know the exact full content to write.");
+        }
+        if (registeredTools.contains("patch_file")) {
+            sb.append(" Use patch_file only when you can make an exact targeted replacement.");
+        }
         return sb.toString();
     }
 
@@ -1292,8 +1383,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                             TaskToolState toolState,
                                             ToolPlan originalPlan) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, false));
-        sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
+        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context.task())));
+        sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
         }
@@ -1333,7 +1424,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
             + "confidence (high|medium|low). "
             + "Ground every claim in the provided tool result and file state. "
-            + "Never claim that a file was written unless the current tool is write_file and Tool Success is true. "
+            + "Never claim that a file was written unless the current tool is "
+            + groundedWriteToolHint(registeredToolCapabilities(worker))
+            + " and Tool Success is true. "
             + "If a declared future round remains, explicitly say the overall task is not complete yet and set suggested_next_step to that next round. "
             + "If an output file is required and it does not exist after this round, produced_artifact must be false. "
             + "Keep summary concise, output_text under 1200 characters, artifact_content under 1600 characters, "
@@ -1347,8 +1440,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                TaskToolState toolStateBefore,
                                                TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context));
-        sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
+        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task())));
+        sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
         }
@@ -1378,10 +1471,16 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context) {
-        return buildTaskPrompt(context, true);
+        return buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task()));
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context, boolean includeFullActiveContext) {
+        return buildTaskPrompt(context, includeFullActiveContext, PromptRenderingMode.resolve(context.task()));
+    }
+
+    private String buildTaskPrompt(TaskRuntimeContext context,
+                                   boolean includeFullActiveContext,
+                                   PromptRenderingMode renderingMode) {
         var task = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(task.title()).append("\n");
@@ -1394,6 +1493,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (task.nextStep() != null && !task.nextStep().isBlank()) {
             sb.append("Next Step: ").append(task.nextStep()).append("\n");
         }
+        appendMountedContext(sb, context, renderingMode);
         if (includeFullActiveContext
             && context.activeContext() != null
             && !context.activeContext().synthesizedContext().isBlank()) {
@@ -1405,7 +1505,83 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 .append(truncate(context.activeContext().synthesizedContext(), 2200))
                 .append("\n");
         }
+        if (context.recentMessages() != null && !context.recentMessages().isEmpty()) {
+            sb.append("\nRecent Messages:\n");
+            for (String line : formatRecentMessages(context.recentMessages(), 6)) {
+                sb.append("- ").append(line).append("\n");
+            }
+        }
         return sb.toString();
+    }
+
+    private void appendMountedContext(StringBuilder sb,
+                                      TaskRuntimeContext context,
+                                      PromptRenderingMode renderingMode) {
+        if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
+            return;
+        }
+        String mountedPrompt = mountedContextPromptRenderer.render(context);
+        if (mountedPrompt.isBlank()) {
+            return;
+        }
+        sb.append("\n").append(mountedPrompt);
+    }
+
+    private WorkerExecutionResult withPromptRenderingMetadata(WorkerExecutionResult result,
+                                                              TaskRuntimeContext context,
+                                                              PromptRenderingMode renderingMode) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (result.metadata() != null) {
+            metadata.putAll(result.metadata());
+        }
+        metadata.put("prompt_rendering_mode", renderingMode.wireName());
+        boolean mountedRendered = renderingMode.shouldRenderMountedPrompt();
+        String mountedPrompt = mountedRendered ? mountedContextPromptRenderer.render(context) : "";
+        metadata.put("mounted_context_rendered", mountedRendered);
+        metadata.put("mounted_context_injected", renderingMode.shouldInjectMountedPrompt() && !mountedPrompt.isBlank());
+        metadata.put("mounted_context_panel_count", context.mountedContextView() != null
+            ? context.mountedContextView().panels().size()
+            : 0);
+        metadata.put("mounted_context_selection_trace_count", context.mountedContextView() != null
+            ? context.mountedContextView().selectionTrace().size()
+            : 0);
+        return new WorkerExecutionResult(
+            result.summary(),
+            result.outputText(),
+            result.producedArtifact(),
+            result.artifactTitle(),
+            result.artifactContent(),
+            result.suggestedNextStep(),
+            result.confidence(),
+            result.executionStatus(),
+            result.evidenceRefs(),
+            result.unfinishedItems(),
+            result.tokenUsage(),
+            result.durationMs(),
+            metadata
+        );
+    }
+
+    private List<String> formatRecentMessages(List<SessionMessage> messages, int limit) {
+        if (messages == null || messages.isEmpty() || limit <= 0) {
+            return List.of();
+        }
+        List<String> lines = new ArrayList<>();
+        int start = Math.max(0, messages.size() - limit);
+        for (int index = start; index < messages.size(); index++) {
+            SessionMessage message = messages.get(index);
+            if (message == null || message.content() == null || message.content().isBlank()) {
+                continue;
+            }
+            String role = message.role() == null || message.role().isBlank() ? "message" : message.role();
+            String type = message.messageType() == null || message.messageType().isBlank() ? "" : " [" + message.messageType() + "]";
+            String content = message.content().replaceAll("\\s+", " ").trim();
+            if (content.length() > 240) {
+                content = content.substring(0, 240) + "...";
+            }
+            lines.add(role + type + ": " + content);
+        }
+        return lines;
     }
 
     private Map<String, Object> buildAutoWriteFailureMetadata(ToolPlan originalPlan, AutoWriteDraft draft) {
@@ -1455,7 +1631,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             if ("read_file".equals(invocation.toolName())) {
                 successfulReadCount++;
             }
-            if ("write_file".equals(invocation.toolName())) {
+            if (isGroundedWriteTool(invocation.toolName())) {
                 successfulWriteCount++;
             }
         }
@@ -1684,7 +1860,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 sb.append(" This round only completed reading and analysis.");
             }
         } else if (fileBackedArtifact) {
-            sb.append("The output file exists and is grounded by a successful write_file call.");
+            sb.append("The output file exists and is grounded by a successful grounded write tool call.");
         }
         return sb.toString();
     }
@@ -1716,9 +1892,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return toolStateBefore.currentRoundInstruction();
         }
         if (toolStateAfter.outputFilePath() != null && !toolStateAfter.outputFilePath().isBlank()) {
-            return "Use write_file to write the required article version to '" + toolStateAfter.outputFilePath() + "'.";
+            return "Use write_file or patch_file to update the required article version at '" + toolStateAfter.outputFilePath() + "'.";
         }
-        return "Use write_file to complete the required current-round file update.";
+        return "Use write_file or patch_file to complete the required current-round file update.";
     }
 
     private boolean requiresCurrentRoundWrite(TaskToolState toolState) {
@@ -1817,6 +1993,60 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
         Object value = metadata.get(key);
         return value == null ? "" : value.toString();
+    }
+
+    private boolean isGroundedWriteTool(String toolName) {
+        return "write_file".equals(toolName) || "patch_file".equals(toolName);
+    }
+
+    private String groundedWriteToolHint(List<String> registeredTools) {
+        if (registeredTools == null || registeredTools.isEmpty()) {
+            return "a grounded write tool";
+        }
+        boolean supportsWrite = registeredTools.contains("write_file");
+        boolean supportsPatch = registeredTools.contains("patch_file");
+        if (supportsWrite && supportsPatch) {
+            return "write_file or patch_file";
+        }
+        if (supportsWrite) {
+            return "write_file";
+        }
+        if (supportsPatch) {
+            return "patch_file";
+        }
+        return "a grounded write tool";
+    }
+
+    private String resolvedGroundedArtifactContent(String currentArtifactContent,
+                                                   ToolPlan plan,
+                                                   ToolExecutionOutcome outcome,
+                                                   String outputFilePath,
+                                                   int maxChars) {
+        String resolvedPath = firstNonBlank(
+            outputFilePath,
+            stringValue(outcome.result().metadata().get("path")),
+            stringValue(outcome.request().arguments().get("path"))
+        );
+        String artifactContent = firstNonBlank(
+            currentArtifactContent,
+            loadExistingOutputFile(resolvedPath, maxChars)
+        );
+        if (!artifactContent.isBlank()) {
+            return artifactContent;
+        }
+        if ("write_file".equals(plan.toolName())) {
+            return truncate(stringValue(outcome.request().arguments().get("content")), maxChars);
+        }
+        return "";
+    }
+
+    private List<String> registeredToolCapabilities(Worker worker) {
+        if (worker == null || worker.toolCapabilities() == null || worker.toolCapabilities().isEmpty()) {
+            return List.of();
+        }
+        return worker.toolCapabilities().stream()
+            .filter(toolRegistry::contains)
+            .toList();
     }
 
     private String fileName(String path) {
@@ -1952,6 +2182,28 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             if (confidence == null || confidence.isBlank()) confidence = "medium";
             if (rawResponse == null) rawResponse = "";
             if (failureReason == null) failureReason = "";
+        }
+    }
+
+    private List<String> extractTouchedPaths(Map<String, Object> arguments, Map<String, Object> traceMetadata) {
+        List<String> touchedPaths = new ArrayList<>();
+        addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("path"));
+        addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("file_path"));
+        addTouchedPath(touchedPaths, arguments == null ? null : arguments.get("output_path"));
+        addTouchedPath(touchedPaths, traceMetadata == null ? null : traceMetadata.get("output_file_path"));
+        return touchedPaths;
+    }
+
+    private void addTouchedPath(List<String> touchedPaths, Object candidate) {
+        if (candidate == null) {
+            return;
+        }
+        String text = candidate.toString().trim();
+        if (text.isBlank()) {
+            return;
+        }
+        if (!touchedPaths.contains(text)) {
+            touchedPaths.add(text);
         }
     }
 

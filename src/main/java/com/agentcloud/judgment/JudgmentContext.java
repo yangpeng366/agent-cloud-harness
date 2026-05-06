@@ -18,7 +18,18 @@ public record JudgmentContext(
     Map<String, Object> latestWorkerMetadata
 ) {
     public JudgmentContext {
-        if (runtimeContext == null) runtimeContext = new TaskRuntimeContext(task, null, null, java.util.List.of(), java.util.List.of(), java.util.List.of(), null);
+        if (runtimeContext == null) {
+            runtimeContext = new TaskRuntimeContext(
+                task,
+                null,
+                null,
+                java.util.List.of(),
+                java.util.List.of(),
+                java.util.List.of(),
+                java.util.List.of(),
+                null
+            );
+        }
         if (workerOutput == null) workerOutput = "";
         if (completionCriteria == null) completionCriteria = "";
         if (latestWorkerMetadata == null) latestWorkerMetadata = Map.of();

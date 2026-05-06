@@ -5,4 +5,8 @@ package com.agentcloud.llm;
  */
 public interface LlmClient {
     String chat(String systemPrompt, String userPrompt);
+
+    default String review(String systemPrompt, String userPrompt) {
+        return chat(systemPrompt, userPrompt);
+    }
 }

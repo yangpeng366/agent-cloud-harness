@@ -12,6 +12,20 @@
 - checkpoint / handoff / human_gate 是否可恢复、可审计
 - judgment 是否只在必要处引入弹性，而不破坏控制层可预测性
 
+这些场景默认服务于同一条更大的验证主线：
+
+- 当前先验证 harness 作为 continuity-first orchestration control plane 是否稳定
+- 再验证它是否足以支撑“强模型负责规划/判断，小模型负责执行”的近端主命题
+
+建议与以下文档一起使用：
+
+- `GOAL_ORIENTED_EVAL_PLAN.md`
+- `CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
+- `AGENT_PROVIDER_TECHNICAL_DESIGN.md`
+- `AGENT_PROVIDER_API_CONTRACT_ADDENDUM.md`
+- `ORCHESTRATION_MVP_PLAN.md`
+- `API_CONTRACTS.md`
+
 ---
 
 ## 2. 测试设计原则
@@ -39,6 +53,7 @@
 3. 是否能恢复执行
 4. 是否生成最小必要 packet
 5. 是否触发正确的人机边界
+6. 是否留下足够的 provider / run 证据面，支撑近端闭环证明
 
 不优先验证：
 
@@ -62,6 +77,12 @@
 ---
 
 ## 3. 场景总览
+
+这些场景里，近期最值得优先落地的是能服务于“小而真实任务闭环证明”的子集：
+
+- `T01-T04`：验证创建、执行、继续、恢复最小闭环
+- `T07`：验证误路由或能力不足时是否能纠偏
+- `T10`：验证 strong_only / small_only / orchestrated 三模式是否可回放、可比较
 
 | 编号 | 场景名 | 目标能力 |
 |------|--------|----------|
@@ -124,6 +145,7 @@ create task
 - task 初始 `control_node` 合法
 - event 表中出现 task_created / routed 类事件
 - 已记录当前选中的 worker
+- 若启用 provider 观测面，`/api/v1/tasks/{id}/provider_selection` 可返回当前 provider 投影
 
 ### 失败信号
 
@@ -178,6 +200,7 @@ task create
 - task.status = done
 - task.control_node = done 或等价终态
 - 最终状态无悬空 next_step
+- 若已有 agent run 落盘，`/api/v1/tasks/{id}/agent_run` 能看到本轮执行摘要
 
 ### 失败信号
 
@@ -271,6 +294,7 @@ running
 - resume 后不会从头开始
 - resume 后 control_node 合法
 - recent artifacts / next_step / route context 仍可用
+- 对小任务闭环 proof 来说，恢复后仍累积在同一条审计链上，而不是重新起一条“新任务”
 
 ### 失败信号
 
@@ -407,6 +431,7 @@ misroute
 - 错误路由不会无限循环
 - mismatch 能被记录
 - 纠偏后任务继续推进
+- provider 维度下，能够解释为什么从不合适的执行源切回更合适的路径
 
 ### 失败信号
 
@@ -523,6 +548,8 @@ waiting_human
 - events
 - checkpoints
 - handoff packet
+- provider selection
+- latest agent run / run events / run artifacts
 - final status
 
 ### 预期路径
@@ -538,6 +565,7 @@ load trace
 
 - 能回答“任务怎么走到这里”
 - 能回答“为什么换 worker / 为什么暂停 / 为什么升级给人”
+- 能回答“为什么这次落到 strong_only、small_only 或 orchestrated 对应路径”
 - 审计者不需要阅读全部原始文本日志
 
 ### 失败信号
@@ -598,6 +626,8 @@ load trace
 
 先稳住最小闭环和 pause/resume。
 
+这一批优先服务 `GOAL_ORIENTED_EVAL_PLAN.md` 中的近期小任务闭环 proof。
+
 ### 第二批
 
 - T05
@@ -606,6 +636,8 @@ load trace
 
 再稳住 handoff、人工边界、纠偏。
 
+这一批重点补强模型调度小模型时的纠偏证据。
+
 ### 第三批
 
 - T08
@@ -613,6 +645,8 @@ load trace
 - T10
 
 最后做长链连续性和审计回放。
+
+这一批用于把近端 proof 提升为完整可审计证据链。
 
 ---
 

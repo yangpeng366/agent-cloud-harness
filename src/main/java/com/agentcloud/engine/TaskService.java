@@ -3,8 +3,10 @@ package com.agentcloud.engine;
 import com.agentcloud.engine.memory.PacketBuilder;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,8 @@ public class TaskService {
     private final ToolInvocationDao toolInvocationDao;
     private final SessionMessageDao sessionMessageDao;
     private final ExperimentRunService experimentRunService;
+    private final AgentRunService agentRunService;
+    private final RuntimeFactSetAssembler runtimeFactSetAssembler;
 
     public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
                        WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
@@ -64,6 +68,21 @@ public class TaskService {
                        ToolInvocationDao toolInvocationDao,
                        SessionMessageDao sessionMessageDao,
                        ExperimentRunService experimentRunService) {
+        this(taskDao, sessionDao, eventDao, packetDao, router, packetBuilder, controlGraph, judgmentService,
+            runtimeContextBuilder, consolidationService, learningMemoryService, toolInvocationDao,
+            sessionMessageDao, experimentRunService, null);
+    }
+
+    public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
+                       WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
+                       RuntimeJudgmentService judgmentService,
+                       TaskRuntimeContextBuilder runtimeContextBuilder,
+                       ConsolidationService consolidationService,
+                       LearningMemoryService learningMemoryService,
+                       ToolInvocationDao toolInvocationDao,
+                       SessionMessageDao sessionMessageDao,
+                       ExperimentRunService experimentRunService,
+                       AgentRunService agentRunService) {
         this.taskDao = taskDao;
         this.sessionDao = sessionDao;
         this.eventDao = eventDao;
@@ -78,6 +97,8 @@ public class TaskService {
         this.toolInvocationDao = toolInvocationDao;
         this.sessionMessageDao = sessionMessageDao;
         this.experimentRunService = experimentRunService;
+        this.agentRunService = agentRunService;
+        this.runtimeFactSetAssembler = new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, router);
     }
 
     public Task createTask(TaskCreateRequest req) {
@@ -222,40 +243,21 @@ public class TaskService {
 
     public JudgmentTraceView getJudgmentTrace(String taskId) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
-        TaskRuntimeContext runtimeContext = runtimeContextBuilder.build(task);
-        Decision executionJudgment = latestDecision(runtimeContext, "execution_judgment");
-        Decision completionJudgment = latestDecision(runtimeContext, "completion_judgment");
-        String latestOutput = runtimeContext.recentArtifacts().isEmpty()
-            ? ""
-            : firstNonBlank(
-                runtimeContext.recentArtifacts().get(0).summary(),
-                runtimeContext.recentArtifacts().get(0).title()
-            );
-        String recommendedAction = executionJudgment != null && executionJudgment.metadata() != null
-            ? stringValue(executionJudgment.metadata().get("action"))
-            : null;
-        String recommendedNextStep = firstNonBlank(
-            executionJudgment != null && executionJudgment.metadata() != null
-                ? stringValue(executionJudgment.metadata().get("next_step"))
-                : null,
-            completionJudgment != null && completionJudgment.metadata() != null
-                ? stringValue(completionJudgment.metadata().get("suggested_next_action"))
-                : null,
-            task.nextStep()
-        );
+        RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, 20);
         return new JudgmentTraceView(
             task.id(),
             task.status(),
             task.controlNode(),
             task.assignedWorker(),
-            latestOutput,
-            recommendedAction,
-            recommendedNextStep,
-            executionJudgment,
-            completionJudgment,
-            runtimeContext
+            facts.latestOutput(),
+            facts.recommendedAction(),
+            facts.recommendedNextStep(),
+            facts.executionJudgment(),
+            facts.completionJudgment(),
+            facts.runtimeContext()
         );
     }
+
 
     public HandoffPacketView getHandoffPacket(String taskId, String targetWorker) {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
@@ -268,17 +270,39 @@ public class TaskService {
     public TaskLiveFlowView getLiveFlow(String taskId, int limit) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         int boundedLimit = boundedLimit(limit);
-        ResumePacket latestPacket = packetDao.getLatestByTask(task.sessionId(), task.id()).orElse(null);
-        var routePreview = router.selectWorker(task);
-        TaskRuntimeContext runtimeContext = runtimeContextBuilder.build(task);
-        JudgmentTraceView judgmentTrace = getJudgmentTrace(taskId);
+        RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, boundedLimit);
+        ResumePacket latestPacket = facts.latestPacket();
+        var routePreview = facts.routePreview();
+        TaskRuntimeContext runtimeContext = facts.runtimeContext();
+        JudgmentTraceView judgmentTrace = new JudgmentTraceView(
+            task.id(),
+            task.status(),
+            task.controlNode(),
+            task.assignedWorker(),
+            facts.latestOutput(),
+            facts.recommendedAction(),
+            facts.recommendedNextStep(),
+            facts.executionJudgment(),
+            facts.completionJudgment(),
+            runtimeContext
+        );
         List<Checkpoint> checkpoints = consolidationService.listByTask(taskId, boundedLimit);
         List<LearningMemory> learningMemories = learningMemoryService.listByTask(taskId, boundedLimit);
-        List<ToolInvocationRecord> toolInvocations = toolInvocationDao.listByTask(taskId, boundedLimit);
+        List<ToolInvocationRecord> toolInvocations = facts.toolInvocations();
         List<SessionMessage> relatedMessages = sessionMessageDao != null
             ? sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit)
             : List.of();
         ExperimentRunRecord experimentRun = experimentRunService != null ? experimentRunService.refresh(task) : null;
+        ProviderSelectionView providerSelection = agentRunService != null
+            ? agentRunService.providerSelection(task, routePreview)
+            : null;
+        AgentRunRecord agentRun = agentRunService != null ? agentRunService.latestByTask(taskId) : null;
+        List<AgentRunEventView> agentRunEvents = agentRunService != null && agentRun != null
+            ? nullToEmpty(agentRunService.listEvents(agentRun.runId(), boundedLimit))
+            : List.of();
+        List<AgentRunArtifactView> agentArtifacts = agentRunService != null && agentRun != null
+            ? nullToEmpty(agentRunService.listArtifacts(agentRun.runId(), boundedLimit))
+            : List.of();
         return new TaskLiveFlowView(
             task,
             latestPacket,
@@ -289,18 +313,84 @@ public class TaskService {
             learningMemories,
             toolInvocations,
             relatedMessages,
-            experimentRun
+            experimentRun,
+            providerSelection,
+            agentRun,
+            agentRunEvents,
+            agentArtifacts
+        );
+    }
+
+    public HarnessTraceView getHarnessTrace(String taskId, int limit) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        int boundedLimit = boundedLimit(limit);
+        RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, boundedLimit);
+        var routePreview = facts.routePreview();
+        TaskRuntimeContext runtimeContext = facts.runtimeContext();
+        Decision executionJudgment = facts.executionJudgment();
+        Decision completionJudgment = facts.completionJudgment();
+        List<ToolInvocationRecord> toolInvocations = facts.toolInvocations();
+        ExperimentRunRecord experimentRun = experimentRunService != null ? experimentRunService.refresh(task) : null;
+        AgentRunRecord agentRun = agentRunService != null ? agentRunService.latestByTask(taskId) : null;
+        List<AgentRunEventView> agentRunEvents = agentRunService != null && agentRun != null
+            ? nullToEmpty(agentRunService.listEvents(agentRun.runId(), boundedLimit))
+            : List.of();
+        List<AgentRunArtifactView> agentArtifacts = agentRunService != null && agentRun != null
+            ? nullToEmpty(agentRunService.listArtifacts(agentRun.runId(), boundedLimit))
+            : List.of();
+        Map<String, Object> harnessMetadata = new LinkedHashMap<>();
+        if (experimentRun != null && experimentRun.metadata() != null) {
+            harnessMetadata.putAll(experimentRun.metadata());
+        }
+        supplementHarnessMetadataFromToolInvocations(harnessMetadata, toolInvocations);
+        harnessMetadata.put("tool_invocation_count", toolInvocations.size());
+        harnessMetadata.put("agent_run_event_count", agentRunEvents.size());
+        harnessMetadata.put("agent_artifact_count", agentArtifacts.size());
+        return new HarnessTraceView(
+            task.id(),
+            task.status(),
+            task.controlNode(),
+            task.assignedWorker(),
+            firstNonBlank(metadataString(harnessMetadata, "execution_status"), task.status()),
+            metadataStringList(harnessMetadata, "evidence_refs"),
+            metadataStringList(harnessMetadata, "unfinished_items"),
+            executionJudgment != null && executionJudgment.metadata() != null
+                ? stringValue(executionJudgment.metadata().get("action"))
+                : null,
+            firstNonBlank(
+                executionJudgment != null && executionJudgment.metadata() != null
+                    ? stringValue(executionJudgment.metadata().get("next_step"))
+                    : null,
+                completionJudgment != null && completionJudgment.metadata() != null
+                    ? stringValue(completionJudgment.metadata().get("suggested_next_action"))
+                    : null,
+                task.nextStep()
+            ),
+            routePreview,
+            experimentRun,
+            agentRun,
+            executionJudgment,
+            completionJudgment,
+            toolInvocations,
+            agentRunEvents,
+            agentArtifacts,
+            harnessMetadata
         );
     }
 
     public List<ToolInvocationRecord> listToolInvocations(String taskId, int limit) {
         taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
-        return toolInvocationDao.listByTask(taskId, boundedLimit(limit));
+        return toolInvocationDao != null ? toolInvocationDao.listByTask(taskId, boundedLimit(limit)) : List.of();
     }
 
     public ExperimentRunRecord getExperimentRun(String taskId) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         return experimentRunService != null ? experimentRunService.refresh(task) : null;
+    }
+
+    public AgentRunRecord getLatestAgentRun(String taskId) {
+        taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        return agentRunService != null ? agentRunService.latestByTask(taskId) : null;
     }
 
     public TaskControlResult pauseTask(String taskId, String reason) {
@@ -420,13 +510,67 @@ public class TaskService {
             return null;
         }
         return runtimeContext.recentDecisions().stream()
-            .filter(decision -> decisionType.equals(decision.decisionType()))
+            .filter(decision -> decision != null && decisionType.equals(decision.decisionType()))
             .findFirst()
             .orElse(null);
     }
 
     private String stringValue(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        return stringValue(metadata.get(key));
+    }
+
+    private void supplementHarnessMetadataFromToolInvocations(Map<String, Object> target, List<ToolInvocationRecord> invocations) {
+        if (target == null || invocations == null || invocations.isEmpty()) {
+            return;
+        }
+        for (ToolInvocationRecord invocation : invocations) {
+            if (invocation == null || invocation.metadata() == null || invocation.metadata().isEmpty()) {
+                continue;
+            }
+            copyMetadataIfAbsent(invocation.metadata(), target, "execution_status");
+            copyMetadataIfAbsent(invocation.metadata(), target, "evidence_refs");
+            copyMetadataIfAbsent(invocation.metadata(), target, "unfinished_items");
+            copyMetadataIfAbsent(invocation.metadata(), target, "tool_execution_mode");
+            copyMetadataIfAbsent(invocation.metadata(), target, "tool_chain_step_count");
+            copyMetadataIfAbsent(invocation.metadata(), target, "tool_chain_termination_reason");
+            copyMetadataIfAbsent(invocation.metadata(), target, "tool_chain_trace_summary");
+            copyMetadataIfAbsent(invocation.metadata(), target, "tool_chain_tools");
+        }
+    }
+
+    private void copyMetadataIfAbsent(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source == null || target == null || key == null || key.isBlank() || target.containsKey(key)) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object value = metadata.get(key);
+        if (value instanceof List<?> list) {
+            return list.stream()
+                .filter(item -> item != null && !item.toString().isBlank())
+                .map(Object::toString)
+                .toList();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return List.of(text);
+        }
+        return List.of();
     }
 
     private String firstNonBlank(String... values) {
@@ -458,6 +602,10 @@ public class TaskService {
 
     private int boundedLimit(int limit) {
         return Math.max(1, Math.min(limit, 20));
+    }
+
+    private <T> List<T> nullToEmpty(List<T> values) {
+        return values == null ? List.of() : values;
     }
 
     private void recordTaskReceipt(Task task, boolean autoStart, boolean followup, Map<String, Object> extraMetadata) {
@@ -547,13 +695,14 @@ public class TaskService {
             return;
         }
         try {
-            TaskRuntimeContext runtimeContext = runtimeContextBuilder != null ? runtimeContextBuilder.build(task) : null;
-            Decision executionJudgment = latestDecision(runtimeContext, "execution_judgment");
-            Decision completionJudgment = latestDecision(runtimeContext, "completion_judgment");
+            RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, 20);
+            TaskRuntimeContext runtimeContext = facts.runtimeContext();
+            Decision executionJudgment = facts.executionJudgment();
+            Decision completionJudgment = facts.completionJudgment();
             Artifact latestArtifact = latestArtifact(runtimeContext);
 
-            String progressSummary = summarizeProgress(task, runtimeContext, executionJudgment, completionJudgment, latestArtifact);
-            String nextStep = summarizeNextStep(task, runtimeContext, executionJudgment, completionJudgment, latestArtifact);
+            String progressSummary = summarizeProgress(task, facts, latestArtifact);
+            String nextStep = summarizeNextStep(task, facts, latestArtifact);
             boolean terminal = isTerminalStatus(task.status());
             if (progressSummary == null && nextStep == null && !terminal) {
                 return;
@@ -572,11 +721,8 @@ public class TaskService {
             if (nextStep != null) {
                 metadata.put("next_step", nextStep);
             }
-            if (executionJudgment != null && executionJudgment.metadata() != null) {
-                String action = stringValue(executionJudgment.metadata().get("action"));
-                if (action != null) {
-                    metadata.put("judgment_action", action);
-                }
+            if (facts.recommendedAction() != null) {
+                metadata.put("judgment_action", facts.recommendedAction());
             }
             if (completionJudgment != null && completionJudgment.metadata() != null) {
                 String completionStatus = stringValue(completionJudgment.metadata().get("status"));
@@ -751,12 +897,14 @@ public class TaskService {
         return snapshot;
     }
 
-    private String summarizeProgress(Task task, TaskRuntimeContext runtimeContext,
-                                     Decision executionJudgment, Decision completionJudgment,
-                                     Artifact latestArtifact) {
+    private String summarizeProgress(Task task, RuntimeFactSet facts, Artifact latestArtifact) {
+        TaskRuntimeContext runtimeContext = facts != null ? facts.runtimeContext() : null;
+        Decision executionJudgment = facts != null ? facts.executionJudgment() : null;
+        Decision completionJudgment = facts != null ? facts.completionJudgment() : null;
         return shorten(
             firstNonBlank(
                 task.summary(),
+                facts != null ? facts.latestOutput() : null,
                 latestArtifact != null ? latestArtifact.summary() : null,
                 runtimeContext != null && runtimeContext.activeContext() != null
                     ? runtimeContext.activeContext().continuitySummary()
@@ -770,15 +918,13 @@ public class TaskService {
         );
     }
 
-    private String summarizeNextStep(Task task, TaskRuntimeContext runtimeContext,
-                                     Decision executionJudgment, Decision completionJudgment,
-                                     Artifact latestArtifact) {
+    private String summarizeNextStep(Task task, RuntimeFactSet facts, Artifact latestArtifact) {
+        TaskRuntimeContext runtimeContext = facts != null ? facts.runtimeContext() : null;
+        Decision completionJudgment = facts != null ? facts.completionJudgment() : null;
         return shorten(
             firstNonBlank(
                 task.nextStep(),
-                executionJudgment != null && executionJudgment.metadata() != null
-                    ? stringValue(executionJudgment.metadata().get("next_step"))
-                    : null,
+                facts != null ? facts.recommendedNextStep() : null,
                 completionJudgment != null && completionJudgment.metadata() != null
                     ? stringValue(completionJudgment.metadata().get("suggested_next_action"))
                     : null,
@@ -902,6 +1048,12 @@ public class TaskService {
         copyMetadataKey(metadata, target, "orchestration_stage");
         copyMetadataKey(metadata, target, "planner_worker");
         copyMetadataKey(metadata, target, "executor_worker");
+        copyMetadataKey(metadata, target, "evaluator_role");
+        copyMetadataKey(metadata, target, "evaluator_model_tier");
+        copyMetadataKey(metadata, target, "evaluator_reason");
+        copyMetadataKey(metadata, target, "evaluation_reason");
+        copyMetadataKey(metadata, target, "orchestration_closed_loop_observed");
+        copyMetadataKey(metadata, target, "orchestration_proof_summary");
         copyMetadataKey(metadata, target, "tool_execution_mode");
         copyMetadataKey(metadata, target, "tool_chain_step_count");
         copyMetadataKey(metadata, target, "tool_chain_termination_reason");

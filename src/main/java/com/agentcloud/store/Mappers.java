@@ -119,11 +119,14 @@ public final class Mappers {
         rs.getString("session_id"),
         rs.getString("task_id"),
         rs.getString("worker_id"),
+        rs.getString("execution_id"),
         rs.getString("tool_name"),
         JsonMapper.fromJson(rs.getString("arguments_json")),
         rs.getString("result_summary"),
+        rs.getString("status"),
         rs.getInt("success") == 1,
         rs.getObject("elapsed_ms") != null ? rs.getInt("elapsed_ms") : null,
+        JsonMapper.listFromJson(rs.getString("touched_paths_json")),
         instant(rs, "created_at"),
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
@@ -151,6 +154,25 @@ public final class Mappers {
         rs.getString("final_artifact_quality_note"),
         instant(rs, "created_at"),
         instant(rs, "updated_at"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
+    public static final RowMapper<AgentRunRecord> AGENT_RUN = (rs, ctx) -> new AgentRunRecord(
+        rs.getString("id"),
+        rs.getString("task_id"),
+        rs.getString("session_id"),
+        rs.getString("provider_id"),
+        rs.getString("provider_display_name"),
+        rs.getString("worker_role"),
+        rs.getString("selected_worker_id"),
+        rs.getString("selected_model_tier"),
+        rs.getString("status"),
+        instant(rs, "started_at"),
+        instant(rs, "ended_at"),
+        rs.getObject("duration_ms") != null ? rs.getLong("duration_ms") : null,
+        rs.getString("summary"),
+        rs.getString("last_event_type"),
+        rs.getObject("artifact_count") != null ? rs.getInt("artifact_count") : null,
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
 }

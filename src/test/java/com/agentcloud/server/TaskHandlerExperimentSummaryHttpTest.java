@@ -89,6 +89,9 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals("orchestrated", orchestratedSummary.path("model_mode").asText());
             assertEquals(1, orchestratedSummary.path("learning_hint_applied_count").asInt());
             assertEquals(1.0, orchestratedSummary.path("learning_hint_applied_rate").asDouble());
+            assertEquals(1, orchestratedSummary.path("runs_with_task_surface_refs").asInt());
+            assertEquals(0, orchestratedSummary.path("runs_with_judgment_surface_refs").asInt());
+            assertEquals(0, orchestratedSummary.path("runs_with_tool_trace_surface_refs").asInt());
             assertEquals(1, orchestratedSummary.path("route_source_counts").path("learning_memory").asInt());
             assertEquals("needs_followup",
                 body.path("data").path("case_comparisons").get(0).path("runs_by_mode").path("orchestrated").path("acceptance_result").asText());

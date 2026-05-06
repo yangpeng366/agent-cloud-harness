@@ -56,6 +56,18 @@
                     <strong id="taskCount">0</strong>
                 </div>
                 <div class="metric">
+                    <span>Agent数</span>
+                    <strong id="agentCount">0</strong>
+                </div>
+                <div class="metric">
+                    <span>Ready</span>
+                    <strong id="readyAgentCount">0</strong>
+                </div>
+                <div class="metric">
+                    <span>Active Runs</span>
+                    <strong id="activeRunCount">0</strong>
+                </div>
+                <div class="metric">
                     <span>轮询</span>
                     <strong id="pollingState">ON</strong>
                 </div>
@@ -166,6 +178,51 @@
         </div>
 
         <div class="inspector-scroll">
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Agent Inventory</span>
+                    <button class="link-button" id="refreshAgentsButton" type="button">刷新</button>
+                </div>
+                <div class="agent-inventory" id="agentInventory"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Provider Detail</span>
+                </div>
+                <div class="agent-detail" id="agentDetail"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Runtime Health</span>
+                    <button class="link-button" id="refreshRuntimeButton" type="button">刷新</button>
+                </div>
+                <div class="runtime-health" id="runtimeHealth"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Run Search</span>
+                    <button class="link-button" id="refreshRunSearchButton" type="button">刷新</button>
+                </div>
+                <div class="agent-run-search" id="agentRunSearch"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Agent Execution</span>
+                </div>
+                <div class="agent-execution" id="agentExecution"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Agent Run Detail</span>
+                </div>
+                <div class="agent-run-detail" id="agentRunDetail"></div>
+            </section>
+
             <section class="inspector-card">
                 <div class="section-title">
                     <span>迭代链上下文</span>

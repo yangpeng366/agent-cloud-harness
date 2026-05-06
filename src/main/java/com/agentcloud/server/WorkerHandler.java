@@ -2,6 +2,7 @@ package com.agentcloud.server;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.ApiResponse;
+import com.agentcloud.tool.HostToolAvailability;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -18,7 +19,8 @@ import java.util.Set;
 class WorkerHandler implements HttpHandler {
     private static final Logger log = LoggerFactory.getLogger(WorkerHandler.class);
     private static final Set<String> KNOWN_TOOL_CAPABILITIES = Set.of(
-        "search_text", "read_file", "write_file", "list_files", "patch_file"
+        "search_text", "read_file", "write_file", "list_files", "patch_file",
+        "git", "shell", "powershell", "cmd"
     );
     private final WorkerRegistry registry;
     private final ObjectMapper mapper;
@@ -47,19 +49,21 @@ class WorkerHandler implements HttpHandler {
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(check));
             } else if ("POST".equals(method) && path.equals("/api/v1/workers")) {
                 Map<String, Object> body = mapper.readValue(NioHttpServer.readBody(ex), Map.class);
+                List<String> toolCapabilities = validatedToolCapabilities(stringList(body, "tool_capabilities"));
+                List<String> toolScope = validatedToolScope(toolCapabilities, stringList(body, "tool_scope"));
                 var w = new com.agentcloud.model.Worker(
                     requiredString(body, "worker_id"),
                     optionalString(body, "worker_type", "other"),
                     stringList(body, "capabilities"),
-                    validatedToolCapabilities(stringList(body, "tool_capabilities")),
-                    stringList(body, "tool_scope"),
+                    toolCapabilities,
+                    toolScope,
                     booleanMap(body, "dependencies"),
                     objectMap(body, "metadata"),
                     optionalBoolean(body, "suggest_only", false),
                     optionalBoolean(body, "ready", true)
                 );
-                registry.register(w);
-                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(w));
+                var registered = registry.register(w);
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(registered));
             } else {
                 NioHttpServer.sendMethodNotAllowed(ex);
             }
@@ -166,7 +170,18 @@ class WorkerHandler implements HttpHandler {
             if (!KNOWN_TOOL_CAPABILITIES.contains(toolCapability)) {
                 throw new IllegalArgumentException("unknown tool capability: " + toolCapability);
             }
+            String unavailableReason = HostToolAvailability.unavailableReason(toolCapability);
+            if (unavailableReason != null) {
+                throw new IllegalArgumentException(unavailableReason);
+            }
         }
         return toolCapabilities;
+    }
+
+    private List<String> validatedToolScope(List<String> toolCapabilities, List<String> toolScope) {
+        if (toolCapabilities != null && !toolCapabilities.isEmpty() && (toolScope == null || toolScope.isEmpty())) {
+            throw new IllegalArgumentException("tool_scope is required when tool_capabilities are declared");
+        }
+        return toolScope;
     }
 }

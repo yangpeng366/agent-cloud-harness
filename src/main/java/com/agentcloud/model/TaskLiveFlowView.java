@@ -20,5 +20,9 @@ public record TaskLiveFlowView(
     List<LearningMemory> learningMemories,
     List<ToolInvocationRecord> toolInvocations,
     List<SessionMessage> relatedMessages,
-    ExperimentRunRecord experimentRun
+    ExperimentRunRecord experimentRun,
+    ProviderSelectionView providerSelection,
+    AgentRunRecord agentRun,
+    List<AgentRunEventView> agentRunEvents,
+    List<AgentRunArtifactView> agentArtifacts
 ) {}

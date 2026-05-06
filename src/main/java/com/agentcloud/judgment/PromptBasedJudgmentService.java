@@ -3,6 +3,8 @@ package com.agentcloud.judgment;
 import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.runtime.context.MountedContextPromptRenderer;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -18,9 +20,17 @@ public class PromptBasedJudgmentService implements JudgmentService {
     private static final Logger log = LoggerFactory.getLogger(PromptBasedJudgmentService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final LlmClient llmClient;
+    private final MountedContextPromptRenderer mountedContextPromptRenderer;
 
     public PromptBasedJudgmentService(LlmClient llmClient) {
+        this(llmClient, new MountedContextPromptRenderer());
+    }
+
+    PromptBasedJudgmentService(LlmClient llmClient, MountedContextPromptRenderer mountedContextPromptRenderer) {
         this.llmClient = llmClient;
+        this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
+            ? new MountedContextPromptRenderer()
+            : mountedContextPromptRenderer;
     }
 
     @Override
@@ -40,7 +50,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "target_worker (string). No markdown, no extra text.";
 
             String user = buildExecutionPrompt(context);
-            String raw = llmClient.chat(system, user).trim();
+            String raw = llmClient.review(system, user).trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String action = parseAction(json.path("action").asText("continue"));
@@ -76,7 +86,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "No markdown, no extra text.";
 
             String user = buildCompletionPrompt(context);
-            String raw = llmClient.chat(system, user).trim();
+            String raw = llmClient.review(system, user).trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String status = parseCompletionStatus(json.path("status").asText("partially_done"));
@@ -109,6 +119,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
 
     private String buildExecutionPrompt(JudgmentContext context) {
         var t = context.task();
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(t);
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");
@@ -118,6 +129,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- Treat the latest worker metadata below as higher-priority structured evidence than free-form text when they disagree.\n");
         sb.append("- If latest worker metadata shows the current round still requires a grounded file write, do not choose done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, the runtime must not choose done.\n");
+        appendMountedContext(sb, context, renderingMode);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null
             && !context.runtimeContext().activeContext().synthesizedContext().isBlank()) {
@@ -133,6 +145,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
 
     private String buildCompletionPrompt(JudgmentContext context) {
         var t = context.task();
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(t);
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");
@@ -143,7 +156,8 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- Optional post-run QA, optional verification, or 'mark task complete' should not by themselves force partially_done.\n");
         sb.append("- If latest worker metadata says more_declared_rounds_remain=true, do not mark the task done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, do not mark the task done.\n");
-        sb.append("- For file-writing tasks, do not infer that the current round performed the final grounded write unless latest worker metadata explicitly shows tool_name=write_file and file_backed_artifact=true, or clearly shows the output file already exists and the current round is only a verification/closeout step.\n");
+        sb.append("- For file-writing tasks, do not infer that the current round performed the final grounded write unless latest worker metadata explicitly shows tool_name=write_file or tool_name=patch_file together with file_backed_artifact=true, or clearly shows the output file already exists and the current round is only a verification/closeout step.\n");
+        appendMountedContext(sb, context, renderingMode);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null
             && !context.runtimeContext().activeContext().synthesizedContext().isBlank()) {
@@ -155,6 +169,22 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("Is the task sufficiently complete and aligned with the goal?");
         return sb.toString();
+    }
+
+    private void appendMountedContext(StringBuilder sb,
+                                      JudgmentContext context,
+                                      PromptRenderingMode renderingMode) {
+        if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
+            return;
+        }
+        if (context == null || context.runtimeContext() == null) {
+            return;
+        }
+        String mountedPrompt = mountedContextPromptRenderer.render(context.runtimeContext());
+        if (mountedPrompt.isBlank()) {
+            return;
+        }
+        sb.append(mountedPrompt);
     }
 
     private void appendLatestWorkerMetadata(StringBuilder sb, Map<String, Object> metadata) {

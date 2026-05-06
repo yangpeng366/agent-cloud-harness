@@ -24,6 +24,16 @@ public class WriteFileTool extends AbstractLocalFileTool {
     }
 
     @Override
+    public String description() {
+        return "Write UTF-8 text to an allowed file path.";
+    }
+
+    @Override
+    public String argumentContract() {
+        return "{\"path\":\"result.txt\",\"content\":\"hello\",\"append\":false}";
+    }
+
+    @Override
     public ToolResult invoke(ToolRequest request) throws IOException {
         Path file = resolvePath(request, true, false);
         String content = stringArg(request.arguments(), "content");

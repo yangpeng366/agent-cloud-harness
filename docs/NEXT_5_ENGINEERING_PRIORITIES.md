@@ -17,14 +17,25 @@
 
 因此，以下优先级都围绕这一主线展开。
 
+但这条主线的前提表述也应保持稳定：
+
+> 当前项目首先是一个 continuity-first control plane / orchestration harness，然后才是围绕该底座去证明 strong-to-small model orchestration 的近端价值。
+
+建议与以下文档对照阅读，避免 roadmap、当前态和评测叙事继续分叉：
+
+- `CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
+- `GOAL_ORIENTED_EVAL_PLAN.md`
+- `EVAL_SCENARIOS.md`
+- `HARDNESS_PHASE1_ALIGNMENT.md`
+
 ---
 
 ## 2. 当前优先级总览
 
 ### P1. 做通“强模型调小模型”的最小闭环
 ### P2. 建立 baseline experiment matrix 与统一指标落盘
-### P3. 固化 checkpoint / handoff packet 协议
-### P4. 把 tool-aware execution 升级到最小多步工具链
+### P3. 把已有 tool/runtime/judgment/checkpoint 能力收束成 hardness phase-1 runtime contract 链
+### P4. 固化 checkpoint / handoff packet 协议
 ### P5. 正式化状态变更接口与消息投影
 
 ---
@@ -171,7 +182,74 @@
 
 ---
 
-## 5. P3. 固化 checkpoint / handoff packet 协议
+## 5. P3. 把已有 tool/runtime/judgment/checkpoint 能力收束成 hardness phase-1 runtime contract 链
+
+## 为什么排第三
+
+对照当前代码后，最值得回收的一点是：
+项目已经不是“还没有 tool-aware execution / tool trace / judgment / checkpoint”。
+
+相反，当前仓库已经有：
+
+- `WorkerExecutionResult`
+- `ToolAwareWorkerExecutor`
+- `ToolInvocationRecord` + `tool_invocations`
+- `ToolPolicy`
+- `TaskRuntimeContext`
+- `JudgmentContext` / `PromptBasedJudgmentService` / `RuntimeJudgmentService`
+- `Checkpoint` / `ResumePacket` / `HandoffPacket`
+
+这意味着当前最大的工程缺口，已经不再是“先把这些能力从零造出来”，而是：
+
+> 把这些已经存在的能力收束成统一、可解释、可恢复、可续跑的 hardness phase-1 runtime contract 链。
+
+## 当前缺口
+
+当前仍缺少：
+
+- 从 `WorkerExecutionResult` 进一步收硬成更显式 execution envelope
+- 给 `ToolInvocationRecord` 补更适合 continuation / judgment 使用的字段
+- 一个统一的 `RuntimeFactSet` 聚合对象
+- 更明确的 `ContinuationAction`
+- 把 checkpoint 从 consolidation 主线推进成更硬的 resume contract
+
+## 开发目标
+
+优先把当前已有能力沿同一条 object chain 收住：
+
+- `WorkerExecutionResult -> WorkerExecutionEnvelope`
+- `ToolInvocationRecord` 增强为更硬的 trace contract
+- `RuntimeFactSet`
+- `ResumeCheckpoint`
+- `JudgmentInput / ContinuationAction`
+
+## 验收标准
+
+以下至少满足：
+
+1. worker round 有统一 execution contract，而不只是自由返回 result 字段
+2. tool trace 能更直接进入 runtime/judgment/continuation 聚合
+3. checkpoint 不只表达 consolidation，而且能表达恢复入口
+4. judgment 输入能显式消费 execution / tool / side-effect facts
+5. continue / halt / handoff / retry 能在 trace 中明确表达
+
+## 风险
+
+- 继续只扩功能，不先收紧 contract，会让 runtime 越来越难解释
+- 工具 trace、judgment、checkpoint 各自存在，但彼此语义不统一
+- 文档和代码会再次开始漂移
+
+## 推荐策略
+
+不要重写架构。
+
+最自然的推进方式是：
+- 保留现有 control plane skeleton
+- 沿 `worker -> tools -> runtime -> judgment -> checkpoint` 插入更硬的 contract / assembler / trace layer
+
+---
+
+## 6. P4. 固化 checkpoint / handoff packet 协议
 
 ## 为什么排第三
 
@@ -389,16 +467,16 @@ checkpoint / handoff packet 是整个 continuity 设计的地基。
 
 1. P1 强模型调小模型最小闭环
 2. P2 baseline experiment matrix + 指标落盘
-3. P3 packet spec 固化并对齐 runtime 输出
-4. P4 tool-aware execution 升级到最小多步
+3. P3 先把已有 tool/runtime/judgment/checkpoint 收束成 hardness runtime contract
+4. P4 packet spec 固化并对齐 runtime 输出
 5. P5 控制动作接口正式化 + 消息投影收口
 
 这个顺序的逻辑是：
 
 - 先把主叙事跑通
 - 再把验证体系建起来
-- 再钉死 continuity 地基
-- 再增强执行层
+- 然后先把已有 runtime contract 收硬，避免能力继续散落
+- 再钉死 continuity packet 地基
 - 最后收口产品化接口与消息面
 
 ---

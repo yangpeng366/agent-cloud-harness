@@ -2,10 +2,31 @@ const state = {
     sessions: [],
     tasks: [],
     workers: [],
+    agents: [],
+    runtimeHealth: null,
+    agentRunSearchFilters: {
+        providerId: "",
+        status: "",
+        role: "",
+        taskId: "",
+        limit: "10"
+    },
+    agentRunSearchResults: [],
+    selectedAgentId: null,
+    selectedAgent: null,
+    selectedAgentRuns: [],
+    selectedAgentRunId: null,
+    selectedAgentRun: null,
+    selectedAgentRunEvents: [],
+    selectedAgentRunArtifacts: [],
     selectedSessionId: null,
     selectedTaskId: null,
     followupParentTaskId: null,
     liveFlow: null,
+    providerSelection: null,
+    agentRun: null,
+    agentRunEvents: [],
+    agentRunArtifacts: [],
     experimentSummary: null,
     toastTimer: null,
     pollingTimer: null
@@ -15,6 +36,9 @@ const dom = {
     healthBadge: document.getElementById("healthBadge"),
     sessionCount: document.getElementById("sessionCount"),
     taskCount: document.getElementById("taskCount"),
+    agentCount: document.getElementById("agentCount"),
+    readyAgentCount: document.getElementById("readyAgentCount"),
+    activeRunCount: document.getElementById("activeRunCount"),
     pollingState: document.getElementById("pollingState"),
     sessionList: document.getElementById("sessionList"),
     sessionForm: document.getElementById("sessionForm"),
@@ -36,6 +60,15 @@ const dom = {
     inspectorTitle: document.getElementById("inspectorTitle"),
     taskOverview: document.getElementById("taskOverview"),
     taskActions: document.getElementById("taskActions"),
+    refreshAgentsButton: document.getElementById("refreshAgentsButton"),
+    refreshRuntimeButton: document.getElementById("refreshRuntimeButton"),
+    refreshRunSearchButton: document.getElementById("refreshRunSearchButton"),
+    agentInventory: document.getElementById("agentInventory"),
+    agentDetail: document.getElementById("agentDetail"),
+    runtimeHealth: document.getElementById("runtimeHealth"),
+    agentRunSearch: document.getElementById("agentRunSearch"),
+    agentExecution: document.getElementById("agentExecution"),
+    agentRunDetail: document.getElementById("agentRunDetail"),
     chainContext: document.getElementById("chainContext"),
     continuitySummary: document.getElementById("continuitySummary"),
     continuityChips: document.getElementById("continuityChips"),
@@ -67,6 +100,15 @@ function bindEvents() {
     dom.taskForm.addEventListener("submit", onCreateTask);
     dom.followupButton.addEventListener("click", onFollowupDraft);
     dom.clearFollowupButton.addEventListener("click", onClearFollowup);
+    dom.refreshAgentsButton.addEventListener("click", () => loadAgents(true).catch(handleError));
+    dom.refreshRuntimeButton.addEventListener("click", () => loadRuntimeHealth(true).catch(handleError));
+    dom.refreshRunSearchButton.addEventListener("click", () => loadAgentRunSearch(true).catch(handleError));
+    dom.agentInventory.addEventListener("click", onAgentInventoryClick);
+    dom.agentDetail.addEventListener("click", onAgentDetailClick);
+    dom.runtimeHealth.addEventListener("click", onRuntimeHealthClick);
+    dom.agentRunSearch.addEventListener("submit", onAgentRunSearchSubmit);
+    dom.agentRunSearch.addEventListener("click", onAgentRunSearchClick);
+    dom.agentExecution.addEventListener("click", onAgentExecutionClick);
     dom.taskTimeline.addEventListener("click", onTimelineClick);
     dom.taskTimeline.addEventListener("keydown", onTimelineKeydown);
     dom.chainContext.addEventListener("click", onChainContextClick);
@@ -88,7 +130,7 @@ function bindEvents() {
 
 async function init() {
     applyLocationSelection();
-    await Promise.all([loadHealth(), loadWorkers()]);
+    await Promise.all([loadHealth(), loadWorkers(), loadAgents(false), loadRuntimeHealth(false), loadAgentRunSearch(false)]);
     await refreshAll(false);
     startPolling();
 }
@@ -96,6 +138,7 @@ async function init() {
 async function refreshAll(loud) {
     await loadSessions();
     await loadTasks();
+    await loadRuntimeHealth(false);
     if (state.selectedTaskId) {
         await loadSelectedTask(state.selectedTaskId, false);
     } else if (state.tasks.length > 0) {
@@ -117,6 +160,89 @@ async function loadHealth() {
 async function loadWorkers() {
     state.workers = await api("/api/v1/workers");
     renderWorkerOptions();
+}
+
+async function loadAgents(loud) {
+    state.agents = await api("/api/v1/agents");
+    if (state.selectedAgentId && !state.agents.some((agent) => providerIdOf(agent) === state.selectedAgentId)) {
+        state.selectedAgentId = null;
+        state.selectedAgent = null;
+        state.selectedAgentRuns = [];
+    }
+    renderAgentInventory();
+    renderAgentDetail();
+    if (loud) {
+        showToast("Agent inventory 已刷新");
+    }
+}
+
+async function loadRuntimeHealth(loud) {
+    state.runtimeHealth = await api("/api/v1/runtime_health?limit=8");
+    renderRuntimeHealth();
+    if (loud) {
+        showToast("Runtime health 已刷新");
+    }
+}
+
+async function loadAgentDetail(providerId, loud = false) {
+    const encodedProviderId = encodeURIComponent(providerId);
+    const [agent, runs] = await Promise.all([
+        api(`/api/v1/agents/${encodedProviderId}`),
+        apiOrNull(`/api/v1/agents/${encodedProviderId}/runs?limit=20`)
+    ]);
+    state.selectedAgentId = providerId;
+    state.selectedAgent = agent;
+    state.selectedAgentRuns = runs || [];
+    renderAgentInventory();
+    renderAgentDetail();
+    if (loud) {
+        showToast(`已加载 Provider ${providerId}`);
+    }
+}
+
+async function refreshAgent(providerId) {
+    const encodedProviderId = encodeURIComponent(providerId);
+    const agent = await api(`/api/v1/agents/${encodedProviderId}/refresh`, {
+        method: "POST",
+        body: "{}"
+    });
+    state.selectedAgentId = providerId;
+    state.selectedAgent = agent;
+    await loadAgents(false);
+    await loadAgentDetail(providerId, false);
+    showToast(`Provider ${providerId} 状态已刷新`);
+}
+
+async function loadAgentRunDetail(runId, loud = false) {
+    const encodedRunId = encodeURIComponent(runId);
+    const [run, events, artifacts] = await Promise.all([
+        api(`/api/v1/agent_runs/${encodedRunId}`),
+        apiOrNull(`/api/v1/agent_runs/${encodedRunId}/events?limit=20`),
+        apiOrNull(`/api/v1/agent_runs/${encodedRunId}/artifacts?limit=20`)
+    ]);
+    state.selectedAgentRunId = runId;
+    state.selectedAgentRun = run;
+    state.selectedAgentRunEvents = events || [];
+    state.selectedAgentRunArtifacts = artifacts || [];
+    renderAgentRunDetail();
+    if (loud) {
+        showToast(`已加载 Run ${runId}`);
+    }
+}
+
+async function loadAgentRunSearch(loud = false) {
+    const filters = state.agentRunSearchFilters || {};
+    const params = new URLSearchParams();
+    appendQueryParam(params, "provider_id", filters.providerId);
+    appendQueryParam(params, "status", filters.status);
+    appendQueryParam(params, "role", filters.role);
+    appendQueryParam(params, "task_id", filters.taskId);
+    appendQueryParam(params, "limit", filters.limit || "10");
+    state.agentRunSearchResults = await api(`/api/v1/agent_runs?${params.toString()}`);
+    renderAgentRunSearch();
+    if (loud) {
+        showToast("Agent run search 已刷新");
+    }
 }
 
 async function loadSessions() {
@@ -143,6 +269,7 @@ async function loadSessions() {
 }
 
 async function loadTasks() {
+    const previousSelectedTaskId = state.selectedTaskId;
     if (state.selectedSessionId) {
         state.tasks = await api(`/api/v1/sessions/${encodeURIComponent(state.selectedSessionId)}/tasks`);
     } else {
@@ -155,6 +282,12 @@ async function loadTasks() {
 
     if (state.selectedTaskId && !state.tasks.some((task) => task.id === state.selectedTaskId)) {
         state.selectedTaskId = state.tasks[state.tasks.length - 1]?.id ?? null;
+    }
+    if (state.selectedTaskId !== previousSelectedTaskId) {
+        state.selectedAgentRunId = null;
+        state.selectedAgentRun = null;
+        state.selectedAgentRunEvents = [];
+        state.selectedAgentRunArtifacts = [];
     }
     if (state.followupParentTaskId && !state.tasks.some((task) => task.id === state.followupParentTaskId)) {
         state.followupParentTaskId = null;
@@ -171,8 +304,34 @@ async function loadTasks() {
 }
 
 async function loadSelectedTask(taskId, loud) {
-    const flow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    const encodedTaskId = encodeURIComponent(taskId);
+    const flow = await api(`/api/v1/tasks/${encodedTaskId}/live_flow?limit=8`);
+    const providerSelection = flow.provider_selection || flow.providerSelection
+        || await apiOrNull(`/api/v1/tasks/${encodedTaskId}/provider_selection`);
+    const agentRun = flow.agent_run || flow.agentRun
+        || await apiOrNull(`/api/v1/tasks/${encodedTaskId}/agent_run`);
+    const flowEvents = flow.agent_run_events || flow.agentRunEvents;
+    const flowArtifacts = flow.agent_artifacts || flow.agentArtifacts;
+    const runId = agentRun?.run_id || agentRun?.runId;
+    const [agentRunEvents, agentRunArtifacts] = await Promise.all([
+        flowEvents ? Promise.resolve(flowEvents) : runId
+            ? apiOrNull(`/api/v1/agent_runs/${encodeURIComponent(runId)}/events?limit=6`)
+            : Promise.resolve([]),
+        flowArtifacts ? Promise.resolve(flowArtifacts) : runId
+            ? apiOrNull(`/api/v1/agent_runs/${encodeURIComponent(runId)}/artifacts?limit=6`)
+            : Promise.resolve([])
+    ]);
     state.liveFlow = flow;
+    state.providerSelection = providerSelection;
+    state.agentRun = agentRun;
+    state.agentRunEvents = agentRunEvents || [];
+    state.agentRunArtifacts = agentRunArtifacts || [];
+    if (agentRun && (!state.selectedAgentRunId || state.selectedAgentRunId === runId)) {
+        state.selectedAgentRunId = runId || null;
+        state.selectedAgentRun = agentRun;
+        state.selectedAgentRunEvents = state.agentRunEvents;
+        state.selectedAgentRunArtifacts = state.agentRunArtifacts;
+    }
     state.experimentSummary = await loadTaskExperimentSummary(taskId, flow);
     state.selectedTaskId = taskId;
     renderTimeline();
@@ -185,6 +344,12 @@ async function loadSelectedTask(taskId, loud) {
 }
 
 async function selectTask(taskId, loud = false) {
+    if (taskId !== state.selectedTaskId) {
+        state.selectedAgentRunId = null;
+        state.selectedAgentRun = null;
+        state.selectedAgentRunEvents = [];
+        state.selectedAgentRunArtifacts = [];
+    }
     await loadSelectedTask(taskId, loud);
 }
 
@@ -345,6 +510,145 @@ function onChainContextClick(event) {
     selectTask(taskId, false).catch(handleError);
 }
 
+function onAgentInventoryClick(event) {
+    const action = event.target.closest("[data-provider-action]");
+    if (action) {
+        const providerId = action.dataset.providerId;
+        if (!providerId) {
+            return;
+        }
+        const providerAction = action.dataset.providerAction;
+        if (providerAction === "refresh") {
+            refreshAgent(providerId).catch(handleError);
+        } else if (providerAction === "view_runs") {
+            filterAgentRunSearchByProvider(providerId);
+        } else if (providerAction === "copy_diagnostics") {
+            copyProviderDiagnostics(providerId).catch(handleError);
+        } else {
+            loadAgentDetail(providerId, true).catch(handleError);
+        }
+        return;
+    }
+
+    const card = event.target.closest("[data-provider-id]");
+    if (card?.dataset.providerId) {
+        loadAgentDetail(card.dataset.providerId, false).catch(handleError);
+    }
+}
+
+function onAgentDetailClick(event) {
+    const action = event.target.closest("[data-provider-action]");
+    if (action?.dataset.providerId) {
+        if (action.dataset.providerAction === "refresh") {
+            refreshAgent(action.dataset.providerId).catch(handleError);
+        } else if (action.dataset.providerAction === "view_runs") {
+            filterAgentRunSearchByProvider(action.dataset.providerId);
+        } else if (action.dataset.providerAction === "copy_diagnostics") {
+            copyProviderDiagnostics(action.dataset.providerId).catch(handleError);
+        } else {
+            loadAgentDetail(action.dataset.providerId, true).catch(handleError);
+        }
+        return;
+    }
+
+    const runTarget = event.target.closest("[data-run-id]");
+    if (runTarget?.dataset.runId) {
+        loadAgentRunDetail(runTarget.dataset.runId, true).catch(handleError);
+    }
+}
+
+function onRuntimeHealthClick(event) {
+    const runTarget = event.target.closest("[data-run-id]");
+    if (runTarget?.dataset.runId) {
+        loadAgentRunDetail(runTarget.dataset.runId, true).catch(handleError);
+        return;
+    }
+
+    const providerTarget = event.target.closest("[data-provider-id]");
+    if (providerTarget?.dataset.providerId) {
+        loadAgentDetail(providerTarget.dataset.providerId, true).catch(handleError);
+    }
+}
+
+function onAgentExecutionClick(event) {
+    const runTarget = event.target.closest("[data-run-id]");
+    if (runTarget?.dataset.runId) {
+        loadAgentRunDetail(runTarget.dataset.runId, true).catch(handleError);
+        return;
+    }
+
+    const providerTarget = event.target.closest("[data-provider-id]");
+    if (providerTarget?.dataset.providerId) {
+        loadAgentDetail(providerTarget.dataset.providerId, true).catch(handleError);
+    }
+}
+
+function onAgentRunSearchSubmit(event) {
+    const form = event.target.closest("[data-agent-run-search-form]");
+    if (!form) {
+        return;
+    }
+    event.preventDefault();
+    const formData = new FormData(form);
+    state.agentRunSearchFilters = {
+        providerId: String(formData.get("providerId") || "").trim(),
+        status: String(formData.get("status") || "").trim(),
+        role: String(formData.get("role") || "").trim(),
+        taskId: String(formData.get("taskId") || "").trim(),
+        limit: String(formData.get("limit") || "10").trim() || "10"
+    };
+    loadAgentRunSearch(true).catch(handleError);
+}
+
+function onAgentRunSearchClick(event) {
+    const action = event.target.closest("[data-run-search-action]");
+    if (action?.dataset.runSearchAction === "reset") {
+        state.agentRunSearchFilters = {
+            providerId: "",
+            status: "",
+            role: "",
+            taskId: "",
+            limit: "10"
+        };
+        loadAgentRunSearch(true).catch(handleError);
+        return;
+    }
+
+    const runTarget = event.target.closest("[data-run-id]");
+    if (runTarget?.dataset.runId) {
+        loadAgentRunDetail(runTarget.dataset.runId, true).catch(handleError);
+    }
+}
+
+function filterAgentRunSearchByProvider(providerId) {
+    state.agentRunSearchFilters = {
+        providerId,
+        status: "",
+        role: "",
+        taskId: "",
+        limit: "20"
+    };
+    loadAgentRunSearch(true).catch(handleError);
+}
+
+async function copyProviderDiagnostics(providerId) {
+    const encodedProviderId = encodeURIComponent(providerId);
+    const agent = state.selectedAgentId === providerId && state.selectedAgent
+        ? state.selectedAgent
+        : await api(`/api/v1/agents/${encodedProviderId}`);
+    const runs = state.selectedAgentId === providerId && state.selectedAgentRuns.length > 0
+        ? state.selectedAgentRuns
+        : await apiOrNull(`/api/v1/agents/${encodedProviderId}/runs?limit=20`);
+    const diagnostics = {
+        copied_at: new Date().toISOString(),
+        provider: agent,
+        recent_runs: runs || [],
+        runtime_health: state.runtimeHealth || null
+    };
+    await writeClipboard(JSON.stringify(diagnostics, null, 2));
+    showToast(`Provider ${providerId} diagnostics 已复制`);
+}
+
 function renderSessions() {
     if (state.sessions.length === 0) {
         dom.sessionList.innerHTML = emptyState("还没有 session。先在下面发布任务，系统会自动创建。");
@@ -483,6 +787,7 @@ function renderInspector() {
     if (!task) {
         dom.inspectorTitle.textContent = "选择一个任务";
         dom.taskOverview.innerHTML = emptyState("右侧会显示 status、control node、worker、tool trace 和连续性摘要。");
+        dom.agentExecution.innerHTML = emptyState("选择任务后显示 provider selection、latest run、事件与产物。");
         dom.chainContext.innerHTML = emptyState("选中一个任务后，可在这里查看当前迭代链并跳转前后轮。");
         dom.continuitySummary.innerHTML = emptyState("暂无任务详情");
         dom.continuityChips.innerHTML = "";
@@ -492,6 +797,14 @@ function renderInspector() {
         dom.artifactList.innerHTML = emptyState("暂无 artifact");
         dom.toolList.innerHTML = emptyState("暂无 tool trace");
         dom.rawJson.textContent = "";
+        state.providerSelection = null;
+        state.agentRun = null;
+        state.agentRunEvents = [];
+        state.agentRunArtifacts = [];
+        renderAgentInventory();
+        renderAgentDetail();
+        renderRuntimeHealth();
+        renderAgentRunDetail();
         setTaskActionState(false);
         renderComposerContext();
         return;
@@ -526,6 +839,9 @@ function renderInspector() {
         overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none"),
         overviewCard("Tool chain", toolLabel || "none")
     ].join("");
+    dom.agentExecution.innerHTML = renderAgentExecution(flow, task);
+    renderAgentDetail();
+    renderAgentRunDetail();
     dom.chainContext.innerHTML = renderChainContext(task);
 
     const continuitySummary =
@@ -603,6 +919,616 @@ function renderWorkerOptions() {
     `);
     dom.handoffWorker.innerHTML = options.join("");
     dom.handoffButton.disabled = options.length === 0;
+}
+
+function renderAgentInventory() {
+    const agents = state.agents || [];
+    const readyCount = agents.filter((agent) => booleanValue(agent.ready) === true).length;
+    dom.agentCount.textContent = String(agents.length);
+    dom.readyAgentCount.textContent = String(readyCount);
+    dom.agentInventory.innerHTML = agents.length > 0
+        ? agents.map(renderAgentInventoryCard).join("")
+        : emptyState("暂无 Agent Provider。");
+}
+
+function renderRuntimeHealth() {
+    const health = state.runtimeHealth || {};
+    const activeRunCount = numberValue(health.active_run_count, health.activeRunCount, 0);
+    const failedRunCount = numberValue(health.failed_run_count_24h, health.failedRunCount24h, 0);
+    const crashedRunCount = numberValue(health.crashed_run_count_24h, health.crashedRunCount24h, 0);
+    const unavailableProviderCount = numberValue(health.unavailable_provider_count, health.unavailableProviderCount, 0);
+    const authNeededProviderCount = numberValue(health.auth_needed_provider_count, health.authNeededProviderCount, 0);
+    const averageDurationMs = numberValue(health.average_run_duration_ms, health.averageRunDurationMs, null);
+    const activeRuns = health.active_runs || health.activeRuns || [];
+    const recentFailures = health.recent_failures || health.recentFailures || [];
+    const unavailableProviders = health.unavailable_providers || health.unavailableProviders || [];
+    const authProblemProviders = health.auth_problem_providers || health.authProblemProviders || [];
+    const providerStats = health.provider_stats || health.providerStats || [];
+    dom.activeRunCount.textContent = String(activeRunCount);
+
+    if (!health.checked_at && !health.checkedAt) {
+        dom.runtimeHealth.innerHTML = emptyState("Runtime health 尚未加载。");
+        return;
+    }
+
+    const metricCards = [
+        overviewCard("Active", String(activeRunCount)),
+        overviewCard("Failed 24h", String(failedRunCount)),
+        overviewCard("Crashed 24h", String(crashedRunCount)),
+        overviewCard("Unavailable", String(unavailableProviderCount)),
+        overviewCard("Auth Needed", String(authNeededProviderCount)),
+        overviewCard("Avg Duration", averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))
+    ].join("");
+
+    const providerStatsRows = providerStats.slice(0, 5)
+        .map(renderProviderRuntimeStatsRow)
+        .join("");
+
+    const activeRows = activeRuns.slice(0, 4).map((run) => {
+        const runId = runIdOf(run);
+        const providerId = providerIdOf(run) || "unknown provider";
+        const taskId = firstNonBlank(run.task_id, run.taskId, "unknown task");
+        const status = firstNonBlank(run.status, "running");
+        return `
+            <button class="artifact-item runtime-health__row runtime-health__row--clickable" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
+                <div>
+                    <div class="artifact-item__meta">
+                        <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                        <span>${escapeHtml(providerId)}</span>
+                        <span>${escapeHtml(formatTime(run.started_at || run.startedAt))}</span>
+                    </div>
+                    <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                    <p>${escapeHtml(taskId)}</p>
+                </div>
+            </button>
+        `;
+    }).join("");
+
+    const failureRows = recentFailures.slice(0, 4).map((run) => {
+        const runId = runIdOf(run);
+        const providerId = providerIdOf(run) || "unknown provider";
+        const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "failed run");
+        return `
+            <button class="artifact-item runtime-health__row runtime-health__row--clickable" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
+                <div>
+                    <div class="artifact-item__meta">
+                        <span class="task-badge" data-tone="${toneForRunStatus(firstNonBlank(run.status, "failed"))}">${escapeHtml(firstNonBlank(run.status, "failed"))}</span>
+                        <span>${escapeHtml(providerId)}</span>
+                        <span>${escapeHtml(formatTime(run.started_at || run.startedAt))}</span>
+                    </div>
+                    <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                    <p>${escapeHtml(preview(summary, 150))}</p>
+                </div>
+            </button>
+        `;
+    }).join("");
+
+    const providerProblems = [...unavailableProviders, ...authProblemProviders]
+        .filter((provider, index, list) => list.findIndex((item) => providerIdOf(item) === providerIdOf(provider)) === index)
+        .slice(0, 4)
+        .map((provider) => {
+            const providerId = providerIdOf(provider) || "unknown";
+            const authStatus = firstNonBlank(provider.auth_status, provider.authStatus, "unknown");
+            const reason = firstNonBlank(provider.readiness_reason, provider.readinessReason, "provider not ready");
+            return `
+                <button class="agent-trace-row agent-trace-row--clickable" type="button" data-provider-id="${escapeHtml(providerId)}">
+                    <span class="task-badge" data-tone="${authStatus === "auth_needed" ? "manual" : "paused"}">${escapeHtml(providerId)}</span>
+                    <span>${escapeHtml(authStatus)} · ${escapeHtml(preview(reason, 120))}</span>
+                </button>
+            `;
+        }).join("");
+
+    dom.runtimeHealth.innerHTML = `
+        <div class="runtime-health__grid">${metricCards}</div>
+        <div class="agent-trace-list runtime-health__section">
+            <div class="decision-item__type">provider comparison</div>
+            ${providerStatsRows || emptyState("最近 24h 暂无 provider run 统计。")}
+        </div>
+        <div class="agent-trace-list runtime-health__section">
+            <div class="decision-item__type">active runs</div>
+            ${activeRows || emptyState("当前没有 active run。")}
+        </div>
+        <div class="agent-trace-list runtime-health__section">
+            <div class="decision-item__type">recent failures</div>
+            ${failureRows || emptyState("最近没有失败 run。")}
+        </div>
+        <div class="agent-trace-list runtime-health__section">
+            <div class="decision-item__type">provider problems</div>
+            ${providerProblems || emptyState("当前没有 provider auth/ready 问题。")}
+        </div>
+    `;
+}
+
+function renderProviderRuntimeStatsRow(stat) {
+    const providerId = providerIdOf(stat) || "unknown";
+    const totalRuns = numberValue(stat.total_runs, stat.totalRuns, 0);
+    const activeRuns = numberValue(stat.active_runs, stat.activeRuns, 0);
+    const completedRuns = numberValue(stat.completed_runs, stat.completedRuns, 0);
+    const failedRuns = numberValue(stat.failed_runs, stat.failedRuns, 0);
+    const cancelledRuns = numberValue(stat.cancelled_runs, stat.cancelledRuns, 0);
+    const crashedRuns = numberValue(stat.crashed_runs, stat.crashedRuns, 0);
+    const averageDurationMs = numberOrNull(stat.average_duration_ms, stat.averageDurationMs);
+    const failureRate = numberOrNull(stat.failure_rate, stat.failureRate) ?? 0;
+    const lastRunAt = firstNonBlank(stat.last_run_at, stat.lastRunAt);
+    const lastFailureSummary = firstNonBlank(stat.last_failure_summary, stat.lastFailureSummary);
+    const tone = failedRuns > 0 || crashedRuns > 0 ? "failed" : activeRuns > 0 ? "active" : "done";
+    const summary = [
+        `${completedRuns} completed`,
+        `${failedRuns} failed`,
+        crashedRuns > 0 ? `${crashedRuns} crashed` : null,
+        cancelledRuns > 0 ? `${cancelledRuns} cancelled` : null
+    ].filter(Boolean).join(" · ");
+    return `
+        <button class="artifact-item runtime-health__row runtime-health__row--clickable provider-stats-row" type="button" data-provider-id="${escapeHtml(providerId)}">
+            <div>
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${tone}">${escapeHtml(formatRate(failureRate))} failed</span>
+                    <span>${escapeHtml(formatCount(totalRuns, "run"))}</span>
+                    <span>${escapeHtml(`${activeRuns} active`)}</span>
+                    <span>avg ${escapeHtml(averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))}</span>
+                </div>
+                <strong>${escapeHtml(providerId)}</strong>
+                <p>${escapeHtml(summary || "no completed status yet")}${lastRunAt ? ` · last ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
+                ${lastFailureSummary ? `<p class="agent-warning">Last failure: ${escapeHtml(preview(lastFailureSummary, 140))}</p>` : ""}
+            </div>
+        </button>
+    `;
+}
+
+function renderAgentRunSearch() {
+    const filters = state.agentRunSearchFilters || {};
+    const results = state.agentRunSearchResults || [];
+    const providerId = escapeHtml(filters.providerId || "");
+    const taskId = escapeHtml(filters.taskId || "");
+    const limit = escapeHtml(filters.limit || "10");
+    const status = filters.status || "";
+    const role = filters.role || "";
+    const resultRows = results.length > 0
+        ? results.map(renderAgentRunSearchRow).join("")
+        : emptyState("没有匹配的 agent run。可放宽 status、role 或 task_id 过滤。");
+
+    dom.agentRunSearch.innerHTML = `
+        <form class="agent-run-search__form" data-agent-run-search-form>
+            <div class="agent-run-search__grid">
+                <label class="field">
+                    <span>Provider</span>
+                    <input name="providerId" type="text" placeholder="codex" value="${providerId}">
+                </label>
+                <label class="field">
+                    <span>Status</span>
+                    <select name="status">
+                        <option value="" ${status === "" ? "selected" : ""}>全部</option>
+                        <option value="running" ${status === "running" ? "selected" : ""}>running</option>
+                        <option value="completed" ${status === "completed" ? "selected" : ""}>completed</option>
+                        <option value="failed" ${status === "failed" ? "selected" : ""}>failed</option>
+                        <option value="crashed" ${status === "crashed" ? "selected" : ""}>crashed</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span>Role</span>
+                    <select name="role">
+                        <option value="" ${role === "" ? "selected" : ""}>全部</option>
+                        <option value="planner" ${role === "planner" ? "selected" : ""}>planner</option>
+                        <option value="executor" ${role === "executor" ? "selected" : ""}>executor</option>
+                        <option value="judge" ${role === "judge" ? "selected" : ""}>judge</option>
+                    </select>
+                </label>
+                <label class="field">
+                    <span>Task ID</span>
+                    <input name="taskId" type="text" placeholder="task_..." value="${taskId}">
+                </label>
+                <label class="field">
+                    <span>Limit</span>
+                    <input name="limit" type="number" min="1" max="100" value="${limit}">
+                </label>
+            </div>
+            <div class="agent-action-row">
+                <button class="button button--ghost" type="submit">Search Runs</button>
+                <button class="link-button" type="button" data-run-search-action="reset">重置</button>
+            </div>
+        </form>
+        <p class="agent-run-search__summary">返回 ${results.length} 条，点击 run 打开详情。</p>
+        <div class="agent-run-search__results">
+            ${resultRows}
+        </div>
+    `;
+}
+
+function renderAgentInventoryCard(agent) {
+    const providerId = providerIdOf(agent) || "unknown";
+    const displayName = firstNonBlank(agent.display_name, agent.displayName, providerId);
+    const providerType = firstNonBlank(agent.provider_type, agent.providerType, "local_cli");
+    const transport = firstNonBlank(agent.transport, "process");
+    const authStatus = firstNonBlank(agent.auth_status, agent.authStatus, "unknown");
+    const version = firstNonBlank(agent.version, "unknown");
+    const ready = booleanValue(agent.ready) === true;
+    const installed = booleanValue(agent.installed) === true;
+    const selected = providerId === state.selectedAgentId;
+    const readinessReason = firstNonBlank(agent.readiness_reason, agent.readinessReason);
+    const checkedAt = firstNonBlank(agent.checked_at, agent.checkedAt);
+    const capabilities = normalizeTextList(agent.capabilities).slice(0, 5);
+    const capabilityLine = capabilities.length > 0
+        ? capabilities.map((capability) => `<span class="chip">${escapeHtml(capability)}</span>`).join("")
+        : `<span class="chip">no capability</span>`;
+    return `
+        <div class="artifact-item agent-provider-card${ready ? " is-ready" : ""}${selected ? " is-selected" : ""}" data-provider-id="${escapeHtml(providerId)}">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "ready" : "not ready"}</span>
+                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "installed" : "missing"}</span>
+                <span>${escapeHtml(providerType)} / ${escapeHtml(transport)}</span>
+            </div>
+            <strong>${escapeHtml(displayName)}</strong>
+            <p class="mono">${escapeHtml(providerId)}</p>
+            <div class="chip-group">${capabilityLine}</div>
+            <div class="artifact-item__meta">
+                <span>auth: ${escapeHtml(authStatus)}</span>
+                <span>version: ${escapeHtml(version)}</span>
+                ${checkedAt ? `<span>checked: ${escapeHtml(formatTime(checkedAt))}</span>` : ""}
+            </div>
+            ${readinessReason ? `<p>${escapeHtml(preview(readinessReason, 160))}</p>` : ""}
+            <div class="agent-action-row">
+                <button class="link-button" type="button" data-provider-action="view" data-provider-id="${escapeHtml(providerId)}">详情</button>
+                <button class="link-button" type="button" data-provider-action="refresh" data-provider-id="${escapeHtml(providerId)}">刷新状态</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderAgentExecution(flow, task) {
+    const selection = state.providerSelection || {};
+    const run = state.agentRun || {};
+    const events = state.agentRunEvents || [];
+    const artifacts = state.agentRunArtifacts || [];
+    const providerId = firstNonBlank(
+        selection.selected_provider,
+        selection.selectedProvider,
+        run.provider_id,
+        run.providerId
+    );
+    const selectedWorker = firstNonBlank(
+        selection.selected_worker_id,
+        selection.selectedWorkerId,
+        run.selected_worker_id,
+        run.selectedWorkerId,
+        task?.assigned_worker,
+        task?.assignedWorker,
+        "unassigned"
+    );
+    const displayName = firstNonBlank(
+        selection.provider_display_name,
+        selection.providerDisplayName,
+        run.provider_display_name,
+        run.providerDisplayName,
+        providerId,
+        "unknown provider"
+    );
+    const runId = firstNonBlank(run.run_id, run.runId);
+    const runStatus = firstNonBlank(run.status);
+    const runSummary = firstNonBlank(run.summary);
+    const selectedModelTier = firstNonBlank(selection.selected_model_tier, selection.selectedModelTier, run.selected_model_tier, run.selectedModelTier);
+    const workerRole = firstNonBlank(selection.worker_role, selection.workerRole, run.worker_role, run.workerRole, "executor");
+    const selectionReason = firstNonBlank(selection.selection_reason, selection.selectionReason, selection.metadata?.selection_reason, selection.metadata?.selectionReason);
+    const fallbackReason = firstNonBlank(selection.fallback_reason, selection.fallbackReason, selection.metadata?.fallback_reason, selection.metadata?.fallbackReason);
+    const authStatus = firstNonBlank(selection.provider_auth_status, selection.providerAuthStatus);
+    const providerVersion = firstNonBlank(selection.provider_version, selection.providerVersion);
+    const providerReady = booleanValue(selection.provider_ready, selection.providerReady);
+    const eventPreview = events.slice(0, 3);
+    const artifactPreview = artifacts.slice(0, 3);
+
+    if (!providerId && !runId) {
+        return emptyState("当前任务还没有 provider selection 或 agent run 记录。");
+    }
+
+    return `
+        <div class="agent-run-card">
+            <div class="artifact-item__meta">
+                ${runStatus ? `<span class="task-badge" data-tone="${toneForRunStatus(runStatus)}">${escapeHtml(runStatus)}</span>` : ""}
+                ${providerReady !== null ? `<span class="task-badge" data-tone="${providerReady ? "active" : "paused"}">${providerReady ? "provider ready" : "provider not ready"}</span>` : ""}
+                <span>${escapeHtml(workerRole)}</span>
+                ${selectedModelTier ? `<span>${escapeHtml(selectedModelTier)}</span>` : ""}
+            </div>
+            <strong>${escapeHtml(displayName)}</strong>
+            <p class="mono">${escapeHtml([providerId, selectedWorker, runId].filter(Boolean).join(" · "))}</p>
+            <div class="agent-run-card__grid">
+                ${runId ? overviewCard("Run ID", runId) : ""}
+                ${run.started_at || run.startedAt ? overviewCard("Started", formatTime(run.started_at || run.startedAt)) : ""}
+                ${run.duration_ms || run.durationMs ? overviewCard("Duration", formatDurationMs(run.duration_ms || run.durationMs)) : ""}
+                ${run.artifact_count || run.artifactCount ? overviewCard("Artifacts", String(run.artifact_count || run.artifactCount)) : ""}
+            </div>
+            ${selectionReason ? `<p>${escapeHtml(preview(selectionReason, 220))}</p>` : ""}
+            ${fallbackReason ? `<p class="agent-warning">Fallback: ${escapeHtml(preview(fallbackReason, 180))}</p>` : ""}
+            ${runSummary ? `<p>${escapeHtml(preview(runSummary, 220))}</p>` : ""}
+            <div class="artifact-item__meta">
+                ${authStatus ? `<span>auth: ${escapeHtml(authStatus)}</span>` : ""}
+                ${providerVersion ? `<span>version: ${escapeHtml(providerVersion)}</span>` : ""}
+            </div>
+            <div class="agent-action-row">
+                ${providerId ? `<button class="link-button" type="button" data-provider-id="${escapeHtml(providerId)}">View Provider</button>` : ""}
+                ${runId ? `<button class="link-button" type="button" data-run-id="${escapeHtml(runId)}">View Run</button>` : ""}
+            </div>
+        </div>
+        ${eventPreview.length > 0 ? `
+            <div class="agent-trace-list">
+                <div class="decision-item__type">recent events</div>
+                ${eventPreview.map((event) => `
+                    <div class="agent-trace-row">
+                        <span class="task-badge">${escapeHtml(event.event_type || event.eventType || "event")}</span>
+                        <span>${escapeHtml(preview(event.summary || event.event_id || event.eventId, 120))}</span>
+                    </div>
+                `).join("")}
+            </div>
+        ` : ""}
+        ${artifactPreview.length > 0 ? `
+            <div class="agent-trace-list">
+                <div class="decision-item__type">agent artifacts</div>
+                ${artifactPreview.map((artifact) => `
+                    <div class="agent-trace-row">
+                        <span class="task-badge">${escapeHtml(artifact.artifact_type || artifact.artifactType || "artifact")}</span>
+                        <span>${escapeHtml(preview(artifact.title || artifact.path || artifact.artifact_id || artifact.artifactId, 120))}</span>
+                    </div>
+                `).join("")}
+            </div>
+        ` : ""}
+    `;
+}
+
+function renderAgentDetail() {
+    const agent = state.selectedAgent
+        || (state.selectedAgentId ? state.agents.find((item) => providerIdOf(item) === state.selectedAgentId) : null);
+    if (!agent) {
+        dom.agentDetail.innerHTML = emptyState("点击 Agent Inventory、Runtime Health 或任务执行卡片里的 provider 后显示详情。");
+        return;
+    }
+
+    const providerId = providerIdOf(agent) || state.selectedAgentId || "unknown";
+    const displayName = firstNonBlank(agent.display_name, agent.displayName, providerId);
+    const providerType = firstNonBlank(agent.provider_type, agent.providerType, "local_cli");
+    const transport = firstNonBlank(agent.transport, "process");
+    const authStatus = firstNonBlank(agent.auth_status, agent.authStatus, "unknown");
+    const version = firstNonBlank(agent.version, "unknown");
+    const ready = booleanValue(agent.ready) === true;
+    const installed = booleanValue(agent.installed) === true;
+    const readinessReason = firstNonBlank(agent.readiness_reason, agent.readinessReason, "no readiness reason");
+    const activeRunCount = numberValue(agent.active_run_count, agent.activeRunCount, 0);
+    const lastSeenAt = firstNonBlank(agent.checked_at, agent.checkedAt, agent.last_seen_at, agent.lastSeenAt);
+    const capabilities = normalizeTextList(agent.capabilities);
+    const runs = state.selectedAgentRuns || [];
+    const chips = capabilities.length > 0
+        ? capabilities.map((capability) => `<span class="chip">${escapeHtml(capability)}</span>`).join("")
+        : `<span class="chip">no capability</span>`;
+
+    dom.agentDetail.innerHTML = `
+        <div class="artifact-item agent-detail-card">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "ready" : "not ready"}</span>
+                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "installed" : "missing"}</span>
+                <span>${escapeHtml(providerType)} / ${escapeHtml(transport)}</span>
+            </div>
+            <strong>${escapeHtml(displayName)}</strong>
+            <p class="mono">${escapeHtml(providerId)}</p>
+            <div class="agent-detail__grid">
+                ${overviewCard("Auth", authStatus)}
+                ${overviewCard("Version", version)}
+                ${overviewCard("Active Runs", String(activeRunCount ?? 0))}
+                ${overviewCard("Checked", lastSeenAt ? formatTime(lastSeenAt) : "unknown")}
+            </div>
+            <div class="chip-group">${chips}</div>
+            <p>${escapeHtml(preview(readinessReason, 220))}</p>
+            ${renderProviderRuntimeDiagnostics(agent, runs)}
+            ${renderMetadataGrid(agent.metadata, 6)}
+            <div class="agent-action-row">
+                <button class="link-button" type="button" data-provider-action="refresh" data-provider-id="${escapeHtml(providerId)}">刷新 Provider</button>
+                <button class="link-button" type="button" data-provider-action="view_runs" data-provider-id="${escapeHtml(providerId)}">筛选 Runs</button>
+                <button class="link-button" type="button" data-provider-action="copy_diagnostics" data-provider-id="${escapeHtml(providerId)}">Copy Diagnostics</button>
+            </div>
+        </div>
+        <div class="agent-trace-list">
+            <div class="decision-item__type">recent provider runs</div>
+            ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 provider 暂无 run 记录。")}
+        </div>
+    `;
+}
+
+function renderProviderRuntimeDiagnostics(agent, runs) {
+    const recentRuns = runs || [];
+    const statusOf = (run) => String(firstNonBlank(run.status, "unknown") || "unknown").toLowerCase();
+    const failedStatuses = new Set(["failed", "crashed", "error"]);
+    const completedStatuses = new Set(["completed", "succeeded", "success"]);
+    const activeStatuses = new Set(["queued", "starting", "running", "active"]);
+    const failedRuns = recentRuns.filter((run) => failedStatuses.has(statusOf(run)));
+    const completedRuns = recentRuns.filter((run) => completedStatuses.has(statusOf(run)));
+    const activeRuns = recentRuns.filter((run) => activeStatuses.has(statusOf(run)));
+    const durations = recentRuns
+        .map((run) => numberOrNull(run.duration_ms, run.durationMs))
+        .filter((duration) => duration !== null);
+    const averageDurationMs = durations.length > 0
+        ? durations.reduce((sum, duration) => sum + duration, 0) / durations.length
+        : null;
+    const failureRate = recentRuns.length > 0
+        ? `${Math.round((failedRuns.length / recentRuns.length) * 100)}%`
+        : "n/a";
+    const lastFailure = failedRuns[0] || null;
+    const lastSuccess = completedRuns[0] || null;
+    const providerActiveRunCount = numberValue(agent.active_run_count, agent.activeRunCount, activeRuns.length);
+    const lastFailureExitCode = numberOrNull(lastFailure?.exit_code, lastFailure?.exitCode);
+    const lastFailureSummary = lastFailure
+        ? firstNonBlank(lastFailure.summary, lastFailure.output_preview, lastFailure.outputPreview, lastFailure.last_event_type, lastFailure.lastEventType, "failed run")
+        : null;
+    const lastFailureRunId = runIdOf(lastFailure);
+
+    return `
+        <div class="agent-trace-list provider-diagnostics">
+            <div class="decision-item__type">runtime diagnostics</div>
+            <div class="agent-detail__grid">
+                ${overviewCard("Recent Runs", String(recentRuns.length))}
+                ${overviewCard("Active", String(providerActiveRunCount ?? activeRuns.length))}
+                ${overviewCard("Completed", String(completedRuns.length))}
+                ${overviewCard("Failed", `${failedRuns.length} / ${failureRate}`)}
+                ${overviewCard("Avg Duration", averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))}
+                ${overviewCard("Last Success", lastSuccess ? formatTime(lastSuccess.started_at || lastSuccess.startedAt) : "n/a")}
+            </div>
+            ${lastFailure ? `
+                <button class="agent-trace-row agent-trace-row--clickable" type="button" ${lastFailureRunId ? `data-run-id="${escapeHtml(lastFailureRunId)}"` : "disabled"}>
+                    <span class="task-badge" data-tone="failed">last failure</span>
+                    <span>
+                        ${escapeHtml(formatTime(lastFailure.started_at || lastFailure.startedAt))}
+                        ${lastFailureExitCode === null ? "" : ` · exit ${escapeHtml(String(lastFailureExitCode))}`}
+                        · ${escapeHtml(preview(lastFailureSummary, 140))}
+                    </span>
+                </button>
+            ` : emptyState("最近 provider runs 里没有失败记录。")}
+        </div>
+    `;
+}
+
+function renderAgentRunDetail() {
+    const run = state.selectedAgentRun || state.agentRun;
+    const events = state.selectedAgentRun ? state.selectedAgentRunEvents : state.agentRunEvents;
+    const artifacts = state.selectedAgentRun ? state.selectedAgentRunArtifacts : state.agentRunArtifacts;
+    if (!run) {
+        dom.agentRunDetail.innerHTML = emptyState("点击任务执行卡片、Provider Detail 或 Runtime Health 里的 run 后显示详情。");
+        return;
+    }
+
+    const runId = runIdOf(run) || state.selectedAgentRunId || "unknown run";
+    const providerId = providerIdOf(run) || "unknown provider";
+    const status = firstNonBlank(run.status, "unknown");
+    const selectedWorker = firstNonBlank(run.selected_worker_id, run.selectedWorkerId, run.worker_id, run.workerId, "unassigned");
+    const modelTier = firstNonBlank(run.selected_model_tier, run.selectedModelTier, run.model_tier, run.modelTier, "unknown");
+    const durationMs = numberOrNull(run.duration_ms, run.durationMs);
+    const artifactCount = numberOrNull(run.artifact_count, run.artifactCount);
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "no summary");
+    const taskId = firstNonBlank(run.task_id, run.taskId);
+    const sessionId = firstNonBlank(run.session_id, run.sessionId);
+
+    dom.agentRunDetail.innerHTML = `
+        <div class="artifact-item agent-run-detail-card">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                <span>${escapeHtml(providerId)}</span>
+                <span>${escapeHtml(selectedWorker)}</span>
+                <span>${escapeHtml(modelTier)}</span>
+            </div>
+            <strong class="mono">${escapeHtml(runId)}</strong>
+            <p>${escapeHtml(preview(summary, 260))}</p>
+            <div class="agent-detail__grid">
+                ${overviewCard("Task", taskId || "unknown")}
+                ${overviewCard("Session", sessionId || "unknown")}
+                ${overviewCard("Started", formatTime(run.started_at || run.startedAt))}
+                ${overviewCard("Duration", durationMs === null ? "unknown" : formatDurationMs(durationMs))}
+                ${overviewCard("Artifacts", artifactCount === null ? String((artifacts || []).length) : String(artifactCount))}
+                ${overviewCard("Last Event", firstNonBlank(run.last_event_type, run.lastEventType, "unknown"))}
+            </div>
+            ${renderMetadataGrid(run.metadata, 8)}
+        </div>
+        <div class="agent-trace-list">
+            <div class="decision-item__type">run timeline</div>
+            ${(events || []).length > 0 ? events.slice(0, 20).map(renderAgentRunEventRow).join("") : emptyState("这个 run 暂无 event。")}
+        </div>
+        <div class="agent-trace-list">
+            <div class="decision-item__type">run artifacts</div>
+            ${(artifacts || []).length > 0 ? artifacts.slice(0, 20).map(renderAgentRunArtifactRow).join("") : emptyState("这个 run 暂无 artifact。")}
+        </div>
+    `;
+}
+
+function renderAgentRunListRow(run) {
+    const runId = runIdOf(run);
+    const status = firstNonBlank(run.status, "unknown");
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, run.task_id, run.taskId, "run");
+    const startedAt = firstNonBlank(run.started_at, run.startedAt);
+    const durationMs = numberOrNull(run.duration_ms, run.durationMs);
+    return `
+        <button class="agent-run-row" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
+            <div>
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                    <span>${escapeHtml(formatTime(startedAt))}</span>
+                    ${durationMs === null ? "" : `<span>${escapeHtml(formatDurationMs(durationMs))}</span>`}
+                </div>
+                <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                <p>${escapeHtml(preview(summary, 140))}</p>
+            </div>
+        </button>
+    `;
+}
+
+function renderAgentRunSearchRow(run) {
+    const runId = runIdOf(run);
+    const providerId = providerIdOf(run) || "unknown provider";
+    const status = firstNonBlank(run.status, "unknown");
+    const role = firstNonBlank(run.worker_role, run.workerRole, "executor");
+    const taskId = firstNonBlank(run.task_id, run.taskId, "unknown task");
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, taskId, "run");
+    const startedAt = firstNonBlank(run.started_at, run.startedAt);
+    const durationMs = numberOrNull(run.duration_ms, run.durationMs);
+    return `
+        <button class="agent-run-row agent-run-search__row" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
+            <div>
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                    <span>${escapeHtml(providerId)}</span>
+                    <span>${escapeHtml(role)}</span>
+                    <span>${escapeHtml(formatTime(startedAt))}</span>
+                    ${durationMs === null ? "" : `<span>${escapeHtml(formatDurationMs(durationMs))}</span>`}
+                </div>
+                <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                <p>${escapeHtml(taskId)} · ${escapeHtml(preview(summary, 160))}</p>
+            </div>
+        </button>
+    `;
+}
+
+function renderAgentRunEventRow(event) {
+    const eventType = firstNonBlank(event.event_type, event.eventType, "event");
+    const summary = firstNonBlank(event.summary, event.message, event.event_id, event.eventId, "no summary");
+    return `
+        <div class="agent-timeline-item">
+            <div class="artifact-item__meta">
+                <span class="task-badge">${escapeHtml(eventType)}</span>
+                <span>${escapeHtml(formatTime(event.created_at || event.createdAt))}</span>
+            </div>
+            <p>${escapeHtml(preview(summary, 180))}</p>
+        </div>
+    `;
+}
+
+function renderAgentRunArtifactRow(artifact) {
+    const artifactType = firstNonBlank(artifact.artifact_type, artifact.artifactType, "artifact");
+    const title = firstNonBlank(artifact.title, artifact.path, artifact.uri, artifact.artifact_id, artifact.artifactId, "artifact");
+    const summary = firstNonBlank(artifact.summary, artifact.uri, artifact.path, "");
+    return `
+        <div class="agent-timeline-item">
+            <div class="artifact-item__meta">
+                <span class="task-badge">${escapeHtml(artifactType)}</span>
+                <span>${escapeHtml(formatTime(artifact.created_at || artifact.createdAt))}</span>
+            </div>
+            <strong>${escapeHtml(preview(title, 120))}</strong>
+            ${summary ? `<p>${escapeHtml(preview(summary, 180))}</p>` : ""}
+        </div>
+    `;
+}
+
+function renderMetadataGrid(metadata, limit = 6) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+        return "";
+    }
+    const entries = Object.entries(metadata)
+        .filter(([, value]) => value !== null && value !== undefined && value !== "")
+        .slice(0, limit);
+    if (entries.length === 0) {
+        return "";
+    }
+    return `
+        <div class="metadata-grid">
+            ${entries.map(([key, value]) => `
+                <div>
+                    <span>${escapeHtml(humanizeToken(key) || key)}</span>
+                    <strong>${escapeHtml(preview(typeof value === "object" ? JSON.stringify(value) : value, 80))}</strong>
+                </div>
+            `).join("")}
+        </div>
+    `;
 }
 
 function overviewCard(label, value) {
@@ -1110,6 +2036,19 @@ function booleanValue(...values) {
     return null;
 }
 
+function numberValue(...values) {
+    for (const value of values) {
+        if (value === null || value === undefined || value === "") {
+            continue;
+        }
+        const number = Number(value);
+        if (Number.isFinite(number)) {
+            return number;
+        }
+    }
+    return null;
+}
+
 function formatRate(value) {
     const number = numberOrNull(value);
     if (number === null) {
@@ -1182,6 +2121,24 @@ function formatCount(value, noun) {
 function valueLine(label, value) {
     const text = firstNonBlank(value);
     return text ? `${label}: ${preview(text, 96)}` : null;
+}
+
+function providerIdOf(value) {
+    return firstNonBlank(
+        value?.provider_id,
+        value?.providerId,
+        value?.selected_provider,
+        value?.selectedProvider
+    );
+}
+
+function runIdOf(value) {
+    return firstNonBlank(
+        value?.run_id,
+        value?.runId,
+        value?.agent_run_id,
+        value?.agentRunId
+    );
 }
 
 function firstNonBlank(...values) {
@@ -1417,6 +2374,23 @@ function toneForStatus(status) {
     }
 }
 
+function toneForRunStatus(status) {
+    switch ((status || "").toLowerCase()) {
+        case "completed":
+        case "succeeded":
+        case "success":
+            return "done";
+        case "failed":
+        case "error":
+            return "failed";
+        case "running":
+        case "active":
+            return "active";
+        default:
+            return "default";
+    }
+}
+
 function formatTime(value) {
     if (!value) {
         return "unknown";
@@ -1431,6 +2405,17 @@ function formatTime(value) {
         hour: "2-digit",
         minute: "2-digit"
     });
+}
+
+function formatDurationMs(value) {
+    const number = numberOrNull(value);
+    if (number === null) {
+        return "unknown";
+    }
+    if (number < 1000) {
+        return `${Math.round(number)} ms`;
+    }
+    return `${(number / 1000).toFixed(number < 10000 ? 1 : 0)} s`;
 }
 
 function showToast(message, isError = false) {
@@ -1465,6 +2450,37 @@ function escapeHtml(value) {
         .replace(/'/g, "&#39;");
 }
 
+function appendQueryParam(params, name, value) {
+    const text = String(value || "").trim();
+    if (text) {
+        params.set(name, text);
+    }
+}
+
+async function writeClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return;
+        } catch (error) {
+            console.warn("clipboard API unavailable, falling back to textarea copy", error);
+        }
+    }
+
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.setAttribute("readonly", "readonly");
+    textArea.style.position = "fixed";
+    textArea.style.left = "-9999px";
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+        document.execCommand("copy");
+    } finally {
+        document.body.removeChild(textArea);
+    }
+}
+
 async function api(path, options = {}) {
     const response = await fetch(path, {
         headers: {
@@ -1475,12 +2491,27 @@ async function api(path, options = {}) {
 
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-        throw new Error(payload?.message || `HTTP ${response.status}`);
+        const error = new Error(payload?.message || `HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
     }
     if (payload && payload.success === false) {
-        throw new Error(payload.message || "request failed");
+        const error = new Error(payload.message || "request failed");
+        error.status = payload.status || null;
+        throw error;
     }
     return payload?.data ?? payload;
+}
+
+async function apiOrNull(path, options = {}) {
+    try {
+        return await api(path, options);
+    } catch (error) {
+        if (error.status !== 404 && !/not found/i.test(error.message || "")) {
+            console.warn(`optional api unavailable: ${path}`, error);
+        }
+        return null;
+    }
 }
 
 function startPolling() {
@@ -1491,6 +2522,8 @@ function startPolling() {
         }
         try {
             await loadHealth();
+            await loadAgents(false);
+            await loadRuntimeHealth(false);
             await loadSessions();
             await loadTasks();
             if (state.selectedTaskId) {

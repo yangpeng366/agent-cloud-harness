@@ -5,7 +5,9 @@ import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.Checkpoint;
 import com.agentcloud.model.ResumePacket;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.context.MountedContextView;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
@@ -22,9 +24,29 @@ public record TaskRuntimeContext(
     List<Event> recentEvents,
     List<Decision> recentDecisions,
     List<Artifact> recentArtifacts,
-    ActiveContext activeContext
+    List<SessionMessage> recentMessages,
+    ActiveContext activeContext,
+    MountedContextView mountedContextView
 ) {
+    public TaskRuntimeContext(Task task, ResumePacket latestPacket, Checkpoint latestCheckpoint,
+                              List<Event> recentEvents, List<Decision> recentDecisions,
+                              List<Artifact> recentArtifacts, ActiveContext activeContext) {
+        this(task, latestPacket, latestCheckpoint, recentEvents, recentDecisions, recentArtifacts, List.of(), activeContext, null);
+    }
+
+    public TaskRuntimeContext(Task task, ResumePacket latestPacket, Checkpoint latestCheckpoint,
+                              List<Event> recentEvents, List<Decision> recentDecisions,
+                              List<Artifact> recentArtifacts, List<SessionMessage> recentMessages,
+                              ActiveContext activeContext) {
+        this(task, latestPacket, latestCheckpoint, recentEvents, recentDecisions, recentArtifacts, recentMessages, activeContext, null);
+    }
+
     public TaskRuntimeContext {
+        if (recentEvents == null) recentEvents = List.of();
+        if (recentDecisions == null) recentDecisions = List.of();
+        if (recentArtifacts == null) recentArtifacts = List.of();
+        if (recentMessages == null) recentMessages = List.of();
         if (activeContext == null) activeContext = new ActiveContext("", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), "", "", 12);
+        if (mountedContextView == null) mountedContextView = MountedContextView.empty(task != null ? task.id() : null);
     }
 }

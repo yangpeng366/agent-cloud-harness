@@ -13,6 +13,7 @@ import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
 import com.agentcloud.store.ToolInvocationDao;
 import com.agentcloud.tool.ListFilesTool;
+import com.agentcloud.tool.PatchFileTool;
 import com.agentcloud.tool.ReadFileTool;
 import com.agentcloud.tool.SearchTextTool;
 import com.agentcloud.tool.ToolPolicy;
@@ -32,6 +33,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolAwareWorkerExecutorMultiToolTest {
@@ -107,6 +109,55 @@ class ToolAwareWorkerExecutorMultiToolTest {
             assertEquals(1, numberValue(readInvocation.metadata().get("tool_chain_step_index")));
             assertEquals("read_file", readInvocation.metadata().get("selected_tool"));
             assertTrue(String.valueOf(readInvocation.metadata().get("result_summary")).contains("read"));
+        }
+    }
+
+    @Test
+    void executeOneRoundResultPreservesHarnessEvolutionSchemaFields() throws Exception {
+        Path noteFile = tempDir.resolve("schema-note.txt");
+        Path outputFile = tempDir.resolve("schema-draft.txt");
+        Files.writeString(noteFile, "Schema guard reference note.");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("worker-result-schema-guard.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            WorkerRegistry workerRegistry = createWorkerRegistry(tempDir);
+            Task task = createTask(outputFile, "Read the schema note and write a guarded draft.");
+            persistTask(sessionDao, taskDao, task);
+            QueuedLlmClient llmClient = new QueuedLlmClient(
+                """
+                {"needs_tool":true,"tool_name":"read_file","tool_arguments":{"path":"schema-note.txt"},"reason":"Read evidence before writing."}
+                """,
+                """
+                {"needs_tool":true,"tool_name":"write_file","tool_arguments":{"path":"schema-draft.txt","content":"Schema guarded draft."},"reason":"Write the grounded schema guard draft."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"Draft is written; finalize."}
+                """,
+                """
+                {"summary":"Schema guard completed.","output_text":"The guarded draft was written.","produced_artifact":false,"artifact_title":"","artifact_content":"","suggested_next_step":"Review the generated draft.","confidence":"high","execution_status":"blocked","evidence_refs":["tool:read_file:schema-note.txt","tool:write_file:schema-draft.txt"],"unfinished_items":["manual_review"]}
+                """
+            );
+
+            ToolAwareWorkerExecutor executor = createExecutor(workerRegistry, toolInvocationDao, llmClient);
+            WorkerExecutionResult result = executor.executeOneRound(
+                createRuntimeContext(task),
+                "tool-worker"
+            );
+
+            llmClient.assertExhausted();
+            assertEquals("blocked", result.executionStatus());
+            assertNotNull(result.evidenceRefs());
+            assertEquals(List.of("tool:read_file:schema-note.txt", "tool:write_file:schema-draft.txt"), result.evidenceRefs());
+            assertNotNull(result.unfinishedItems());
+            assertEquals(List.of("manual_review"), result.unfinishedItems());
+            assertEquals(0, result.tokenUsage());
+            assertTrue(result.durationMs() >= 0L);
+            assertNotNull(result.metadata());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals(2, numberValue(result.metadata().get("tool_chain_step_count")));
+            assertTrue(result.producedArtifact());
         }
     }
 
@@ -241,6 +292,53 @@ class ToolAwareWorkerExecutorMultiToolTest {
         }
     }
 
+    @Test
+    void executeOneRoundTreatsPatchFileAsGroundedWriteArtifact() throws Exception {
+        Path outputFile = tempDir.resolve("patched-draft.txt");
+        Files.writeString(outputFile, "Grounded TODO draft.");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-patch.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            WorkerRegistry workerRegistry = createWorkerRegistry(tempDir);
+            Task task = createTask(outputFile, "Patch the existing grounded draft in place.");
+            persistTask(sessionDao, taskDao, task);
+            QueuedLlmClient llmClient = new QueuedLlmClient(
+                """
+                {"needs_tool":true,"tool_name":"patch_file","tool_arguments":{"path":"patched-draft.txt","old_text":"TODO","new_text":"final"},"reason":"Apply the targeted wording fix."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"The grounded patch is already applied."}
+                """,
+                """
+                {"summary":"Draft patched.","output_text":"The targeted wording fix was applied.","produced_artifact":false,"artifact_title":"","artifact_content":"","suggested_next_step":"","confidence":"high"}
+                """
+            );
+
+            ToolAwareWorkerExecutor executor = createExecutor(workerRegistry, toolInvocationDao, llmClient);
+            WorkerExecutionResult result = executor.executeOneRound(
+                createRuntimeContext(task),
+                "tool-worker"
+            );
+
+            llmClient.assertExhausted();
+            assertEquals("Grounded final draft.", Files.readString(outputFile));
+            assertTrue(result.producedArtifact());
+            assertEquals("Grounded final draft.", result.artifactContent());
+            assertEquals(Boolean.TRUE, result.metadata().get("file_backed_artifact"));
+            assertEquals("planner_no_additional_tool", result.metadata().get("tool_chain_termination_reason"));
+
+            List<Map<String, Object>> trace = trace(result.metadata());
+            assertEquals(1, trace.size());
+            assertEquals("patch_file", trace.get(0).get("selected_tool"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask("task-multi-tool", 10);
+            assertEquals(1, invocations.size());
+            assertEquals("patch_file", invocations.get(0).toolName());
+        }
+    }
+
     private ToolAwareWorkerExecutor createExecutor(WorkerRegistry workerRegistry,
                                                    ToolInvocationDao toolInvocationDao,
                                                    LlmClient llmClient) {
@@ -249,7 +347,8 @@ class ToolAwareWorkerExecutorMultiToolTest {
             .register(new ListFilesTool(workerRegistry, toolPolicy))
             .register(new ReadFileTool(workerRegistry, toolPolicy))
             .register(new SearchTextTool(workerRegistry, toolPolicy))
-            .register(new WriteFileTool(workerRegistry, toolPolicy));
+            .register(new WriteFileTool(workerRegistry, toolPolicy))
+            .register(new PatchFileTool(workerRegistry, toolPolicy));
         WorkerExecutor fallbackExecutor = (context, workerId) -> {
             throw new AssertionError("fallback executor should not be used in this test");
         };
@@ -269,7 +368,7 @@ class ToolAwareWorkerExecutorMultiToolTest {
             "tool-worker",
             "native-tool",
             List.of("coding"),
-            List.of("list_files", "read_file", "search_text", "write_file"),
+            List.of("list_files", "read_file", "search_text", "write_file", "patch_file"),
             List.of(scopeRoot.toString()),
             Map.of("config_present", true),
             Map.of("model_tier", "small"),

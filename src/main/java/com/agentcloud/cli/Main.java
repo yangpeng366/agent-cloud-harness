@@ -1,5 +1,10 @@
 package com.agentcloud.cli;
 
+import com.agentcloud.agent.AgentDiscoveryService;
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.SimpleAgentDiscoveryService;
+import com.agentcloud.agent.providers.CodexProvider;
+import com.agentcloud.agent.providers.OpenClawProvider;
 import com.agentcloud.engine.*;
 import com.agentcloud.engine.memory.ContextReconstructor;
 import com.agentcloud.engine.memory.PacketBuilder;
@@ -14,9 +19,14 @@ import com.agentcloud.runtime.TaskRuntimeContextBuilder;
 import com.agentcloud.runtime.ActiveContextBuilder;
 import com.agentcloud.server.NioHttpServer;
 import com.agentcloud.store.*;
+import com.agentcloud.tool.CmdTool;
+import com.agentcloud.tool.GitTool;
 import com.agentcloud.tool.ListFilesTool;
+import com.agentcloud.tool.PatchFileTool;
+import com.agentcloud.tool.PowerShellTool;
 import com.agentcloud.tool.ReadFileTool;
 import com.agentcloud.tool.SearchTextTool;
+import com.agentcloud.tool.ShellTool;
 import com.agentcloud.tool.ToolPolicy;
 import com.agentcloud.tool.ToolRegistry;
 import com.agentcloud.tool.WriteFileTool;
@@ -57,6 +67,7 @@ public class Main {
         ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
         SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
         ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
+        AgentRunDao agentRunDao = db.jdbi().onDemand(AgentRunDao.class);
 
         // 引擎
         LearningMemoryService learningMemoryService = new LearningMemoryService(learningMemoryDao);
@@ -75,7 +86,8 @@ public class Main {
         // Phase 1 新增: LLM Adapter Layer
         LlmConfig llmConfig = new LlmConfig();
         LlmClient llmClient = new OpenAiCompatibleClient(llmConfig);
-        log.info("LLM adapter initialized. available={} model={}", llmConfig.available(), llmConfig.model());
+        log.info("LLM adapter initialized. available={} model={} reviewModel={} wireApi={}",
+            llmConfig.available(), llmConfig.model(), llmConfig.reviewModel(), llmConfig.wireApi());
 
         // Phase 2 新增: Active Context / Working Memory Layer
         ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
@@ -87,7 +99,8 @@ public class Main {
         // Runtime Context Builder
         TaskRuntimeContextBuilder runtimeContextBuilder =
             new TaskRuntimeContextBuilder(
-                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, learningMemoryService
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, sessionMessageDao,
+                activeContextBuilder, learningMemoryService
             );
 
         // Phase 1 新增: Judgment Layer（当前为占位实现，保留 RuntimeJudgmentService 给 TaskService 使用）
@@ -99,7 +112,12 @@ public class Main {
             .register(new ListFilesTool(workerRegistry, toolPolicy))
             .register(new ReadFileTool(workerRegistry, toolPolicy))
             .register(new SearchTextTool(workerRegistry, toolPolicy))
-            .register(new WriteFileTool(workerRegistry, toolPolicy));
+            .register(new WriteFileTool(workerRegistry, toolPolicy))
+            .register(new PatchFileTool(workerRegistry, toolPolicy))
+            .register(new GitTool(workerRegistry, toolPolicy))
+            .register(new ShellTool(workerRegistry, toolPolicy))
+            .register(new PowerShellTool(workerRegistry, toolPolicy))
+            .register(new CmdTool(workerRegistry, toolPolicy));
 
         WorkerExecutor defaultWorkerExecutor = new DefaultWorkerExecutor(llmClient);
         WorkerExecutor toolAwareWorkerExecutor = new ToolAwareWorkerExecutor(
@@ -114,11 +132,19 @@ public class Main {
             workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor
         );
 
+        // Agent Provider Layer (Phase 1 skeleton)
+        AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry()
+            .register(new OpenClawProvider())
+            .register(new CodexProvider());
+        AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
+        AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
+        log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());
+
         // 新增: Control Node Graph（注入 Phase 1 新组件）
         ControlNodeGraph controlGraph = new ControlNodeGraph(
             taskDao, eventDao, sessionDao, packetDao, workerRouter, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService,
-            artifactDao, decisionDao, learningMemoryService
+            artifactDao, decisionDao, learningMemoryService, agentRunService
         );
 
         // 新增: Skill Registry + Router
@@ -129,15 +155,15 @@ public class Main {
         TaskService taskService = new TaskService(
             taskDao, sessionDao, eventDao, packetDao, workerRouter, packetBuilder, controlGraph,
             runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao,
-            sessionMessageDao, experimentRunService
+            sessionMessageDao, experimentRunService, agentRunService
         );
         ExperimentMatrixService experimentMatrixService = new ExperimentMatrixService(taskService, experimentRunService);
 
         // NIO HTTP Server (虚拟线程)
         int port = Integer.parseInt(System.getProperty("server.port", "8080"));
         NioHttpServer server = new NioHttpServer(
-            port, taskService, sessionService, workerRegistry, skillRegistry, consolidation, learningMemoryService,
-            experimentRunService, experimentMatrixService
+            port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation, learningMemoryService,
+            experimentRunService, experimentMatrixService, agentRunService
         );
         server.start();
 
@@ -155,6 +181,8 @@ public class Main {
         log.info("  GET  /api/v1/tasks/{id}     - get task");
         log.info("  POST /api/v1/tasks/{id}/state      - update state");
         log.info("  GET  /api/v1/tasks/{id}/select_worker - preview routing");
+        log.info("  GET  /api/v1/tasks/{id}/provider_selection - inspect provider selection");
+        log.info("  GET  /api/v1/tasks/{id}/agent_run - inspect latest agent provider run");
         log.info("  GET  /api/v1/tasks/{id}/runtime_context - inspect working memory/runtime context");
         log.info("  GET  /api/v1/tasks/{id}/judgment_trace - inspect latest execution/completion judgment");
         log.info("  GET  /api/v1/tasks/{id}/live_flow - inspect aggregated live flow diagnostics");
@@ -169,6 +197,14 @@ public class Main {
         log.info("  POST /api/v1/tasks/{id}/handoff    - handoff task");
         log.info("  POST /api/v1/sessions/{id}/close   - close session");
         log.info("  GET  /api/v1/workers        - list workers");
+        log.info("  GET  /api/v1/agents         - list agent providers");
+        log.info("  GET  /api/v1/agents/{id}    - get agent provider detail");
+        log.info("  GET  /api/v1/agents/{id}/runs - list provider agent runs");
+        log.info("  POST /api/v1/agents/{id}/refresh - refresh agent provider status");
+        log.info("  GET  /api/v1/agent_runs/{runId} - get agent run detail");
+        log.info("  GET  /api/v1/agent_runs/{runId}/events - list agent run events");
+        log.info("  GET  /api/v1/agent_runs/{runId}/artifacts - list agent run artifacts");
+        log.info("  GET  /api/v1/runtime_health - inspect managed agent runtime health");
         log.info("  GET  /api/v1/workers/{id}/readiness - check readiness");
         log.info("  GET  /api/v1/skills         - list skills");
         log.info("  POST /api/v1/skills         - register skill");

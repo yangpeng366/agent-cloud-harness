@@ -1,5 +1,7 @@
 package com.agentcloud.server;
 
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.engine.AgentRunService;
 import com.agentcloud.engine.ConsolidationService;
 import com.agentcloud.engine.ExperimentMatrixService;
 import com.agentcloud.engine.ExperimentRunService;
@@ -25,6 +27,7 @@ public class NioHttpServer {
     static final String LEGACY_WRITE_ROUTE_SUNSET = "Thu, 31 Dec 2026 23:59:59 GMT";
     static final ObjectMapper SHARED_MAPPER = createSharedMapper();
     private final int port;
+    private final AgentProviderRegistry agentProviderRegistry;
     private final TaskService taskService;
     private final SessionService sessionService;
     private final WorkerRegistry workerRegistry;
@@ -33,24 +36,37 @@ public class NioHttpServer {
     private final LearningMemoryService learningMemoryService;
     private final ExperimentRunService experimentRunService;
     private final ExperimentMatrixService experimentMatrixService;
+    private final AgentRunService agentRunService;
     private final ObjectMapper mapper;
     private final ClassLoader appClassLoader;
     private HttpServer server;
 
     public NioHttpServer(int port, TaskService taskService, SessionService sessionService,
-                         WorkerRegistry workerRegistry, SkillRegistry skillRegistry,
+                         WorkerRegistry workerRegistry, AgentProviderRegistry agentProviderRegistry, SkillRegistry skillRegistry,
                          ConsolidationService consolidation, LearningMemoryService learningMemoryService,
                          ExperimentRunService experimentRunService,
                          ExperimentMatrixService experimentMatrixService) {
+        this(port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation,
+            learningMemoryService, experimentRunService, experimentMatrixService, null);
+    }
+
+    public NioHttpServer(int port, TaskService taskService, SessionService sessionService,
+                         WorkerRegistry workerRegistry, AgentProviderRegistry agentProviderRegistry, SkillRegistry skillRegistry,
+                         ConsolidationService consolidation, LearningMemoryService learningMemoryService,
+                         ExperimentRunService experimentRunService,
+                         ExperimentMatrixService experimentMatrixService,
+                         AgentRunService agentRunService) {
         this.port = port;
         this.taskService = taskService;
         this.sessionService = sessionService;
         this.workerRegistry = workerRegistry;
+        this.agentProviderRegistry = agentProviderRegistry;
         this.skillRegistry = skillRegistry;
         this.consolidation = consolidation;
         this.learningMemoryService = learningMemoryService;
         this.experimentRunService = experimentRunService;
         this.experimentMatrixService = experimentMatrixService;
+        this.agentRunService = agentRunService;
         this.mapper = SHARED_MAPPER;
         this.appClassLoader = NioHttpServer.class.getClassLoader();
     }
@@ -69,9 +85,12 @@ public class NioHttpServer {
         });
         server.createContext("/dialogue", new WebConsoleHandler("/dialogue", "web/dialogue"));
         server.createContext("/console", new WebConsoleHandler("/console", "web/console"));
-        server.createContext("/api/v1/tasks", new TaskHandler(taskService, experimentMatrixService, mapper));
+        server.createContext("/api/v1/tasks", new TaskHandler(taskService, experimentMatrixService, agentProviderRegistry, mapper));
         server.createContext("/api/v1/sessions", new SessionHandler(sessionService, mapper));
         server.createContext("/api/v1/workers", new WorkerHandler(workerRegistry, mapper));
+        server.createContext("/api/v1/agents", new AgentHandler(agentProviderRegistry, agentRunService, mapper));
+        server.createContext("/api/v1/agent_runs", new AgentRunHandler(agentRunService));
+        server.createContext("/api/v1/runtime_health", new RuntimeHealthHandler(agentRunService));
         server.createContext("/api/v1/skills", new SkillHandler(skillRegistry, mapper));
         server.createContext("/api/v1/checkpoints", new CheckpointHandler(consolidation, mapper));
         server.createContext("/api/v1/learning_memories", new LearningMemoryHandler(learningMemoryService));

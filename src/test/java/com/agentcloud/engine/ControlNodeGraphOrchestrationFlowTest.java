@@ -126,6 +126,16 @@ class ControlNodeGraphOrchestrationFlowTest {
                 "completion_judgment".equals(d.decisionType())
                     && "done:high".equals(metadataString(d.metadata(), "evaluation_result"))
             ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && "strong_evaluator".equals(metadataString(d.metadata(), "evaluator_role"))
+                    && "strong".equals(metadataString(d.metadata(), "evaluator_model_tier"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "orchestration_closed_loop_observed"))
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && "planner".equals(metadataString(d.metadata(), "selection_scope"))
+            ));
         }
     }
 

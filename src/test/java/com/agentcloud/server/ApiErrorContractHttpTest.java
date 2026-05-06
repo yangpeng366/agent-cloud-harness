@@ -11,8 +11,10 @@ import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.SkillDao;
 import com.agentcloud.store.TaskDao;
+import com.agentcloud.tool.HostToolAvailability;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -23,6 +25,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
@@ -123,6 +127,128 @@ class ApiErrorContractHttpTest {
             assertFalse(response.body().path("success").asBoolean());
             assertEquals("400", response.body().path("code").asText());
             assertEquals("invalid json body", response.body().path("message").asText());
+        }
+    }
+
+    @Test
+    void workerRegistrationAcceptsSupportedCommandToolCapabilitiesForCurrentHost() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-tools.db"))) {
+            List<String> toolCapabilities = supportedCommandToolCapabilities();
+            ApiCall response = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "command-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("ops"),
+                "tool_capabilities", toolCapabilities,
+                "tool_scope", java.util.List.of(tempDir.toString())
+            ));
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().path("success").asBoolean());
+            assertTrue(response.body().path("data").path("tool_capabilities").isArray());
+            assertEquals(toolCapabilities.size(), response.body().path("data").path("tool_capabilities").size());
+        }
+    }
+
+    @Test
+    void workerReadinessReportsToolChecksForDeclaredCommandCapabilities() throws Exception {
+        List<String> toolCapabilities = supportedCommandToolCapabilities();
+        Assumptions.assumeFalse(toolCapabilities.isEmpty(), "no supported command tool available on this host");
+        String toolCapability = toolCapabilities.get(0);
+
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-readiness-tools.db"))) {
+            ApiCall registration = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "ready-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("ops"),
+                "tool_capabilities", java.util.List.of(toolCapability),
+                "tool_scope", java.util.List.of(tempDir.toString())
+            ));
+
+            assertEquals(200, registration.statusCode());
+            assertTrue(registration.body().path("data").path("metadata").path("host_tool_availability")
+                .path(toolCapability).asBoolean());
+
+            ApiCall readiness = fixture.get("/api/v1/workers/ready-worker/readiness");
+
+            assertEquals(200, readiness.statusCode());
+            assertTrue(readiness.body().path("success").asBoolean());
+            assertTrue(readiness.body().path("data").path("ready").asBoolean());
+            assertTrue(readiness.body().path("data").path("checks").path("tool:" + toolCapability).asBoolean());
+            assertEquals("ready", readiness.body().path("data").path("reason").asText());
+        }
+    }
+
+    @Test
+    void workerRegistrationRejectsWindowsOnlyToolCapabilityOnNonWindowsHost() throws Exception {
+        if (HostToolAvailability.isWindowsHost()) {
+            return;
+        }
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-tools-nonwindows.db"))) {
+            ApiCall response = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "command-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("ops"),
+                "tool_capabilities", java.util.List.of("powershell"),
+                "tool_scope", java.util.List.of(tempDir.toString())
+            ));
+
+            assertEquals(400, response.statusCode());
+            assertFalse(response.body().path("success").asBoolean());
+            assertEquals("powershell is only available on Windows hosts", response.body().path("message").asText());
+        }
+    }
+
+    @Test
+    void workerRegistrationRejectsGitToolCapabilityWhenGitUnavailable() throws Exception {
+        if (HostToolAvailability.isToolCapabilityAvailable("git")) {
+            return;
+        }
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-tools-nogit.db"))) {
+            ApiCall response = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "command-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("ops"),
+                "tool_capabilities", java.util.List.of("git"),
+                "tool_scope", java.util.List.of(tempDir.toString())
+            ));
+
+            assertEquals(400, response.statusCode());
+            assertFalse(response.body().path("success").asBoolean());
+            assertEquals("git is not available on this host", response.body().path("message").asText());
+        }
+    }
+
+    @Test
+    void workerRegistrationAcceptsPatchFileToolCapability() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-patch-tool.db"))) {
+            ApiCall response = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "patch-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("coding"),
+                "tool_capabilities", java.util.List.of("patch_file"),
+                "tool_scope", java.util.List.of(tempDir.toString())
+            ));
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().path("success").asBoolean());
+            assertEquals("patch_file", response.body().path("data").path("tool_capabilities").get(0).asText());
+        }
+    }
+
+    @Test
+    void workerRegistrationRequiresToolScopeWhenToolCapabilitiesAreDeclared() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-scope-required.db"))) {
+            ApiCall response = fixture.postJson("/api/v1/workers", Map.of(
+                "worker_id", "scope-missing-worker",
+                "worker_type", "codex",
+                "capabilities", java.util.List.of("coding"),
+                "tool_capabilities", java.util.List.of("patch_file")
+            ));
+
+            assertEquals(400, response.statusCode());
+            assertFalse(response.body().path("success").asBoolean());
+            assertEquals("tool_scope is required when tool_capabilities are declared",
+                response.body().path("message").asText());
         }
     }
 
@@ -248,5 +374,9 @@ class ApiErrorContractHttpTest {
     }
 
     private record ApiCall(int statusCode, JsonNode body) {
+    }
+
+    private List<String> supportedCommandToolCapabilities() {
+        return HostToolAvailability.supportedCommandToolCapabilities();
     }
 }

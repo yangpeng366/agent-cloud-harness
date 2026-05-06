@@ -15,6 +15,41 @@
 - continuity 是否为长任务带来显著收益
 - 成本与效果之间是否出现更优平衡
 
+本文档默认建立在一个更小也更准确的当前态前提上：
+
+> `agent-cloud-harness` 当前首先要被评测为一个 continuity-first orchestration harness；“强模型调度小模型”的命题则是这个 harness 近期最关键、最值得尽快证明的价值闭环。
+
+建议与以下文档一起看：
+
+- `ARCHITECTURE.md`
+- `CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
+- `NEXT_5_ENGINEERING_PRIORITIES.md`
+- `EVAL_SCENARIOS.md`
+- `AGENT_PROVIDER_TECHNICAL_DESIGN.md`
+- `AGENT_PROVIDER_API_CONTRACT_ADDENDUM.md`
+- `ORCHESTRATION_MVP_PLAN.md`
+
+---
+
+## 1.1 近期验证边界
+
+在进入“大任务长期收益”论证前，建议先把近端证明问题收紧为：
+
+> harness 是否已经能让 `strong_only / small_only / orchestrated` 三种模式，在一组**小而真实**的仓库任务上形成可比较、可审计、可复跑的闭环？
+
+这里的“小而真实”建议满足：
+
+- 人工预估在 10-30 分钟内可完成
+- 1-3 个文件范围内可验收
+- 验收标准清楚，不依赖开放域主观判断
+- 允许插入一次 pause / resume 或一次路由纠偏，以验证 continuity 与 orchestration 的真实价值
+
+近期 proof 不要求一步证明“大任务完全自动化”，而是先证明：
+
+- orchestrated 模式确实能闭环完成一批小任务
+- strong / small 分工在这些任务上已有可见收益
+- 系统已经能通过 `provider_selection / agent_run / live_flow / experiment_run` 留下足够证据链
+
 ---
 
 ## 2. 核心评测问题
@@ -64,6 +99,12 @@
 如果没有 baseline，对“能力提升”和“成本优化”的判断就不成立。
 
 因此至少要建立 3 组基线。
+
+这里的 baseline 不应和当前已落地的 runtime / trace / packet / provider 观测能力脱节。更稳妥的做法是：
+
+- 复用现有 `experiment_run / experiment_summary / harness_trace / provider_selection / agent_run` 观测面
+- 先证明 strong_only / small_only / orchestrated 三模式在同一 harness 里可比较
+- 再逐步增加任务集和 acceptance 复杂度
 
 ### B1. 强模型单独完成任务
 
@@ -203,9 +244,54 @@
 - 这是验证项目价值的主战场
 - 最适合体现 continuity 和模型分工的收益
 
+## 5.4 近期 proof 任务集
+
+为尽快回答近端问题，建议先固定一组更容易复跑的小型真实任务切片：
+
+- 文档增量整理：例如补一段约束、统一术语、补 cross-link，并要求改动范围可控
+- 单接口/单文件低风险修补：例如小范围 handler/contract/脚本修正，并有明确验收点
+- 带一次恢复动作的小任务：在前两类任务中人为插入一次 `pause/resume` 或一次轻量 handoff
+
+这组任务的价值不在于“难”，而在于：
+
+- 足够真实，不是纯合成 benchmark
+- 足够小，便于用三种 `model_mode` 快速对比
+- 足够可验收，能形成第一版闭环证据
+
 ---
 
 ## 6. 推荐最小实验集
+
+## E0. 小型真实任务闭环证明
+
+### 目标
+
+先证明 harness 已经能在近端任务上跑出可审计闭环，而不是只证明控制图能转。
+
+### 对比组
+
+- `strong_only`
+- `small_only`
+- `orchestrated`
+
+### 任务范围
+
+- 优先选用 `5.4` 中的 3-5 个小型真实任务
+- 每个任务都要求有明确 acceptance，且最好能复用仓库现有 API / trace / experiment 观测面
+
+### 必看观测
+
+- `/api/v1/tasks/{id}/provider_selection`
+- `/api/v1/tasks/{id}/agent_run`
+- `/api/v1/tasks/{id}/live_flow`
+- `/api/v1/tasks/{id}/experiment_run`
+
+### 希望看到的结果
+
+- orchestrated 模式能稳定闭环完成多数小任务
+- small_only 在这些任务上更容易暴露漂移或验收不足
+- strong_only 可作为质量参考，但成本更高
+- 三组结果都能留下结构化证据，而不只是人工印象
 
 ## E1. 单模型 vs 分层协作
 
@@ -316,6 +402,10 @@
 为了避免一直停留在“感觉不错”，建议先设一个最小验收门槛。
 
 ## 7.1 对项目目标的最小成立标准
+
+在进入中长任务结论前，建议先加一个更近端的入口门槛：
+
+- 至少 3 个小型真实任务在 `orchestrated` 模式下完成闭环，且可从 `provider_selection / agent_run / live_flow` 还原关键路径
 
 至少满足以下 3 条中的 2 条：
 

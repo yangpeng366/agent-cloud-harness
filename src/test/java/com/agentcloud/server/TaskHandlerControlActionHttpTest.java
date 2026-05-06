@@ -7,6 +7,14 @@ import com.agentcloud.model.Session;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
+import com.agentcloud.runtime.ActiveContext;
+import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.ContextObjectType;
+import com.agentcloud.runtime.context.ContextRetentionState;
+import com.agentcloud.runtime.context.MountedContextPanel;
+import com.agentcloud.runtime.context.MountedContextPanelName;
+import com.agentcloud.runtime.context.MountedContextView;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.SessionDao;
@@ -238,6 +246,40 @@ class TaskHandlerControlActionHttpTest {
         }
     }
 
+    @Test
+    void getRuntimeContextReturnsMountedContextViewSurface() throws Exception {
+        try (RuntimeContextHarness harness = new RuntimeContextHarness(tempDir.resolve("task-handler-runtime-context.db"))) {
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/task_runtime_http/runtime_context"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> mountedContextView = harness.map(data.get("mounted_context_view"));
+            List<Map<String, Object>> panels = harness.list(mountedContextView.get("panels"));
+            List<?> selectionTrace = (List<?>) mountedContextView.get("selection_trace");
+            Map<String, Object> pinnedPanel = panels.stream()
+                .filter(panel -> "pinned".equals(panel.get("name")))
+                .findFirst()
+                .orElseThrow();
+            List<Map<String, Object>> pinnedObjects = harness.list(pinnedPanel.get("objects"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("task_runtime_http", mountedContextView.get("task_id"));
+            assertTrue(selectionTrace.contains("compat_mode=task_runtime_context_preserved"));
+            assertEquals(1, pinnedObjects.size());
+            assertEquals("constraint", pinnedObjects.getFirst().get("type"));
+            assertEquals("pinned", pinnedObjects.getFirst().get("retention_state"));
+            assertEquals("/sessions/session_runtime_http/tasks/task_runtime_http/constraints",
+                pinnedObjects.getFirst().get("path"));
+            assertEquals("/sessions/session_runtime_http/tasks/task_runtime_http",
+                pinnedObjects.getFirst().get("parent_path"));
+        }
+    }
+
     private static final class TestHarness implements AutoCloseable {
         private final DatabaseManager db;
         private final TaskService service;
@@ -306,6 +348,153 @@ class TaskHandlerControlActionHttpTest {
 
         private void saveTask(Task task) {
             taskDao.updateState(task);
+        }
+
+        private URI uri(String path) {
+            return URI.create("http://127.0.0.1:" + port + path);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> readJson(String body) throws IOException {
+            return NioHttpServer.SHARED_MAPPER.readValue(body, Map.class);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> map(Object value) {
+            return (Map<String, Object>) value;
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> list(Object value) {
+            return (List<Map<String, Object>>) value;
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+            executor.shutdownNow();
+            db.close();
+        }
+    }
+
+    private static final class RuntimeContextHarness implements AutoCloseable {
+        private final DatabaseManager db;
+        private final HttpServer server;
+        private final ExecutorService executor;
+        private final HttpClient client;
+        private final int port;
+
+        private RuntimeContextHarness(Path dbPath) throws IOException {
+            this.db = new DatabaseManager(dbPath);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+
+            Session session = Session.create("session_runtime_http", "runtime http", "active");
+            sessionDao.insert(session);
+            Task task = new Task(
+                "task_runtime_http",
+                session.id(),
+                null,
+                "runtime context endpoint",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T07:10:00Z"),
+                Instant.parse("2026-05-06T07:10:00Z"),
+                null,
+                null,
+                null,
+                "已有 runtime summary",
+                "验证 runtime_context HTTP 输出",
+                null,
+                "codex",
+                "continue",
+                null,
+                Map.of("task_type", "coding")
+            );
+            taskDao.insert(task);
+            eventDao.insert(new Event(
+                "evt_runtime_http",
+                session.id(),
+                task.id(),
+                Instant.parse("2026-05-06T07:10:01Z"),
+                "task_progressed",
+                "system",
+                null,
+                "mounted context runtime prepared",
+                Map.of()
+            ));
+
+            TaskRuntimeContext runtimeContext = new TaskRuntimeContext(
+                task,
+                null,
+                null,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                new ActiveContext(
+                    "runtime http",
+                    List.of("priority=high"),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of("保留关键约束"),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    List.of("budget=12"),
+                    "runtime summary",
+                    "runtime synthesized context",
+                    12
+                ),
+                new MountedContextView(
+                    null,
+                    task.id(),
+                    List.of(
+                        new MountedContextPanel(
+                            MountedContextPanelName.PINNED,
+                            "Pinned",
+                            List.of(new ContextObject(
+                                "constraint_runtime_http",
+                                "/sessions/session_runtime_http/tasks/task_runtime_http/constraints",
+                                ContextObjectType.CONSTRAINT,
+                                "/sessions/session_runtime_http/tasks/task_runtime_http",
+                                "Constraints",
+                                "runtime_context 接口需要暴露 mounted context",
+                                "runtime_context 接口需要暴露 mounted context",
+                                Instant.parse("2026-05-06T07:10:02Z"),
+                                ContextRetentionState.PINNED,
+                                List.of(),
+                                List.of(),
+                                Map.of("constraint_count", 1)
+                            ))
+                        )
+                    ),
+                    List.of("compat_mode=task_runtime_context_preserved")
+                )
+            );
+
+            TaskService service = new TaskService(
+                taskDao, sessionDao, eventDao, null, null, null, null,
+                null, null, null, null, null
+            ) {
+                @Override
+                public TaskRuntimeContext getRuntimeContext(String taskId) {
+                    if (!"task_runtime_http".equals(taskId)) {
+                        throw new IllegalArgumentException("task not found");
+                    }
+                    return runtimeContext;
+                }
+            };
+
+            this.server = HttpServer.create(new InetSocketAddress(0), 0);
+            this.executor = Executors.newCachedThreadPool();
+            this.server.setExecutor(executor);
+            this.server.createContext("/api/v1/tasks", new TaskHandler(service, NioHttpServer.SHARED_MAPPER));
+            this.server.start();
+            this.port = server.getAddress().getPort();
+            this.client = HttpClient.newHttpClient();
         }
 
         private URI uri(String path) {

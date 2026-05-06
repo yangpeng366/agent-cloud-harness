@@ -3,6 +3,7 @@ package com.agentcloud.server;
 import com.agentcloud.engine.ExperimentRunService;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.model.ApiResponse;
+import com.agentcloud.model.ExperimentRunSummary;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import org.slf4j.Logger;
@@ -36,6 +37,16 @@ class ExperimentRunHandler implements HttpHandler {
                     params.get("task_case_key"),
                     params.get("task_length_bucket"),
                     params.get("model_mode"),
+                    params.get("completion_status"),
+                    params.get("acceptance_result"),
+                    parseBooleanParam(params.get("failure_reason_present")),
+                    parseBooleanParam(params.get("recovery_success")),
+                    params.get("route_source"),
+                    parseBooleanParam(params.get("orchestration_closed_loop_observed")),
+                    parseBooleanParam(params.get("has_route_evidence")),
+                    parseBooleanParam(params.get("has_execution_judgment")),
+                    parseBooleanParam(params.get("has_completion_judgment")),
+                    parseBooleanParam(params.get("has_closed_loop_evidence_chain")),
                     params.get("tool_execution_mode"),
                     params.get("tool_chain_termination_reason"),
                     parsePositiveInt(params.get("min_tool_chain_steps")),
@@ -46,9 +57,36 @@ class ExperimentRunHandler implements HttpHandler {
                 return;
             }
 
+            if ("GET".equals(method) && path.equals("/api/v1/experiment_runs/summary")) {
+                ExperimentRunSummary summary = experimentRunService.summarizeRuns(
+                    params.get("experiment_name"),
+                    params.get("task_case_key"),
+                    params.get("task_length_bucket"),
+                    params.get("model_mode"),
+                    params.get("completion_status"),
+                    params.get("acceptance_result"),
+                    parseBooleanParam(params.get("failure_reason_present")),
+                    parseBooleanParam(params.get("recovery_success")),
+                    params.get("route_source"),
+                    parseBooleanParam(params.get("orchestration_closed_loop_observed")),
+                    parseBooleanParam(params.get("has_route_evidence")),
+                    parseBooleanParam(params.get("has_execution_judgment")),
+                    parseBooleanParam(params.get("has_completion_judgment")),
+                    parseBooleanParam(params.get("has_closed_loop_evidence_chain")),
+                    params.get("tool_execution_mode"),
+                    params.get("tool_chain_termination_reason"),
+                    parsePositiveInt(params.get("min_tool_chain_steps")),
+                    parsePositiveInt(params.get("max_tool_chain_steps"))
+                );
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(summary));
+                return;
+            }
+
             if ("GET".equals(method) && path.startsWith("/api/v1/experiment_runs/")) {
                 String taskId = NioHttpServer.pathVar(ex, 4);
-                var run = taskService.getExperimentRun(taskId);
+                var run = taskService != null
+                    ? taskService.getExperimentRun(taskId)
+                    : experimentRunService.getByTaskId(taskId);
                 if (run == null) {
                     NioHttpServer.sendNotFound(ex);
                 } else {
@@ -97,5 +135,17 @@ class ExperimentRunHandler implements HttpHandler {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    private Boolean parseBooleanParam(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase();
+        return switch (normalized) {
+            case "true", "1", "yes" -> Boolean.TRUE;
+            case "false", "0", "no" -> Boolean.FALSE;
+            default -> null;
+        };
     }
 }

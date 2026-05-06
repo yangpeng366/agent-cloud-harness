@@ -2,6 +2,7 @@ package com.agentcloud.engine;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.model.Decision;
 import com.agentcloud.model.ExperimentMatrixCreateRequest;
 import com.agentcloud.model.ExperimentMatrixSummary;
 import com.agentcloud.model.Task;
@@ -96,6 +97,13 @@ class ExperimentMatrixServiceTest {
                 "single tool strong output",
                 Map.of(
                     "route_source", "capability_match",
+                    "execution_judgment_action", "done",
+                    "completion_judgment_status", "done",
+                    "completion_alignment_level", "high",
+                    "has_route_evidence", true,
+                    "has_execution_judgment", true,
+                    "has_completion_judgment", true,
+                    "has_closed_loop_evidence_chain", true,
                     "latest_worker_metadata", Map.of(
                         "tool_execution_mode", "single_tool_round",
                         "tool_chain_step_count", 1,
@@ -113,16 +121,23 @@ class ExperimentMatrixServiceTest {
                 null,
                 null,
                 "multi tool small output",
-                Map.of(
-                    "route_source", "capability_match",
-                    "preferred_worker_hint", "codex",
-                    "learning_hint_applied", false,
-                    "fallback_reason", "hint filtered by model tier",
-                    "latest_worker_metadata", Map.of(
+                Map.ofEntries(
+                    Map.entry("route_source", "capability_match"),
+                    Map.entry("preferred_worker_hint", "codex"),
+                    Map.entry("learning_hint_applied", false),
+                    Map.entry("fallback_reason", "hint filtered by model tier"),
+                    Map.entry("execution_judgment_action", "escalate"),
+                    Map.entry("completion_judgment_status", "misaligned"),
+                    Map.entry("completion_alignment_level", "low"),
+                    Map.entry("has_route_evidence", true),
+                    Map.entry("has_execution_judgment", true),
+                    Map.entry("has_completion_judgment", true),
+                    Map.entry("has_closed_loop_evidence_chain", true),
+                    Map.entry("latest_worker_metadata", Map.of(
                         "tool_execution_mode", "multi_tool_round",
                         "tool_chain_step_count", 4,
                         "tool_chain_termination_reason", "repeated_tool_guard"
-                    )
+                    ))
                 )
             ));
             harness.artifactDao().insert(new com.agentcloud.model.Artifact(
@@ -135,17 +150,39 @@ class ExperimentMatrixServiceTest {
                 null,
                 null,
                 "multi tool orchestrated output",
-                Map.of(
-                    "route_source", "learning_memory",
-                    "preferred_worker_hint", "kimi",
-                    "learning_hint_applied", true,
-                    "latest_worker_metadata", Map.of(
+                Map.ofEntries(
+                    Map.entry("route_source", "learning_memory"),
+                    Map.entry("preferred_worker_hint", "kimi"),
+                    Map.entry("learning_hint_applied", true),
+                    Map.entry("orchestration_closed_loop_observed", true),
+                    Map.entry("execution_judgment_action", "checkpoint"),
+                    Map.entry("completion_judgment_status", "partially_done"),
+                    Map.entry("completion_alignment_level", "medium"),
+                    Map.entry("has_route_evidence", true),
+                    Map.entry("has_execution_judgment", true),
+                    Map.entry("has_completion_judgment", true),
+                    Map.entry("has_closed_loop_evidence_chain", true),
+                    Map.entry("closed_loop_evidence", Map.of(
+                        "task_surface_refs", Map.of(
+                            "task_id", orchestratedShort.id(),
+                            "live_flow_path", "/api/v1/tasks/" + orchestratedShort.id() + "/live_flow",
+                            "runtime_context_path", "/api/v1/tasks/" + orchestratedShort.id() + "/runtime_context",
+                            "harness_trace_path", "/api/v1/tasks/" + orchestratedShort.id() + "/harness_trace",
+                            "judgment_trace_path", "/api/v1/tasks/" + orchestratedShort.id() + "/judgment_trace",
+                            "tool_trace_path", "/api/v1/tasks/" + orchestratedShort.id() + "/tool_trace"
+                        )
+                    )),
+                    Map.entry("latest_worker_metadata", Map.of(
                         "tool_execution_mode", "multi_tool_round",
                         "tool_chain_step_count", 2,
                         "tool_chain_termination_reason", "planner_no_additional_tool"
-                    )
+                    ))
                 )
             ));
+
+            harness.insertJudgments(strongShort, "done", "done", "high");
+            harness.insertJudgments(smallShort, "escalate", "misaligned", "low");
+            harness.insertJudgments(orchestratedShort, "checkpoint", "partially_done", "medium");
 
             taskService.updateTaskState(strongShort.id(), "done", "baseline strong completed");
             taskService.updateTaskState(smallShort.id(), "failed", "baseline small stalled");
@@ -162,7 +199,16 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("strong_only").completedCount());
             assertEquals(1, modeSummaries.get("strong_only").acceptedCount());
             assertEquals(1, modeSummaries.get("strong_only").runsWithRouteData());
+            assertEquals(1, modeSummaries.get("strong_only").runsWithExecutionJudgment());
+            assertEquals(1, modeSummaries.get("strong_only").runsWithCompletionJudgment());
+            assertEquals(1, modeSummaries.get("strong_only").runsWithClosedLoopEvidenceChain());
+            assertEquals(2, modeSummaries.get("strong_only").runsWithTaskSurfaceRefs());
+            assertEquals(1, modeSummaries.get("strong_only").runsWithJudgmentSurfaceRefs());
+            assertEquals(0, modeSummaries.get("strong_only").runsWithToolTraceSurfaceRefs());
             assertEquals(1, modeSummaries.get("strong_only").routeSourceCounts().get("capability_match"));
+            assertEquals(1, modeSummaries.get("strong_only").executionActionCounts().get("done"));
+            assertEquals(1, modeSummaries.get("strong_only").completionJudgmentStatusCounts().get("done"));
+            assertEquals(1, modeSummaries.get("strong_only").completionAlignmentLevelCounts().get("high"));
             assertEquals(0, modeSummaries.get("strong_only").runsWithLearningHint());
             assertEquals(0, modeSummaries.get("strong_only").learningHintAppliedCount());
             assertEquals(0.0, modeSummaries.get("strong_only").learningHintAppliedRate());
@@ -173,7 +219,16 @@ class ExperimentMatrixServiceTest {
             assertEquals(2, modeSummaries.get("small_only").runCount());
             assertEquals(1, modeSummaries.get("small_only").rejectedCount());
             assertEquals(1, modeSummaries.get("small_only").runsWithRouteData());
+            assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgment());
+            assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgment());
+            assertEquals(1, modeSummaries.get("small_only").runsWithClosedLoopEvidenceChain());
+            assertEquals(2, modeSummaries.get("small_only").runsWithTaskSurfaceRefs());
+            assertEquals(1, modeSummaries.get("small_only").runsWithJudgmentSurfaceRefs());
+            assertEquals(0, modeSummaries.get("small_only").runsWithToolTraceSurfaceRefs());
             assertEquals(1, modeSummaries.get("small_only").routeSourceCounts().get("capability_match"));
+            assertEquals(1, modeSummaries.get("small_only").executionActionCounts().get("escalate"));
+            assertEquals(1, modeSummaries.get("small_only").completionJudgmentStatusCounts().get("misaligned"));
+            assertEquals(1, modeSummaries.get("small_only").completionAlignmentLevelCounts().get("low"));
             assertEquals(1, modeSummaries.get("small_only").runsWithLearningHint());
             assertEquals(0, modeSummaries.get("small_only").learningHintAppliedCount());
             assertEquals(0.0, modeSummaries.get("small_only").learningHintAppliedRate());
@@ -184,7 +239,18 @@ class ExperimentMatrixServiceTest {
             assertEquals(2, modeSummaries.get("orchestrated").runCount());
             assertEquals(1, modeSummaries.get("orchestrated").needsFollowupCount());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithRouteData());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgment());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgment());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithClosedLoopEvidenceChain());
+            assertEquals(2, modeSummaries.get("orchestrated").runsWithTaskSurfaceRefs());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithJudgmentSurfaceRefs());
+            assertEquals(0, modeSummaries.get("orchestrated").runsWithToolTraceSurfaceRefs());
             assertEquals(1, modeSummaries.get("orchestrated").routeSourceCounts().get("learning_memory"));
+            assertEquals(1, modeSummaries.get("orchestrated").executionActionCounts().get("checkpoint"));
+            assertEquals(1, modeSummaries.get("orchestrated").completionJudgmentStatusCounts().get("partially_done"));
+            assertEquals(1, modeSummaries.get("orchestrated").completionAlignmentLevelCounts().get("medium"));
+            assertEquals(2, modeSummaries.get("orchestrated").orchestratedRunCount());
+            assertEquals(1, modeSummaries.get("orchestrated").orchestrationClosedLoopObservedCount());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithLearningHint());
             assertEquals(1, modeSummaries.get("orchestrated").learningHintAppliedCount());
             assertEquals(1.0, modeSummaries.get("orchestrated").learningHintAppliedRate());
@@ -243,10 +309,54 @@ class ExperimentMatrixServiceTest {
             experimentRunService
         );
 
-        return new TestHarness(taskService, new ExperimentMatrixService(taskService, experimentRunService), artifactDao);
+        return new TestHarness(
+            taskService,
+            new ExperimentMatrixService(taskService, experimentRunService),
+            artifactDao,
+            decisionDao
+        );
     }
 
     private record TestHarness(TaskService taskService,
                                ExperimentMatrixService experimentMatrixService,
-                               ArtifactDao artifactDao) {}
+                               ArtifactDao artifactDao,
+                               DecisionDao decisionDao) {
+        private void insertJudgments(Task task,
+                                     String executionAction,
+                                     String completionStatus,
+                                     String alignmentLevel) {
+            var executionMetadata = new java.util.LinkedHashMap<String, Object>();
+            executionMetadata.put("action", executionAction);
+            if (task.assignedWorker() != null) {
+                executionMetadata.put("selected_worker", task.assignedWorker());
+            }
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "execution_judgment",
+                "Execution judgment: " + executionAction,
+                "seed execution judgment for matrix summary",
+                "medium",
+                null,
+                executionMetadata
+            ));
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "completion_judgment",
+                "Completion judgment: " + completionStatus,
+                "seed completion judgment for matrix summary",
+                "medium",
+                null,
+                Map.of(
+                    "status", completionStatus,
+                    "alignment_level", alignmentLevel
+                )
+            ));
+        }
+    }
 }

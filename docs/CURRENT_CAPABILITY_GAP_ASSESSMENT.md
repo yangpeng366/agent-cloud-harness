@@ -14,24 +14,39 @@
 本文档与 `NEXT_5_ENGINEERING_PRIORITIES.md` 配套使用。
 前者回答“先做什么”，本文回答“现在做到哪了，还差什么”。
 
+如果要顺着同一条主线继续看，建议同时联读：
+
+- `ARCHITECTURE.md`：当前代码里的 continuity-first control plane 落点
+- `GOAL_ORIENTED_EVAL_PLAN.md`：如何验证“强模型调小模型”的近端命题
+- `PHASE2_ROADMAP.md`：当前 runtime contract 收硬方向
+- `AGENT_PROVIDER_TECHNICAL_DESIGN.md`：provider 接入面如何接到现有 harness 上
+
 ---
 
 ## 2. 总体判断
 
 如果压缩成一句话，当前项目的状态是：
 
-> `agent-cloud-harness` 已经具备了相当明确的 continuity runtime / control plane 雏形，但还没有把“强模型调度小模型完成长任务”的主价值闭环真正跑通，也没有建立足够稳定的实验骨架来证明该闭环优于基线。
+> `agent-cloud-harness` 已经具备相当明确的 continuity runtime / control plane 雏形，而且已经拥有真实的 tool-aware execution、tool trace 持久化、runtime context、judgment trace 与 experiment surface；但还没有把这些能力进一步收束成统一的 hardness phase-1 runtime contract 链，也还没有把“强模型调度小模型完成长任务”的主价值闭环稳定证明出来。
 
 因此当前项目：
 
 - 已经不像一个纯 demo
-- 也还不能完全证明自己是一个成熟的 orchestration harness
+- 也不只是“只有设计没有落地”
+- 但还不能完全证明自己是一个成熟的 orchestration harness
+
+更具体地说，当前最应该坚持的叙事顺序是：
+
+1. 先把项目描述为 **continuity-first orchestration harness**
+2. 再把“强模型调度小模型完成更长任务”作为近端最关键 proof target
+3. 避免重新退回“所有 runtime/provider 能力都还是未来工作”的旧表述
 
 更细一点看：
 
 - continuity / packet / control 方向已经达到中等成熟度
+- tool-aware execution 已进入真实实现阶段
 - orchestration 主闭环仍偏早期
-- evaluation system 仍明显不足
+- evaluation system 虽已有 matrix / run surface，但仍需要更稳定的对比闭环
 
 ---
 
@@ -42,7 +57,7 @@
 | P1 | 强模型调小模型最小闭环 | 有基础但未闭环 | 20%-30% | 没有真实 strong planner -> small executor -> strong evaluator 路径 | 先固定一个单场景闭环，并把 model tier / selection reason 写进 trace |
 | P2 | Baseline experiment matrix | 有 eval 意识但缺执行框架 | 10%-20% | 无三模式固定对比、无统一指标落盘 | 先建立 strong_only / small_only / orchestrated 三模式 run skeleton |
 | P3 | Checkpoint / handoff packet spec | 概念最成熟但协议未封板 | 45%-60% | schema 边界不够正式，machine-readable first 不够稳定 | 冻结最小字段集，并让 runtime 输出与 schema 对齐 |
-| P4 | Tool-aware 最小多步执行 | 有雏形但执行链偏弱 | 25%-35% | 单轮单工具倾向明显，缺少多步 guard 与 trace | 做 2-3 步工具链，先支持 search -> read -> write 型路径 |
+| P4 | Tool-aware 最小多步执行 | 已有真实执行雏形 | 45%-60% | 已有多步工具链与 trace，但 execution contract / runtime fact aggregation / continuation 对齐仍不够硬 | 先把 `WorkerExecutionResult`、`ToolInvocationRecord`、checkpoint / judgment / live flow 聚合进一步收束成统一 hardness contract |
 | P5 | 状态变更接口 + 消息投影 | 有用户面雏形但产品收口未完成 | 35%-50% | runtime / message layer 仍未完全统一，控制接口过渡态明显 | 把关键控制动作改成 POST/PATCH，并固定生命周期消息投影 |
 
 ---

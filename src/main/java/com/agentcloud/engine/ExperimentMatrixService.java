@@ -199,8 +199,31 @@ public class ExperimentMatrixService {
                 .sum();
             int runsWithRouteData = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
-                .map(metadata -> metadataString(metadata, "route_source"))
-                .filter(value -> value != null && !value.isBlank())
+                .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "has_route_evidence")))
+                .count();
+            int runsWithExecutionJudgment = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "has_execution_judgment")))
+                .count();
+            int runsWithCompletionJudgment = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "has_completion_judgment")))
+                .count();
+            int runsWithClosedLoopEvidenceChain = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "has_closed_loop_evidence_chain")))
+                .count();
+            int runsWithTaskSurfaceRefs = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasTaskSurfaceRefs)
+                .count();
+            int runsWithJudgmentSurfaceRefs = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasJudgmentSurfaceRefs)
+                .count();
+            int runsWithToolTraceSurfaceRefs = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasToolTraceSurfaceRefs)
                 .count();
             int runsWithLearningHint = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
@@ -229,6 +252,13 @@ public class ExperimentMatrixService {
                 .max()
                 .orElse(0);
             Map<String, Integer> routeSourceCounts = countMetadataValues(runsByMode, "route_source");
+            Map<String, Integer> executionActionCounts = countMetadataValues(runsByMode, "execution_judgment_action");
+            Map<String, Integer> completionJudgmentStatusCounts = countMetadataValues(
+                runsByMode, "completion_judgment_status"
+            );
+            Map<String, Integer> completionAlignmentLevelCounts = countMetadataValues(
+                runsByMode, "completion_alignment_level"
+            );
             Map<String, Integer> toolExecutionModeCounts = countMetadataValues(runsByMode, "tool_execution_mode");
             Map<String, Integer> toolChainTerminationReasonCounts = countMetadataValues(
                 runsByMode, "tool_chain_termination_reason"
@@ -236,6 +266,13 @@ public class ExperimentMatrixService {
             double averageCost = runCount == 0 ? 0.0 : roundToThree(totalCost / runCount);
             double completionRate = runCount == 0 ? 0.0 : roundToThree((double) completedCount / runCount);
             double acceptanceRate = runCount == 0 ? 0.0 : roundToThree((double) acceptedCount / runCount);
+            int orchestratedRunCount = (int) runsByMode.stream()
+                .filter(run -> "orchestrated".equalsIgnoreCase(run.modelMode()))
+                .count();
+            int orchestrationClosedLoopObservedCount = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "orchestration_closed_loop_observed")))
+                .count();
             modeSummaries.add(new ExperimentMatrixSummary.ModeSummary(
                 mode,
                 runCount,
@@ -250,11 +287,22 @@ public class ExperimentMatrixService {
                 totalHumanGates,
                 completionRate,
                 acceptanceRate,
+                orchestrationClosedLoopObservedCount,
+                orchestratedRunCount,
                 runsWithRouteData,
+                runsWithExecutionJudgment,
+                runsWithCompletionJudgment,
+                runsWithClosedLoopEvidenceChain,
+                runsWithTaskSurfaceRefs,
+                runsWithJudgmentSurfaceRefs,
+                runsWithToolTraceSurfaceRefs,
                 runsWithLearningHint,
                 learningHintAppliedCount,
                 learningHintAppliedRate,
                 routeSourceCounts,
+                executionActionCounts,
+                completionJudgmentStatusCounts,
+                completionAlignmentLevelCounts,
                 runsWithToolChainData,
                 averageToolChainStepCount,
                 maxToolChainStepCount,
@@ -454,6 +502,42 @@ public class ExperimentMatrixService {
                 (left, right) -> left,
                 LinkedHashMap::new
             ));
+    }
+
+    private boolean hasTaskSurfaceRefs(Map<String, Object> metadata) {
+        Map<String, Object> refs = taskSurfaceRefs(metadata);
+        return metadataString(refs, "live_flow_path") != null
+            && metadataString(refs, "harness_trace_path") != null;
+    }
+
+    private boolean hasJudgmentSurfaceRefs(Map<String, Object> metadata) {
+        return metadataString(taskSurfaceRefs(metadata), "judgment_trace_path") != null;
+    }
+
+    private boolean hasToolTraceSurfaceRefs(Map<String, Object> metadata) {
+        return metadataString(taskSurfaceRefs(metadata), "tool_trace_path") != null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> taskSurfaceRefs(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return Map.of();
+        }
+        Object rawEvidence = metadata.get("closed_loop_evidence");
+        if (!(rawEvidence instanceof Map<?, ?> evidenceMap)) {
+            return Map.of();
+        }
+        Object rawRefs = evidenceMap.get("task_surface_refs");
+        if (!(rawRefs instanceof Map<?, ?> refsMap)) {
+            return Map.of();
+        }
+        LinkedHashMap<String, Object> normalized = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : refsMap.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+                normalized.put(entry.getKey().toString(), entry.getValue());
+            }
+        }
+        return normalized;
     }
 
     private double roundToThree(double value) {

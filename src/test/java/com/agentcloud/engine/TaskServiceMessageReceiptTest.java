@@ -277,11 +277,14 @@ class TaskServiceMessageReceiptTest {
                 task.sessionId(),
                 task.id(),
                 "kimi",
+                "exec_read_file",
                 "read_file",
                 Map.of("path", "input.txt"),
                 "input loaded",
+                "succeeded",
                 true,
                 14,
+                List.of("input.txt"),
                 Instant.now(),
                 Map.of("tool_execution_mode", "multi_tool_round", "tool_chain_step_index", 1)
             ));
@@ -290,11 +293,14 @@ class TaskServiceMessageReceiptTest {
                 task.sessionId(),
                 task.id(),
                 "kimi",
+                "exec_write_file",
                 "write_file",
                 Map.of("path", "draft.txt"),
                 "draft updated",
+                "succeeded",
                 true,
                 24,
+                List.of("draft.txt"),
                 Instant.now(),
                 Map.of("tool_execution_mode", "multi_tool_round", "tool_chain_step_index", 2)
             ));

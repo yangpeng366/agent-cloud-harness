@@ -176,11 +176,14 @@ CREATE TABLE IF NOT EXISTS tool_invocations (
   session_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
   worker_id TEXT NOT NULL,
+  execution_id TEXT,
   tool_name TEXT NOT NULL,
   arguments_json TEXT,
   result_summary TEXT,
+  status TEXT,
   success INTEGER NOT NULL,
   elapsed_ms INTEGER,
+  touched_paths_json TEXT,
   created_at TEXT NOT NULL,
   metadata_json TEXT,
   FOREIGN KEY(session_id) REFERENCES sessions(id),
@@ -210,6 +213,27 @@ CREATE TABLE IF NOT EXISTS experiment_runs (
   final_artifact_quality_note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  provider_display_name TEXT,
+  worker_role TEXT,
+  selected_worker_id TEXT,
+  selected_model_tier TEXT,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  duration_ms INTEGER,
+  summary TEXT,
+  last_event_type TEXT,
+  artifact_count INTEGER NOT NULL DEFAULT 0,
   metadata_json TEXT,
   FOREIGN KEY(session_id) REFERENCES sessions(id),
   FOREIGN KEY(task_id) REFERENCES tasks(id)
@@ -266,3 +290,9 @@ ON experiment_runs(experiment_name, task_case_key, model_mode, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_experiment_runs_task_length
 ON experiment_runs(task_length_bucket, model_mode, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_started
+ON agent_runs(task_id, started_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_provider_started
+ON agent_runs(provider_id, started_at);

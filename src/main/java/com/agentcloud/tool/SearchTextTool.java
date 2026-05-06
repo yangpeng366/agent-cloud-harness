@@ -29,6 +29,16 @@ public class SearchTextTool extends AbstractLocalFileTool {
     }
 
     @Override
+    public String description() {
+        return "Search text within an allowed file or directory tree.";
+    }
+
+    @Override
+    public String argumentContract() {
+        return "{\"path\":\".\",\"query\":\"TODO\",\"recursive\":true,\"ignore_case\":false,\"max_results\":30}";
+    }
+
+    @Override
     public ToolResult invoke(ToolRequest request) throws IOException {
         Path root = resolvePath(request, false, true);
         String query = stringArg(request.arguments(), "query");

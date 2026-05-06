@@ -16,6 +16,15 @@
 
 **把当前已存在的 runtime 雏形，收敛成更稳定的认知控制层。**
 
+本文档描述的是“在已有落点之上继续收硬 runtime contract”的 Phase 2 路线，而不是重新声明这些层都还不存在。
+
+建议与以下文档一起读：
+
+- `ARCHITECTURE.md`
+- `HARDNESS_PHASE1_ALIGNMENT.md`
+- `CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
+- `NEXT_5_ENGINEERING_PRIORITIES.md`
+
 ---
 
 ## 2. 当前状态判断
@@ -48,11 +57,11 @@ create task
 
 当前主要缺口：
 
-1. `working memory` 还没有独立层。
+1. `working memory` 已有 `ActiveContextBuilder` 与 `active_context` 暴露面，但还没有完全收束成更稳定、边界更清晰的独立 runtime contract 层。
 2. worker 输出仍以自由文本为主，协议不稳定。
-3. `judgeCompletion()` 已存在，但还没有真正进入主状态迁移闭环。
+3. `judgeCompletion()` 已存在，且已进入 `continue` 节点判断链，但其 contract、输入事实面与迁移动作语义仍有继续收硬空间。
 4. consolidation 仍偏 checkpoint 摘要器，还没有明显反哺 active context / judgment policy。
-5. 尚未开始沉淀 `operational learning memory`。
+5. `operational learning memory` 已有最小服务与持久化落点，但强化策略、消费面和稳定协议仍在早期阶段。
 
 ---
 
@@ -167,6 +176,8 @@ src/main/java/com/agentcloud/model/
 src/main/java/com/agentcloud/store/
   LearningMemoryDao.java
 ```
+
+上述对象在当前仓库里已经有真实落点，因此这里更准确的含义是：继续增强与正式化其 phase-2 语义，而不是从零创建。
 
 状态建议：
 

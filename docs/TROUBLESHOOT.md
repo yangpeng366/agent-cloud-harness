@@ -4,27 +4,37 @@
 
 ### G01: 控制动作接口处于 GET/POST 双兼容期
 
-- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java`; `src/main/java/com/agentcloud/server/SessionHandler.java:42`
-- **现象**: 任务控制动作已经有正式 `POST` 接口，但历史 `GET` 兼容路径仍在；如果外部继续调用旧 `GET`，仍可能被预取或缓存层误触发。
-- **原因**: 为兼容旧调用方，`pause/resume/continue/escalate` 暂未立即删除 GET 分支。
-- **规避方式**: 新接入统一改用 `POST /api/v1/tasks/{id}/pause|resume|continue|escalate`；仅把 GET 当作过渡兼容。
-- **代码证据**: handler 同时保留 `POST` 正式入口与 `GET` 兼容分支。
+- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java`, `SessionHandler.java`
+- **现象**: 任务和 session 控制动作已经有正式 `POST` 接口，但历史 `GET` 兼容路径仍在。
+- **风险**: 外部继续调用旧 `GET` 时，仍可能被预取或缓存层误触发。
+- **规避方式**: 新接入统一改用 `POST /api/v1/tasks/{id}/pause|resume|continue|escalate|handoff` 和 `POST /api/v1/sessions/{id}/pause|resume|close`；仅把 `GET` 当作过渡兼容。
 
 ### G02: 任务列表过滤键名存在双写兼容期
 
-- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java:37`
-- **现象**: 当前同时兼容 `?state=active` 和 `?status=active`，对外契约若不收口，SDK 可能继续分叉。
-- **原因**: 为兼容旧调用方，handler 同时接受 `state/status` 两个查询键。
-- **规避方式**: 对外文档优先统一成 `state`，内部过渡期保留双写兼容。
-- **代码证据**: handler 先取 `status`，为空时再回退到 `state`。
+- **位置**: `src/main/java/com/agentcloud/server/TaskHandler.java`
+- **现象**: 当前同时兼容 `?state=active` 和 `?status=active`。
+- **风险**: SDK 或外部脚本可能继续分叉。
+- **规避方式**: 对外文档优先统一成 `status`，`state` 仅保留为历史兼容。
 
-### G03: tool-aware 执行器当前只支持单工具单轮
+### G03: tool-aware 执行器已支持多步工具链，但仍有单轮上限
 
 - **位置**: `src/main/java/com/agentcloud/worker/ToolAwareWorkerExecutor.java`
-- **现象**: 某些需要“先检索再读取再写回”的复杂任务，第一轮只能完成一次工具调用，结果质量可能有限。
-- **原因**: 当前实现是最小双阶段协议，只支持 `planning -> invoke one tool -> finalization`。
-- **规避方式**: 先用它验证“受控工具能力 + 可观测性”已打通；不要把它当成多轮 thread bridge。
-- **代码证据**: executor 只解析一次 `ToolPlan`，并在一次工具调用后直接收敛最终 `WorkerExecutionResult`。
+- **现象**: 复杂任务已经能在单轮内走“检索 -> 读取 -> 写回”这类最多 3 步工具链，但如果命中 guard 或达到上限，仍会提前收敛。
+- **原因**: 当前上限是 `MAX_TOOL_ROUNDS = 3`，并带 `repeated_tool_guard`、`no_progress_guard`、`max_tool_rounds_reached` 等保护。
+- **规避方式**: 把它当成“最小可观测工具链”，不要假设它已经是无限多轮 agent loop；排查时看 `/tool_trace` 和最终 `guard` 原因。
+
+### G04: 路由结果现在受 learning memory 和 model mode 共同影响
+
+- **位置**: `src/main/java/com/agentcloud/engine/router/WorkerRouter.java`
+- **现象**: worker readiness 看起来正常，但最终没有命中你以为的“最强”或“最熟悉” worker。
+- **原因**: 当前路由不再只看 capability/readiness，还会同时考虑 `model_mode`、orchestration stage、learning memory preferred worker hint，以及候选集收窄后的 `fallback_reason`。
+- **规避方式**: 排查时不要只看 `assigned_worker`；同时查看 `/api/v1/tasks/{id}/select_worker`、`/runtime_context`、`/judgment_trace`、`/live_flow` 里的 route metadata。
+
+### G05: 根路径不再是“空白页”，而是前端入口
+
+- **位置**: `src/main/java/com/agentcloud/server/NioHttpServer.java`
+- **现象**: 访问 `http://localhost:8080/` 会直接跳到 `/dialogue/`。
+- **规避方式**: 调试前端问题时，明确区分 `/dialogue/` 和 `/console/` 两套页面；API 调试仍走 `/api/v1/*`。
 
 ## 2. 常见错误场景
 
@@ -32,147 +42,104 @@
 
 - **典型表现**: 启动阶段抛出 SQLite 或文件权限相关异常。
 - **可能原因**:
-  1. 用户目录不可写 — 检查 `src/main/java/com/agentcloud/cli/Main.java`
-  2. `schema.sql` 未打入资源包 — 检查 `src/main/resources/schema.sql`
+  1. `${user.home}\\.agentcloud\\` 不可写
+  2. `schema.sql` 未打入资源包
 - **排查步骤**:
   1. 确认 `${user.home}\\.agentcloud\\` 目录存在且可写。
   2. 检查打包后的 JAR 是否包含 `schema.sql`。
-  3. 查看控制台或 `server.err.log` 输出。
-- **解决方案**: 修正用户目录权限，或通过运行用户环境确保能创建 DB 文件。
+  3. 查看控制台或 `server.err.log`。
 
-### 2.2 关键迁移后 packet 不符合预期
+### 2.2 关键迁移后 packet / checkpoint 不符合预期
 
 - **典型表现**: `/pause`、`/escalate` 或 `/handoff` 返回成功，但 `resume_packets` / `checkpoints` 中固化内容和期望不一致。
 - **可能原因**:
-  1. 任务本身缺少足够的 `decision/artifact/event` 轨迹，packet 只能生成空摘要。
-  2. 调用的是 `handoff_packet` 预览接口，而不是正式的 `/handoff` 执行接口。
+  1. 任务本身缺少足够的 `decision/artifact/event` 轨迹，packet 只能生成空摘要
+  2. 调用的是 `handoff_packet` 预览接口，而不是正式 `/handoff`
+  3. 看的是旧 packet，没有刷新当前 task 最新记录
 - **排查步骤**:
   1. 先查 `resume_packets` 是否新增记录。
   2. 再查 `checkpoints` 表中的 `checkpoint_type` 是否为 `pause_before`、`escalate_before`、`handoff_before` 或 `halt_before`。
-  3. 对照 `events/decisions/artifacts` 是否已有足够输入轨迹。
-- **解决方案**: 先补轨迹数据，再看 packet；如果只是预览交接内容，使用 `/handoff_packet`，不要把它当作执行型接口。
+  3. 再看 `/api/v1/tasks/{id}/runtime_context` 与 `/judgment_trace` 是否已有输入轨迹。
 
-### 2.3 Worker readiness 看似正常，但路由结果不符合预期
+### 2.3 Worker readiness 正常，但路由结果不符合预期
 
-- **典型表现**: 任务分配给 fallback worker，或没有按能力最优匹配。
+- **典型表现**: 任务分配给 fallback worker，或没有按预期命中某个 planner/executor。
 - **可能原因**:
-  1. 任务 `metadata.task_type` 缺失，路由回落到 `general` — 检查创建任务请求
-  2. worker 虽 `ready=true`，但 capability 不包含目标任务类型 — 检查 `WorkerRegistry`
+  1. 任务 `metadata.task_type` 缺失，路由回落到 `general`
+  2. worker 虽 `ready=true`，但 capability 不包含目标任务类型
+  3. `model_mode=small_only/strong_only/orchestrated` 收窄了候选 tier
+  4. learning memory preferred worker hint 未命中当前 tier，因而触发 fallback
+  5. worker 声明了 `git/shell/powershell/cmd`，但 `/readiness` 里的 `tool:<name>` 检查失败，导致它被排除在 ready 候选集之外
 - **排查步骤**:
-  1. 查看任务 `metadata_json` 中的 `task_type`。
-  2. 调用 `/api/v1/workers` 和 `/api/v1/workers/{id}/readiness`。
-  3. 对照 `WorkerRouter.selectWorker` 的筛选规则。
-- **解决方案**: 创建任务时明确传 `task_type`，并为 worker 正确注册 capability。
+  1. 查看任务 `metadata_json` 中的 `task_type`、`model_mode`。
+  2. 调用 `/api/v1/workers` 和 `/api/v1/workers/{id}/readiness`，重点看 `metadata.host_tool_availability` 与 `checks.tool:<name>`。
+  3. 再查 `/api/v1/tasks/{id}/select_worker`，看 `route_source/why_selected/fallback_reason`。
+  4. 如果是 orchestrated 流程，再查 `/api/v1/tasks/{id}/live_flow` 看当前 stage。
 
 ### 2.4 `/dialogue/` 里消息已写入，但页面不显示
 
-- **典型表现**: `POST /api/v1/sessions/{id}/messages` 返回成功，但 `/dialogue/` 中间的消息流或右侧 `Related Messages` 仍然为空。
+- **典型表现**: `POST /api/v1/sessions/{id}/messages` 返回成功，但 `/dialogue/` 仍然为空。
 - **可能原因**:
   1. 当前页面选中的 `session` 不是消息实际写入的那个 session
   2. 消息绑定了 `task_id`，但当前右侧查看的是另一个 task
   3. 前端 URL hash 仍锁在旧的 `session/task`
-  4. 刚执行了任务动作，但页面还没刷新最新的 `assistant/system` 回执
-  5. 本轮任务并没有产出新的 `summary / next_step`，所以不会额外生成 `task_progress`
-  6. 上半区消息过滤器当前切到了 `assistant`、`system` 或 `task-only/session-only`，把目标消息筛掉了
+  4. 页面筛选器把目标消息过滤掉了
 - **排查步骤**:
-  1. 先直接调用 `GET /api/v1/sessions/{id}/messages?limit=20`，确认消息已落库
-  2. 如果看 `Related Messages`，再调用 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`
-  3. 确认 `/dialogue/` 左侧当前选中的 session 与 API 返回的 `session_id` 一致
-  4. 刷新页面，或清掉 URL hash 后重新选择 session/task
-  5. 如果是刚执行 `pause/resume/continue/handoff`，确认当前页面是否已重新拉取消息列表
-  6. 检查上半区过滤器是否处于 `all + all`，先排除前端筛选造成的“假空列表”
-- **解决方案**: 优先确认 session/task 选中态是否正确；若是通过任务表单自动镜像的消息，确认任务创建后页面是否已经切换到了新 task 所在 session。
-
-### 2.4.1 只有 `task_receipt / task_action / task_state`，没有 `task_progress / task_result`
-
-- **典型表现**: `/dialogue/` 已经能看到任务回执，但看不到更像“assistant 进展播报”的消息。
-- **可能原因**:
-  1. 本轮动作并没有触发新的执行推进，例如只做了普通状态更新
-  2. runtime 里没有可用的 `summary / judgment / artifact / next_step`
-  3. 任务尚未进入 `done / failed`，因此不会产生 `task_result`
-- **排查步骤**:
-  1. 先查 `GET /api/v1/tasks/{id}/live_flow?limit=8`，确认 `task.summary`、`judgment_trace`、`runtime_context.active_context` 是否已有可读内容
-  2. 再查 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`，确认该 task 已经收到了哪些 message type
-  3. 对照本次动作是否属于 `auto_start / resume / continue / handoff`
-- **解决方案**: 先确认这轮是否真的推进了执行链；若只是普通状态切换，只看到 `task_state` 是符合当前实现的。若要稳定出现 `task_progress`，需要让任务在本轮产出摘要或下一步建议。
+  1. 先直接调用 `GET /api/v1/sessions/{id}/messages?limit=20`，确认消息已落库。
+  2. 如果看 `Related Messages`，再调用 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`。
+  3. 确认 `/dialogue/` 左侧当前选中的 session 与 API 返回的 `session_id` 一致。
+  4. 把过滤器先切回 `all + all`。
 
 ### 2.5 `/tool_trace` 为空，或 `live_flow` 中没有工具轨迹
 
-- **典型表现**: 任务执行过后，`/api/v1/tasks/{id}/tool_trace` 返回空数组，或 `/api/v1/tasks/{id}/live_flow` 中 `tool_invocations` 为空。
+- **典型表现**: 任务执行过后，`/api/v1/tasks/{id}/tool_trace` 返回空数组。
 - **可能原因**:
-  1. 任务没有命中带工具能力的 worker，而是走了普通 `DefaultWorkerExecutor`
+  1. 任务没有命中带工具能力的 worker，而是走了 `DefaultWorkerExecutor`
   2. worker 注册时 `suggest_only=true` 或 `tool_capabilities=[]`
   3. tool planning 判定 `needs_tool=false`
-  4. planning/finalization 的 JSON 输出不符合协议，executor 回退到默认路径
+  4. 在多步工具链里提早命中 guard
 - **排查步骤**:
-  1. 先查 `/api/v1/tasks/{id}`，确认 `assigned_worker`
-  2. 再查 `/api/v1/workers`，确认该 worker 的 `tool_capabilities`、`tool_scope`、`suggest_only`
-  3. 再查 `/api/v1/tasks/{id}/live_flow?limit=10`，确认是否已有 judgment 但没有 `tool_invocations`
-  4. 查看服务日志中的 tool planning / tool invocation 相关输出
-- **解决方案**: 优先确认任务是否路由到了真正的 tool-aware worker；若只是试点验证，建议直接按 `docs/LOCAL_DOC_WORKER_PILOT.md` 使用自定义 `task_type=local_doc`。
+  1. 先查 `/api/v1/tasks/{id}`，确认 `assigned_worker`。
+  2. 再查 `/api/v1/workers`，确认该 worker 的 `tool_capabilities`、`tool_scope`、`suggest_only`。
+  3. 再查 `/api/v1/tasks/{id}/live_flow?limit=10`，确认是否已有 judgment 但没有 `tool_invocations`。
+  4. 查看日志中的 tool planning / tool invocation 相关输出。
 
 ### 2.6 本地文档试点任务没有命中 `kimi-local-doc`
 
 - **典型表现**: 明明注册了 `kimi-local-doc`，但任务仍然分给了内置 `doc` worker。
 - **可能原因**:
-  1. 任务使用的是 `task_type=doc`，而不是试点专用的 `task_type=local_doc`
+  1. 任务使用的是 `task_type=doc`，而不是试点专用 `task_type=local_doc`
   2. `kimi-local-doc` 没带 `local_doc` capability
   3. worker 注册时 `ready=false`
 - **排查步骤**:
   1. 查看任务创建请求中的 `task_type`
   2. 查看 `/api/v1/workers` 中 `kimi-local-doc` 的 capability 列表
-  3. 对照 `docs/LOCAL_DOC_WORKER_PILOT.md` 的脚本参数和示例负载
-- **解决方案**: 试点阶段优先使用 `local_doc`，避免和内置 `doc` capability 发生路由竞争。
+  3. 对照 `docs/LOCAL_DOC_WORKER_PILOT.md`
 
 ### 2.7 `mvn package` 直接报“无效的目标发行版: 21”
 
-- **典型表现**: Maven 在编译阶段直接失败，报错类似 `invalid target release: 21` 或 `无效的目标发行版: 21`。
+- **典型表现**: Maven 在编译阶段直接失败，报错类似 `invalid target release: 21`。
 - **可能原因**:
   1. `JAVA_HOME` 指向 Java 8 或其他低版本 JDK
   2. `mvn -v` 显示 Maven 正运行在非 Java 21 环境
-- **本机已确认可用的 Java 21 安装**:
-  - JDK 目录: `C:\Program Files\Java\jdk-21.0.9+10`
-  - 版本标识: `jdk-21.0.9+10`
-- **排查步骤**:
-  1. 先执行 `mvn -v`，确认 Maven runtime Java 版本
-  2. 再执行 `java -version`，确认命令行默认 JDK
-  3. 对照 `pom.xml` 中的 `maven-compiler-plugin` 配置
-- **解决方案**: 切换到 Java 21 后再运行构建；本项目启用了 preview 特性，低版本 JDK 无法通过编译。
-
-Windows PowerShell 可直接临时切换：
+- **解决方案**: 切换到 Java 21 后再运行构建；推荐直接用仓库脚本：
 
 ```powershell
-$env:JAVA_HOME = "C:\Program Files\Java\jdk-21.0.9+10"
-$env:Path = "$env:JAVA_HOME\bin;$env:Path"
-mvn -v
-```
-
-仓库内也已提供可直接使用的脚本：
-
-```powershell
+.\scripts\Test-WithJava21.ps1
 .\scripts\Build-WithJava21.ps1 -SkipTests
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
 ```
 
-### 2.8 新打出来的 shaded JAR 能启动，但 `/health` 或其他 JSON 接口直接报 `BufferRecyclers`
+### 2.8 Shaded JAR 能启动，但 JSON 接口报 `BufferRecyclers`
 
 - **典型表现**:
-  1. 服务启动日志正常，端口也能监听
-  2. 但首次访问 `/api/v1/health`、`/api/v1/tasks/...` 这类 JSON 接口时直接失败
+  1. 服务启动日志正常
+  2. 但首次访问 `/api/v1/health`、`/api/v1/tasks/...` 这类 JSON 接口时失败
   3. 日志里出现 `java.lang.NoClassDefFoundError: com/fasterxml/jackson/core/util/BufferRecyclers`
-- **本机已确认的根因**:
+- **已确认根因**:
   1. 进程环境里残留了全局 `CLASSPATH`
-  2. 其值指向旧的 Java 8 运行库，例如：
-     - `C:\Program Files\Java\jdk1.8.0_333\lib\dt.jar`
-     - `C:\Program Files\Java\jdk1.8.0_333\lib\tools.jar`
-- **排查步骤**:
-  1. 先执行 `Get-ChildItem Env:CLASSPATH`
-  2. 如果存在旧 JDK 路径，先切到项目脚本：`. .\scripts\Use-Java21.ps1`
-  3. 再重新启动服务并访问 `/api/v1/health`
+  2. 其值指向旧的 Java 8 运行库
 - **解决方案**:
-  1. `Use-Java21.ps1` 现在会自动清空继承下来的 `CLASSPATH`
-  2. 旧值会暂存到 `$env:AGENTCLOUD_PREVIOUS_CLASSPATH`
-  3. 再用仓库脚本构建或启动即可
 
 ```powershell
 . .\scripts\Use-Java21.ps1
@@ -180,17 +147,16 @@ mvn -v
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
 ```
 
-补充说明：
-
-- 已在本机确认：清空遗留 `CLASSPATH` 后，同一个 shaded JAR 可以正常返回 `/api/v1/health`。
-
 ## 3. 调试技巧
 
-### 3.1 本地调试
+### 3.1 本地调试入口
 
-- **日志位置**: 默认输出到控制台；当前工作区有 `server.out.log` 样本。
-- **日志级别配置**: `src/main/resources/logback.xml` 中 root 为 `INFO`。
-- **调试工具**: 直接用 IDE 附加断点即可，项目无额外容器依赖。
+- **日志**: 默认输出到控制台；当前工作区有 `server.out.log` 样本。
+- **数据库**: 直接用 SQLite CLI 或 DB Browser 打开 `${user.home}/.agentcloud/agent_cloud.db`。
+- **前端入口**:
+  - `http://localhost:8080/` 会重定向到 `/dialogue/`
+  - `http://localhost:8080/dialogue/` 查看 session message 与 task 回执
+  - `http://localhost:8080/console/` 查看任务、route、packet、experiment 面板
 
 ### 3.2 常用调试命令
 
@@ -208,57 +174,42 @@ curl -X POST http://localhost:8080/api/v1/tasks -H "Content-Type: application/js
 curl http://localhost:8080/api/v1/workers
 ```
 
-本地文档试点也可以直接用脚本：
-
-```powershell
-.\scripts\Start-LocalDocPilot.ps1 `
-  -BaseUrl "http://localhost:18080" `
-  -ScopePath "D:\BaiduSyncdisk\Obsidian Vault\当前项目\02_项目推进\agent-cloud-architecture" `
-  -OutputFileName "pilot-summary.md"
-```
-
 ### 3.3 关键断点位置
 
 | 场景 | 建议断点位置 | 说明 |
 |------|------------|------|
-| 创建任务后为何分配到某个 worker | `src/main/java/com/agentcloud/engine/router/WorkerRouter.java:18` | 可以看到 taskType 推导和 fallback 逻辑 |
-| 关键迁移前是否真的固化了 packet | `src/main/java/com/agentcloud/engine/ControlNodeGraph.java` 中 `persistTransitionPacket` | 可同时确认 packet 和 checkpoint 是否写入 |
-| checkpoint 内容为何缺 artifact | `src/main/java/com/agentcloud/engine/ConsolidationService.java:36` | 现在应能看到正确的 `sessionId` 参数 |
-| 路由注册是否成功 | `src/main/java/com/agentcloud/server/NioHttpServer.java:46` | 确认上下文已挂载 |
+| 创建任务后为何分配到某个 worker | `src/main/java/com/agentcloud/engine/router/WorkerRouter.java` 的 `selectWorker` | 可以同时看到 tier 选择、learning hint、fallback reason |
+| 单轮执行为什么停在某个阶段 | `src/main/java/com/agentcloud/engine/ControlNodeGraph.java` 的 `schedulerNode` / `continueNode` | 能看到 route、artifact、judgment、state transition |
+| runtime context 为什么不完整 | `src/main/java/com/agentcloud/runtime/TaskRuntimeContextBuilder.java` 的 `build` | 可确认 active context、latest packet/checkpoint、learning hints 的拼装 |
+| judgment 为什么判成 continue/pause/done | `src/main/java/com/agentcloud/judgment/PromptBasedJudgmentService.java` | 能直接看 prompt 输入与结构化输出 |
+| 工具链为什么提前结束 | `src/main/java/com/agentcloud/worker/ToolAwareWorkerExecutor.java` 的 `executeMultiToolRound` | 可看 `planner_no_additional_tool`、`repeated_tool_guard`、`no_progress_guard` |
+| checkpoint / refined packet 内容异常 | `src/main/java/com/agentcloud/engine/ConsolidationService.java` | 可确认 artifact/decision/event 的抽取与 protocol payload |
+| 实验汇总为什么不对 | `src/main/java/com/agentcloud/engine/ExperimentRunService.java`, `ExperimentMatrixService.java` | 可追踪 run metadata 聚合与按 mode/case 汇总 |
 
 ## 4. 配置相关注意事项
-
-### 4.1 容易出错的配置
 
 | 配置项 | 位置 | 常见错误 | 正确做法 |
 |--------|------|---------|---------|
 | `server.port` | JVM System Property | 忘记传导致端口冲突排查方向错误 | 明确在启动参数中覆盖 |
 | `user.home` | 运行环境 | 使用受限账户导致无法创建 `.agentcloud` | 确保运行用户有写权限 |
 | `schema.sql` | `src/main/resources/schema.sql` | 打包缺失导致启动失败 | 保持资源文件在主资源目录 |
-
-### 4.2 环境差异
-
-| 差异点 | 开发环境 | 测试环境 | 生产环境 |
-|--------|---------|---------|---------|
-| 数据库存储 | 本地用户目录 SQLite | 未发现独立配置 | 未发现独立配置 |
-| Worker 注册 | 进程内预注册 + API 动态注册 | 同开发 | 同开发 |
-| 日志输出 | 控制台 `INFO` | 取决于启动脚本 | 取决于进程托管方式 |
+| LLM 配置 | 环境变量 / 系统属性 | 本地未配置就期待 prompt judgment 生效 | 对照 `LlmConfig` 的读取项补齐 |
 
 ## 5. 性能隐患
 
 | 编号 | 位置 | 问题描述 | 风险等级 | 建议 |
 |------|------|---------|---------|------|
-| P01 | `src/main/java/com/agentcloud/server/TaskHandler.java` | 列表接口固定只取最近 100 条，缺少真正分页能力 | 中 | 增加分页参数和总量查询 |
-| P02 | `src/main/java/com/agentcloud/store/DatabaseManager.java:62` | 启动时按分号手工切分 schema 执行，schema 变复杂后容易出错 | 低 | 引入更稳健的 migration 机制 |
-| P03 | `src/main/java/com/agentcloud/engine/ConsolidationService.java` | consolidation 每次都查多张表并在 API 线程内同步执行 | 中 | 后续可异步化或加限流 |
+| P01 | `src/main/java/com/agentcloud/server/TaskHandler.java` | 列表接口仍以固定上限查询为主，缺少完整分页 | 中 | 增加分页参数和总量查询 |
+| P02 | `src/main/java/com/agentcloud/engine/ConsolidationService.java` | consolidation 在 API 线程内同步执行 | 中 | 后续可异步化或限流 |
+| P03 | `src/main/java/com/agentcloud/worker/ToolAwareWorkerExecutor.java` | 多步工具链仍是单轮内固定上限 | 中 | 若要长链任务，需要更明确的多轮代理协议 |
 
 ## 6. 安全注意事项
 
 | 编号 | 位置 | 问题描述 | 风险等级 | 建议 |
 |------|------|---------|---------|------|
 | S01 | `src/main/java/com/agentcloud/server` | 全部 API 无鉴权、无租户隔离 | 高 | 增加认证和最小权限控制 |
-| S02 | `src/main/java/com/agentcloud/server/WorkerHandler.java:39`, `SkillHandler.java:31` | 直接接受外部请求注册 worker/skill，缺少校验 | 中 | 增加字段校验与权限限制 |
-| S03 | `src/main/java/com/agentcloud/server/*Handler.java` | 500 响应直接回传 `e.getMessage()`，可能泄露内部细节 | 中 | 对外返回通用错误码，详细异常只写日志 |
+| S02 | `src/main/java/com/agentcloud/server/WorkerHandler.java`, `SkillHandler.java` | 允许外部注册 worker/skill；虽已有基础字段校验，但仍无权限边界 | 中 | 增加权限控制、白名单与更严格的字段/范围校验 |
+| S03 | `src/main/java/com/agentcloud/server/*Handler.java` | 500 已统一脱敏为 `internal error`；风险主要转移到服务端日志暴露面 | 低 | 保持 HTTP 脱敏，日志只在受控环境可见 |
 
 ## 7. 运维检查清单
 
@@ -269,7 +220,3 @@ curl http://localhost:8080/api/v1/workers
 - [ ] `skills`、`workers` 基础数据符合当前运行环境预期。
 - [ ] 若依赖暂停恢复流程，先验证 `checkpoints` 与 `resume_packets` 是否都按预期写入。
 - [ ] 若启用了工具能力，确认 `/api/v1/tasks/{id}/tool_trace` 与 `/api/v1/tasks/{id}/live_flow` 中都能看到 `tool_invocations`。
-
-## 8. TODO/FIXME 汇总
-
-本项目未发现相关内容，原因是源码中没有搜到 `TODO`、`FIXME`、`HACK`、`WORKAROUND`、`BUG`、`DEPRECATED` 等标记。

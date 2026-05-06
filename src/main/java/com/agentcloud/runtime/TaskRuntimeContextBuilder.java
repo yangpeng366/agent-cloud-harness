@@ -5,16 +5,21 @@ import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.context.ContextViewBuilder;
+import com.agentcloud.runtime.context.MountedContextView;
 import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.CheckpointDao;
 import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.ResumePacketDao;
+import com.agentcloud.store.SessionMessageDao;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -27,20 +32,42 @@ public class TaskRuntimeContextBuilder {
     private final ArtifactDao artifactDao;
     private final ResumePacketDao packetDao;
     private final CheckpointDao checkpointDao;
+    private final SessionMessageDao sessionMessageDao;
     private final ActiveContextBuilder activeContextBuilder;
     private final LearningMemoryService learningMemoryService;
+    private final ContextViewBuilder contextViewBuilder;
 
     public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
                                      ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
                                      ActiveContextBuilder activeContextBuilder,
                                      LearningMemoryService learningMemoryService) {
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, null, activeContextBuilder, learningMemoryService, null);
+    }
+
+    public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
+                                     ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
+                                     SessionMessageDao sessionMessageDao,
+                                     ActiveContextBuilder activeContextBuilder,
+                                     LearningMemoryService learningMemoryService) {
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, sessionMessageDao,
+            activeContextBuilder, learningMemoryService, null);
+    }
+
+    public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
+                                     ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
+                                     SessionMessageDao sessionMessageDao,
+                                     ActiveContextBuilder activeContextBuilder,
+                                     LearningMemoryService learningMemoryService,
+                                     ContextViewBuilder contextViewBuilder) {
         this.eventDao = eventDao;
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.packetDao = packetDao;
         this.checkpointDao = checkpointDao;
+        this.sessionMessageDao = sessionMessageDao;
         this.activeContextBuilder = activeContextBuilder;
         this.learningMemoryService = learningMemoryService;
+        this.contextViewBuilder = contextViewBuilder != null ? contextViewBuilder : new ContextViewBuilder();
     }
 
     public TaskRuntimeContext build(Task task) {
@@ -62,8 +89,15 @@ public class TaskRuntimeContextBuilder {
         List<Artifact> artifacts = safeList(() -> artifactDao.listBySessionAndTask(sessionId, taskId, 20));
         log.info("[RuntimeContext] artifacts loaded task={} count={}", taskId, artifacts.size());
 
+        log.info("[RuntimeContext] query recent task messages task={}", taskId);
+        List<SessionMessage> messages = sessionMessageDao == null
+            ? List.of()
+            : safeList(() -> sessionMessageDao.listBySessionAndTask(sessionId, taskId, 12));
+        messages = chronological(messages);
+        log.info("[RuntimeContext] task messages loaded task={} count={}", taskId, messages.size());
+
         log.info("[RuntimeContext] query latest packet task={}", taskId);
-        ResumePacket packet = packetDao.getLatestByTask(sessionId, taskId).orElse(null);
+        ResumePacket packet = packetDao == null ? null : packetDao.getLatestByTask(sessionId, taskId).orElse(null);
         log.info("[RuntimeContext] latest packet loaded task={} present={}", taskId, packet != null);
 
         log.info("[RuntimeContext] query latest checkpoint task={}", taskId);
@@ -80,10 +114,18 @@ public class TaskRuntimeContextBuilder {
         log.info("[RuntimeContext] learned hints loaded task={} count={}", taskId, learnedHints.size());
 
         log.info("[RuntimeContext] build active context task={}", taskId);
-        ActiveContext activeContext = activeContextBuilder.build(task, packet, latestCheckpoint, events, decisions, artifacts, learnedHints);
+        ActiveContext activeContext = activeContextBuilder == null
+            ? null
+            : activeContextBuilder.build(task, packet, latestCheckpoint, events, decisions, artifacts, learnedHints);
         log.info("[RuntimeContext] build done task={} durationMs={}", taskId, System.currentTimeMillis() - startedAt);
 
-        return new TaskRuntimeContext(task, packet, latestCheckpoint, events, decisions, artifacts, activeContext);
+        TaskRuntimeContext baseContext = new TaskRuntimeContext(
+            task, packet, latestCheckpoint, events, decisions, artifacts, messages, activeContext
+        );
+        MountedContextView mountedContextView = contextViewBuilder.build(baseContext);
+        return new TaskRuntimeContext(
+            task, packet, latestCheckpoint, events, decisions, artifacts, messages, activeContext, mountedContextView
+        );
     }
 
     @FunctionalInterface
@@ -92,6 +134,9 @@ public class TaskRuntimeContextBuilder {
     }
 
     private <T> List<T> safeList(DaoCall<T> call) {
+        if (call == null) {
+            return Collections.emptyList();
+        }
         try {
             List<T> result = call.call();
             return result != null ? result : Collections.emptyList();
@@ -99,5 +144,14 @@ public class TaskRuntimeContextBuilder {
             log.warn("Failed to query runtime context list, returning empty", e);
             return Collections.emptyList();
         }
+    }
+
+    private <T> List<T> chronological(List<T> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<T> copied = new ArrayList<>(values);
+        Collections.reverse(copied);
+        return copied;
     }
 }

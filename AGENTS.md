@@ -28,6 +28,9 @@ Agent Cloud Harness 是一个面向多智能体协作场景的**轻量控制平�
 | DAO | Jdbi3 (SQL Object) | 3.45.1 | 注解式 SQL，无 ORM |
 | 连接池 | HikariCP | 5.1.0 | |
 | 日志 | SLF4J + Logback | 2.0.13 / 1.5.6 | 控制台输出，root 级别 `INFO` |
+| 前端 | Vanilla JS + CSS | N/A | 内置 `/console/` 与 `/dialogue/` 静态页面 |
+| LLM 调用 | OpenAI-compatible client | N/A | 通过 `llm/OpenAiCompatibleClient` 对接兼容接口 |
+| 工具层 | `ToolRegistry` + 受控本地工具 | N/A | 受 `ToolPolicy` 限制，支持 list/read/search/write/patch，且按宿主机真实可执行性动态暴露 `git/shell/powershell/cmd`（其中 `powershell/cmd` 仍仅 Windows 宿主可用） |
 | 测试 | JUnit Jupiter | 5.11.0 | 已有覆盖 packet、orchestration、tool-aware execution、message projection 等方向的测试 |
 
 ## 构建与运行
@@ -104,10 +107,7 @@ src/main/java/com/agentcloud/
 ├── judgment/                     # Judgment 层（执行判断与完成判断）
 │   ├── JudgmentService.java      # 判断服务接口
 │   ├── PromptBasedJudgmentService.java # 基于 LLM prompt 的判断实现
-│   ├── JudgmentContext.java      # 判断上下文
-│   └── model/
-│       ├── ExecutionDecision.java
-│       └── CompletionDecision.java
+│   └── JudgmentContext.java      # 判断上下文
 ├── llm/                          # LLM 适配层
 │   ├── LlmClient.java            # LLM 客户端接口
 │   ├── LlmConfig.java            # 配置（从环境变量 / 系统属性读取）
@@ -116,21 +116,23 @@ src/main/java/com/agentcloud/
 │   ├── TaskRuntimeContext.java   # 单轮执行与判断所需完整上下文
 │   ├── TaskRuntimeContextBuilder.java # 组装运行时上下文
 │   ├── ActiveContext.java        # 工作记忆 / Active Context 结构
-│   ├── ActiveContextBuilder.java # 从 checkpoint / event / decision / artifact 构建 Active Context
-│   └── policy/
-│       ├── ActiveContextPolicy.java
-│       ├── RetentionPolicy.java
-│       └── ExclusionPolicy.java
-├── tool/                         # 受控本地文件工具
+│   └── ActiveContextBuilder.java # 从 checkpoint / event / decision / artifact 构建 Active Context，并内含默认保留/排除策略
+├── tool/                         # 受控本地工具（文件 + 命令）
 │   ├── Tool.java                 # 工具接口
 │   ├── ToolRegistry.java         # 工具注册表
-│   ├── ToolPolicy.java           # 工具访问路径校验
+│   ├── ToolPolicy.java           # 路径/CWD/命令策略校验
 │   ├── ToolRequest.java / ToolResult.java
 │   ├── AbstractLocalFileTool.java
+│   ├── AbstractCommandTool.java
 │   ├── ListFilesTool.java
 │   ├── ReadFileTool.java
 │   ├── SearchTextTool.java
-│   └── WriteFileTool.java
+│   ├── WriteFileTool.java
+│   ├── PatchFileTool.java
+│   ├── GitTool.java
+│   ├── ShellTool.java
+│   ├── PowerShellTool.java
+│   └── CmdTool.java
 ├── worker/                       # Worker 执行层
 │   ├── WorkerExecutor.java       # 执行器接口
 │   ├── DefaultWorkerExecutor.java # 默认纯 LLM 执行器
@@ -207,27 +209,27 @@ src/main/resources/
 
 ### 5. 控制节点图（Control Node Graph）
 
-`ControlNodeGraph` 是任务流转的核心状态机，6 个节点：
+`ControlNodeGraph` 仍然保留 6 个命名控制节点，但 `scheduler` 和 `continue` 已经串起了路由、执行、判断、学习记忆与轨迹落库：
 
 | 节点 | 职责 |
 |------|------|
 | `intake` | 入口，自动转到 `scheduler` |
-| `scheduler` | 若未分配 worker，调用 `WorkerRouter.selectWorker` |
-| `continue` | 继续执行；若状态为 `paused/waiting/done/failed` 则停止循环 |
-| `packet` | 构建 resume packet，触发 consolidation，回到 `scheduler` |
-| `human_gate` | 人工确认等待门 |
-| `handoff` | 触发 handoff_before consolidation，回到 `scheduler` |
+| `scheduler` | 路由 worker、构建 runtime context、执行一轮 worker，并写入 worker artifact / route trace |
+| `continue` | 基于 judgment prompt 做 execution/completion 判断，写入 decision trace，并把经验强化到 learning memory |
+| `packet` | 构建并持久化 resume packet，触发 consolidation，必要时回到 `scheduler` |
+| `human_gate` | 人工确认等待门；等待外部 resume/escalate/close 等动作 |
+| `handoff` | 固化 handoff 前 checkpoint / packet，切换目标 worker 后回到 `scheduler` |
 
-外部触发方法：`triggerPause`、`triggerResume`、`triggerEscalate`、`triggerHandoff`、`triggerHalt`。
+当前构造注入已包括：`workerExecutor`、`runtimeContextBuilder`、`judgmentService`、`artifactDao`、`decisionDao`、`learningMemoryService`。外部触发方法仍是 `triggerPause`、`triggerResume`、`triggerEscalate`、`triggerHandoff`、`triggerHalt`。
 
 ### 6. Worker 路由策略
 
 - `WorkerRegistry` 内存维护 worker 列表，启动时预注册了 3 个内置 worker。
 - `WorkerRouter.selectWorker` 逻辑：
   1. 从 `task.metadata.task_type` 提取目标能力。
-  2. 查找能力匹配且 `ready=true` 的 worker。
-  3. 无匹配时回退到所有 ready worker。
-  4. 按 capability 精确匹配数取最大，保留 2 个 fallback。
+  2. 结合 `model_mode` 收窄 model tier：`strong_only` 强制 strong，`small_only` 强制 small，`orchestrated` 按阶段在 planner/judge 与 executor 之间切 tier。
+  3. 读取 `LearningMemoryService.selectPreferredWorker(taskType)` 作为 preferred worker hint，仅在候选集允许时应用。
+  4. 输出 `selected_worker`、`route_source`、`why_selected`、`fallback_reason`、`preferred_worker_hint`、`learning_hint_applied` 等显式 trace 字段。
 
 ### 7. 依赖注入
 
@@ -297,6 +299,9 @@ SessionService → TaskService → ExperimentMatrixService → NioHttpServer
 | POST | `/api/v1/experiment_matrix/runs` | 批量创建可比较基线 run |
 | GET | `/api/v1/experiment_matrix/summary` | 按实验名聚合 matrix 结果 |
 | GET | `/api/v1/health` | 健康检查 |
+| GET | `/` | 重定向到 `/dialogue/` |
+| GET | `/console/` | Web Console 静态前端 |
+| GET | `/dialogue/` | Dialogue 静态前端 |
 
 > ⚠️ **注意**：`pause/resume/continue/escalate` 已正式切到 **POST**；服务端暂时保留旧 `GET` 兼容入口。新接入不要再依赖 `GET`，否则仍有被缓存/预取误触发的风险。
 
@@ -341,7 +346,7 @@ SessionService → TaskService → ExperimentMatrixService → NioHttpServer
 - **不可变更新**：领域对象状态变更一律使用 `withXxx()` 返回新 record，不要直接修改字段。
 - **日志**：统一使用 SLF4J，`private static final Logger log = LoggerFactory.getLogger(Xxx.class)`。
 - **空值处理**：使用 `@JsonInclude(Include.NON_NULL)` 控制 JSON 输出；DAO 查询返回 `Optional<T>`。
-- **异常**：服务层在找不到记录时抛出 `IllegalArgumentException` 或 `IllegalStateException`；Handler 捕获后转 500 响应。
+- **异常**：服务层常用 `IllegalArgumentException` / `IllegalStateException` 表达参数错误、资源缺失或非法状态；Handler 会把可识别问题映射成 `400/404`，其他未处理异常统一脱敏成 `500 internal error`。
 - **时间戳**：业务层使用 `Instant.now()`；存储层通过 `InstantArgumentFactory` 和 `Mappers.instant()` 做 SQLite 兼容。
 - **新增接口**：
   - 若新增 HTTP 资源，沿用现有 `XxxHandler implements HttpHandler` 模式。

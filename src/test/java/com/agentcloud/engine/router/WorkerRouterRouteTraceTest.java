@@ -9,6 +9,7 @@ import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.LearningMemoryDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
+import com.agentcloud.tool.HostToolAvailability;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,6 +20,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -66,6 +68,47 @@ class WorkerRouterRouteTraceTest {
         assertEquals(route.routeReason(), route.whySelected());
         assertTrue(route.fallbackReason().contains("fallback to any ready worker"));
         assertTrue(route.candidateWorkers().size() >= 1);
+    }
+
+    @Test
+    void defaultCodexWorkerCarriesControlledDefaultToolsAndScope() {
+        WorkerRegistry registry = new WorkerRegistry();
+        Worker codex = registry.get("codex");
+
+        assertNotNull(codex);
+        assertToolPresence(codex, "git");
+        assertToolPresence(codex, "shell");
+        assertTrue(codex.toolCapabilities().contains("patch_file"));
+        assertToolPresence(codex, "powershell");
+        assertToolPresence(codex, "cmd");
+        assertEquals(HostToolAvailability.isWindowsHost() ? "windows" : "posix",
+            codex.metadata().get("host_platform"));
+        assertFalse(codex.toolScope().isEmpty());
+        assertTrue(Path.of(codex.toolScope().get(0)).isAbsolute());
+    }
+
+    @Test
+    void routeSkipsCapabilityMatchWhenWorkerFailsDependencyReadiness() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new Worker(
+            "blocked-continuation",
+            "codex",
+            List.of("continuation"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", false),
+            Map.of("model_tier", "strong", "primary_role", "executor"),
+            false,
+            true
+        ));
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("continuation"));
+
+        assertNotNull(route.selectedWorker());
+        assertNotEquals("blocked-continuation", route.selectedWorker());
+        assertEquals("ready_fallback", route.routeSource());
+        assertTrue(route.fallbackReason().contains("fallback to any ready worker"));
     }
 
     @Test
@@ -204,5 +247,13 @@ class WorkerRouterRouteTraceTest {
             Map.of("category", "routing_preference")
         ));
         return new LearningMemoryService(learningMemoryDao);
+    }
+
+    private void assertToolPresence(Worker worker, String toolCapability) {
+        if (HostToolAvailability.unavailableReason(toolCapability) == null) {
+            assertTrue(worker.toolCapabilities().contains(toolCapability));
+        } else {
+            assertFalse(worker.toolCapabilities().contains(toolCapability));
+        }
     }
 }
