@@ -924,7 +924,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 "auto_write_original_plan_reason", originalPlan.reason(),
                 "auto_write_original_plan_raw", truncate(originalPlan.rawResponse(), 1200),
                 "auto_write_file_count", draft.files().size(),
-                "auto_write_generation_mode", autoWriteFilesGenerationMode(draft)
+                "auto_write_generation_mode", normalizeDirectoryAutoWriteGenerationMode(draft, outcome)
             )
         );
 
@@ -2663,6 +2663,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return s;
         }
         return "unknown";
+    }
+
+    private String normalizeDirectoryAutoWriteGenerationMode(AutoWriteFilesDraft draft,
+                                                             ToolExecutionOutcome outcome) {
+        if (draft == null) {
+            return "unknown";
+        }
+        return autoWriteFilesGenerationMode(draft);
     }
 
     private String autoWriteFilesGenerationMode(AutoWriteFilesDraft draft) {

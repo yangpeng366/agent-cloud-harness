@@ -28,8 +28,7 @@ public class LocalCliAgentProvider implements AgentProvider {
     private final String defaultBinary;
     private final String pathEnvVar;
     private final String modelEnvVar;
-    private final String pathProperty;
-    private final String modelProperty;
+    private final LocalCliProviderConfig cliConfig;
 
     public LocalCliAgentProvider(String providerId,
                                  String displayName,
@@ -55,8 +54,7 @@ public class LocalCliAgentProvider implements AgentProvider {
         this.defaultBinary = defaultBinary == null || defaultBinary.isBlank() ? this.providerId : defaultBinary;
         this.pathEnvVar = blankToNull(pathEnvVar);
         this.modelEnvVar = blankToNull(modelEnvVar);
-        this.pathProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".path";
-        this.modelProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".model";
+        this.cliConfig = new LocalCliProviderConfig(this.providerId, this.defaultBinary, this.pathEnvVar, this.modelEnvVar);
         this.descriptor = new AgentProviderDescriptor(
             this.providerId,
             displayName,
@@ -74,21 +72,12 @@ public class LocalCliAgentProvider implements AgentProvider {
 
     @Override
     public AgentProviderStatus detect() {
-        ConfigValue binary = resolveConfig(pathProperty, pathEnvVar, defaultBinary);
-        ConfigValue model = resolveConfig(modelProperty, modelEnvVar, null);
+        LocalCliProviderConfig.ResolvedConfig resolved = cliConfig.resolve();
+        LocalCliProviderConfig.ConfigValue binary = resolved.binary();
         boolean installed = HostToolAvailability.isToolAvailable(binary.value());
         String version = installed ? probeVersion(binary.value()) : null;
 
-        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("binary", defaultBinary);
-        metadata.put("configured_binary", binary.value());
-        metadata.put("binary_source", binary.source());
-        putIfNotBlank(metadata, "path_env_var", pathEnvVar);
-        putIfNotBlank(metadata, "path_property", pathProperty);
-        putIfNotBlank(metadata, "configured_model", model.value());
-        putIfNotBlank(metadata, "model_source", model.source());
-        putIfNotBlank(metadata, "model_env_var", modelEnvVar);
-        putIfNotBlank(metadata, "model_property", modelProperty);
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(resolved.metadata());
         if (version != null) {
             metadata.put("version_probe", "cli");
         }
@@ -110,25 +99,13 @@ public class LocalCliAgentProvider implements AgentProvider {
         if (metadata != null) {
             merged.putAll(metadata);
         }
-        merged.put("binary", defaultBinary);
-        putIfNotBlank(merged, "path_env_var", pathEnvVar);
-        putIfNotBlank(merged, "path_property", pathProperty);
-        putIfNotBlank(merged, "model_env_var", modelEnvVar);
-        putIfNotBlank(merged, "model_property", modelProperty);
+        merged.putAll(cliConfig.resolve().metadata());
         merged.put("probe_mode", "local_cli");
         return Map.copyOf(merged);
     }
 
-    private ConfigValue resolveConfig(String propertyKey, String envKey, String fallbackValue) {
-        String propertyValue = blankToNull(propertyKey == null ? null : System.getProperty(propertyKey));
-        if (propertyValue != null) {
-            return new ConfigValue(propertyValue, "system_property");
-        }
-        String envValue = blankToNull(envKey == null ? null : System.getenv(envKey));
-        if (envValue != null) {
-            return new ConfigValue(envValue, "environment");
-        }
-        return new ConfigValue(fallbackValue, "default");
+    public LocalCliProviderConfig cliConfig() {
+        return cliConfig;
     }
 
     private String probeVersion(String binary) {
@@ -193,12 +170,5 @@ public class LocalCliAgentProvider implements AgentProvider {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
-    }
-
-    private record ConfigValue(String value, String source) {
-        private ConfigValue {
-            if (value == null || value.isBlank()) value = "";
-            if (source == null || source.isBlank()) source = "default";
-        }
     }
 }

@@ -31,6 +31,7 @@ import com.agentcloud.tool.ToolRegistry;
 import com.agentcloud.tool.WriteFileTool;
 import com.agentcloud.tool.WriteFilesTool;
 import com.agentcloud.worker.DefaultWorkerExecutor;
+import com.agentcloud.worker.ProviderCliWorkerExecutor;
 import com.agentcloud.worker.ToolAwareWorkerExecutor;
 import com.agentcloud.worker.WorkerExecutor;
 import com.agentcloud.worker.WorkerExecutorRouter;
@@ -129,15 +130,16 @@ public class Main {
             llmClient,
             defaultWorkerExecutor
         );
-        WorkerExecutor workerExecutor = new WorkerExecutorRouter(
-            workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor
-        );
 
         // Agent Provider Layer (Phase 1 skeleton)
         AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
         AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
+        ProviderCliWorkerExecutor providerCliWorkerExecutor = new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry);
+        WorkerExecutor workerExecutor = new WorkerExecutorRouter(
+            workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor, providerCliWorkerExecutor
+        );
         log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());
 
         // 新增: Control Node Graph（注入 Phase 1 新组件）

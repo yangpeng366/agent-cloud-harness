@@ -2,6 +2,7 @@ package com.agentcloud.tool;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -122,7 +123,12 @@ public final class HostToolAvailability {
                 continue;
             }
 
-            Path directory = Path.of(unquote(pathEntry));
+            Path directory;
+            try {
+                directory = Path.of(unquote(pathEntry));
+            } catch (InvalidPathException ignored) {
+                continue;
+            }
             for (String candidateName : candidateExecutableNames(toolName)) {
                 if (isRunnableFile(directory.resolve(candidateName))) {
                     return true;
@@ -141,7 +147,11 @@ public final class HostToolAvailability {
 
     private static Path toDirectPath(String toolName) {
         if (toolName.contains("/") || toolName.contains("\\")) {
-            return Path.of(toolName);
+            try {
+                return Path.of(toolName);
+            } catch (InvalidPathException ignored) {
+                return null;
+            }
         }
         return null;
     }
