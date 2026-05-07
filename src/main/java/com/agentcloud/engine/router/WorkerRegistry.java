@@ -7,15 +7,15 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 public class WorkerRegistry {
     private static final Logger log = LoggerFactory.getLogger(WorkerRegistry.class);
-    private final Map<String, Worker> workers = new ConcurrentHashMap<>();
+    private final Map<String, Worker> workers = Collections.synchronizedMap(new LinkedHashMap<>());
 
     public WorkerRegistry() {
         String defaultToolScope = Path.of(System.getProperty("user.dir", "."))
@@ -29,7 +29,7 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("config_present", true, "backend_reachable", true),
-            Map.of("model_tier", "tool", "primary_role", "tool_executor"), false, true));
+            Map.of("model_tier", "tool", "primary_role", "tool_executor", "selection_priority", 120), false, true));
         register(new Worker("codex", "codex",
             List.of("coding", "reading", "ops"),
             defaultCodexToolCapabilities(),
@@ -38,15 +38,72 @@ public class WorkerRegistry {
             Map.of(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
+                "selection_priority", 100,
                 "default_tool_scope", defaultToolScope,
                 "tool_command_mode", "guarded"
             ), false, true));
+        register(new Worker("claude", "claude",
+            List.of("coding", "reading", "writing"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 92),
+            false, true));
+        register(new Worker("cursor", "cursor",
+            List.of("coding", "reading", "ops"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 91),
+            false, true));
+        register(new Worker("copilot", "copilot",
+            List.of("coding", "reading"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 90),
+            false, true));
+        register(new Worker("opencode", "opencode",
+            List.of("coding", "ops", "writing"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 89),
+            false, true));
+        register(new Worker("gemini", "gemini",
+            List.of("coding", "research", "browser"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 88),
+            false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "small", "primary_role", "executor"), true, true));
+            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 80), true, true));
+        register(new Worker("hermes", "hermes",
+            List.of("coding", "research", "writing"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 72),
+            true, true));
+        register(new Worker("pi", "pi",
+            List.of("research", "writing", "message"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "small", "primary_role", "assistant", "selection_priority", 70),
+            true, true));
+        register(new Worker("kiro", "kiro",
+            List.of("coding", "reading"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 69),
+            true, true));
     }
 
     public Worker register(Worker worker) {

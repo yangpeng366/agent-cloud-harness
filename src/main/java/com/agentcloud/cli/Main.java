@@ -3,8 +3,7 @@ package com.agentcloud.cli;
 import com.agentcloud.agent.AgentDiscoveryService;
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.SimpleAgentDiscoveryService;
-import com.agentcloud.agent.providers.CodexProvider;
-import com.agentcloud.agent.providers.OpenClawProvider;
+import com.agentcloud.agent.providers.BuiltinAgentProviders;
 import com.agentcloud.engine.*;
 import com.agentcloud.engine.memory.ContextReconstructor;
 import com.agentcloud.engine.memory.PacketBuilder;
@@ -135,9 +134,8 @@ public class Main {
         );
 
         // Agent Provider Layer (Phase 1 skeleton)
-        AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry()
-            .register(new OpenClawProvider())
-            .register(new CodexProvider());
+        AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
         AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
         log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());

@@ -1,7 +1,10 @@
 package com.agentcloud.worker;
 
+import com.agentcloud.worker.model.WorkerExecutionEnvelope;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -45,5 +48,69 @@ public record WorkerExecutionResult(
         if (tokenUsage == null) tokenUsage = 0;
         if (durationMs == null) durationMs = 0L;
         if (metadata == null) metadata = Map.of();
+    }
+
+    public WorkerExecutionResult withEnvelope(WorkerExecutionEnvelope envelope) {
+        if (envelope == null) {
+            return this;
+        }
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>();
+        if (metadata != null && !metadata.isEmpty()) {
+            merged.putAll(metadata);
+        }
+        merged.put("execution_id", envelope.executionId());
+        merged.put("execution_started_at", envelope.startedAt().toString());
+        merged.put("execution_finished_at", envelope.finishedAt().toString());
+        merged.put("execution_duration_ms", envelope.durationMs());
+        merged.put("execution_status", envelope.executionStatus());
+        if (envelope.toolInvocationIds() != null && !envelope.toolInvocationIds().isEmpty()) {
+            merged.put("tool_invocation_ids", envelope.toolInvocationIds());
+        }
+        if (envelope.metadata() != null && !envelope.metadata().isEmpty()) {
+            merged.putAll(envelope.metadata());
+        }
+        return new WorkerExecutionResult(
+            summary,
+            outputText,
+            producedArtifact,
+            artifactTitle,
+            artifactContent,
+            suggestedNextStep,
+            confidence,
+            envelope.executionStatus(),
+            evidenceRefs,
+            unfinishedItems,
+            tokenUsage,
+            envelope.durationMs(),
+            merged
+        );
+    }
+
+    public static WorkerExecutionResult withEnvelope(WorkerExecutionResult result,
+                                                     String executionId,
+                                                     String sessionId,
+                                                     String taskId,
+                                                     String workerId,
+                                                     Instant startedAt,
+                                                     Instant finishedAt,
+                                                     List<String> toolInvocationIds,
+                                                     Map<String, Object> envelopeMetadata) {
+        if (result == null) {
+            return null;
+        }
+        WorkerExecutionEnvelope envelope = new WorkerExecutionEnvelope(
+            executionId,
+            sessionId,
+            taskId,
+            workerId,
+            startedAt,
+            finishedAt,
+            finishedAt != null && startedAt != null ? Math.max(0L, finishedAt.toEpochMilli() - startedAt.toEpochMilli()) : result.durationMs(),
+            result.executionStatus(),
+            result,
+            toolInvocationIds,
+            envelopeMetadata
+        );
+        return result.withEnvelope(envelope);
     }
 }

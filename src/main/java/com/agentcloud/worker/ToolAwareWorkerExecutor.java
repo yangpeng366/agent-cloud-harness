@@ -29,6 +29,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -50,6 +51,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private static final int DEFAULT_MAX_TOOL_ROUNDS = 4;
     private static final int DIRECTORY_TASK_MAX_TOOL_ROUNDS = 8;
     private static final int IMAGE_DIRECTORY_TASK_MAX_TOOL_ROUNDS = 10;
+    private static final int MINIMAL_DIRECTORY_FALLBACK_FILE_LIMIT = 8;
+    private static final int VISION_BRIEF_MAX_CHARS = 2400;
     private static final Pattern ROUND_INSTRUCTION_PATTERN =
         Pattern.compile("(?im)^Round\\s+(\\d+)\\s*:\\s*(.+)$");
 
@@ -344,7 +347,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 "",
                 outcome.result().success(),
                 outcome.elapsedMs(),
-                truncate(outcome.result().output(), 1200)
+                truncate(outcome.result().output(), 1200),
+                stringValue(outcome.traceMetadata().get("tool_invocation_id"))
             ));
 
             lastPlan = plan;
@@ -491,6 +495,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             Instant.now(),
             traceMetadata
         ));
+        traceMetadata.put("tool_invocation_id", toolInvocationId);
 
         log.info("Tool invocation recorded. task={} worker={} tool={} success={} elapsedMs={}",
             context.task().id(), worker.workerId(), plan.toolName(), result.success(), elapsedMs);
@@ -846,7 +851,26 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                                      int nextStepIndex,
                                                                      int maxToolRounds,
                                                                      long startMs) {
-        AutoWriteFilesDraft draft = generateAutoWriteFilesDraft(context, worker, toolStateBefore, originalPlan);
+        ImageInputDiagnostics imageDiagnostics = imageInputDiagnostics(context);
+        String visualBrief = resolveVisualBrief(context, worker, imageDiagnostics);
+        AutoWriteFilesDraft draft = generateAutoWriteFilesDraft(
+            context,
+            worker,
+            toolStateBefore,
+            originalPlan,
+            imageDiagnostics,
+            visualBrief
+        );
+        if (draft.basePath().isBlank() || draft.files().isEmpty()) {
+            draft = minimalDirectoryFallbackDraft(
+                context,
+                toolStateBefore,
+                originalPlan,
+                draft,
+                imageDiagnostics,
+                visualBrief
+            );
+        }
         if (draft.basePath().isBlank() || draft.files().isEmpty()) {
             return null;
         }
@@ -879,7 +903,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             "stop: auto directory grounded write completed",
             outcome.result().success(),
             outcome.elapsedMs(),
-            truncate(outcome.result().output(), 1200)
+            truncate(outcome.result().output(), 1200),
+            stringValue(outcome.traceMetadata().get("tool_invocation_id"))
         ));
 
         long totalDurationMs = System.currentTimeMillis() - startMs;
@@ -898,7 +923,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 "auto_write_files_raw", truncate(draft.rawResponse(), 1200),
                 "auto_write_original_plan_reason", originalPlan.reason(),
                 "auto_write_original_plan_raw", truncate(originalPlan.rawResponse(), 1200),
-                "auto_write_file_count", draft.files().size()
+                "auto_write_file_count", draft.files().size(),
+                "auto_write_generation_mode", autoWriteFilesGenerationMode(draft)
             )
         );
 
@@ -916,8 +942,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(finalized.metadata());
-        metadata.put("auto_write_generation_mode", autoWriteFilesGenerationMode(draft));
-        metadata.put("auto_write_used_images", !LlmImageInputResolver.resolve(context).isEmpty());
+        metadata.put("auto_write_generation_mode", autoWriteExecutionMode(generated));
+        appendImageDiagnosticsMetadata(metadata, imageDiagnostics);
+        metadata.put("auto_write_used_images", imageDiagnostics.hasAvailableInputs());
+        metadata.put("visual_brief_present", !visualBrief.isBlank());
+        if (!visualBrief.isBlank()) {
+            metadata.put("visual_brief_preview", truncate(visualBrief, 600));
+        }
         return new WorkerExecutionResult(
             finalized.summary(),
             finalized.outputText(),
@@ -969,12 +1000,21 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private AutoWriteFilesDraft generateAutoWriteFilesDraft(TaskRuntimeContext context,
                                                             Worker worker,
                                                             TaskToolState toolStateBefore,
-                                                            ToolPlan originalPlan) {
+                                                            ToolPlan originalPlan,
+                                                            ImageInputDiagnostics imageDiagnostics,
+                                                            String visualBrief) {
         try {
-            List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
+            List<LlmImageInput> imageInputs = imageDiagnostics.availableInputs();
             String raw = llmClient.chat(
                 buildAutoWriteFilesSystemPrompt(worker),
-                buildAutoWriteFilesUserPrompt(context, worker, toolStateBefore, originalPlan),
+                buildAutoWriteFilesUserPrompt(
+                    context,
+                    worker,
+                    toolStateBefore,
+                    originalPlan,
+                    imageDiagnostics,
+                    visualBrief
+                ),
                 imageInputs
             );
             AutoWriteFilesDraft parsed = parseAutoWriteFilesDraft(raw, toolStateBefore.outputDirPath());
@@ -995,6 +1035,50 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                     + ": " + firstNonBlank(e.getMessage(), "unknown error")
             );
         }
+    }
+
+    private AutoWriteFilesDraft minimalDirectoryFallbackDraft(TaskRuntimeContext context,
+                                                              TaskToolState toolState,
+                                                              ToolPlan originalPlan,
+                                                              AutoWriteFilesDraft failedDraft,
+                                                              ImageInputDiagnostics imageDiagnostics,
+                                                              String visualBrief) {
+        String basePath = firstNonBlank(toolState.outputDirPath(), "");
+        if (basePath.isBlank()) {
+            return failedDraft;
+        }
+        String taskTitle = sanitizeTitle(firstNonBlank(context.task().title(), "Demo Project"));
+        String goal = firstNonBlank(context.task().goal(), stringValue(context.task().metadata().get("goal")));
+        List<LlmImageInput> imageInputs = imageDiagnostics.availableInputs();
+        String imageList = formatImageInputList(imageDiagnostics);
+        boolean fullStackTask = requiresFullStackBundle(context);
+        String summary = fullStackTask
+            ? "Auto-fallback wrote a minimal runnable full-stack demo bundle because richer bundle generation did not return files in time."
+            : "Auto-fallback wrote a minimal runnable static demo scaffold because image-grounded bundle generation did not return files in time.";
+        String nextStep = fullStackTask
+            ? "Run `npm install` and `npm start` to verify the backend and frontend, then refine the generated bundle with additional write_files or patch_file steps if needed."
+            : imageInputs.isEmpty()
+                ? "Open index.html to verify the scaffold, then refine styles or content with additional write_files or patch_file steps if needed."
+                : "Open index.html to verify the scaffold, then refine the visuals against the referenced local images in a follow-up round if needed.";
+        String reason = firstNonBlank(
+            failedDraft.failureReason(),
+            originalPlan.reason(),
+            "planner_no_additional_tool"
+        );
+
+        List<Map<String, Object>> files = fullStackTask
+            ? minimalFullStackFallbackFiles(taskTitle, goal, imageList, reason, visualBrief)
+            : minimalStaticFallbackFiles(taskTitle, goal, imageInputs, imageList, reason, visualBrief);
+
+        return new AutoWriteFilesDraft(
+            summary,
+            basePath,
+            files.subList(0, Math.min(files.size(), MINIMAL_DIRECTORY_FALLBACK_FILE_LIMIT)),
+            nextStep,
+            "medium",
+            firstNonBlank(failedDraft.rawResponse(), failedDraft.failureReason(), ""),
+            "minimal_directory_fallback"
+        );
     }
 
     private WorkerExecutionResult missingRequiredWriteWithoutTool(TaskRuntimeContext context,
@@ -1146,9 +1230,19 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("file_backed_artifact", fileBackedArtifact);
         metadata.put("directory_backed_artifact", directoryBackedArtifact);
         metadata.put("grounded_output_present", groundedArtifact);
+        Object existingAutoWriteMode = metadata.get("auto_write_generation_mode");
+        if (existingAutoWriteMode == null || String.valueOf(existingAutoWriteMode).isBlank()) {
+            if ("auto_grounded_directory_write".equals(terminationReason)) {
+                metadata.put("auto_write_generation_mode", "generated");
+            }
+        }
         metadata.put("tool_chain_step_count", toolChain.size());
         metadata.put("tool_chain_termination_reason", terminationReason);
         metadata.put("tool_chain_trace", toToolChainTraceMetadata(toolChain));
+        metadata.put("tool_invocation_ids", toolChain.stream()
+            .map(ToolChainStep::toolInvocationId)
+            .filter(id -> id != null && !id.isBlank())
+            .toList());
         if (!worker.toolScope().isEmpty()) {
             metadata.put("tool_scope", worker.toolScope());
         }
@@ -1363,6 +1457,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             if (step.outputPreview() != null && !step.outputPreview().isBlank()) {
                 item.put("output_preview", step.outputPreview());
             }
+            if (step.toolInvocationId() != null && !step.toolInvocationId().isBlank()) {
+                item.put("tool_invocation_id", step.toolInvocationId());
+            }
             trace.add(item);
         }
         return trace;
@@ -1551,7 +1648,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "Return a JSON object with exactly these fields: "
             + "summary (string), base_path (string), files (array), suggested_next_step (string), confidence (high|medium|low). "
             + "Each files entry must be an object with path (relative string) and content (full exact text). "
-            + "Use files only for the minimum runnable project structure needed to satisfy the task. "
+            + "If image analysis is partial or unavailable, still produce the minimum runnable bundle required by the task contract instead of refusing to write files. "
+            + "If the task explicitly requires frontend plus backend/API artifacts, your bundle must include both sides and the manifest/README needed to run them. "
+            + "Use files only for the smallest runnable project structure that still satisfies the declared deliverables. "
             + "Do not include markdown fences or any explanation outside JSON.";
     }
 
@@ -1617,6 +1716,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             for (LlmImageInput imageInput : imageInputs) {
                 sb.append("\n- ").append(firstNonBlank(imageInput.path(), "(inline image)"));
             }
+            sb.append("\nIf no image-viewing tool is available, treat these images as visual references and continue by producing the best grounded scaffold you can with the current filesystem evidence.");
         }
         sb.append("\nPrior Tool Trace:\n").append(toolState.recentToolTrace());
         appendExpectedGroundedOutput(sb, toolState);
@@ -1675,7 +1775,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private String buildAutoWriteFilesUserPrompt(TaskRuntimeContext context,
                                                  Worker worker,
                                                  TaskToolState toolState,
-                                                 ToolPlan originalPlan) {
+                                                 ToolPlan originalPlan,
+                                                 ImageInputDiagnostics imageDiagnostics,
+                                                 String visualBrief) {
         StringBuilder sb = new StringBuilder();
         sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context.task())));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
@@ -1685,16 +1787,677 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         sb.append("\nPlanner Returned No Additional Tool: true");
         sb.append("\nOriginal Planning Reason: ").append(firstNonBlank(originalPlan.reason(), "(empty)"));
         sb.append("\nGrounded Output Directory Required: ").append(toolState.outputDirRequired());
+        sb.append("\nTask Contract Requires Full Stack Bundle: ").append(requiresFullStackBundle(context));
         sb.append("\nPrior Tool Trace:\n").append(truncate(toolState.recentToolTrace(), 2000));
         String carryForwardNotes = extractCarryForwardNotes(context, 5000);
         if (!carryForwardNotes.isBlank()) {
             sb.append("\nCarry-Forward Notes From Prior Rounds:\n").append(carryForwardNotes);
         }
+        appendImageDiagnosticsPrompt(sb, imageDiagnostics);
+        if (!visualBrief.isBlank()) {
+            sb.append("\nVisual Brief From References:\n").append(visualBrief);
+            sb.append("\nUse the visual brief to shape layout, section order, spacing, palette, and component hierarchy.");
+        }
         appendExpectedGroundedOutput(sb, toolState);
-        sb.append("\nCreate the minimal runnable directory-backed artifact now.");
+        sb.append("\nCreate the minimum runnable directory-backed artifact that satisfies the declared task contract now.");
         sb.append("\nUse base_path: ").append(toolState.outputDirPath());
         sb.append("\nAll file paths in files[] must be relative to base_path.");
+        sb.append("\nIf the task contract requires frontend plus backend/API deliverables, include both instead of collapsing to a frontend-only scaffold.");
+        sb.append("\nWhen local reference images are available, the frontend should visibly reflect their composition instead of a generic dashboard.");
+        sb.append("\nIf richer generation fails, still return a runnable bundle rather than zero files.");
         return sb.toString();
+    }
+
+    private Map<String, Object> fileDraft(String path, String content) {
+        LinkedHashMap<String, Object> file = new LinkedHashMap<>();
+        file.put("path", path);
+        file.put("content", content);
+        return file;
+    }
+
+    private String sanitizeTitle(String value) {
+        String safe = firstNonBlank(value, "Demo Project").trim();
+        return safe.isBlank() ? "Demo Project" : safe;
+    }
+
+    private void appendTaskContractPrompt(StringBuilder sb, Map<String, Object> metadata) {
+        if (sb == null || metadata == null || metadata.isEmpty()) {
+            return;
+        }
+        appendMetadataLine(sb, "Output Contract", metadataString(metadata, "output_contract"));
+        appendMetadataLine(sb, "Project Kind", metadataString(metadata, "project_kind"));
+        appendMetadataLine(sb, "Output Directory", metadataString(metadata, "output_dir"));
+        appendMetadataLine(sb, "Reference Repo", metadataString(metadata, "reference_repo"));
+        List<String> requiredComponents = metadataStringList(metadata, "required_components");
+        if (!requiredComponents.isEmpty()) {
+            sb.append("Required Components: ").append(requiredComponents).append("\n");
+        }
+        appendMetadataLine(sb, "Frontend Required", booleanMetadataLabel(metadata, "frontend_required"));
+        appendMetadataLine(sb, "Backend Required", booleanMetadataLabel(metadata, "backend_required"));
+        appendMetadataLine(sb, "API Required", booleanMetadataLabel(metadata, "api_required"));
+    }
+
+    private void appendMetadataLine(StringBuilder sb, String label, String value) {
+        if (sb == null || value == null || value.isBlank()) {
+            return;
+        }
+        sb.append(label).append(": ").append(value).append("\n");
+    }
+
+    private String booleanMetadataLabel(Map<String, Object> metadata, String key) {
+        return metadataBoolean(metadata, key) ? "true" : "";
+    }
+
+    private boolean requiresFullStackBundle(TaskRuntimeContext context) {
+        if (context == null || context.task() == null) {
+            return false;
+        }
+        Map<String, Object> metadata = context.task().metadata();
+        if (metadata == null || metadata.isEmpty()) {
+            return false;
+        }
+        if (metadataBoolean(metadata, "backend_required") || metadataBoolean(metadata, "api_required")) {
+            return true;
+        }
+        List<String> requiredComponents = metadataStringList(metadata, "required_components");
+        for (String component : requiredComponents) {
+            String normalized = component == null ? "" : component.trim().toLowerCase();
+            if ("backend".equals(normalized)
+                || "api".equals(normalized)
+                || "server".equals(normalized)
+                || "manifest".equals(normalized)) {
+                return true;
+            }
+        }
+        return textSuggestsFullStack(metadataString(metadata, "output_contract"))
+            || textSuggestsFullStack(metadataString(metadata, "project_kind"))
+            || textSuggestsFullStack(metadataString(metadata, "intent"))
+            || textSuggestsFullStack(context.task().goal());
+    }
+
+    private boolean textSuggestsFullStack(String text) {
+        String normalized = text == null ? "" : text.trim().toLowerCase();
+        if (normalized.isBlank()) {
+            return false;
+        }
+        return normalized.contains("full-stack")
+            || normalized.contains("full stack")
+            || normalized.contains("frontend and backend")
+            || normalized.contains("frontend + backend")
+            || normalized.contains("backend api")
+            || normalized.contains("api endpoint")
+            || normalized.contains("前后端")
+            || normalized.contains("后端")
+            || normalized.contains("接口");
+    }
+
+    private boolean metadataBoolean(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return false;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Boolean b) {
+            return b;
+        }
+        return Boolean.parseBoolean(stringValue(value));
+    }
+
+    private List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object raw = metadata.get(key);
+        if (raw instanceof List<?> list) {
+            List<String> values = new ArrayList<>();
+            for (Object item : list) {
+                String text = stringValue(item).trim();
+                if (!text.isBlank()) {
+                    values.add(text);
+                }
+            }
+            return List.copyOf(values);
+        }
+        String single = stringValue(raw).trim();
+        return single.isBlank() ? List.of() : List.of(single);
+    }
+
+    private String formatImageInputList(List<LlmImageInput> imageInputs) {
+        if (imageInputs == null || imageInputs.isEmpty()) {
+            return "- (none)";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (LlmImageInput imageInput : imageInputs) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("- ").append(firstNonBlank(imageInput.path(), "(inline image)"));
+        }
+        return sb.toString();
+    }
+
+    private String formatImageInputList(ImageInputDiagnostics diagnostics) {
+        if (diagnostics == null) {
+            return "- (none)";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (LlmImageInput imageInput : diagnostics.availableInputs()) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("- ").append(firstNonBlank(imageInput.path(), "(inline image)"));
+        }
+        for (String missingPath : diagnostics.missingPaths()) {
+            if (sb.length() > 0) {
+                sb.append("\n");
+            }
+            sb.append("- ").append(missingPath).append(" (missing)");
+        }
+        return sb.length() == 0 ? "- (none)" : sb.toString();
+    }
+
+    private String formatImageInputItems(List<LlmImageInput> imageInputs) {
+        if (imageInputs == null || imageInputs.isEmpty()) {
+            return "                        <li>No local image references were provided.</li>";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (LlmImageInput imageInput : imageInputs) {
+            sb.append("                        <li>")
+                .append(escapeHtml(firstNonBlank(imageInput.path(), "(inline image)")))
+                .append("</li>\n");
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    private String escapeHtml(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;");
+    }
+
+    private String escapeJson(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"");
+    }
+
+    private String toJsString(String value) {
+        return "\"" + escapeJson(firstNonBlank(value, "")) + "\"";
+    }
+
+    private List<Map<String, Object>> minimalStaticFallbackFiles(String taskTitle,
+                                                                 String goal,
+                                                                 List<LlmImageInput> imageInputs,
+                                                                 String imageList,
+                                                                 String reason,
+                                                                 String visualBrief) {
+        String safeTitle = escapeHtml(firstNonBlank(taskTitle, "Autonomous Scaffold"));
+        String safeGoal = escapeHtml(firstNonBlank(goal, "A minimal runnable scaffold was generated automatically."));
+        String safeReason = escapeHtml(firstNonBlank(reason, "planner_no_additional_tool"));
+        String imageItems = formatImageInputItems(imageInputs);
+        String readmeImageList = firstNonBlank(imageList, "- (none)");
+        String safeVisualBrief = escapeHtml(firstNonBlank(visualBrief, "No visual brief was available."));
+        String visualBriefSection = visualBrief == null || visualBrief.isBlank()
+            ? ""
+            : """
+                    <section class="panel">
+                        <h2>Visual brief</h2>
+                        <p>%s</p>
+                    </section>
+            """.formatted(safeVisualBrief);
+
+        String indexHtml = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>%s</title>
+                <link rel="stylesheet" href="style.css">
+            </head>
+            <body>
+                <main class="shell">
+                    <section class="hero">
+                        <p class="eyebrow">Autonomous Scaffold</p>
+                        <h1>%s</h1>
+                        <p class="lede">%s</p>
+                        <div class="meta">
+                            <span>Fallback reason</span>
+                            <strong>%s</strong>
+                        </div>
+                    </section>
+                    <section class="panel">
+                        <h2>Local image references</h2>
+                        <ul>
+            %s
+                        </ul>
+                    </section>
+            %s
+                    <section class="panel">
+                        <h2>Next step</h2>
+                        <p>Open this page locally, compare it with the intended references, then refine copy, layout, and assets with additional write_files or patch_file steps.</p>
+                    </section>
+                </main>
+                <script src="script.js"></script>
+            </body>
+            </html>
+            """.formatted(safeTitle, safeTitle, safeGoal, safeReason, imageItems, visualBriefSection);
+
+        String styleCss = """
+            :root {
+                color-scheme: light;
+                --bg: #f4efe6;
+                --panel: rgba(255, 251, 245, 0.82);
+                --text: #1f1d1a;
+                --muted: #6f675c;
+                --accent: #d6603d;
+                --border: rgba(31, 29, 26, 0.08);
+                --shadow: 0 24px 48px rgba(69, 47, 31, 0.12);
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                min-height: 100vh;
+                font-family: "Segoe UI", "PingFang SC", sans-serif;
+                background:
+                    radial-gradient(circle at top, rgba(214, 96, 61, 0.18), transparent 34%%),
+                    linear-gradient(160deg, #f8f4ec 0%%, #efe6d9 100%%);
+                color: var(--text);
+            }
+
+            .shell {
+                width: min(960px, calc(100%% - 32px));
+                margin: 0 auto;
+                padding: 48px 0 64px;
+            }
+
+            .hero,
+            .panel {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 24px;
+                box-shadow: var(--shadow);
+                backdrop-filter: blur(8px);
+            }
+
+            .hero {
+                padding: 32px;
+            }
+
+            .panel {
+                margin-top: 20px;
+                padding: 24px 28px;
+            }
+
+            .eyebrow {
+                margin: 0 0 10px;
+                color: var(--accent);
+                font-size: 0.82rem;
+                font-weight: 700;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+            }
+
+            h1,
+            h2 {
+                margin: 0;
+            }
+
+            .lede {
+                color: var(--muted);
+                font-size: 1.04rem;
+                line-height: 1.7;
+                margin: 16px 0 0;
+            }
+
+            .meta {
+                display: inline-flex;
+                gap: 10px;
+                align-items: center;
+                margin-top: 18px;
+                padding: 10px 14px;
+                border-radius: 999px;
+                background: rgba(214, 96, 61, 0.1);
+                color: var(--muted);
+            }
+
+            ul {
+                margin: 14px 0 0;
+                padding-left: 20px;
+                line-height: 1.7;
+            }
+            """;
+
+        String scriptJs = """
+            const scaffold = {
+              title: %s,
+              reason: %s,
+              imageReferences: %s,
+              visualBrief: %s
+            };
+
+            console.info("Autonomous scaffold ready", scaffold);
+            """.formatted(
+            toJsString(firstNonBlank(taskTitle, "Autonomous Scaffold")),
+            toJsString(firstNonBlank(reason, "planner_no_additional_tool")),
+            toJsString(readmeImageList),
+            toJsString(firstNonBlank(visualBrief, ""))
+        );
+
+        String readme = """
+            # %s
+
+            This directory was generated by the harness fallback path so the task still lands a runnable artifact even when richer generation does not return files in time.
+
+            ## Goal
+
+            %s
+
+            ## Fallback reason
+
+            `%s`
+
+            ## Local image references
+
+            %s
+
+            ## Visual brief
+
+            %s
+
+            ## Verify
+
+            Open `index.html` in a browser, then refine content, assets, and layout with follow-up `write_files` or `patch_file` steps.
+            """.formatted(
+            firstNonBlank(taskTitle, "Autonomous Scaffold"),
+            firstNonBlank(goal, "A minimal runnable scaffold was generated automatically."),
+            firstNonBlank(reason, "planner_no_additional_tool"),
+            readmeImageList,
+            firstNonBlank(visualBrief, "(none)")
+        );
+
+        return List.of(
+            fileDraft("index.html", indexHtml),
+            fileDraft("style.css", styleCss),
+            fileDraft("script.js", scriptJs),
+            fileDraft("README.md", readme)
+        );
+    }
+
+    private List<Map<String, Object>> minimalFullStackFallbackFiles(String taskTitle,
+                                                                    String goal,
+                                                                    String imageList,
+                                                                    String reason,
+                                                                    String visualBrief) {
+        String safeTitle = firstNonBlank(taskTitle, "Autonomous Full Stack Demo");
+        String safeGoal = firstNonBlank(goal, "A minimal runnable full-stack demo bundle was generated automatically.");
+        String safeReason = firstNonBlank(reason, "planner_no_additional_tool");
+        String safeVisualBrief = firstNonBlank(visualBrief, "");
+        String heroEyebrow = safeVisualBrief.isBlank() ? "Full Stack Fallback" : "Image-Grounded Full Stack Fallback";
+        String heroSupport = safeVisualBrief.isBlank()
+            ? safeGoal
+            : safeGoal + " Visual brief: " + truncateSingleLine(safeVisualBrief, 220);
+        String detailCards = safeVisualBrief.isBlank()
+            ? """
+                        <article class="card">
+                            <h2>Reason</h2>
+                            <p>%s</p>
+                        </article>
+            """.formatted(escapeHtml(safeReason))
+            : """
+                        <article class="card">
+                            <h2>Visual brief</h2>
+                            <p>%s</p>
+                        </article>
+                        <article class="card">
+                            <h2>Reason</h2>
+                            <p>%s</p>
+                        </article>
+            """.formatted(escapeHtml(safeVisualBrief), escapeHtml(safeReason));
+
+        String packageJson = """
+            {
+              "name": "%s",
+              "version": "1.0.0",
+              "private": true,
+              "description": "%s",
+              "main": "server.js",
+              "scripts": {
+                "start": "node server.js"
+              },
+              "dependencies": {
+                "express": "^4.19.2"
+              }
+            }
+            """.formatted(
+            escapeJson(safeTitle.toLowerCase().replaceAll("[^a-z0-9]+", "-").replaceAll("(^-|-$)", "")),
+            escapeJson(safeGoal)
+        );
+
+        String serverJs = """
+            const express = require("express");
+            const path = require("path");
+
+            const app = express();
+            const port = process.env.PORT || 3000;
+
+            app.use(express.static(path.join(__dirname, "public")));
+
+            app.get("/api/status", (_req, res) => {
+              res.json({
+                status: "ok",
+                title: %s,
+                goal: %s,
+                fallbackReason: %s
+              });
+            });
+
+            app.listen(port, () => {
+              console.log("Server listening on http://localhost:" + port);
+            });
+            """.formatted(
+            toJsString(safeTitle),
+            toJsString(safeGoal),
+            toJsString(safeReason)
+        );
+
+        String indexHtml = """
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>%s</title>
+                <link rel="stylesheet" href="styles.css">
+            </head>
+            <body>
+                <main class="layout">
+                    <section class="hero">
+                        <p class="eyebrow">%s</p>
+                        <h1>%s</h1>
+                        <p class="lede">%s</p>
+                    </section>
+                    <section class="grid">
+                        <article class="card">
+                            <h2>API status</h2>
+                            <pre id="status-card">Loading...</pre>
+                        </article>
+            %s
+                    </section>
+                </main>
+                <script src="app.js"></script>
+            </body>
+            </html>
+            """.formatted(
+            escapeHtml(heroEyebrow),
+            escapeHtml(safeTitle),
+            escapeHtml(safeTitle),
+            escapeHtml(heroSupport),
+            detailCards
+        );
+
+        String stylesCss = """
+            :root {
+                color-scheme: light;
+                --bg: #fbf8f3;
+                --ink: #1d1f23;
+                --muted: #676d76;
+                --accent: #0f766e;
+                --card: #ffffff;
+                --line: rgba(29, 31, 35, 0.08);
+                --shadow: 0 20px 40px rgba(17, 24, 39, 0.08);
+            }
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                min-height: 100vh;
+                font-family: "Segoe UI", "PingFang SC", sans-serif;
+                color: var(--ink);
+                background:
+                    radial-gradient(circle at top right, rgba(15, 118, 110, 0.12), transparent 28%),
+                    linear-gradient(180deg, #fffdf8 0%, #f2eee6 100%);
+            }
+
+            .layout {
+                width: min(1080px, calc(100% - 32px));
+                margin: 0 auto;
+                padding: 48px 0 72px;
+            }
+
+            .hero {
+                padding: 32px;
+                border-radius: 28px;
+                background: rgba(255, 255, 255, 0.88);
+                border: 1px solid var(--line);
+                box-shadow: var(--shadow);
+            }
+
+            .eyebrow {
+                margin: 0 0 10px;
+                color: var(--accent);
+                font-size: 0.82rem;
+                font-weight: 700;
+                letter-spacing: 0.12em;
+                text-transform: uppercase;
+            }
+
+            .lede {
+                margin: 14px 0 0;
+                color: var(--muted);
+                line-height: 1.7;
+                max-width: 60ch;
+            }
+
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+                gap: 18px;
+                margin-top: 20px;
+            }
+
+            .card {
+                padding: 24px;
+                border-radius: 24px;
+                background: var(--card);
+                border: 1px solid var(--line);
+                box-shadow: var(--shadow);
+            }
+
+            pre {
+                margin: 0;
+                padding: 16px;
+                overflow: auto;
+                border-radius: 16px;
+                background: #0f172a;
+                color: #e2e8f0;
+            }
+            """;
+
+        String appJs = """
+            const visualBrief = %s;
+
+            async function loadStatus() {
+              const card = document.getElementById("status-card");
+              try {
+                const response = await fetch("/api/status");
+                const payload = await response.json();
+                if (visualBrief) {
+                  payload.visualBrief = visualBrief;
+                }
+                card.textContent = JSON.stringify(payload, null, 2);
+              } catch (error) {
+                card.textContent = "Failed to load /api/status\\n" + error.message;
+              }
+            }
+
+            loadStatus();
+            """.formatted(toJsString(safeVisualBrief));
+
+        String readme = """
+            # %s
+
+            This bundle was generated by the harness fallback path to satisfy an explicit full-stack task contract.
+
+            ## Goal
+
+            %s
+
+            ## Fallback reason
+
+            `%s`
+
+            ## Includes
+
+            - Express backend in `server.js`
+            - Static frontend in `public/`
+            - API probe at `/api/status`
+
+            ## Local image references
+
+            %s
+
+            ## Visual brief
+
+            %s
+
+            ## Run
+
+            ```bash
+            npm install
+            npm start
+            ```
+            """.formatted(
+            safeTitle,
+            safeGoal,
+            safeReason,
+            firstNonBlank(imageList, "- (none)"),
+            firstNonBlank(visualBrief, "(none)")
+        );
+
+        return List.of(
+            fileDraft("package.json", packageJson),
+            fileDraft("server.js", serverJs),
+            fileDraft("public/index.html", indexHtml),
+            fileDraft("public/styles.css", stylesCss),
+            fileDraft("public/app.js", appJs),
+            fileDraft("README.md", readme)
+        );
     }
 
     private String buildFinalizationSystemPrompt(Worker worker) {
@@ -1761,12 +2524,17 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         var task = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(task.title()).append("\n");
+        String taskType = metadataString(task.metadata(), "task_type");
+        if (!taskType.isBlank()) {
+            sb.append("Task Type: ").append(taskType).append("\n");
+        }
         if (task.goal() != null && !task.goal().isBlank()) {
             sb.append("Goal: ").append(task.goal()).append("\n");
         }
         if (task.metadata() != null && task.metadata().get("intent") != null) {
             sb.append("Intent: ").append(task.metadata().get("intent")).append("\n");
         }
+        appendTaskContractPrompt(sb, task.metadata());
         if (task.nextStep() != null && !task.nextStep().isBlank()) {
             sb.append("Next Step: ").append(task.nextStep()).append("\n");
         }
@@ -1788,6 +2556,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 sb.append("- ").append(line).append("\n");
             }
         }
+        appendImageDiagnosticsPrompt(sb, imageInputDiagnostics(context));
         return sb.toString();
     }
 
@@ -1813,9 +2582,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
         String mountedPrompt = renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : "";
         metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt).toMetadata());
-        List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
-        metadata.put("image_input_count", imageInputs.size());
-        metadata.put("image_input_used", !imageInputs.isEmpty());
+        appendImageDiagnosticsMetadata(metadata, imageInputDiagnostics(context));
         return new WorkerExecutionResult(
             result.summary(),
             result.outputText(),
@@ -1885,6 +2652,17 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return "empty_content";
         }
         return "generated";
+    }
+
+    private String autoWriteExecutionMode(WorkerExecutionResult generated) {
+        if (generated == null || generated.metadata() == null) {
+            return "unknown";
+        }
+        Object mode = generated.metadata().get("auto_write_generation_mode");
+        if (mode instanceof String s && !s.isBlank()) {
+            return s;
+        }
+        return "unknown";
     }
 
     private String autoWriteFilesGenerationMode(AutoWriteFilesDraft draft) {
@@ -2727,6 +3505,135 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return text.length() > limit ? text.substring(0, limit) + "..." : text;
     }
 
+    private String truncateSingleLine(String text, int limit) {
+        return truncate(text == null ? "" : text.replaceAll("\\s+", " ").trim(), limit);
+    }
+
+    private ImageInputDiagnostics imageInputDiagnostics(TaskRuntimeContext context) {
+        List<LlmImageInput> availableInputs = LlmImageInputResolver.resolve(context);
+        List<String> declaredPaths = declaredImagePaths(context);
+        List<String> missingPaths = new ArrayList<>();
+        for (String path : declaredPaths) {
+            if (path == null || path.isBlank()) {
+                continue;
+            }
+            boolean present = availableInputs.stream()
+                .anyMatch(input -> path.equalsIgnoreCase(firstNonBlank(input.path(), "")));
+            if (!present) {
+                missingPaths.add(path);
+            }
+        }
+        return new ImageInputDiagnostics(availableInputs, missingPaths);
+    }
+
+    private List<String> declaredImagePaths(TaskRuntimeContext context) {
+        if (context == null || context.task() == null || context.task().metadata() == null) {
+            return List.of();
+        }
+        Object raw = context.task().metadata().get("image_inputs");
+        if (!(raw instanceof List<?> list) || list.isEmpty()) {
+            return List.of();
+        }
+        List<String> paths = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof String s && !s.isBlank()) {
+                paths.add(s);
+            } else if (item instanceof Map<?, ?> map) {
+                Object path = map.get("path");
+                if (path != null && !String.valueOf(path).isBlank()) {
+                    paths.add(String.valueOf(path));
+                }
+            }
+        }
+        return paths;
+    }
+
+    private String resolveVisualBrief(TaskRuntimeContext context,
+                                      Worker worker,
+                                      ImageInputDiagnostics imageDiagnostics) {
+        if (imageDiagnostics == null || imageDiagnostics.availableInputs().isEmpty()) {
+            return "";
+        }
+        try {
+            String raw = llmClient.chat(
+                buildVisualBriefSystemPrompt(worker),
+                buildVisualBriefUserPrompt(context, imageDiagnostics),
+                imageDiagnostics.availableInputs()
+            );
+            return truncateSingleLine(firstNonBlank(raw, ""), 1200);
+        } catch (Exception e) {
+            log.warn("Visual brief generation failed. task={} worker={} reason={}",
+                context != null && context.task() != null ? context.task().id() : "",
+                worker != null ? worker.workerId() : "",
+                e.getMessage());
+            return "";
+        }
+    }
+
+    private String buildVisualBriefSystemPrompt(Worker worker) {
+        return "You are a visual grounding helper for a tool-enabled worker. Worker ID: "
+            + (worker == null ? "" : worker.workerId())
+            + ". Summarize the provided reference images into a compact implementation-oriented visual brief. "
+            + "Focus on layout hierarchy, major sections, component grouping, spacing rhythm, palette hints, and obvious interaction affordances. "
+            + "Return plain text only, under 400 words, no markdown.";
+    }
+
+    private String buildVisualBriefUserPrompt(TaskRuntimeContext context, ImageInputDiagnostics imageDiagnostics) {
+        StringBuilder sb = new StringBuilder();
+        if (context != null && context.task() != null) {
+            sb.append("Task: ").append(firstNonBlank(context.task().title(), "(untitled)")).append("\n");
+            if (context.task().goal() != null && !context.task().goal().isBlank()) {
+                sb.append("Goal: ").append(context.task().goal()).append("\n");
+            }
+        }
+        sb.append("Reference Images:\n").append(formatImageInputList(imageDiagnostics)).append("\n");
+        sb.append("Provide a concise visual brief for code generation.");
+        return sb.toString();
+    }
+
+    private void appendImageDiagnosticsPrompt(StringBuilder sb, ImageInputDiagnostics imageDiagnostics) {
+        if (sb == null || imageDiagnostics == null) {
+            return;
+        }
+        sb.append("\nReference Images:\n").append(formatImageInputList(imageDiagnostics));
+        sb.append("\nAvailable Image Count: ").append(imageDiagnostics.availableInputs().size());
+        if (!imageDiagnostics.missingPaths().isEmpty()) {
+            sb.append("\nMissing Image Paths: ").append(imageDiagnostics.missingPaths());
+        }
+    }
+
+    private void appendImageDiagnosticsMetadata(LinkedHashMap<String, Object> metadata,
+                                               ImageInputDiagnostics imageDiagnostics) {
+        if (metadata == null || imageDiagnostics == null) {
+            return;
+        }
+        metadata.put("image_input_count", imageDiagnostics.availableInputs().size());
+        metadata.put("image_input_present", imageDiagnostics.hasAvailableInputs());
+        metadata.put("image_input_used", imageDiagnostics.hasAvailableInputs());
+        if (!imageDiagnostics.missingPaths().isEmpty()) {
+            metadata.put("missing_image_paths", imageDiagnostics.missingPaths());
+        }
+        if (imageDiagnostics.hasAvailableInputs()) {
+            metadata.put("image_input_paths", imageDiagnostics.availableInputs().stream()
+                .map(input -> firstNonBlank(input.path(), "(inline image)"))
+                .toList());
+        }
+    }
+
+    private record ImageInputDiagnostics(
+        List<LlmImageInput> availableInputs,
+        List<String> missingPaths
+    ) {
+        private ImageInputDiagnostics {
+            if (availableInputs == null) availableInputs = List.of();
+            if (missingPaths == null) missingPaths = List.of();
+        }
+
+        private boolean hasAvailableInputs() {
+            return availableInputs != null && !availableInputs.isEmpty();
+        }
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -2904,7 +3811,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         String whyNextStep,
         boolean success,
         int elapsedMs,
-        String outputPreview
+        String outputPreview,
+        String toolInvocationId
     ) {
         private ToolChainStep {
             if (selectedTool == null) selectedTool = "";
@@ -2925,7 +3833,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 updatedWhyNextStep,
                 success,
                 elapsedMs,
-                outputPreview
+                outputPreview,
+                toolInvocationId
             );
         }
     }

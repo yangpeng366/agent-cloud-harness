@@ -104,11 +104,13 @@ class ToolAwareWorkerExecutorMultiToolTest {
             assertEquals(2, numberValue(writeInvocation.metadata().get("tool_chain_step_index")));
             assertEquals("write_file", writeInvocation.metadata().get("selected_tool"));
             assertEquals("Write the grounded draft now.", writeInvocation.metadata().get("why_selected"));
+            assertTrue(writeInvocation.executionId() != null && !writeInvocation.executionId().isBlank());
 
             assertEquals("multi_tool_round", readInvocation.metadata().get("tool_execution_mode"));
             assertEquals(1, numberValue(readInvocation.metadata().get("tool_chain_step_index")));
             assertEquals("read_file", readInvocation.metadata().get("selected_tool"));
             assertTrue(String.valueOf(readInvocation.metadata().get("result_summary")).contains("read"));
+            assertTrue(readInvocation.executionId() != null && !readInvocation.executionId().isBlank());
         }
     }
 

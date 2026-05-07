@@ -6,6 +6,7 @@ import com.agentcloud.model.Worker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -81,11 +82,7 @@ public class WorkerRouter {
         // 简单策略：优先找 readiness 全过的，按 capability 匹配数排序
         Worker selected = capable.stream()
             .filter(w -> registry.checkReadiness(w.workerId()).ready())
-            .max((a, b) -> {
-                int matchA = (int) a.capabilities().stream().filter(c -> c.equals(taskType)).count();
-                int matchB = (int) b.capabilities().stream().filter(c -> c.equals(taskType)).count();
-                return Integer.compare(matchA, matchB);
-            })
+            .max(routeComparator(taskType))
             .orElse(null);
 
         if (selected == null) {
@@ -198,6 +195,34 @@ public class WorkerRouter {
         }
         Object value = metadata.get(key);
         return value == null ? null : value.toString();
+    }
+
+    private Comparator<Worker> routeComparator(String taskType) {
+        return Comparator
+            .comparingInt((Worker worker) -> exactCapabilityMatches(worker, taskType))
+            .thenComparingInt(this::selectionPriority)
+            .thenComparing(Worker::workerId);
+    }
+
+    private int exactCapabilityMatches(Worker worker, String taskType) {
+        if (worker == null || worker.capabilities() == null || taskType == null || taskType.isBlank()) {
+            return 0;
+        }
+        return (int) worker.capabilities().stream()
+            .filter(capability -> taskType.equals(capability))
+            .count();
+    }
+
+    private int selectionPriority(Worker worker) {
+        String priority = metadataString(worker != null ? worker.metadata() : null, "selection_priority");
+        if (priority == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(priority);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private String mergeReasons(String left, String right) {

@@ -671,7 +671,7 @@ class TaskHandlerProviderSelectionHttpTest {
 
             AgentProviderRegistry registry = new AgentProviderRegistry()
                 .register(new OpenClawProvider())
-                .register(new CodexProvider());
+                .register(new CodexProvider("definitely-missing-codex-binary-for-test"));
             AgentRunService agentRunService = new AgentRunService(agentRunDao, registry, eventDao, artifactDao);
             ConsolidationService consolidationService = new ConsolidationService(
                 decisionDao, artifactDao, eventDao, checkpointDao, taskDao);

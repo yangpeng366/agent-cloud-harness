@@ -121,6 +121,40 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    void chatWithMissingImagesSkipsUnavailableLocalInputs() throws Exception {
+        Path imagePath = tempDir.resolve("missing.png");
+
+        try (StubServer server = new StubServer("""
+            {"output":[{"type":"message","content":[{"type":"output_text","text":"vision ok"}]}]}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "responses",
+                30,
+                1,
+                222
+            );
+
+            OpenAiCompatibleClient client = new OpenAiCompatibleClient(config);
+            String response = client.chat(
+                "system prompt",
+                "user prompt",
+                List.of(new LlmImageInput(imagePath.toString(), "image/png"))
+            );
+
+            assertEquals("vision ok", response);
+            JsonNode body = server.lastRequestBodyAsJson();
+            JsonNode content = body.path("input").get(0).path("content");
+            assertEquals(1, content.size());
+            assertEquals("input_text", content.get(0).path("type").asText());
+            assertEquals("user prompt", content.get(0).path("text").asText());
+        }
+    }
+
+    @Test
     void chatWithImagesUsesChatCompletionsImageUrlContent() throws Exception {
         Path imagePath = tempDir.resolve("input.jpg");
         Files.write(imagePath, new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF});

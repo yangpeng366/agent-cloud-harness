@@ -3,8 +3,13 @@ package com.agentcloud.worker;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Worker;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.worker.model.WorkerExecutionEnvelope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.List;
 
 /**
  * 按 worker 合同选择执行器的统一门面。
@@ -28,7 +33,34 @@ public class WorkerExecutorRouter implements WorkerExecutor {
     @Override
     public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
         WorkerExecutor executor = selectExecutor(workerId);
-        return executor.executeOneRound(context, workerId);
+        Instant startedAt = Instant.now();
+        String executionId = context.task().id() + ":" + workerId + ":" + startedAt.toEpochMilli();
+        WorkerExecutionResult result = executor.executeOneRound(context, workerId);
+        Instant finishedAt = Instant.now();
+        WorkerExecutionEnvelope envelope = new WorkerExecutionEnvelope(
+            executionId,
+            context.task().sessionId(),
+            context.task().id(),
+            workerId,
+            startedAt,
+            finishedAt,
+            Math.max(0L, finishedAt.toEpochMilli() - startedAt.toEpochMilli()),
+            result != null ? result.executionStatus() : "unknown",
+            result,
+            readToolInvocationIds(result),
+            new LinkedHashMap<>()
+        );
+        return WorkerExecutionResult.withEnvelope(
+            result,
+            envelope.executionId(),
+            envelope.sessionId(),
+            envelope.taskId(),
+            envelope.workerId(),
+            envelope.startedAt(),
+            envelope.finishedAt(),
+            envelope.toolInvocationIds(),
+            envelope.metadata()
+        );
     }
 
     private WorkerExecutor selectExecutor(String workerId) {
@@ -46,5 +78,17 @@ public class WorkerExecutorRouter implements WorkerExecutor {
         log.info("Routing worker to tool-aware executor. worker={} tools={}",
             worker.workerId(), worker.toolCapabilities());
         return toolAwareExecutor;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> readToolInvocationIds(WorkerExecutionResult result) {
+        if (result == null || result.metadata() == null) {
+            return List.of();
+        }
+        Object value = result.metadata().get("tool_invocation_ids");
+        if (value instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return List.of();
     }
 }

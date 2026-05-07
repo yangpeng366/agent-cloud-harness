@@ -507,6 +507,225 @@ class ToolAwareWorkerExecutorMultiStepTest {
     }
 
     @Test
+    void autoWriteFilesTimeoutFallsBackToMinimalRunnableScaffold() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-fallback"));
+        Path outputDir = workspace.resolve("demo-project");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-fallback.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-fallback",
+                "codex",
+                List.of("visual_demo"),
+                List.of("list_files", "write_files"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ListFilesTool(workerRegistry, toolPolicy))
+                .register(new WriteFilesTool(workerRegistry, toolPolicy));
+
+            FailingImageSequencedLlmClient llmClient = new FailingImageSequencedLlmClient(List.of(
+                """
+                {"needs_tool":true,"tool_name":"list_files","tool_arguments":{"path":".","recursive":false,"max_entries":100},"reason":"Inspect the available local files before writing the bundle."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"No image-viewing tool is available, so stop planning after the filesystem probe."}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_fallback",
+                "session_multi_fallback",
+                null,
+                "fallback directory artifact",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create a runnable scaffold even if richer generation times out.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Use the local references when possible, but still write a runnable scaffold into the output directory.",
+                    "output_dir", outputDir.toString(),
+                    "image_inputs", List.of("D:\\gitAll\\open\\20260506-141916.jpg")
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool fallback", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals("auto_grounded_directory_write", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("minimal_directory_fallback", result.metadata().get("auto_write_generation_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("directory_backed_artifact"));
+            assertTrue(Files.exists(outputDir.resolve("index.html")));
+            assertTrue(Files.exists(outputDir.resolve("style.css")));
+            assertTrue(Files.exists(outputDir.resolve("script.js")));
+            assertTrue(Files.exists(outputDir.resolve("README.md")));
+            assertTrue(Files.readString(outputDir.resolve("index.html")).contains("Autonomous Scaffold"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(2, invocations.size());
+            assertEquals("write_files", invocations.get(0).toolName());
+            assertEquals("list_files", invocations.get(1).toolName());
+        }
+    }
+
+    @Test
+    void autoWriteFilesTimeoutFallsBackToMinimalRunnableFullStackBundleWhenContractRequiresIt() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-fullstack-fallback"));
+        Path outputDir = workspace.resolve("demo-fullstack");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-fullstack-fallback.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-fullstack-fallback",
+                "codex",
+                List.of("visual_demo"),
+                List.of("list_files", "write_files"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ListFilesTool(workerRegistry, toolPolicy))
+                .register(new WriteFilesTool(workerRegistry, toolPolicy));
+
+            FailingImageSequencedLlmClient llmClient = new FailingImageSequencedLlmClient(List.of(
+                """
+                {"needs_tool":true,"tool_name":"list_files","tool_arguments":{"path":".","recursive":false,"max_entries":100},"reason":"Inspect the workspace before generating the full-stack bundle."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"No richer tool path remains after the filesystem probe."}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_fullstack_fallback",
+                "session_multi_fullstack_fallback",
+                null,
+                "fallback full-stack artifact",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create a runnable frontend and backend bundle even if richer generation times out.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Write a runnable full-stack bundle with frontend, backend, and API status endpoint.",
+                    "output_dir", outputDir.toString(),
+                    "output_contract", "full-stack runnable bundle",
+                    "project_kind", "frontend and backend demo",
+                    "frontend_required", true,
+                    "backend_required", true,
+                    "api_required", true,
+                    "required_components", List.of("frontend", "backend", "api", "manifest", "readme"),
+                    "image_inputs", List.of("D:\\gitAll\\open\\missing-reference.png")
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool fullstack fallback", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals("auto_grounded_directory_write", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("minimal_directory_fallback", result.metadata().get("auto_write_generation_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("directory_backed_artifact"));
+            assertTrue(Files.exists(outputDir.resolve("package.json")));
+            assertTrue(Files.exists(outputDir.resolve("server.js")));
+            assertTrue(Files.exists(outputDir.resolve("public/index.html")));
+            assertTrue(Files.exists(outputDir.resolve("public/styles.css")));
+            assertTrue(Files.exists(outputDir.resolve("public/app.js")));
+            assertTrue(Files.exists(outputDir.resolve("README.md")));
+            assertTrue(Files.readString(outputDir.resolve("server.js")).contains("/api/status"));
+            assertTrue(Files.readString(outputDir.resolve("package.json")).contains("\"express\""));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(2, invocations.size());
+            assertEquals("write_files", invocations.get(0).toolName());
+            assertEquals("list_files", invocations.get(1).toolName());
+        }
+    }
+
+    @Test
     void stopsBeforeRepeatingSameToolAndArgs() throws Exception {
         Path workspace = Files.createDirectories(tempDir.resolve("repeat-workspace"));
         Files.writeString(workspace.resolve("notes.txt"), "TODO: one note only.\n");
@@ -929,6 +1148,17 @@ class ToolAwareWorkerExecutorMultiStepTest {
         @Override
         public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
             return chat(systemPrompt, userPrompt);
+        }
+    }
+
+    private static final class FailingImageSequencedLlmClient extends SequencedLlmClient {
+        private FailingImageSequencedLlmClient(List<String> responses) {
+            super(responses);
+        }
+
+        @Override
+        public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
+            throw new RuntimeException("simulated image-generation timeout");
         }
     }
 

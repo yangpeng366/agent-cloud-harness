@@ -13,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
@@ -156,7 +157,7 @@ public class OpenAiCompatibleClient implements LlmClient {
     }
 
     private void appendChatCompletionImage(ArrayNode userContent, LlmImageInput imageInput) throws IOException {
-        String imageUrl = toDataUrl(imageInput);
+        String imageUrl = safeDataUrl(imageInput);
         if (imageUrl.isBlank()) {
             return;
         }
@@ -167,13 +168,22 @@ public class OpenAiCompatibleClient implements LlmClient {
     }
 
     private void appendResponsesImage(ArrayNode content, LlmImageInput imageInput) throws IOException {
-        String imageUrl = toDataUrl(imageInput);
+        String imageUrl = safeDataUrl(imageInput);
         if (imageUrl.isBlank()) {
             return;
         }
         ObjectNode imageItem = content.addObject();
         imageItem.put("type", "input_image");
         imageItem.put("image_url", imageUrl);
+    }
+
+    private String safeDataUrl(LlmImageInput imageInput) throws IOException {
+        try {
+            return toDataUrl(imageInput);
+        } catch (NoSuchFileException e) {
+            log.warn("Skipping missing local image input. path={}", imageInput == null ? "" : imageInput.path());
+            return "";
+        }
     }
 
     private String toDataUrl(LlmImageInput imageInput) throws IOException {

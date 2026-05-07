@@ -14,15 +14,39 @@ public final class AgentProviderResolver {
         if (normalizedWorker == null && normalizedType == null) {
             return null;
         }
+        if (contains(normalizedWorker, "claude") || contains(normalizedType, "claude")) {
+            return "claude";
+        }
         if (contains(normalizedWorker, "codex") || contains(normalizedType, "codex")) {
             return "codex";
+        }
+        if (contains(normalizedWorker, "cursor") || contains(normalizedType, "cursor")) {
+            return "cursor";
+        }
+        if (contains(normalizedWorker, "copilot") || contains(normalizedType, "copilot")) {
+            return "copilot";
+        }
+        if (contains(normalizedWorker, "opencode") || contains(normalizedType, "opencode")) {
+            return "opencode";
         }
         if (contains(normalizedWorker, "openclaw") || contains(normalizedType, "openclaw")
             || contains(normalizedType, "native")) {
             return "openclaw";
         }
+        if (contains(normalizedWorker, "hermes") || contains(normalizedType, "hermes")) {
+            return "hermes";
+        }
+        if (contains(normalizedWorker, "gemini") || contains(normalizedType, "gemini")) {
+            return "gemini";
+        }
+        if (contains(normalizedWorker, "pi") || contains(normalizedType, "pi")) {
+            return "pi";
+        }
         if (contains(normalizedWorker, "kimi") || contains(normalizedType, "kimi")) {
             return "kimi";
+        }
+        if (contains(normalizedWorker, "kiro") || contains(normalizedType, "kiro")) {
+            return "kiro";
         }
         return firstNonBlank(workerType, workerId);
     }
