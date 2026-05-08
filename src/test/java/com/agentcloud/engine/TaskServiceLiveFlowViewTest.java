@@ -224,10 +224,10 @@ class TaskServiceLiveFlowViewTest {
             assertNotNull(flow.executionBoundary());
             assertEquals("exec_read_file", flow.executionBoundary().executionId());
             assertEquals("kimi", flow.executionBoundary().workerId());
-            assertEquals("succeeded", flow.executionBoundary().executionStatus());
-            assertEquals(1, flow.executionBoundary().toolInvocationCount());
-            assertEquals("read_file", flow.executionBoundary().metadata().get("latest_tool_name"));
-            assertEquals("1 tool call · succeeded · read_file", flow.executionBoundary().traceSummary());
+            assertEquals("blocked", flow.executionBoundary().executionStatus());
+            assertEquals(2, flow.executionBoundary().toolInvocationCount());
+            assertEquals("write_file", flow.executionBoundary().metadata().get("latest_tool_name"));
+            assertEquals("2 steps · planner_no_additional_tool · read_file -> write_file", flow.executionBoundary().traceSummary());
             assertEquals("multi_tool_round", flow.experimentRun().metadata().get("tool_execution_mode"));
             assertEquals(2, ((Number) flow.experimentRun().metadata().get("tool_chain_step_count")).intValue());
             assertEquals("planner_no_additional_tool",
@@ -489,8 +489,8 @@ class TaskServiceLiveFlowViewTest {
                     null,
                     null,
                     List.of(),
-                    List.of(),
-                    List.of(),
+                    decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 20),
+                    artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 20),
                     List.of(),
                     new ActiveContext(
                         task.title(),

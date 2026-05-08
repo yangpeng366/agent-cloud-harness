@@ -182,6 +182,156 @@ class RuntimeFactSetAssemblerTest {
         assertEquals(null, facts.executionBoundary());
     }
 
+    @Test
+    void assemblePrefersLatestWorkerMetadataForRoundLevelExecutionBoundary() {
+        Instant now = Instant.parse("2026-05-05T06:00:00Z");
+        Task task = new Task(
+            "task_2",
+            "session_2",
+            null,
+            "runtime facts worker round",
+            "active",
+            "high",
+            now,
+            now,
+            now,
+            null,
+            null,
+            null,
+            "unify worker round facts",
+            "review tool chain",
+            "kimi",
+            "continue",
+            null,
+            Map.of("task_type", "coding", "model_mode", "orchestrated", "orchestration_stage", "execution_active")
+        );
+
+        Artifact latestArtifact = new Artifact(
+            "art_round",
+            task.sessionId(),
+            task.id(),
+            now.plusSeconds(2),
+            "worker_artifact",
+            "Executor result",
+            null,
+            null,
+            "round summary",
+            Map.ofEntries(
+                Map.entry("selected_worker", "kimi"),
+                Map.entry("route_source", "learning_memory"),
+                Map.entry("preferred_worker_hint", "kimi"),
+                Map.entry("learning_hint_applied", true),
+                Map.entry("fallback_reason", "hint survived tier filter"),
+                Map.entry("latest_worker_metadata", Map.ofEntries(
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("selected_worker_type", "kimi"),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("execution_role", "executor"),
+                    Map.entry("selection_scope", "executor"),
+                    Map.entry("route_source", "learning_memory"),
+                    Map.entry("preferred_worker_hint", "kimi"),
+                    Map.entry("learning_hint_applied", true),
+                    Map.entry("fallback_reason", "hint survived tier filter"),
+                    Map.entry("tool_execution_mode", "multi_tool_round"),
+                    Map.entry("tool_chain_step_count", 2),
+                    Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                    Map.entry("tool_chain_trace", List.of(
+                        Map.of("tool_chain_step_index", 1, "tool_name", "read_file"),
+                        Map.of("tool_chain_step_index", 2, "tool_name", "write_file")
+                    )),
+                    Map.entry("execution_status", "blocked"),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
+                ))
+            )
+        );
+        TaskRuntimeContext runtimeContext = new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(latestArtifact),
+            List.of(),
+            new ActiveContext(
+                "review tool chain",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of("manual_review"),
+                List.of(),
+                List.of(),
+                List.of(),
+                "continuity says inspect latest worker metadata",
+                "ctx",
+                8
+            )
+        );
+
+        TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(null, null, null, null, null, null, null) {
+            @Override
+            public TaskRuntimeContext build(Task ignored) {
+                return runtimeContext;
+            }
+        };
+
+        ToolInvocationRecord writeRecord = new ToolInvocationRecord(
+            "tool_write",
+            task.sessionId(),
+            task.id(),
+            "kimi",
+            "exec_write_file",
+            "write_file",
+            Map.of("path", "draft.txt"),
+            "draft updated",
+            "succeeded",
+            true,
+            21,
+            List.of("draft.txt"),
+            now.plusSeconds(4),
+            Map.of("tool_execution_mode", "multi_tool_round", "tool_chain_step_index", 2)
+        );
+        ToolInvocationRecord readRecord = new ToolInvocationRecord(
+            "tool_read",
+            task.sessionId(),
+            task.id(),
+            "kimi",
+            "exec_read_file",
+            "read_file",
+            Map.of("path", "input.txt"),
+            "input loaded",
+            "succeeded",
+            true,
+            12,
+            List.of("input.txt"),
+            now.plusSeconds(3),
+            Map.of("tool_execution_mode", "multi_tool_round", "tool_chain_step_index", 1)
+        );
+
+        RuntimeFactSetAssembler assembler = new RuntimeFactSetAssembler(
+            runtimeContextBuilder,
+            new InMemoryToolInvocationDao(writeRecord, readRecord),
+            routerWithCodexAndKimi()
+        );
+
+        RuntimeFactSet facts = assembler.assemble(task, 10);
+
+        assertNotNull(facts.executionBoundary());
+        assertEquals("blocked", facts.executionBoundary().executionStatus());
+        assertEquals(2, facts.executionBoundary().toolInvocationCount());
+        assertEquals(List.of("tool_write"), facts.executionBoundary().toolInvocationIds());
+        assertEquals("2 steps · planner_no_additional_tool · read_file -> write_file", facts.executionBoundary().traceSummary());
+        assertEquals("write_file", facts.executionBoundary().metadata().get("latest_tool_name"));
+        assertEquals("learning_memory", facts.routePreview().routeSource());
+        assertEquals("kimi", facts.routePreview().preferredWorkerHint());
+        assertTrue(facts.routePreview().learningHintApplied());
+        assertEquals("blocked", facts.metadata().get("execution_status"));
+        assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"), facts.metadata().get("evidence_refs"));
+        assertEquals(List.of("manual_review"), facts.metadata().get("unfinished_items"));
+    }
+
     private WorkerRouter routerWithCodex() {
         WorkerRegistry registry = new WorkerRegistry();
         registry.register(new Worker(
@@ -192,6 +342,33 @@ class RuntimeFactSetAssemblerTest {
             List.of("workspace"),
             Map.of(),
             Map.of("model_tier", "strong", "primary_role", "executor"),
+            false,
+            true
+        ));
+        return new WorkerRouter(registry);
+    }
+
+    private WorkerRouter routerWithCodexAndKimi() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new Worker(
+            "codex",
+            "codex",
+            List.of("coding", "continuation"),
+            List.of("read_file", "write_file"),
+            List.of("workspace"),
+            Map.of(),
+            Map.of("model_tier", "strong", "primary_role", "executor"),
+            false,
+            true
+        ));
+        registry.register(new Worker(
+            "kimi",
+            "kimi",
+            List.of("coding", "continuation"),
+            List.of("read_file", "write_file"),
+            List.of("workspace"),
+            Map.of(),
+            Map.of("model_tier", "small", "primary_role", "executor"),
             false,
             true
         ));
