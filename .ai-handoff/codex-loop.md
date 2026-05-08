@@ -120,56 +120,39 @@ Known green at last solid checkpoint:
 - `ToolAwareWorkerExecutorMultiToolTest`
 - `WorkerExecutorRouterProviderNativeTest`
 
-## Known Open Issue
+### 6. 2026-05-08 continuity hardening update
+- `ToolAwareWorkerExecutorMultiStepTest.probeThenNoToolStillAutoWritesDirectoryBundle` did not reproduce on the current Java-21 test run; do not treat it as an active blocker unless it fails again.
+- aligned `ControlNodeGraph` judgment prompt-mode diagnostics with the actual runtime-context / latest-packet rendering mode
+- preserved packet-only prompt-mode continuity in both `PacketBuilder` and `ConsolidationService` when task metadata is silent
+- added targeted regressions:
+  - `continueJudgmentPromptMetadataUsesLatestPacketPromptModeAlias`
+  - `resumePacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent`
+  - `checkpointRefinedPacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent`
 
-### Primary open failure to finish first
+## Historical Note
+
+### Previous suspected blocker
 `ToolAwareWorkerExecutorMultiStepTest.probeThenNoToolStillAutoWritesDirectoryBundle`
 
-Observed symptom:
-- expected `auto_write_generation_mode = generated`
-- actual `minimal_directory_fallback`
-
-Interpretation:
-- this likely is **not** just metadata loss
-- the case appears to truly flow into `minimalDirectoryFallbackDraft(...)`
-- likely issue is upstream of metadata merge, around one of:
-  - `generateAutoWriteFilesDraft(...)`
-  - raw LLM draft shape
-  - parser acceptance
-  - `files[]` emptiness / validity checks
-  - `base_path` alignment / normalization
+2026-05-08 status:
+- current Java-21 suite run is green
+- no code change was needed for this case in the current loop
+- keep as historical context only; reopen only if the failure reproduces
 
 ### Separate older-line failure
 `RuntimeFactSetAssemblerTest.assembleBuildsFactSetFromRuntimeContextAndToolTrace`
 - expected provider `codex`
 - actual `claude`
-- treat as separate from the current executor slice unless it blocks current progress
+- still treat as separate unless it starts blocking mounted-context/runtime-contract work
 
-## Immediate Task For Codex
+## Immediate Next Task For Codex
 
-Finish the remaining executor/test slice before branching back to broader roadmap work.
+The executor/test blocker described above is no longer the right next slice.
 
-### First target
-Investigate and fix why:
-- `probeThenNoToolStillAutoWritesDirectoryBundle`
-- lands in `minimalDirectoryFallbackDraft(...)`
-- instead of preserving `generated`
-
-### What to inspect
-Prioritize these seams in `ToolAwareWorkerExecutor.java`:
-- `generateAutoWriteFilesDraft(...)`
-- `minimalDirectoryFallbackDraft(...)`
-- `parseAutoWriteFilesDraft(...)`
-- generated draft validity checks
-- handling of `base_path`
-- handling of empty/blank file content
-- any finalization path that silently downgrades generated draft to fallback
-
-### Likely hypothesis directions
-1. LLM-produced draft parses but fails validation, causing fallback
-2. `files[]` becomes empty after normalization/filtering
-3. `base_path` is absent/mismatched, making generated draft non-acceptable
-4. generated metadata is produced, but later path reconstruction still chooses fallback object
+Resume the roadmap path from the mounted-context convergence side:
+- keep Phase 2A in a green, evidence-backed state
+- avoid reopening already-closed prompt-mode continuity gaps
+- move the next implementation slice toward Phase 2B only after preserving current diagnostics and runtime-contract stability
 
 ## Validation Commands
 

@@ -19,11 +19,18 @@ public class PacketBuilder {
     private final DecisionDao decisionDao;
     private final ArtifactDao artifactDao;
     private final TaskDao taskDao;
+    private final ResumePacketDao resumePacketDao;
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao) {
+        this(decisionDao, artifactDao, taskDao, null);
+    }
+
+    public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
+                         ResumePacketDao resumePacketDao) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.taskDao = taskDao;
+        this.resumePacketDao = resumePacketDao;
     }
 
     public ResumePacket buildResumePacket(Task task, Session session) {
@@ -383,10 +390,38 @@ public class PacketBuilder {
         if (target == null) {
             return;
         }
-        String wireName = PromptRenderingMode.resolve(task).wireName();
+        String wireName = PromptRenderingMode.resolve(resolvePromptModeSource(task)).wireName();
         target.put("prompt_rendering_mode", wireName);
         target.put("mounted_context_mode", wireName);
         target.put("prompt_mode", wireName);
+    }
+
+    private Task resolvePromptModeSource(Task task) {
+        if (task == null || resumePacketDao == null) {
+            return task;
+        }
+        if (PromptRenderingMode.resolve(task) != PromptRenderingMode.ACTIVE_CONTEXT_ONLY) {
+            return task;
+        }
+        ResumePacket latestPacket = resumePacketDao.getLatestByTask(task.sessionId(), task.id()).orElse(null);
+        if (latestPacket == null || latestPacket.payload() == null || latestPacket.payload().isEmpty()) {
+            return task;
+        }
+        String packetMode = firstNonBlank(
+            metadataString(latestPacket.payload(), "prompt_rendering_mode"),
+            metadataString(latestPacket.payload(), "mounted_context_mode"),
+            metadataString(latestPacket.payload(), "prompt_mode")
+        );
+        if (packetMode == null) {
+            return task;
+        }
+        Map<String, Object> metadata = task.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(task.metadata());
+        metadata.put("prompt_rendering_mode", packetMode);
+        metadata.put("mounted_context_mode", packetMode);
+        metadata.put("prompt_mode", packetMode);
+        return task.withMetadata(metadata);
     }
 
     private String firstNonBlank(String... values) {

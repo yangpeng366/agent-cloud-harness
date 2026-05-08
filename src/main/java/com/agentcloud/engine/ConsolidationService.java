@@ -24,14 +24,21 @@ public class ConsolidationService {
     private final EventDao eventDao;
     private final CheckpointDao checkpointDao;
     private final TaskDao taskDao;
+    private final ResumePacketDao resumePacketDao;
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao) {
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, null);
+    }
+
+    public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
+                                CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.eventDao = eventDao;
         this.checkpointDao = checkpointDao;
         this.taskDao = taskDao;
+        this.resumePacketDao = resumePacketDao;
     }
 
     public Checkpoint consolidate(Task task, String triggerType) {
@@ -341,10 +348,38 @@ public class ConsolidationService {
         if (target == null) {
             return;
         }
-        String wireName = PromptRenderingMode.resolve(task).wireName();
+        String wireName = PromptRenderingMode.resolve(resolvePromptModeSource(task)).wireName();
         target.put("prompt_rendering_mode", wireName);
         target.put("mounted_context_mode", wireName);
         target.put("prompt_mode", wireName);
+    }
+
+    private Task resolvePromptModeSource(Task task) {
+        if (task == null || resumePacketDao == null) {
+            return task;
+        }
+        if (PromptRenderingMode.resolve(task) != PromptRenderingMode.ACTIVE_CONTEXT_ONLY) {
+            return task;
+        }
+        ResumePacket latestPacket = resumePacketDao.getLatestByTask(task.sessionId(), task.id()).orElse(null);
+        if (latestPacket == null || latestPacket.payload() == null || latestPacket.payload().isEmpty()) {
+            return task;
+        }
+        String packetMode = firstNonBlank(
+            metadataString(latestPacket.payload(), "prompt_rendering_mode"),
+            metadataString(latestPacket.payload(), "mounted_context_mode"),
+            metadataString(latestPacket.payload(), "prompt_mode")
+        );
+        if (packetMode == null) {
+            return task;
+        }
+        Map<String, Object> metadata = task.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(task.metadata());
+        metadata.put("prompt_rendering_mode", packetMode);
+        metadata.put("mounted_context_mode", packetMode);
+        metadata.put("prompt_mode", packetMode);
+        return task.withMetadata(metadata);
     }
 
     private String firstNonBlank(String... values) {

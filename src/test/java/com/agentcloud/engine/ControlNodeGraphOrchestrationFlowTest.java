@@ -8,6 +8,7 @@ import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
@@ -35,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -470,6 +472,100 @@ class ControlNodeGraphOrchestrationFlowTest {
         }
     }
 
+    @Test
+    void continueJudgmentPromptMetadataUsesLatestPacketPromptModeAlias() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-packet-prompt-mode.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_packet_prompt_mode", "judgment packet prompt mode", "active"));
+
+            WorkerRouter router = new WorkerRouter(new WorkerRegistry());
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                null, runtimeContextBuilder, new DoneJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_packet_prompt_mode",
+                "session_packet_prompt_mode",
+                null,
+                "judgment prompt mode comes from packet alias",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Complete the task using packet-only prompt mode.",
+                null,
+                "codex",
+                "continue",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "verify judgment prompt metadata follows latest packet alias"
+                ))
+            );
+            taskDao.insert(task);
+
+            packetDao.insert(new ResumePacket(
+                UUID.randomUUID().toString(),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-06T06:42:00Z"),
+                "1.1",
+                "review summary",
+                null,
+                null,
+                List.of(),
+                "evaluate output",
+                Map.of(
+                    "prompt_mode", "mounted_context_primary",
+                    "next_step", "evaluate output"
+                )
+            ));
+
+            Task finalTask = graph.enter(task);
+            List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            assertEquals("done", finalTask.status());
+            assertTrue(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "mounted_context_mode"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_rendered"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_render_used"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "mounted_context_mode"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_rendered"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_render_used"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
+            ));
+        }
+    }
+
     private static String metadataString(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
             return null;
@@ -754,4 +850,5 @@ class ControlNodeGraphOrchestrationFlowTest {
             return executionContexts.get(index);
         }
     }
+
 }

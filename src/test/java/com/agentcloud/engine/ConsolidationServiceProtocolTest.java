@@ -4,6 +4,7 @@ import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Checkpoint;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
 import com.agentcloud.store.ArtifactDao;
@@ -11,6 +12,7 @@ import com.agentcloud.store.CheckpointDao;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
+import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
 import org.junit.jupiter.api.Test;
@@ -20,6 +22,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -159,6 +162,74 @@ class ConsolidationServiceProtocolTest {
             Map<?, ?> recentDecision = assertInstanceOf(Map.class, recentDecisions.get(0));
             assertEquals("execution_judgment", recentDecision.get("decision_type"));
             assertEquals("Planner recorded the protocol boundary.", recentDecision.get("summary"));
+        }
+    }
+
+    @Test
+    void checkpointRefinedPacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("checkpoint-protocol-prompt-alias.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+
+            Session session = Session.create("session_cp_alias", "checkpoint alias session", "active");
+            sessionDao.insert(session);
+
+            Task task = new Task(
+                "task_cp_alias",
+                session.id(),
+                null,
+                "preserve packet-only checkpoint prompt mode",
+                "paused",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                "Checkpoint summary draft is ready.",
+                "Keep checkpoint continuity prompt mode stable.",
+                "Persist refined packet fields.",
+                "codex",
+                "packet",
+                null,
+                Map.of("task_type", "coding")
+            );
+            taskDao.insert(task);
+
+            packetDao.insert(new ResumePacket(
+                UUID.randomUUID().toString(),
+                session.id(),
+                task.id(),
+                Instant.parse("2026-05-06T06:42:00Z"),
+                "1.1",
+                "previous packet",
+                null,
+                null,
+                List.of(),
+                "persist refined packet fields",
+                Map.of("prompt_mode", "mounted_context_shadow")
+            ));
+
+            ConsolidationService service = new ConsolidationService(
+                decisionDao,
+                artifactDao,
+                eventDao,
+                checkpointDao,
+                taskDao,
+                packetDao
+            );
+
+            Checkpoint checkpoint = service.consolidate(task, "pause_before");
+            Map<String, Object> refinedPacket = checkpoint.refinedPacket();
+
+            assertEquals("mounted_context_shadow", refinedPacket.get("prompt_rendering_mode"));
+            assertEquals("mounted_context_shadow", refinedPacket.get("mounted_context_mode"));
+            assertEquals("mounted_context_shadow", refinedPacket.get("prompt_mode"));
         }
     }
 }

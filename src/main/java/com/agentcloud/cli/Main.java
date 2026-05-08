@@ -78,11 +78,13 @@ public class Main {
         );
         WorkerRegistry workerRegistry = new WorkerRegistry();
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
-        PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao);
+        PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao, packetDao);
         ContextReconstructor reconstructor = new ContextReconstructor(taskDao, decisionDao, artifactDao, eventDao, relationDao);
 
         // 新增: Consolidation Layer
-        ConsolidationService consolidation = new ConsolidationService(decisionDao, artifactDao, eventDao, checkpointDao, taskDao);
+        ConsolidationService consolidation = new ConsolidationService(
+            decisionDao, artifactDao, eventDao, checkpointDao, taskDao, packetDao
+        );
         RuntimeJudgmentService runtimeJudgmentService = new RuntimeJudgmentService();
 
         // Phase 1 新增: LLM Adapter Layer

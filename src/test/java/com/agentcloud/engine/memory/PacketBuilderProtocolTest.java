@@ -9,6 +9,7 @@ import com.agentcloud.model.Task;
 import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.DecisionDao;
+import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
 import org.junit.jupiter.api.Test;
@@ -18,6 +19,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -244,6 +246,63 @@ class PacketBuilderProtocolTest {
             assertEquals("mounted_context_shadow", packet.metadata().get("prompt_rendering_mode"));
             assertEquals("mounted_context_shadow", packet.metadata().get("mounted_context_mode"));
             assertEquals("mounted_context_shadow", packet.metadata().get("prompt_mode"));
+        }
+    }
+
+    @Test
+    void resumePacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("resume-packet-prompt-mode-fallback.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+
+            Session session = Session.create("session_packet_alias", "packet alias session", "active");
+            sessionDao.insert(session);
+
+            Task task = new Task(
+                "task_packet_alias",
+                session.id(),
+                null,
+                "preserve packet-only prompt mode",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                "Planner summary is ready.",
+                "Keep packet continuity prompt mode stable.",
+                "Continue validation.",
+                "codex",
+                "continue",
+                null,
+                Map.of("task_type", "coding")
+            );
+            taskDao.insert(task);
+
+            packetDao.insert(new ResumePacket(
+                UUID.randomUUID().toString(),
+                session.id(),
+                task.id(),
+                Instant.parse("2026-05-06T06:42:00Z"),
+                "1.1",
+                "previous packet",
+                null,
+                null,
+                List.of(),
+                "continue validation",
+                Map.of("prompt_mode", "mounted_context_primary")
+            ));
+
+            PacketBuilder builder = new PacketBuilder(decisionDao, artifactDao, taskDao, packetDao);
+            ResumePacket packet = builder.buildResumePacket(task, session);
+
+            assertEquals("mounted_context_primary", packet.payload().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_primary", packet.payload().get("mounted_context_mode"));
+            assertEquals("mounted_context_primary", packet.payload().get("prompt_mode"));
         }
     }
 }

@@ -1300,7 +1300,9 @@ public class ControlNodeGraph {
     }
 
     private MountedContextPromptMetrics buildJudgmentPromptMetrics(Task task, TaskRuntimeContext context) {
-        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(task);
+        PromptRenderingMode renderingMode = context != null
+            ? PromptRenderingMode.resolve(context)
+            : PromptRenderingMode.resolve(task);
         MountedContextPromptRenderResult mountedRenderResult = renderingMode.shouldRenderMountedPrompt()
             ? JUDGMENT_PROMPT_RENDERER.renderResult(context)
             : MountedContextPromptRenderResult.empty();
