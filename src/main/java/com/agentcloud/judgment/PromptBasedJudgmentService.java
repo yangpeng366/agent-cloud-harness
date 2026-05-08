@@ -5,11 +5,13 @@ import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -138,6 +140,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         if (context.workerOutput() != null && !context.workerOutput().isBlank()) {
             sb.append("Latest Worker Output: ").append(context.workerOutput()).append("\n");
         }
+        appendRuntimeFacts(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("What should the runtime do next?");
         return sb.toString();
@@ -166,6 +169,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         if (context.workerOutput() != null && !context.workerOutput().isBlank()) {
             sb.append("Latest Worker Output (current round): ").append(context.workerOutput()).append("\n");
         }
+        appendRuntimeFacts(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("Is the task sufficiently complete and aligned with the goal?");
         return sb.toString();
@@ -185,6 +189,103 @@ public class PromptBasedJudgmentService implements JudgmentService {
             return;
         }
         sb.append(mountedPrompt);
+    }
+
+    private void appendRuntimeFacts(StringBuilder sb, RuntimeFactSet factSet) {
+        if (factSet == null) {
+            return;
+        }
+        boolean hasExecutionBoundary = factSet.executionBoundary() != null;
+        boolean hasRoutePreview = factSet.routePreview() != null;
+        boolean hasToolInvocations = factSet.toolInvocations() != null && !factSet.toolInvocations().isEmpty();
+        boolean hasMetadata = factSet.metadata() != null && !factSet.metadata().isEmpty();
+        if (!hasExecutionBoundary && !hasRoutePreview && !hasToolInvocations && !hasMetadata) {
+            return;
+        }
+        sb.append("Runtime Facts:\n");
+        if (hasRoutePreview) {
+            appendRoutePreview(sb, factSet.routePreview());
+        }
+        if (hasExecutionBoundary) {
+            appendExecutionBoundary(sb, factSet.executionBoundary());
+        }
+        if (hasToolInvocations) {
+            appendToolInvocations(sb, factSet.toolInvocations());
+        }
+        if (hasMetadata) {
+            appendFactMetadata(sb, factSet.metadata());
+        }
+    }
+
+    private void appendRoutePreview(StringBuilder sb, com.agentcloud.engine.router.WorkerRouter.RouteResult routePreview) {
+        sb.append("Route Preview:\n");
+        appendBullet(sb, "selected_worker", routePreview.selectedWorker());
+        appendBullet(sb, "selected_model_tier", routePreview.selectedModelTier());
+        appendBullet(sb, "selected_execution_role", routePreview.selectedExecutionRole());
+        appendBullet(sb, "selection_scope", routePreview.selectionScope());
+        appendBullet(sb, "route_source", routePreview.routeSource());
+        appendBullet(sb, "why_selected", routePreview.whySelected());
+        appendBullet(sb, "fallback_reason", routePreview.fallbackReason());
+        if (routePreview.candidateWorkers() != null && !routePreview.candidateWorkers().isEmpty()) {
+            appendBullet(sb, "candidate_workers", String.join(", ", routePreview.candidateWorkers()));
+        }
+    }
+
+    private void appendExecutionBoundary(StringBuilder sb, RuntimeFactSet.ExecutionBoundary executionBoundary) {
+        sb.append("Execution Boundary:\n");
+        appendBullet(sb, "execution_id", executionBoundary.executionId());
+        appendBullet(sb, "execution_status", executionBoundary.executionStatus());
+        appendBullet(sb, "execution_duration_ms", executionBoundary.durationMs());
+        appendBullet(sb, "worker_id", executionBoundary.workerId());
+        appendBullet(sb, "tool_invocation_count", executionBoundary.toolInvocationCount());
+        appendBullet(sb, "trace_summary", executionBoundary.traceSummary());
+        if (executionBoundary.toolInvocationIds() != null && !executionBoundary.toolInvocationIds().isEmpty()) {
+            appendBullet(sb, "tool_invocation_ids", String.join(", ", executionBoundary.toolInvocationIds()));
+        }
+        if (executionBoundary.metadata() != null && !executionBoundary.metadata().isEmpty()) {
+            appendMetadataLine(sb, executionBoundary.metadata(), "tool_execution_mode");
+            appendMetadataLine(sb, executionBoundary.metadata(), "tool_chain_step_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "tool_chain_termination_reason");
+            appendMetadataLine(sb, executionBoundary.metadata(), "grounded_output_present");
+            appendMetadataLine(sb, executionBoundary.metadata(), "missing_required_current_round_write");
+            appendMetadataLine(sb, executionBoundary.metadata(), "evidence_refs");
+            appendMetadataLine(sb, executionBoundary.metadata(), "unfinished_items");
+        }
+    }
+
+    private void appendToolInvocations(StringBuilder sb, List<com.agentcloud.model.ToolInvocationRecord> toolInvocations) {
+        sb.append("Recent Tool Invocations:\n");
+        int max = Math.min(toolInvocations.size(), 3);
+        for (int i = 0; i < max; i++) {
+            com.agentcloud.model.ToolInvocationRecord record = toolInvocations.get(i);
+            if (record == null) {
+                continue;
+            }
+            String summary = firstNonBlank(
+                record.toolName(),
+                record.resultSummary(),
+                record.executionId()
+            );
+            if (summary == null) {
+                continue;
+            }
+            StringBuilder line = new StringBuilder("- ").append(summary);
+            if (record.status() != null && !record.status().isBlank()) {
+                line.append(" [").append(record.status()).append("]");
+            }
+            if (record.touchedPaths() != null && !record.touchedPaths().isEmpty()) {
+                line.append(" paths=").append(String.join(", ", record.touchedPaths()));
+            }
+            sb.append(line).append("\n");
+        }
+    }
+
+    private void appendFactMetadata(StringBuilder sb, Map<String, Object> metadata) {
+        appendMetadataLine(sb, metadata, "execution_trace_summary");
+        appendMetadataLine(sb, metadata, "has_execution_boundary");
+        appendMetadataLine(sb, metadata, "has_route_preview");
+        appendMetadataLine(sb, metadata, "has_latest_packet");
+        appendMetadataLine(sb, metadata, "has_latest_checkpoint");
     }
 
     private void appendLatestWorkerMetadata(StringBuilder sb, Map<String, Object> metadata) {
@@ -247,6 +348,17 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- ").append(key).append(": ").append(text).append("\n");
     }
 
+    private void appendBullet(StringBuilder sb, String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        String text = value.toString();
+        if (text.isBlank()) {
+            return;
+        }
+        sb.append("- ").append(key).append(": ").append(text).append("\n");
+    }
+
     private String resolveTargetWorker(JudgmentContext context) {
         if (context.task().metadata() == null) {
             return null;
@@ -281,5 +393,17 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 : raw.contains("done") || raw.contains("complete") ? "done"
                 : "partially_done";
         };
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

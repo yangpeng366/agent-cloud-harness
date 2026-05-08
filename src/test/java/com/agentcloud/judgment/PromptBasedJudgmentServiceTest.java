@@ -12,6 +12,7 @@ import com.agentcloud.runtime.context.ContextRetentionState;
 import com.agentcloud.runtime.context.MountedContextPanel;
 import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.runtime.context.MountedContextView;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -119,6 +120,49 @@ class PromptBasedJudgmentServiceTest {
         assertTrue(llmClient.completionPrompt.contains("compat_mode=task_runtime_context_preserved"));
     }
 
+    @Test
+    void judgmentPrimaryModeCanBeResolvedFromTaskMetadata() {
+        Task task = task("mounted_context_primary");
+        assertEquals("mounted_context_primary",
+            com.agentcloud.runtime.context.PromptRenderingMode.resolve(task).wireName());
+    }
+
+    @Test
+    void judgmentPromptsIncludeRuntimeFactSetEvidence() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        JudgmentContext context = new JudgmentContext(
+            task("mounted_context_primary"),
+            runtimeContext("mounted_context_primary"),
+            "worker output",
+            "",
+            Map.of(
+                "selected_worker", "kimi",
+                "selected_model_tier", "small",
+                "route_source", "learning_memory"
+            ),
+            runtimeFactSet()
+        );
+
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        assertTrue(llmClient.executionPrompt.contains("Runtime Facts:"));
+        assertTrue(llmClient.executionPrompt.contains("Route Preview:"));
+        assertTrue(llmClient.executionPrompt.contains("- selected_worker: kimi"));
+        assertTrue(llmClient.executionPrompt.contains("Execution Boundary:"));
+        assertTrue(llmClient.executionPrompt.contains("- execution_status: blocked"));
+        assertTrue(llmClient.executionPrompt.contains("- trace_summary: 2 steps"));
+        assertTrue(llmClient.executionPrompt.contains("- evidence_refs: [tool:read_file:input.txt, tool:write_file:draft.txt]"));
+        assertTrue(llmClient.completionPrompt.contains("- has_route_preview: true"));
+    }
+
     private Task task(String promptRenderingMode) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("task_type", "coding");
@@ -198,6 +242,64 @@ class PromptBasedJudgmentServiceTest {
             List.of(),
             activeContext,
             mountedContextView
+        );
+    }
+
+    private RuntimeFactSet runtimeFactSet() {
+        return new RuntimeFactSet(
+            "task-review",
+            "session-review",
+            "active",
+            "continue",
+            "kimi",
+            "worker output",
+            "continue",
+            "next",
+            runtimeContext("mounted_context_primary"),
+            null,
+            null,
+            null,
+            null,
+            List.of(),
+            new RuntimeFactSet.ExecutionBoundary(
+                "exec-123",
+                "blocked",
+                "2026-05-08T01:00:00Z",
+                "2026-05-08T01:00:10Z",
+                10L,
+                "kimi",
+                List.of("tool-1", "tool-2"),
+                2,
+                "2 steps · planner_no_additional_tool · read_file -> write_file",
+                Map.of(
+                    "tool_execution_mode", "multi_tool_round",
+                    "tool_chain_step_count", 2,
+                    "tool_chain_termination_reason", "planner_no_additional_tool",
+                    "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")
+                )
+            ),
+            new com.agentcloud.engine.router.WorkerRouter.RouteResult(
+                "task-review",
+                "kimi",
+                List.of("codex"),
+                "selected by learning memory hint",
+                "learning_memory",
+                "coding",
+                "kimi",
+                true,
+                List.of("kimi", "codex"),
+                "codex",
+                "small",
+                "executor",
+                "executor",
+                "selected by learning memory hint",
+                null
+            ),
+            Map.of(
+                "has_route_preview", true,
+                "has_execution_boundary", true,
+                "execution_trace_summary", "2 steps · planner_no_additional_tool · read_file -> write_file"
+            )
         );
     }
 

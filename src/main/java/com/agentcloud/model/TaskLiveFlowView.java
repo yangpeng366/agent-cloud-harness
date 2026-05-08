@@ -2,6 +2,7 @@ package com.agentcloud.model;
 
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
@@ -16,9 +17,11 @@ public record TaskLiveFlowView(
     WorkerRouter.RouteResult routePreview,
     TaskRuntimeContext runtimeContext,
     JudgmentTraceView judgmentTrace,
+    RuntimeFactSet runtimeFacts,
     List<Checkpoint> checkpoints,
     List<LearningMemory> learningMemories,
     List<ToolInvocationRecord> toolInvocations,
+    RuntimeFactSet.ExecutionBoundary executionBoundary,
     List<SessionMessage> relatedMessages,
     ExperimentRunRecord experimentRun,
     ProviderSelectionView providerSelection,

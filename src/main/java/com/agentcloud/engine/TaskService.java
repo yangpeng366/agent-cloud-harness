@@ -244,18 +244,7 @@ public class TaskService {
     public JudgmentTraceView getJudgmentTrace(String taskId) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, 20);
-        return new JudgmentTraceView(
-            task.id(),
-            task.status(),
-            task.controlNode(),
-            task.assignedWorker(),
-            facts.latestOutput(),
-            facts.recommendedAction(),
-            facts.recommendedNextStep(),
-            facts.executionJudgment(),
-            facts.completionJudgment(),
-            facts.runtimeContext()
-        );
+        return buildJudgmentTraceView(task, facts);
     }
 
 
@@ -274,21 +263,11 @@ public class TaskService {
         ResumePacket latestPacket = facts.latestPacket();
         var routePreview = facts.routePreview();
         TaskRuntimeContext runtimeContext = facts.runtimeContext();
-        JudgmentTraceView judgmentTrace = new JudgmentTraceView(
-            task.id(),
-            task.status(),
-            task.controlNode(),
-            task.assignedWorker(),
-            facts.latestOutput(),
-            facts.recommendedAction(),
-            facts.recommendedNextStep(),
-            facts.executionJudgment(),
-            facts.completionJudgment(),
-            runtimeContext
-        );
+        JudgmentTraceView judgmentTrace = buildJudgmentTraceView(task, facts);
         List<Checkpoint> checkpoints = consolidationService.listByTask(taskId, boundedLimit);
         List<LearningMemory> learningMemories = learningMemoryService.listByTask(taskId, boundedLimit);
         List<ToolInvocationRecord> toolInvocations = facts.toolInvocations();
+        RuntimeFactSet.ExecutionBoundary executionBoundary = facts.executionBoundary();
         List<SessionMessage> relatedMessages = sessionMessageDao != null
             ? sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit)
             : List.of();
@@ -309,15 +288,35 @@ public class TaskService {
             routePreview,
             runtimeContext,
             judgmentTrace,
+            facts,
             checkpoints,
             learningMemories,
             toolInvocations,
+            executionBoundary,
             relatedMessages,
             experimentRun,
             providerSelection,
             agentRun,
             agentRunEvents,
             agentArtifacts
+        );
+    }
+
+    private JudgmentTraceView buildJudgmentTraceView(Task task, RuntimeFactSet facts) {
+        RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(task);
+        return new JudgmentTraceView(
+            task.id(),
+            task.status(),
+            task.controlNode(),
+            task.assignedWorker(),
+            runtimeFacts.latestOutput(),
+            runtimeFacts.recommendedAction(),
+            runtimeFacts.recommendedNextStep(),
+            runtimeFacts.executionJudgment(),
+            runtimeFacts.completionJudgment(),
+            runtimeFacts.executionBoundary(),
+            runtimeFacts.runtimeContext(),
+            runtimeFacts
         );
     }
 

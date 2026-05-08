@@ -28,7 +28,8 @@ class WorkerExecutorRouterProviderNativeTest {
             registry,
             defaultExecutor,
             toolAwareExecutor,
-            providerCliExecutor
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
         );
 
         WorkerExecutionResult result = router.executeOneRound(runtimeContext("cursor"), "cursor");
@@ -39,7 +40,7 @@ class WorkerExecutorRouterProviderNativeTest {
     }
 
     @Test
-    void keepsCodexOnToolAwareExecutor() {
+    void routesCopilotToProviderNativeExecutor() {
         WorkerRegistry registry = new WorkerRegistry();
         RecordingExecutor defaultExecutor = new RecordingExecutor("default");
         RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
@@ -48,13 +49,98 @@ class WorkerExecutorRouterProviderNativeTest {
             registry,
             defaultExecutor,
             toolAwareExecutor,
-            providerCliExecutor
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("copilot"), "copilot");
+
+        assertEquals("provider-native", result.summary());
+        assertEquals(0, defaultExecutor.calls);
+        assertEquals(0, toolAwareExecutor.calls);
+    }
+
+    @Test
+    void routesCodexToProviderAppServerExecutor() {
+        WorkerRegistry registry = new WorkerRegistry();
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        StubCodexAppServerWorkerExecutor codexExecutor = new StubCodexAppServerWorkerExecutor("codex-app-server");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            codexExecutor
         );
 
         WorkerExecutionResult result = router.executeOneRound(runtimeContext("codex"), "codex");
 
-        assertEquals("tool-aware", result.summary());
+        assertEquals("codex-app-server", result.summary());
         assertEquals(0, defaultExecutor.calls);
+        assertEquals(0, toolAwareExecutor.calls);
+    }
+
+    @Test
+    void providerCliIsPreferredOverToolAwareWhenWorkerHasToolsButNoExplicitHarnessPreference() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new com.agentcloud.model.Worker(
+            "cursor-open",
+            "cursor",
+            List.of("coding"),
+            List.of("read_file", "patch_file"),
+            List.of("D:\\gitAll\\agent-cloud-harness"),
+            Map.of("installed", true),
+            Map.of(),
+            false,
+            true
+        ));
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("cursor-open"), "cursor-open");
+
+        assertEquals("provider-native", result.summary());
+        assertEquals(0, toolAwareExecutor.calls);
+    }
+
+    @Test
+    void toolAwareBackendStillRoutesToHarnessToolExecutorWhenExplicitlyRequested() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new com.agentcloud.model.Worker(
+            "cursor-tool-aware",
+            "cursor",
+            List.of("coding"),
+            List.of("read_file", "patch_file"),
+            List.of("D:\\gitAll\\agent-cloud-harness"),
+            Map.of("installed", true),
+            Map.of("execution_backend", "tool_aware"),
+            false,
+            true
+        ));
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("cursor-tool-aware"), "cursor-tool-aware");
+
+        assertEquals("tool-aware", result.summary());
         assertEquals(1, toolAwareExecutor.calls);
     }
 
@@ -97,6 +183,12 @@ class WorkerExecutorRouterProviderNativeTest {
             12
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, null);
+    }
+
+    private static AgentProviderRegistry registry() {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        return registry;
     }
 
     private static final class RecordingExecutor implements WorkerExecutor {
@@ -155,10 +247,33 @@ class WorkerExecutorRouterProviderNativeTest {
             );
         }
 
-        private static AgentProviderRegistry registry() {
-            AgentProviderRegistry registry = new AgentProviderRegistry();
-            BuiltinAgentProviders.defaults().forEach(registry::register);
-            return registry;
+    }
+
+    private static final class StubCodexAppServerWorkerExecutor extends CodexAppServerWorkerExecutor {
+        private final String summary;
+
+        private StubCodexAppServerWorkerExecutor(String summary) {
+            super(registry(), null);
+            this.summary = summary;
+        }
+
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            return new WorkerExecutionResult(
+                summary,
+                summary,
+                false,
+                "",
+                "",
+                "",
+                "medium",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                1L,
+                Map.of("execution_backend", "provider_app_server")
+            );
         }
     }
 }

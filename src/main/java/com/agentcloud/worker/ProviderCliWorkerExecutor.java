@@ -7,8 +7,6 @@ import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.agent.providers.LocalCliProviderConfig;
 import com.agentcloud.engine.router.WorkerRegistry;
-import com.agentcloud.llm.LlmImageInput;
-import com.agentcloud.llm.LlmImageInputResolver;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -18,20 +16,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
  * 面向本地 agent CLI 的单轮执行器。
- * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw。
+ * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw/claude/gemini。
  */
 public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ProviderCliWorkerExecutor.class);
@@ -83,10 +88,16 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         Process process = null;
         ProviderCliOutput output;
         try {
-            process = new ProcessBuilder(plan.command())
+            ProcessBuilder builder = new ProcessBuilder(plan.command())
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
-                .redirectErrorStream(true)
-                .start();
+                .redirectErrorStream(true);
+            if (plan.environment() != null && !plan.environment().isEmpty()) {
+                builder.environment().putAll(plan.environment());
+            }
+            process = builder.start();
+            if (plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank()) {
+                writePromptToStdin(process, plan.stdinPrompt());
+            }
             output = consume(process, providerId);
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
@@ -160,17 +171,26 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         if (providerId == null || providerId.isBlank()) {
             return false;
         }
-        return "cursor".equalsIgnoreCase(providerId) || "openclaw".equalsIgnoreCase(providerId);
+        return "cursor".equalsIgnoreCase(providerId)
+            || "openclaw".equalsIgnoreCase(providerId)
+            || "claude".equalsIgnoreCase(providerId)
+            || "gemini".equalsIgnoreCase(providerId)
+            || "copilot".equalsIgnoreCase(providerId)
+            || "opencode".equalsIgnoreCase(providerId);
     }
 
     private ProviderCliPlan buildPlan(String providerId,
                                       LocalCliProviderConfig.ResolvedConfig config,
                                       TaskRuntimeContext context,
                                       String cwd) {
-        String prompt = buildPrompt(context);
+        String prompt = ProviderTaskPromptBuilder.build(context);
         return switch (providerId.toLowerCase(Locale.ROOT)) {
             case "cursor" -> buildCursorPlan(config, prompt, context, cwd);
             case "openclaw" -> buildOpenClawPlan(config, prompt, context);
+            case "claude" -> buildClaudePlan(config, prompt, context);
+            case "gemini" -> buildGeminiPlan(config, prompt, context);
+            case "copilot" -> buildCopilotPlan(config, prompt, context);
+            case "opencode" -> buildOpenCodePlan(config, prompt, context);
             default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
         };
     }
@@ -224,11 +244,118 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return new ProviderCliPlan(command, truncate(prompt, 240), model);
     }
 
+    private ProviderCliPlan buildClaudePlan(LocalCliProviderConfig.ResolvedConfig config,
+                                            String prompt,
+                                            TaskRuntimeContext context) {
+        ArrayList<String> command = new ArrayList<>();
+        command.add(config.binary().value());
+        command.add("-p");
+        command.add("--output-format");
+        command.add("stream-json");
+        command.add("--input-format");
+        command.add("stream-json");
+        command.add("--verbose");
+        command.add("--strict-mcp-config");
+        command.add("--permission-mode");
+        command.add("bypassPermissions");
+        String model = configuredModel(config, context);
+        if (model != null && !model.isBlank()) {
+            command.add("--model");
+            command.add(model);
+        }
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            command.add("--resume");
+            command.add(resumeId);
+        }
+        return new ProviderCliPlan(command, truncate(prompt, 240), model, buildClaudeInput(prompt));
+    }
+
+    private ProviderCliPlan buildGeminiPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                            String prompt,
+                                            TaskRuntimeContext context) {
+        ArrayList<String> command = new ArrayList<>();
+        command.add(config.binary().value());
+        command.add("-p");
+        command.add(prompt);
+        command.add("--yolo");
+        command.add("-o");
+        command.add("stream-json");
+        String model = configuredModel(config, context);
+        if (model != null && !model.isBlank()) {
+            command.add("-m");
+            command.add(model);
+        }
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            command.add("-r");
+            command.add(resumeId);
+        }
+        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+    }
+
+    private ProviderCliPlan buildCopilotPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                             String prompt,
+                                             TaskRuntimeContext context) {
+        ArrayList<String> command = new ArrayList<>();
+        command.add(config.binary().value());
+        command.add("-p");
+        command.add(prompt);
+        command.add("--output-format");
+        command.add("json");
+        command.add("--allow-all");
+        command.add("--no-ask-user");
+        String model = configuredModel(config, context);
+        if (model != null && !model.isBlank()) {
+            command.add("--model");
+            command.add(model);
+        }
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            command.add("--resume");
+            command.add(resumeId);
+        }
+        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+    }
+
+    private ProviderCliPlan buildOpenCodePlan(LocalCliProviderConfig.ResolvedConfig config,
+                                              String prompt,
+                                              TaskRuntimeContext context) {
+        ArrayList<String> command = new ArrayList<>();
+        command.add(resolveOpenCodeExecutable(config.binary().value()));
+        command.add("run");
+        command.add("--format");
+        command.add("json");
+        String model = configuredModel(config, context);
+        if (model != null && !model.isBlank()) {
+            command.add("--model");
+            command.add(model);
+        }
+        String systemPrompt = systemPrompt(context, "OpenCode");
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            command.add("--prompt");
+            command.add(systemPrompt);
+        }
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            command.add("--session");
+            command.add(resumeId);
+        }
+        command.add(prompt);
+        return new ProviderCliPlan(command, truncate(prompt, 240), model, null, Map.of(
+            "OPENCODE_PERMISSION", "{\"*\":\"allow\"}"
+        ));
+    }
+
     private ProviderCliOutput consume(Process process, String providerId) throws IOException {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
             return switch (providerId.toLowerCase(Locale.ROOT)) {
                 case "cursor" -> consumeCursor(reader);
                 case "openclaw" -> consumeOpenClaw(reader);
+                case "claude" -> consumeClaude(reader);
+                case "gemini" -> consumeGemini(reader);
+                case "copilot" -> consumeCopilot(reader);
+                case "opencode" -> consumeOpenCode(reader);
                 default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
             };
         }
@@ -345,12 +472,235 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private ProviderCliOutput consumeClaude(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String sessionId = null;
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.isBlank() || trimmed.charAt(0) != '{') {
+                appendLine(output, trimmed);
+                continue;
+            }
+            try {
+                JsonNode event = MAPPER.readTree(trimmed);
+                String type = text(event, "type");
+                if ("assistant".equals(type)) {
+                    JsonNode message = event.path("message");
+                    if (message.isObject() && message.path("content").isArray()) {
+                        for (JsonNode block : message.path("content")) {
+                            String blockType = text(block, "type");
+                            if ("text".equals(blockType) || "thinking".equals(blockType)) {
+                                appendLine(output, text(block, "text"));
+                            }
+                        }
+                    }
+                } else if ("result".equals(type)) {
+                    appendLine(output, text(event, "result"));
+                    if (event.path("is_error").asBoolean(false)) {
+                        status = "failed";
+                        errorText = firstNonBlank(errorText, text(event, "result"), text(event, "message"));
+                    }
+                } else if ("system".equals(type)) {
+                    String subtype = text(event, "subtype");
+                    if ("error".equalsIgnoreCase(subtype)) {
+                        status = "failed";
+                        errorText = firstNonBlank(errorText, text(event, "message"), trimmed);
+                    }
+                }
+                sessionId = firstNonBlank(sessionId, text(event, "session_id"), text(event, "sessionId"));
+            } catch (Exception ignored) {
+                appendLine(output, trimmed);
+            }
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            sessionId,
+            null,
+            null,
+            "claude_stream_json"
+        );
+    }
+
+    private ProviderCliOutput consumeGemini(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String sessionId = null;
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.isBlank() || trimmed.charAt(0) != '{') {
+                appendLine(output, trimmed);
+                continue;
+            }
+            try {
+                JsonNode event = MAPPER.readTree(trimmed);
+                String type = text(event, "type");
+                if ("message".equals(type) && "assistant".equalsIgnoreCase(text(event, "role"))) {
+                    appendLine(output, text(event, "content"));
+                } else if ("error".equals(type)) {
+                    status = "failed";
+                    errorText = firstNonBlank(errorText, text(event, "message"), trimmed);
+                } else if ("result".equals(type)) {
+                    if ("error".equalsIgnoreCase(text(event, "status"))) {
+                        status = "failed";
+                        errorText = firstNonBlank(errorText,
+                            nestedText(event, "error", "message"),
+                            text(event, "message"),
+                            trimmed);
+                    }
+                }
+                sessionId = firstNonBlank(sessionId, text(event, "session_id"), text(event, "sessionId"));
+            } catch (Exception ignored) {
+                appendLine(output, trimmed);
+            }
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            sessionId,
+            null,
+            null,
+            "gemini_stream_json"
+        );
+    }
+
+    private ProviderCliOutput consumeCopilot(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String sessionId = null;
+        String activeModel = null;
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.isBlank() || trimmed.charAt(0) != '{') {
+                appendLine(output, trimmed);
+                continue;
+            }
+            try {
+                JsonNode event = MAPPER.readTree(trimmed);
+                String type = text(event, "type");
+                JsonNode data = event.path("data");
+                if ("session.start".equals(type)) {
+                    sessionId = firstNonBlank(sessionId, text(data, "sessionId"));
+                    activeModel = firstNonBlank(activeModel, text(data, "selectedModel"));
+                } else if ("assistant.message_delta".equals(type)) {
+                    appendRaw(output, text(data, "deltaContent"));
+                } else if ("assistant.message".equals(type)) {
+                    String content = text(data, "content");
+                    if (content != null && !content.isBlank()) {
+                        output.setLength(0);
+                        output.append(content.trim());
+                    }
+                    activeModel = firstNonBlank(text(data, "selectedModel"), activeModel);
+                } else if ("assistant.reasoning".equals(type) || "assistant.reasoning_delta".equals(type)) {
+                    appendLine(output, firstNonBlank(text(data, "content"), text(data, "deltaContent")));
+                } else if ("session.error".equals(type)) {
+                    status = "failed";
+                    errorText = firstNonBlank(errorText, text(data, "message"), trimmed);
+                } else if ("result".equals(type)) {
+                    sessionId = firstNonBlank(text(event, "sessionId"), sessionId);
+                    if (event.path("exitCode").asInt(0) != 0) {
+                        status = "failed";
+                        errorText = firstNonBlank(errorText, "copilot exited with code " + event.path("exitCode").asInt());
+                    }
+                }
+                if (activeModel != null && !activeModel.isBlank()) {
+                    sessionId = firstNonBlank(sessionId, text(data, "sessionId"));
+                }
+            } catch (Exception ignored) {
+                appendLine(output, trimmed);
+            }
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            sessionId,
+            null,
+            activeModel,
+            "copilot_jsonl"
+        );
+    }
+
+    private ProviderCliOutput consumeOpenCode(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String sessionId = null;
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.isBlank() || trimmed.charAt(0) != '{') {
+                appendLine(output, trimmed);
+                continue;
+            }
+            try {
+                JsonNode event = MAPPER.readTree(trimmed);
+                String type = text(event, "type");
+                JsonNode part = event.path("part");
+                sessionId = firstNonBlank(sessionId, text(event, "sessionID"), text(part, "sessionID"));
+                if ("text".equals(type)) {
+                    appendRaw(output, text(part, "text"));
+                } else if ("error".equals(type)) {
+                    status = "failed";
+                    errorText = firstNonBlank(errorText,
+                        nestedText(event, "error", "data", "message"),
+                        text(event.path("error"), "name"),
+                        trimmed);
+                }
+            } catch (Exception ignored) {
+                appendLine(output, trimmed);
+            }
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            sessionId,
+            null,
+            null,
+            "opencode_json"
+        );
+    }
+
     private void appendOpenClawBlob(StringBuilder output, JsonNode blob) {
         JsonNode payloads = blob.path("payloads");
         if (payloads.isArray()) {
             for (JsonNode payload : payloads) {
                 appendLine(output, text(payload, "text"));
             }
+        }
+    }
+
+    private void writePromptToStdin(Process process, String stdinPrompt) throws IOException {
+        try (Writer writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8)) {
+            writer.write(stdinPrompt);
+            writer.flush();
+        }
+    }
+
+    private String buildClaudeInput(String prompt) {
+        try {
+            LinkedHashMap<String, Object> payload = new LinkedHashMap<>();
+            payload.put("type", "user");
+            payload.put("message", Map.of(
+                "role", "user",
+                "content", List.of(Map.of(
+                    "type", "text",
+                    "text", prompt
+                ))
+            ));
+            return MAPPER.writeValueAsString(payload) + "\n";
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to build claude stdin payload", e);
         }
     }
 
@@ -393,46 +743,6 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return config.model().value();
     }
 
-    private String buildPrompt(TaskRuntimeContext context) {
-        if (context == null || context.task() == null) {
-            return "Execute the assigned task.";
-        }
-        Task task = context.task();
-        StringBuilder sb = new StringBuilder();
-        sb.append("Task Title: ").append(task.title()).append("\n");
-        if (task.goal() != null && !task.goal().isBlank()) {
-            sb.append("Goal: ").append(task.goal()).append("\n");
-        }
-        if (task.summary() != null && !task.summary().isBlank()) {
-            sb.append("Summary: ").append(task.summary()).append("\n");
-        }
-        if (task.nextStep() != null && !task.nextStep().isBlank()) {
-            sb.append("Next Step: ").append(task.nextStep()).append("\n");
-        }
-        String intent = metadataString(task.metadata(), "intent");
-        if (intent != null && !intent.isBlank()) {
-            sb.append("Intent: ").append(intent).append("\n");
-        }
-        if (context.activeContext() != null && context.activeContext().synthesizedContext() != null
-            && !context.activeContext().synthesizedContext().isBlank()) {
-            sb.append("\nActive Context:\n");
-            sb.append(context.activeContext().synthesizedContext()).append("\n");
-        }
-        List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
-        if (!imageInputs.isEmpty()) {
-            sb.append("\nImage Inputs:\n");
-            for (LlmImageInput imageInput : imageInputs) {
-                sb.append("- ").append(imageInput.path());
-                if (imageInput.mediaType() != null && !imageInput.mediaType().isBlank()) {
-                    sb.append(" (").append(imageInput.mediaType()).append(")");
-                }
-                sb.append("\n");
-            }
-        }
-        sb.append("\nReturn the best concrete execution result for this task.");
-        return sb.toString();
-    }
-
     private String resolveWorkingDirectory(TaskRuntimeContext context, Worker worker) {
         if (context != null && context.task() != null) {
             Map<String, Object> metadata = context.task().metadata();
@@ -453,6 +763,14 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             }
         }
         return Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString();
+    }
+
+    private String systemPrompt(TaskRuntimeContext context, String providerDisplayName) {
+        String metadataPrompt = metadataString(context == null || context.task() == null ? null : context.task().metadata(), "system_prompt");
+        if (metadataPrompt != null && !metadataPrompt.isBlank()) {
+            return metadataPrompt;
+        }
+        return ProviderTaskPromptBuilder.defaultSystemPrompt(providerDisplayName);
     }
 
     private String resumeId(TaskRuntimeContext context) {
@@ -575,12 +893,15 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         target.append(text.trim());
     }
 
-    private String metadataString(Map<String, Object> metadata, String key) {
-        if (metadata == null || metadata.isEmpty() || key == null || key.isBlank()) {
-            return null;
+    private void appendRaw(StringBuilder target, String text) {
+        if (target == null || text == null || text.isBlank()) {
+            return;
         }
-        Object value = metadata.get(key);
-        return value == null ? null : value.toString();
+        target.append(text);
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        return ProviderTaskPromptBuilder.metadataString(metadata, key);
     }
 
     private String text(JsonNode node, String field) {
@@ -614,10 +935,151 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return value == null || value.isBlank() ? null : value;
     }
 
-    private record ProviderCliPlan(List<String> command, String promptPreview, String model) {
+    private String resolveOpenCodeExecutable(String configuredBinary) {
+        if (!isWindowsHost()) {
+            return configuredBinary;
+        }
+        Path binaryPath = directPath(configuredBinary);
+        if (binaryPath != null) {
+            String nativePath = resolveOpenCodeNativeFromShim(binaryPath);
+            if (nativePath != null) {
+                return nativePath;
+            }
+            return configuredBinary;
+        }
+        Path located = locateOnPath(configuredBinary);
+        if (located == null) {
+            return configuredBinary;
+        }
+        String nativePath = resolveOpenCodeNativeFromShim(located);
+        return nativePath != null ? nativePath : configuredBinary;
+    }
+
+    private String resolveOpenCodeNativeFromShim(Path shimPath) {
+        if (shimPath == null) {
+            return null;
+        }
+        String fileName = shimPath.getFileName() == null ? "" : shimPath.getFileName().toString();
+        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".cmd")) {
+            return null;
+        }
+        Path prefix = shimPath.getParent();
+        if (prefix == null) {
+            return null;
+        }
+        for (String packageName : openCodeWindowsPackageCandidates()) {
+            Path candidate = prefix
+                .resolve("node_modules")
+                .resolve("opencode-ai")
+                .resolve("node_modules")
+                .resolve(packageName)
+                .resolve("bin")
+                .resolve("opencode.exe");
+            if (Files.isRegularFile(candidate)) {
+                return candidate.toAbsolutePath().normalize().toString();
+            }
+        }
+        return null;
+    }
+
+    private List<String> openCodeWindowsPackageCandidates() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        if (arch.contains("arm")) {
+            return List.of("opencode-windows-arm64", "opencode-windows-x64", "opencode-windows-x64-baseline");
+        }
+        return List.of("opencode-windows-x64", "opencode-windows-x64-baseline", "opencode-windows-arm64");
+    }
+
+    private boolean isWindowsHost() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private Path directPath(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return null;
+        }
+        if (toolName.contains("/") || toolName.contains("\\")) {
+            try {
+                return Paths.get(toolName).toAbsolutePath().normalize();
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Path locateOnPath(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return null;
+        }
+        String pathValue = System.getenv("PATH");
+        if (pathValue == null || pathValue.isBlank()) {
+            return null;
+        }
+        for (String rawEntry : pathValue.split(File.pathSeparator)) {
+            String entry = rawEntry == null ? "" : rawEntry.trim();
+            if (entry.isBlank()) {
+                continue;
+            }
+            Path dir;
+            try {
+                dir = Paths.get(unquote(entry));
+            } catch (Exception ignored) {
+                continue;
+            }
+            for (String candidate : candidateExecutableNames(toolName)) {
+                Path path = dir.resolve(candidate);
+                if (Files.isRegularFile(path)) {
+                    return path.toAbsolutePath().normalize();
+                }
+            }
+        }
+        return null;
+    }
+
+    private Set<String> candidateExecutableNames(String toolName) {
+        LinkedHashSet<String> names = new LinkedHashSet<>();
+        names.add(toolName);
+        if (!isWindowsHost() || toolName.contains(".")) {
+            return names;
+        }
+        String pathExtValue = System.getenv("PATHEXT");
+        List<String> extensions = (pathExtValue == null || pathExtValue.isBlank())
+            ? List.of(".exe", ".cmd", ".bat", ".com")
+            : List.of(pathExtValue.split(";"));
+        for (String rawExtension : extensions) {
+            String extension = rawExtension == null ? "" : rawExtension.trim().toLowerCase(Locale.ROOT);
+            if (!extension.isBlank()) {
+                names.add(toolName + extension);
+            }
+        }
+        return names;
+    }
+
+    private String unquote(String value) {
+        if (value != null && value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1);
+        }
+        return value;
+    }
+
+    private record ProviderCliPlan(List<String> command,
+                                   String promptPreview,
+                                   String model,
+                                   String stdinPrompt,
+                                   Map<String, String> environment) {
         private ProviderCliPlan {
             if (command == null) command = List.of();
             if (promptPreview == null) promptPreview = "";
+            if (environment == null) environment = Map.of();
+        }
+
+        private ProviderCliPlan(List<String> command, String promptPreview, String model) {
+            this(command, promptPreview, model, null, Map.of());
+        }
+
+        private ProviderCliPlan(List<String> command, String promptPreview, String model, String stdinPrompt) {
+            this(command, promptPreview, model, stdinPrompt, Map.of());
         }
 
         private String commandPreview() {

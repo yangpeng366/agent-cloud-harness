@@ -29,7 +29,12 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("config_present", true, "backend_reachable", true),
-            Map.of("model_tier", "tool", "primary_role", "tool_executor", "selection_priority", 120), false, true));
+            Map.of(
+                "model_tier", "tool",
+                "primary_role", "tool_executor",
+                "selection_priority", 120,
+                "execution_backend", "provider_native_cli"
+            ), false, true));
         register(new Worker("codex", "codex",
             List.of("coding", "reading", "ops"),
             defaultCodexToolCapabilities(),
@@ -40,42 +45,68 @@ public class WorkerRegistry {
                 "primary_role", "planner_executor",
                 "selection_priority", 100,
                 "default_tool_scope", defaultToolScope,
-                "tool_command_mode", "guarded"
+                "tool_command_mode", "guarded",
+                "execution_backend", "provider_app_server"
             ), false, true));
         register(new Worker("claude", "claude",
             List.of("coding", "reading", "writing"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 92),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 92,
+                "execution_backend", "provider_native_cli"
+            ),
             false, true));
         register(new Worker("cursor", "cursor",
             List.of("coding", "reading", "ops"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 91),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 91,
+                "execution_backend", "provider_native_cli"
+            ),
             false, true));
         register(new Worker("copilot", "copilot",
             List.of("coding", "reading"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 90),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 90,
+                "execution_backend", "provider_native_cli"
+            ),
             false, true));
         register(new Worker("opencode", "opencode",
             List.of("coding", "ops", "writing"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 89),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 89,
+                "execution_backend", "provider_native_cli"
+            ),
             false, true));
         register(new Worker("gemini", "gemini",
             List.of("coding", "research", "browser"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "strong", "primary_role", "planner_executor", "selection_priority", 88),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 88,
+                "execution_backend", "provider_native_cli"
+            ),
             false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),

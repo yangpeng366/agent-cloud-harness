@@ -194,6 +194,7 @@ public class ExperimentRunService {
         if (executionNeedsHuman != null) {
             metadata.put("execution_judgment_needs_human", executionNeedsHuman);
         }
+        copyDecisionMetadata(executionJudgment != null ? executionJudgment.metadata() : null, metadata, "execution");
         if (completionJudgmentStatus != null) {
             metadata.put("completion_judgment_status", completionJudgmentStatus);
         }
@@ -203,6 +204,7 @@ public class ExperimentRunService {
         if (completionSuggestedNextAction != null) {
             metadata.put("completion_suggested_next_action", completionSuggestedNextAction);
         }
+        copyDecisionMetadata(completionJudgment != null ? completionJudgment.metadata() : null, metadata, "completion");
         metadata.put("has_route_evidence", hasRouteEvidence);
         metadata.put("has_execution_judgment", hasExecutionJudgment);
         metadata.put("has_completion_judgment", hasCompletionJudgment);
@@ -1531,6 +1533,39 @@ public class ExperimentRunService {
         copyMetadata(source, target, "evaluator_reason");
         copyMetadata(source, target, "evaluation_reason");
         copyMetadata(source, target, "orchestration_closed_loop_observed");
+    }
+
+    private void copyDecisionMetadata(Map<String, Object> source, Map<String, Object> target, String stagePrefix) {
+        if (source == null || source.isEmpty() || target == null || stagePrefix == null || stagePrefix.isBlank()) {
+            return;
+        }
+        copyDecisionMetadataKey(source, target, stagePrefix, "prompt_rendering_mode");
+        copyDecisionMetadataKey(source, target, stagePrefix, "prompt_mode");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_rendered");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_render_used");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_injected");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_panel_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_panel_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_non_empty_panel_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_non_empty_panel_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_selection_trace_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_pinned_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_active_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_ancestor_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_sibling_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_evidence_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_index_count");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_archive_count");
+    }
+
+    private void copyDecisionMetadataKey(Map<String, Object> source,
+                                         Map<String, Object> target,
+                                         String stagePrefix,
+                                         String key) {
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(stagePrefix + "_judgment_" + key, value);
+        }
     }
 
     private String metadataString(Map<String, Object> metadata, String key) {

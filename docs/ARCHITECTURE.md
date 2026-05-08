@@ -1,22 +1,37 @@
 # Architecture
 
-<!-- 更新时间：2026-04-28 -->
-<!-- 分析依据：当前工作区源码与资源文件 -->
+<!-- 更新时间：2026-05-07 -->
+<!-- 分析依据：当前工作区源码、测试、运行时 contract 与最新 roadmap 文档 -->
 
 ## 1. 项目简介
 
-Agent Cloud Harness 是一个面向多智能体协作场景的轻量控制平面服务。它的当前主线不是“通用 agent 平台大全”，而是一个 **continuity-first orchestration harness**：负责创建会话与任务、为任务路由 worker、执行单轮 worker round、在暂停/恢复/移交时生成 continuity packet，并把运行时轨迹、判断结果、工具调用、学习记忆与实验指标持久化到本地 SQLite。当前形态是单机 harness，不是分布式 control plane。
+Agent Cloud Harness 是一个面向多轮、长时程、可恢复任务执行的轻量 runtime harness。
 
-当前最值得关注的近端证明目标也已经比较明确：
+它当前最准确的定位，不是“通用 agent 平台大全”，也不是“更厚的 coding shell”，而是一个：
 
-- 先证明 continuity-first control plane 本身成立
-- 再证明它能支撑“强模型负责规划/判断，小模型负责执行”的最小 orchestration 闭环
+## **continuity-first runtime substrate**
 
-如果需要进一步理解这条主线与评测、优先级、roadmap 的关系，建议联读：
+也就是，它的核心职责不是只帮助模型完成某一次更好的回答，而是让任务在时间维度上保持连续、可观察、可恢复、可移交、可再进入。
 
+当前项目主线应理解为：
+
+- 为 task identity over time 提供控制面
+- 为多轮执行提供显式 working-memory surface
+- 为 execution / judgment / handoff 提供共享 runtime cognition seam
+- 为 pause / resume / checkpoint / handoff / recovery 提供 continuity semantics
+- 为 tool trace、artifact、decision、learning hint 提供可追踪 evidence surface
+- 为未来 loop / routine / async / background execution 提供演进基础
+
+当前形态仍是单机 harness，不是分布式 control plane。
+但它的演进方向已经不只是“最小 loop”，而是在收敛成一个 continuity-first orchestration/runtime skeleton。
+
+建议联读：
+
+- `docs/PHASE2_ROADMAP.md`
+- `docs/HARDNESS_PHASE1_ALIGNMENT.md`
 - `docs/CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
-- `docs/NEXT_5_ENGINEERING_PRIORITIES.md`
-- `docs/GOAL_ORIENTED_EVAL_PLAN.md`
+- `C:\Users\47037\.openclaw\workspace\docs\AGENT_CLOUD_HARNESS_POSITIONING_DRAFT_2026-05.md`
+- `C:\Users\47037\.openclaw\workspace\docs\AGENT_CLOUD_HARNESS_ROADMAP_V1_2026-05.md`
 
 ## 2. 技术栈与约束
 
@@ -34,7 +49,7 @@ Agent Cloud Harness 是一个面向多智能体协作场景的轻量控制平面
 | LLM 适配 | OpenAI-compatible client | N/A | `llm/OpenAiCompatibleClient` |
 | 工具层 | 内置 Tool Registry | N/A | 受 `ToolPolicy` 约束的受控本地工具，含文件工具与命令工具；`git/shell/powershell/cmd` 都按宿主机真实可执行性探测动态暴露，其中 `powershell/cmd` 仍仅 Windows 宿主可用 |
 | 日志 | SLF4J + Logback | 2.0.13 / 1.5.6 | root=`INFO` |
-| 测试 | JUnit Jupiter | 5.11.0 | 当前已有 27 个测试文件 |
+| 测试 | JUnit Jupiter | 5.11.0 | 已覆盖 packet、orchestration、judgment、tool-aware execution、experiment、message projection、mounted-context seam 等方向 |
 
 ### 2.2 技术栈约束规则
 
@@ -44,7 +59,7 @@ Agent Cloud Harness 是一个面向多智能体协作场景的轻量控制平面
 - **持久化**: 继续沿用 SQLite + Jdbi SQL Object；schema 由 `schema.sql` 初始化。
 - **JSON 契约**: 统一共享 `ObjectMapper`，输出 `snake_case`。
 - **前端形态**: 当前前端是 resources 下的静态页面，不存在额外 SPA 构建链。
-- **测试基线**: 已有 packet、orchestration、judgment、tool-aware execution、experiment、message projection 等回归测试。
+- **演进原则**: 优先收紧 runtime contract、trace、evidence、continuity semantics，不优先扩表层功能数量。
 
 ## 3. 目录结构
 
@@ -59,7 +74,8 @@ agent-cloud-harness/
 │   │   │   ├── engine/router/       # Worker 注册与路由
 │   │   │   ├── judgment/            # Prompt-based execution/completion judgment
 │   │   │   ├── llm/                 # OpenAI-compatible LLM client 与配置
-│   │   │   ├── runtime/             # Active Context / Runtime Context 组装
+│   │   │   ├── runtime/             # Active Context / Runtime Context / mounted view 组装
+│   │   │   ├── runtime/context/     # MountedContextView / renderer / panel 模型 / render mode
 │   │   │   ├── server/              # HttpServer 与各资源 Handler
 │   │   │   ├── store/               # DB 初始化、Mapper、DAO
 │   │   │   ├── tool/                # 受控本地工具与 ToolPolicy
@@ -71,7 +87,7 @@ agent-cloud-harness/
 │   │       └── web/
 │   │           ├── console/         # Web Console 静态前端
 │   │           └── dialogue/        # Dialogue 静态前端
-│   └── test/java/com/agentcloud/    # 当前已有 27 个测试文件
+│   └── test/java/com/agentcloud/    # 回归测试与 seam 验证
 ├── docs/                            # 架构、规格、契约、排查文档
 ├── scripts/                         # Java 21 构建/测试/运行脚本
 ├── pom.xml
@@ -105,18 +121,29 @@ Browser / curl / SDK
                                    |      |      +--> PacketBuilder / Consolidation
                                    |      |
                                    |      +--> TaskRuntimeContextBuilder
-                                   |             + PromptBasedJudgmentService
+                                   |             + ActiveContextBuilder
+                                   |             + ContextViewBuilder
                                    |
                                    +--> WorkerRouter
                                           + LearningMemoryService
                                           + WorkerExecutorRouter
                                                 |
                                                 +--> DefaultWorkerExecutor
+                                                |      + MountedContextPromptRenderer
+                                                |
                                                 +--> ToolAwareWorkerExecutor
+                                                       + MountedContextPromptRenderer
                                                        + ToolRegistry/ToolPolicy
+                                                       + ToolInvocation trace
                                                        + LLM Client
 
-All runtime traces / packets / messages / experiments
+                           +--------------------------------------+
+                           | PromptBasedJudgmentService           |
+                           | execution/completion judgment        |
+                           | shares runtime cognition seam        |
+                           +--------------------------------------+
+
+All runtime traces / packets / decisions / artifacts / tool calls
                     |
                     v
          +-----------------------------+
@@ -125,225 +152,296 @@ All runtime traces / packets / messages / experiments
          +-----------------------------+
 ```
 
-### 4.2 分层结构
+### 4.2 当前最关键的架构判断
+
+这个项目的核心链条，不该只理解为：
+
+`task -> worker -> text result`
+
+而应该理解为：
+
+`packet continuity -> working memory -> worker execution -> judgment -> consolidation -> next round continuity`
+
+这条链条里的每个环节都正在从“隐式文本拼接”收敛到“更显式的 runtime contract”。
+
+### 4.3 分层结构
 
 | 层级 | 目录/命名空间 | 职责 | 典型类/文件 |
 |------|-------------|------|------------|
 | 前端层 | `src/main/resources/web` | 本地观测与交互 UI | `console/app.js`, `dialogue/app.js` |
 | 接入层 | `src/main/java/com/agentcloud/server` | HTTP API、静态资源服务、错误包装 | `NioHttpServer`, `TaskHandler`, `SessionHandler`, `WebConsoleHandler` |
-| 应用层 | `src/main/java/com/agentcloud/engine` | 任务/会话生命周期、实验、学习记忆、控制动作编排 | `TaskService`, `SessionService`, `ControlNodeGraph`, `ExperimentMatrixService` |
-| 运行时层 | `src/main/java/com/agentcloud/runtime` | Active Context 与 Runtime Context 构建 | `ActiveContextBuilder`, `TaskRuntimeContextBuilder` |
-| Judgment 层 | `src/main/java/com/agentcloud/judgment` | 执行判断、完成判断与 prompt 组装 | `PromptBasedJudgmentService`, `JudgmentContext` |
-| 路由与续跑层 | `src/main/java/com/agentcloud/engine/router`, `engine/memory` | worker 路由、packet 构建、上下文重建 | `WorkerRouter`, `PacketBuilder`, `ContextReconstructor` |
-| 执行与工具层 | `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool` | 单轮执行、tool-aware 多步工具链、工具访问控制 | `WorkerExecutorRouter`, `ToolAwareWorkerExecutor`, `ToolPolicy` |
-| LLM 适配层 | `src/main/java/com/agentcloud/llm` | LLM 配置与兼容客户端封装 | `LlmConfig`, `OpenAiCompatibleClient` |
-| 数据层 | `src/main/java/com/agentcloud/store` | SQLite 初始化、DAO、Mapper、JSON 列转换 | `DatabaseManager`, `TaskDao`, `ExperimentRunDao` |
-| 模型层 | `src/main/java/com/agentcloud/model` | API DTO、View、Packet、Record | `Task`, `ResumePacket`, `LearningMemory`, `ExperimentRunRecord` |
+| 应用层 | `src/main/java/com/agentcloud/engine` | 任务/会话生命周期、实验、学习记忆、控制动作编排 | `TaskService`, `SessionService`, `ControlNodeGraph`, `ExperimentRunService` |
+| 运行时层 | `src/main/java/com/agentcloud/runtime` | Active Context 与 TaskRuntimeContext 组装 | `ActiveContextBuilder`, `TaskRuntimeContextBuilder`, `TaskRuntimeContext` |
+| mounted context 层 | `src/main/java/com/agentcloud/runtime/context` | mounted working-memory view、panel 化表示、prompt renderer、mode seam | `MountedContextView`, `ContextViewBuilder`, `MountedContextPromptRenderer`, `PromptRenderingMode` |
+| 执行层 | `src/main/java/com/agentcloud/worker` | worker 一轮执行、工具调用、结果结构化、执行元数据 | `DefaultWorkerExecutor`, `ToolAwareWorkerExecutor`, `WorkerExecutionResult`, `WorkerExecutionEnvelope` |
+| judgment 层 | `src/main/java/com/agentcloud/judgment` | execution/completion judgment，驱动 continue / wait / checkpoint / handoff / done | `PromptBasedJudgmentService`, `JudgmentContext` |
+| 工具层 | `src/main/java/com/agentcloud/tool` | 受控工具注册、权限、调用结果 | `ToolRegistry`, `ToolPolicy`, `ToolResult` |
+| 持久化层 | `src/main/java/com/agentcloud/store` | schema、DAO、数据库访问 | `TaskDao`, `EventDao`, `ArtifactDao`, `ToolInvocationDao` |
+| 模型层 | `src/main/java/com/agentcloud/model` | task/packet/decision/artifact/trace/eval DTO | `Task`, `ResumePacket`, `Checkpoint`, `Decision`, `ToolInvocationRecord` |
 
-## 5. 模块清单
+## 5. Continuity-first 设计主轴
 
-### 5.1 启动与装配模块
+### 5.1 任务身份优先于单轮回答
 
-- **目录**: `src/main/java/com/agentcloud/cli`
-- **职责**: 作为唯一进程入口，按固定顺序装配 DAO、学习记忆、实验、路由、packet、runtime、judgment、tool、worker executor、service、HTTP server。
-- **入口文件**: `src/main/java/com/agentcloud/cli/Main.java`
-- **关键点**: 当前依赖顺序必须以 `Main.main` 为准，不要再参考旧文档中的简化装配链。
+项目最值得坚持的设计取向是：
 
-### 5.2 HTTP 接入模块
+- 任务要能跨轮存在
+- 执行要有中间边界
+- 中断后要可恢复
+- 移交要有 machine-readable packet
+- 判断要能解释为什么继续/暂停/结束
 
-- **目录**: `src/main/java/com/agentcloud/server`
-- **职责**: 暴露 `/api/v1/*` JSON API，同时挂载 `/console/` 与 `/dialogue/` 静态前端。
-- **关键类**:
-  - `NioHttpServer` — 注册 API 与前端路由，配置虚拟线程执行器。
-  - `TaskHandler` — task CRUD、control action、runtime/judgment/tool/experiment 观测接口。
-  - `SessionHandler` — session CRUD、pause/resume/close、messages。
-  - `AgentHandler` / `AgentRunHandler` / `RuntimeHealthHandler` — provider inventory、agent run、runtime health 观测接口。
-  - `ExperimentRunHandler` / `ExperimentMatrixHandler` / `LearningMemoryHandler` — 新增观测与评估端点。
-  - `WebConsoleHandler` — 静态资源服务与根路径重定向。
+所以这个项目的核心价值，不在单次回答质量本身，而在 **任务随时间保持连贯**。
 
-### 5.3 任务编排与实验模块
+### 5.2 mounted context 是 Phase 2 working-memory spine
 
-- **目录**: `src/main/java/com/agentcloud/engine`
-- **职责**: 负责 task/session 生命周期、control action、消息投影、实验 run 落盘、experiment matrix 汇总，以及 provider 运行结果与任务侧轨迹的拼接。
-- **关键类**:
-  - `TaskService` — 创建任务、控制动作、live flow/runtime context/judgment trace/tool trace 聚合。
-  - `SessionService` — session 生命周期与 session message 投影。
-  - `AgentRunService` — 记录 provider run、provider selection 与 runtime health 摘要。
-  - `ExperimentRunService` — 记录每个 run 的成本、恢复次数、route trace 等指标。
-  - `ExperimentMatrixService` — 生成 baseline case matrix，按 mode/case 汇总结果。
+当前架构中最重要的新 seam 是 mounted context。
 
-### 5.4 路由、学习记忆与 Continuity 模块
+它的意义不是“更好看的 prompt 拼装”，而是：
 
-- **目录**: `src/main/java/com/agentcloud/engine/router`, `src/main/java/com/agentcloud/engine/memory`
-- **职责**: 决定“任务交给谁做”和“停下来之后如何继续做”，并把可复用的 routing / retention 经验沉淀回 runtime 上游。
-- **关键类**:
-  - `WorkerRegistry` — 维护内置与动态注册 worker。
-  - `WorkerRouter` — 同时考虑 capability、readiness、`model_mode`、learning memory preferred hint、fallback reason。
-  - `LearningMemoryService` — 当前已捕获并强化 `routing_preference`、`context_retention_hint`、`completion_pattern`、`worker_heuristic` 四类经验；其中 `routing_preference` 会反哺 `WorkerRouter`，`context_retention_hint` 会回流 `ActiveContextBuilder`，并且 retention hint 已优先从 `mounted_context_view` 提取 retained item，保留 panel / retention state / selection trace 证据。
-  - `PacketBuilder` — 构建 `ResumePacket`、`HandoffPacket` 与稳定协议头。
-  - `ContextReconstructor` — 回放 packet 视图与共享上下文。
+- 给 runtime 一个 task-local working-memory surface
+- 把 context engineering 从经验做法推进成 runtime contract
+- 给 worker execution 和 judgment 提供共享认知面
+- 为未来 demotion / reload / archive reopen 提供策略插口
 
-### 5.5 Runtime / Judgment / LLM 模块
+当前代码里已经有：
 
-- **目录**: `src/main/java/com/agentcloud/runtime`, `src/main/java/com/agentcloud/judgment`, `src/main/java/com/agentcloud/llm`
-- **职责**: 为单轮执行构建高价值上下文，并基于 prompt 对执行结果进行结构化判断。
-- **关键类**:
-  - `ActiveContextBuilder` — 从事件、决策、产物、checkpoint、learning memory 中裁出工作记忆。
-  - `TaskRuntimeContextBuilder` — 组装 worker round 与 judgment 共享的 runtime context；当前会同时挂上兼容旧面的 `activeContext` 与 panel/object 化的 `mountedContextView`。
-  - `PromptBasedJudgmentService` — 输出 execution/completion judgment，并保留 trace；当前 judgment prompt 通过 `PromptRenderingMode` seam 决定是否注入 mounted context surface。
-  - `RuntimeJudgmentService` — 基于 task metadata 做最小 continue / pause / escalate / handoff 规则判断。
-  - `OpenAiCompatibleClient` — 对接兼容 OpenAI 协议的 LLM 接口。
+- `MountedContextView`
+- `ContextViewBuilder`
+- `MountedContextPromptRenderer`
+- `PromptRenderingMode`
+- `TaskRuntimeContext.mountedContextView`
 
-**与 hardness phase-1 方案的当前对齐判断**:
+并且 mounted seam 已进入：
 
-- 当前代码里已经有 `WorkerExecutionResult` 的近邻配套上下文和 judgment 模块，说明 runtime / judgment 主线并不是概念层。
-- 当前代码里已经有 `Checkpoint`、`ResumePacket`、`HandoffPacket` 与 `TaskRuntimeContext`，说明 resume / continuity 主线已具备真实落点；其中 `TaskRuntimeContext` 现在同时暴露 `active_context` 与 `mounted_context_view`。`mounted_context_view` 在 runtime 构建与 retention-hint capture 上始终有效，在 execution/planning/judgment prompt 上则通过 `PromptRenderingMode` 做安全 rollout，默认仍是 `active_context_only`。
-- 当前 prompt seam 的稳定模式是：`active_context_only`（默认，仅旧 active context）、`mounted_context_shadow`（渲染 shadow metadata 但不注入 prompt）、`mounted_context_primary`（显式注入 mounted prompt，同时保留 active context 兼容面）。
-- judgment 层已经是显式模块，而不是散落逻辑；但 `JudgmentInput` 仍更多隐含在 `JudgmentContext`、runtime context 和 trace 聚合里，尚未完全升级为 fact-aware 的统一输入对象。
+- `DefaultWorkerExecutor`
+- `ToolAwareWorkerExecutor`
+- `PromptBasedJudgmentService`
 
-也就是说，这一层当前最准确的状态不是“还没开始”，而是：**已有真实实现落点，但还未完全收束成统一 hardness contract。**
+这意味着项目当前的重点不是“再提出 mounted context 概念”，而是把它收敛成稳定、可测、可 rollout 的 working-memory contract。
 
-### 5.6 Worker 执行与工具模块
+### 5.3 ActiveContext 仍然有用，但不再是最终抽象
 
-- **目录**: `src/main/java/com/agentcloud/worker`, `src/main/java/com/agentcloud/tool`
-- **职责**: 在选中 worker 后执行一轮真实工作，并在需要时驱动工具链。
-- **关键类**:
-  - `WorkerExecutorRouter` — 在默认执行器与 tool-aware 执行器之间分流。
-  - `DefaultWorkerExecutor` — 纯 LLM 单轮执行。
-  - `ToolAwareWorkerExecutor` — 最多 3 步的工具链执行，含 `repeated_tool_guard`、`no_progress_guard` 与 grounded write 判定。
-  - `ToolPolicy` / `ToolRegistry` — 约束文件路径、命令工作目录、只读 git 子命令、超时、输出长度与危险命令拦截。
-  - `ToolInvocationRecord` + `ToolInvocationDao` — 持久化工具调用 trace。
+`ActiveContext` 仍然是有价值的上游综合面。
 
-**与 hardness phase-1 方案的当前对齐判断**:
+但从长期看，它更适合作为：
 
-- `ToolInvocationRecord`、`tool_invocations` 表、`ToolInvocationDao` 已经存在，所以“工具 trace 应优先持久化”这一步在代码里其实已经实现。
-- `ToolPolicy` 已不只是概念边界，而是包含 `suggestOnly` 限制、`toolCapabilities` 校验、`toolScope` 路径边界、命令 allowlist / denylist、timeout 与输出长度限制的真实 enforcement。
-- `ToolAwareWorkerExecutor` 已经是可运行的多步工具执行雏形，不应再被文档描述成“只有单工具设想”。当前更准确的 gap 是：虽然执行链和 trace 已存在，但还没有统一收束成更显式的 `WorkerExecutionEnvelope -> ToolInvocationRecord -> RuntimeFactSet -> ResumeCheckpoint -> JudgmentInput` runtime contract 链。
+- compatibility projection，或
+- synthesis layer
 
-### 5.7 存储模块
+而 mounted context 更适合成为 runtime-facing working set abstraction。
 
-- **目录**: `src/main/java/com/agentcloud/store`, `src/main/resources`
-- **职责**: 提供 sessions、tasks、events、decisions、artifacts、resume_packets、checkpoints、session_messages、tool_invocations、learning_memories、experiment_runs、agent_runs 等持久化。
-- **关键类**:
-  - `DatabaseManager` — 初始化 HikariCP/Jdbi，执行 `schema.sql`。
-  - `Mappers` / `JsonMapper` / `InstantArgumentFactory` — 处理 SQLite 时间与 JSON 列兼容。
-  - `*Dao` — 每类实体对应一个 SQL Object DAO。
+### 5.4 packet / checkpoint 不是旧包袱，而是 continuity 资产
 
-### 5.8 Agent Provider 模块
+项目里已有的：
 
-- **目录**: `src/main/java/com/agentcloud/agent`
-- **职责**: 提供真实 agent/provider 的注册、发现、状态探测与最小运行引用模型，作为现有 worker/control plane 的增量接入层。
-- **关键类**:
-  - `AgentProviderRegistry` — 管理当前已接入 provider。
-  - `AgentDiscoveryService` / `SimpleAgentDiscoveryService` — 负责本机侧 provider 探测与状态刷新。
-  - `CodexProvider` / `OpenClawProvider` — 当前已落地的 provider skeleton。
-  - `AgentRunRef` / `AgentRunResult` / `AgentArtifactRef` — provider 运行引用与产物模型。
+- `ResumePacket`
+- `Checkpoint`
+- `HandoffPacket` 方向
+- `TaskRuntimeContext`
 
-这一层当前最准确的状态不是“纯未来设计”，而是：**provider inventory、agent run 与 runtime health 已进入代码与 API 接面，但 provider orchestration contract 仍在继续收硬。**
+不是应该被“更新潮的 memory 概念”替换掉的旧设计。
+相反，它们是 continuity harness 的硬资产，因为它们承载：
 
-### 5.9 Web 前端模块
+- resumability
+- recoverability
+- auditable continuity boundary
+- structured handoff
+- lifecycle semantics
 
-- **目录**: `src/main/resources/web`
-- **职责**: 提供无需额外构建链的内置前端。
-- **页面**:
-  - `/console/` — 任务、session、worker、route、packet、experiment，以及逐步扩展中的 agent/provider 观测入口。
-  - `/dialogue/` — session message 流、task 交互与任务进展回执入口。
+## 6. 运行时主链路
 
-## 6. 模块依赖与数据流
+### 6.1 最小闭环
 
-### 6.1 模块间依赖
+当前最小运行闭环仍是：
 
 ```text
-cli/Main
-   |
-   +--> server
-   |      |
-   |      +--> engine
-   |              |
-   |              +--> runtime
-   |              +--> judgment
-   |              +--> worker --> tool
-   |              +--> llm
-   |              +--> engine/router
-   |              +--> engine/memory
-   |              +--> store
-   |              +--> model
-   |
-   +--> resources/web
+create task
+  -> intake
+  -> scheduler select worker
+  -> build task runtime context
+  -> execute one round
+  -> persist event / artifact / tool trace
+  -> execution + completion judgment
+  -> continue / wait / checkpoint / handoff / done
 ```
 
-### 6.2 核心数据流
+### 6.2 TaskRuntimeContext 的角色
 
-```text
-[POST /api/v1/tasks]
-        |
-        v
-   TaskHandler
-        |
-        v
-   TaskService.createTask
-        |
-        v
-   ControlNodeGraph.enter
-        |
-        +--> WorkerRouter.selectWorker
-        |         |
-        |         +--> LearningMemoryService
-        |
-        +--> TaskRuntimeContextBuilder.build
-        |
-        +--> WorkerExecutorRouter.executeOneRound
-        |         |
-        |         +--> ToolAwareWorkerExecutor / DefaultWorkerExecutor
-        |                 |
-        |                 +--> ToolRegistry / LLM Client
-        |
-        +--> PromptBasedJudgmentService
-        |
-        +--> PacketBuilder / ConsolidationService
-        |
-        +--> ExperimentRunService / SessionMessage projection
-        |
-        v
-[SQLite: tasks/events/decisions/artifacts/packets/messages/tools/experiments]
-```
+`TaskRuntimeContext` 是当前运行时共享事实面的核心容器，聚合：
 
-## 7. 构建与部署
+- `task`
+- `latestPacket`
+- `latestCheckpoint`
+- `recentEvents`
+- `recentDecisions`
+- `recentArtifacts`
+- `recentMessages`
+- `activeContext`
+- `mountedContextView`
 
-### 7.1 环境要求
+它的重要性在于：
 
-- Java 21
-- Maven 3.9+ 为宜
-- 运行用户对 `${user.home}/.agentcloud/` 有写权限
+- execution 与 judgment 不再只依赖 task title + raw text
+- continuity artifacts 开始以结构化方式进入运行面
+- mounted context 能成为行为路径的一部分，而不是附属说明
 
-### 7.2 本地开发
+### 6.3 Worker execution
 
-```bash
-mvn package
-java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
-```
+当前有两条主要执行路径：
 
-推荐脚本：
+#### `DefaultWorkerExecutor`
+- 构建基础 system/user prompt
+- 解析 LLM 输出
+- 根据 `PromptRenderingMode` 注入 mounted context 或 shadow render
+- 产出 `WorkerExecutionResult`
 
-```powershell
-.\scripts\Test-WithJava21.ps1
-.\scripts\Run-HarnessWithJava21.ps1 -Port 18080
-```
+#### `ToolAwareWorkerExecutor`
+- 采用多轮 tool-aware 协议
+- 具备工具选择、调用、trace 记录、二次收敛能力
+- 管理 auto-write / grounded output / image input / visual brief 等更复杂执行场景
+- 将工具调用与执行 trace 通过 metadata、`tool_invocation_id` 等字段相连
 
-### 7.3 配置说明
+### 6.4 Execution envelope 与 trace
 
-| 配置项 | 来源 | 说明 | 默认值 |
-|--------|------|------|--------|
-| `server.port` | JVM System Property | HTTP 监听端口 | `8080` |
-| `user.home` | JVM / OS 环境 | SQLite 文件落点 `${user.home}/.agentcloud/agent_cloud.db` | 当前用户主目录 |
-| LLM 配置 | 环境变量 / 系统属性 | 由 `LlmConfig` 读取 | 依环境而定 |
-| `schema.sql` | `src/main/resources/schema.sql` | 启动时初始化表结构 | 内置资源 |
+执行结果已经不应只被视为一段 output text。
 
-## 8. 代码规模概要
+当前更重要的是把单轮执行稳定收敛成一个可追踪 execution envelope，包括：
 
-| 指标 | 数值 |
-|------|------|
-| `src/main/java` Java 文件数 | 103 |
-| `src/test/java` 测试文件数 | 27 |
-| `src/main/resources/web` 前端文件数 | 6 |
-| 最近活跃度 | 当前工作区无 `.git` 信息可用，本文档未尝试从历史提交推导 |
+- `execution_id`
+- `started_at`
+- `finished_at`
+- `duration_ms`
+- `execution_status`
+- `tool_invocation_ids`
+- result metadata
+
+这条线的重要意义在于：
+
+- 单轮执行有明确边界
+- worker round 可和 tool trace 关联
+- 后续 experiment/live flow/harness evolution 才有稳定证据面
+
+### 6.5 Judgment
+
+`PromptBasedJudgmentService` 当前承担两类判断：
+
+- `judgeExecution()`
+- `judgeCompletion()`
+
+长期重点不是“再多写几个动作词”，而是让 judgment 逐渐依赖同一份 runtime cognition surface：
+
+- mounted context
+- active context
+- latest worker metadata
+- artifacts / tool evidence
+- continuity packet
+
+从而让 continue / checkpoint / handoff / done 不只是基于自由文本印象做决定。
+
+## 7. Evidence 与 memory 方向
+
+### 7.1 Evidence-first 而不是 transcript flood
+
+长时程 agent runtime 的关键限制，往往不是模型不会回答，而是上下文债务太大。
+
+因此系统长期应坚持：
+
+- 原始工具输出可保留
+- prompt 中只放 bounded preview / structured evidence
+- summary 不是 memory 本体，只是进入证据的入口
+- judgment / execution 应优先消费高价值结构化证据，而不是长文本堆叠
+
+### 7.2 热温冷分层
+
+mounted context 的长期方向应该支撑热温冷分层：
+
+- hot: 当前 mounted active working set
+- warm: bounded summaries + handles
+- cold: raw traces / raw artifacts / historical packets
+- reopen: 按需把冷数据重新拉回热区
+
+### 7.3 Retrieval / reopen 是后续 Phase，不是现在跳题
+
+项目长期应支持：
+
+- archive reopen
+- evidence handle rehydration
+- context demotion / reload
+- retrieval during reasoning
+
+但前提是先把 mounted working-memory seam 和 lifecycle semantics 收稳。
+
+## 8. Harness 演化方向
+
+项目的长期潜力，不只在于执行任务，也在于逐步演化 harness 自身。
+
+### 8.1 Harness self-evolution 的最小闭环
+
+未来应逐步形成：
+
+1. 记录 runtime trace
+2. 压缩为结构化 failure/success evidence
+3. 形成 change hypothesis
+4. 在小范围验证
+5. 根据结果 keep / adjust / rollback
+
+### 8.2 需要的一等工件
+
+这要求以下对象逐步变成一等工件：
+
+- component change contract
+- execution/judgment evidence
+- eval scenarios
+- learning memory candidates
+- rollback boundary
+
+因此以下文档方向是合理的：
+
+- `docs/HARNESS_EVOLUTION.md`
+- `docs/HARNESS_CHANGE_CONTRACT.md`
+
+长期还可以继续补：
+
+- trace debugging schema
+- hard-case eval matrix
+- harness evolution ledger
+
+## 9. 当前最重要的工程优先级
+
+如果对照最新代码现状，项目的最优先顺序应是：
+
+### Priority 1. 完成 mounted context Phase 2A convergence
+- renderer boundedness
+- mode rollout discipline
+- worker/judgment compatibility
+- tests and observability
+
+### Priority 2. 收紧 execution/judgment shared cognition surface
+- 减少 execution 与 judgment 读不同事实面的情况
+- 更明确地让结构化 metadata、artifact、tool evidence 进入 judgment
+
+### Priority 3. 生命周期加固
+- pause / resume / checkpoint / handoff / reopen 语义继续收硬
+
+### Priority 4. evidence reopen 与 memory discipline
+- 不是先做更大 retrieval，而是先做 reopen policy 和 evidence hierarchy
+
+### Priority 5. adaptive harness evolution
+- 在 trace、eval、contract 稳定后，再推进 harness policy 自演化
+
+## 10. 非目标与边界
+
+当前阶段不应让这些方向抢走主线：
+
+- 单纯拼 UI 表层能力
+- 更厚的本地 coding shell 便利封装竞赛
+- 仅以 agent 数量为卖点的多 agent demo
+- 在 continuity semantics 未稳前就激进做 retrieval-first memory 平台
+- 在 trace/eval 不稳前就推进高风险自改系统
+
+## 11. 一句话总结
+
+Agent Cloud Harness 当前最准确的架构理解，不是“一个能跑 agent 的小控制平面”，而是：
+
+**一个正在从最小 runtime loop 收敛为 continuity-first runtime substrate 的 agent harness，其核心主线是 working memory、shared runtime cognition、lifecycle semantics、evidence discipline 与可演化的 harness contract。**

@@ -34,6 +34,7 @@ public record RuntimeFactSet(
     Decision executionJudgment,
     Decision completionJudgment,
     List<ToolInvocationRecord> toolInvocations,
+    ExecutionBoundary executionBoundary,
     WorkerRouter.RouteResult routePreview,
     Map<String, Object> metadata
 ) {
@@ -65,7 +66,30 @@ public record RuntimeFactSet(
             null,
             List.of(),
             null,
+            null,
             Map.of()
         );
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ExecutionBoundary(
+        String executionId,
+        String executionStatus,
+        String startedAt,
+        String finishedAt,
+        Long durationMs,
+        String workerId,
+        List<String> toolInvocationIds,
+        Integer toolInvocationCount,
+        String traceSummary,
+        Map<String, Object> metadata
+    ) {
+        public ExecutionBoundary {
+            if (executionId == null) executionId = "";
+            if (executionStatus == null) executionStatus = "";
+            if (workerId == null) workerId = "";
+            if (toolInvocationIds == null) toolInvocationIds = List.of();
+            if (metadata == null) metadata = Map.of();
+        }
     }
 }

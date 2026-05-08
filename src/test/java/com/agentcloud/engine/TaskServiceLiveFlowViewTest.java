@@ -28,15 +28,36 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TaskServiceLiveFlowViewTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void getJudgmentTraceWithoutToolEvidenceLeavesExecutionBoundaryNull() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-trace-no-execution-boundary.db"))) {
+            TaskService service = service(db);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "judgment trace empty task", "continuation", "user", "high",
+                "没有 tool evidence 时不应伪造 execution boundary", "保持 judgment trace 干净", null, null, Map.of(), false
+            ));
+
+            var trace = service.getJudgmentTrace(task.id());
+
+            assertNull(trace.executionBoundary());
+            assertNotNull(trace.runtimeFacts());
+            assertEquals(task.id(), trace.runtimeFacts().taskId());
+            assertEquals(0, ((Number) trace.runtimeFacts().metadata().get("tool_invocation_count")).intValue());
+        }
+    }
 
     @Test
     void getLiveFlowIncludesRelatedMessages() {
@@ -46,7 +67,7 @@ class TaskServiceLiveFlowViewTest {
 
             Task task = service.createTask(new TaskCreateRequest(
                 "live flow task", "continuation", "user", "high",
-                "整理与 continuity 相关的输入", "形成一版结构化摘要", null, null, Map.of(), false
+                "整理 continuity 相关的输入", "形成一版结构化摘要", null, null, Map.of(), false
             ));
 
             messageDao.insert(new SessionMessage(
@@ -55,7 +76,7 @@ class TaskServiceLiveFlowViewTest {
                 task.id(),
                 "user",
                 "task_note",
-                "这条消息应被 live_flow 聚合到 related_messages。",
+                "这条消息应被 live_flow 聚合进 related_messages",
                 Instant.now(),
                 Map.of("source_surface", "test")
             ));
@@ -65,7 +86,7 @@ class TaskServiceLiveFlowViewTest {
                 null,
                 "user",
                 "user_note",
-                "这条 session 级消息不应出现在 related_messages 中。",
+                "这条 session 级消息不应出现在 related_messages 中",
                 Instant.now(),
                 Map.of("source_surface", "test")
             ));
@@ -73,6 +94,8 @@ class TaskServiceLiveFlowViewTest {
             var flow = service.getLiveFlow(task.id(), 10);
 
             assertEquals(task.id(), flow.task().id());
+            assertNotNull(flow.runtimeFacts());
+            assertEquals(task.id(), flow.runtimeFacts().taskId());
             assertEquals(2, flow.relatedMessages().size());
             assertEquals(task.id(), flow.experimentRun().taskId());
             assertTrue(flow.relatedMessages().stream().allMatch(message -> task.id().equals(message.taskId())));
@@ -126,7 +149,7 @@ class TaskServiceLiveFlowViewTest {
                 "Executor result",
                 null,
                 null,
-                "完成两步 tool chain。",
+                "完成两步 tool chain",
                 Map.of(
                     "selected_model_tier", "small",
                     "route_source", "learning_memory",
@@ -189,9 +212,22 @@ class TaskServiceLiveFlowViewTest {
             var flow = service.getLiveFlow(task.id(), 10);
 
             assertEquals("learning_memory", flow.experimentRun().metadata().get("route_source"));
+            assertNotNull(flow.runtimeFacts());
+            assertEquals(flow.routePreview().selectedWorker(), flow.runtimeFacts().routePreview().selectedWorker());
+            assertEquals(2, flow.runtimeFacts().toolInvocations().size());
+            assertEquals(Set.of("read_file", "write_file"),
+                flow.runtimeFacts().toolInvocations().stream().map(ToolInvocationRecord::toolName).collect(java.util.stream.Collectors.toSet()));
+            assertEquals("blocked", flow.runtimeFacts().metadata().get("execution_status"));
             assertEquals("kimi", flow.experimentRun().metadata().get("preferred_worker_hint"));
             assertEquals(Boolean.TRUE, flow.experimentRun().metadata().get("learning_hint_applied"));
             assertEquals("hint survived tier filter", flow.experimentRun().metadata().get("fallback_reason"));
+            assertNotNull(flow.executionBoundary());
+            assertEquals("exec_read_file", flow.executionBoundary().executionId());
+            assertEquals("kimi", flow.executionBoundary().workerId());
+            assertEquals("succeeded", flow.executionBoundary().executionStatus());
+            assertEquals(1, flow.executionBoundary().toolInvocationCount());
+            assertEquals("read_file", flow.executionBoundary().metadata().get("latest_tool_name"));
+            assertEquals("1 tool call · succeeded · read_file", flow.executionBoundary().traceSummary());
             assertEquals("multi_tool_round", flow.experimentRun().metadata().get("tool_execution_mode"));
             assertEquals(2, ((Number) flow.experimentRun().metadata().get("tool_chain_step_count")).intValue());
             assertEquals("planner_no_additional_tool",
@@ -203,6 +239,52 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"),
                 flow.experimentRun().metadata().get("evidence_refs"));
             assertEquals(List.of("manual_review"), flow.experimentRun().metadata().get("unfinished_items"));
+        }
+    }
+
+    @Test
+    void getJudgmentTraceCarriesExecutionBoundary() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-trace-execution-boundary.db"))) {
+            TaskService service = service(db);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "judgment trace task", "coding", "user", "high",
+                "把 execution boundary 带进 judgment trace", "方便 operator 对照判断与执行事实", null, null, Map.of(), false
+            ));
+
+            toolInvocationDao.insert(new ToolInvocationRecord(
+                "exec_boundary_1",
+                task.sessionId(),
+                task.id(),
+                "codex",
+                "exec_boundary_1",
+                "read_file",
+                Map.of("path", "input.txt"),
+                "input loaded",
+                "succeeded",
+                true,
+                18,
+                List.of("input.txt"),
+                Instant.now(),
+                Map.of(
+                    "execution_status", "succeeded",
+                    "execution_duration_ms", 18,
+                    "tool_execution_mode", "single_tool_round"
+                )
+            ));
+
+            var trace = service.getJudgmentTrace(task.id());
+
+            assertNotNull(trace.executionBoundary());
+            assertNotNull(trace.runtimeFacts());
+            assertEquals("codex", trace.runtimeFacts().routePreview().selectedWorker());
+            assertEquals(1, trace.runtimeFacts().toolInvocations().size());
+            assertEquals("exec_boundary_1", trace.executionBoundary().executionId());
+            assertEquals("codex", trace.executionBoundary().workerId());
+            assertEquals("succeeded", trace.executionBoundary().executionStatus());
+            assertEquals(1, trace.executionBoundary().toolInvocationCount());
+            assertEquals("read_file", trace.executionBoundary().metadata().get("latest_tool_name"));
         }
     }
 
@@ -295,7 +377,7 @@ class TaskServiceLiveFlowViewTest {
                 "Blocked executor result",
                 null,
                 null,
-                "工具链停在人工复核。",
+                "工具链停在人工复核",
                 Map.of("latest_worker_metadata", Map.of(
                     "tool_execution_mode", "multi_tool_round",
                     "tool_chain_step_count", 2,
@@ -421,7 +503,7 @@ class TaskServiceLiveFlowViewTest {
                         List.of(),
                         List.of(),
                         List.of(),
-                        "已汇总 live flow 所需的最小上下文。",
+                        "已汇总 live flow 所需的最小上下文",
                         "test runtime context",
                         12
                     ),

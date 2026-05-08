@@ -38,6 +38,7 @@ import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ControlNodeGraphOrchestrationFlowTest {
@@ -96,7 +97,8 @@ class ControlNodeGraphOrchestrationFlowTest {
                     "task_type", "coding",
                     "intent", "prove planner to executor runtime path",
                     "model_mode", "orchestrated",
-                    "orchestration_stage", "plan_pending"
+                    "orchestration_stage", "plan_pending",
+                    "prompt_rendering_mode", "mounted_context_primary"
                 ))
             );
             taskDao.insert(task);
@@ -140,6 +142,16 @@ class ControlNodeGraphOrchestrationFlowTest {
             assertTrue(decisions.stream().anyMatch(d ->
                 "execution_judgment".equals(d.decisionType())
                     && "planner".equals(metadataString(d.metadata(), "selection_scope"))
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
             ));
         }
     }
@@ -289,6 +301,173 @@ class ControlNodeGraphOrchestrationFlowTest {
         }
     }
 
+    @Test
+    void schedulerPersistsProviderContinuationMetadataIntoTaskAndArtifactTrace() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("provider-continuation-flow.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_provider_continuation", "provider continuation flow", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "codex-app",
+                "codex",
+                List.of("coding"),
+                List.of(),
+                List.of(tempDir.toString()),
+                Map.of(),
+                Map.of("model_tier", "strong", "execution_backend", "provider_app_server"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                new ProviderContinuationWorkerExecutor(), runtimeContextBuilder, new DoneJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_provider_continuation",
+                "session_provider_continuation",
+                null,
+                "persist provider continuation metadata",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Verify task metadata persistence for provider-native sessions.",
+                null,
+                "codex-app",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Persist provider continuation metadata for the next codex round."
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+            List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            assertEquals("done", finalTask.status());
+            assertEquals("thread-codex-001", persisted.metadata().get("provider_session_id"));
+            assertEquals("thread-codex-001", persisted.metadata().get("provider_thread_id"));
+            assertEquals("thread-codex-001", persisted.metadata().get("codex_thread_id"));
+            assertEquals("provider_app_server", persisted.metadata().get("execution_backend"));
+            assertEquals("codex", persisted.metadata().get("provider_id"));
+            assertFalse(artifacts.isEmpty());
+            assertTrue(artifacts.stream().anyMatch(artifact ->
+                artifact.metadata().get("latest_worker_metadata") instanceof Map<?, ?> latest
+                    && "thread-codex-001".equals(String.valueOf(latest.get("provider_thread_id")))
+                    && "provider_app_server".equals(String.valueOf(latest.get("execution_backend")))
+            ));
+        }
+    }
+
+    @Test
+    void continueBuildsFactAwareJudgmentContextForOrchestratedFlow() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("orchestration-judgment-facts.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_fact_aware", "fact aware orchestration", "active"));
+
+            WorkerRouter router = new WorkerRouter(new WorkerRegistry());
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+            RecordingJudgmentService judgmentService = new RecordingJudgmentService();
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                new FakeWorkerExecutor(), runtimeContextBuilder, judgmentService,
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_fact_aware",
+                "session_fact_aware",
+                null,
+                "fact aware orchestration",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "make judgment consume runtime facts",
+                null,
+                null,
+                "intake",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "verify runtime fact set reaches judgment",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "plan_pending"
+                ))
+            );
+            taskDao.insert(task);
+
+            graph.enter(task);
+
+            assertEquals(2, judgmentService.executionContexts.size());
+
+            JudgmentContext plannerContext = judgmentService.contextAt(0);
+            assertNotNull(plannerContext.runtimeFactSet());
+            assertNotNull(plannerContext.runtimeFactSet().routePreview());
+            assertEquals("codex", plannerContext.runtimeFactSet().routePreview().selectedWorker());
+            assertEquals("strong", plannerContext.runtimeFactSet().routePreview().selectedModelTier());
+            assertEquals("planner", plannerContext.runtimeFactSet().routePreview().selectionScope());
+            assertEquals("codex", plannerContext.runtimeFactSet().executionBoundary().workerId());
+            assertEquals("12", String.valueOf(plannerContext.runtimeFactSet().executionBoundary().durationMs()));
+            assertEquals("capability_match",
+                plannerContext.runtimeFactSet().routePreview().routeSource());
+            assertTrue(plannerContext.runtimeFactSet().routePreview().whySelected().contains("strong"));
+
+            JudgmentContext executorContext = judgmentService.contextAt(1);
+            assertNotNull(executorContext.runtimeFactSet());
+            assertNotNull(executorContext.runtimeFactSet().routePreview());
+            assertEquals("kimi", executorContext.runtimeFactSet().routePreview().selectedWorker());
+            assertEquals("small", executorContext.runtimeFactSet().routePreview().selectedModelTier());
+            assertEquals("executor", executorContext.runtimeFactSet().routePreview().selectionScope());
+            assertEquals("kimi", executorContext.runtimeFactSet().executionBoundary().workerId());
+        }
+    }
+
     private static String metadataString(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
             return null;
@@ -311,7 +490,15 @@ class ControlNodeGraphOrchestrationFlowTest {
                     "high",
                     0,
                     12L,
-                    Map.of("parser", "json")
+                    Map.ofEntries(
+                        Map.entry("parser", "json"),
+                        Map.entry("selected_worker", workerId),
+                        Map.entry("selected_model_tier", "strong"),
+                        Map.entry("execution_role", "planner"),
+                        Map.entry("execution_status", "completed"),
+                        Map.entry("tool_chain_step_count", 1),
+                        Map.entry("tool_chain_termination_reason", "planner_brief_ready")
+                    )
                 );
             }
             return new WorkerExecutionResult(
@@ -324,7 +511,15 @@ class ControlNodeGraphOrchestrationFlowTest {
                 "high",
                 0,
                 15L,
-                Map.of("parser", "json")
+                Map.ofEntries(
+                    Map.entry("parser", "json"),
+                    Map.entry("selected_worker", workerId),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("execution_role", "executor"),
+                    Map.entry("execution_status", "completed"),
+                    Map.entry("tool_chain_step_count", 1),
+                    Map.entry("tool_chain_termination_reason", "executor_step_done")
+                )
             );
         }
     }
@@ -450,6 +645,111 @@ class ControlNodeGraphOrchestrationFlowTest {
                 "grounded output exists and satisfies the task",
                 "Complete the task."
             );
+        }
+    }
+
+    private static final class ProviderContinuationWorkerExecutor implements WorkerExecutor {
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            return new WorkerExecutionResult(
+                "Codex thread is ready for the next round",
+                "Persist the provider thread id for follow-up execution.",
+                true,
+                "Codex Continuation",
+                "provider thread persisted",
+                "resume the same codex thread on the next round",
+                "high",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                16L,
+                Map.ofEntries(
+                    Map.entry("provider_id", "codex"),
+                    Map.entry("execution_backend", "provider_app_server"),
+                    Map.entry("provider_session_id", "thread-codex-001"),
+                    Map.entry("provider_thread_id", "thread-codex-001"),
+                    Map.entry("provider_output_parser", "codex_json_rpc"),
+                    Map.entry("selected_worker", workerId),
+                    Map.entry("selected_model_tier", "strong"),
+                    Map.entry("execution_role", "executor")
+                )
+            );
+        }
+    }
+
+    private static final class DoneJudgmentService implements JudgmentService {
+        @Override
+        public ExecutionDecision judgeExecution(JudgmentContext context) {
+            return new ExecutionDecision(
+                "done",
+                "provider continuation metadata has been captured",
+                "complete the task",
+                false,
+                false,
+                null
+            );
+        }
+
+        @Override
+        public CompletionDecision judgeCompletion(JudgmentContext context) {
+            return new CompletionDecision(
+                "done",
+                "high",
+                "the task produced a reusable provider continuation token",
+                "Complete the task."
+            );
+        }
+    }
+
+    private static final class RecordingJudgmentService implements JudgmentService {
+        private final List<JudgmentContext> executionContexts = new java.util.ArrayList<>();
+
+        @Override
+        public ExecutionDecision judgeExecution(JudgmentContext context) {
+            executionContexts.add(context);
+            String stage = metadataString(context.task().metadata(), "orchestration_stage");
+            if ("plan_pending".equals(stage)) {
+                return new ExecutionDecision(
+                    "continue",
+                    "planner produced a delegation brief",
+                    "delegate to executor",
+                    false,
+                    false,
+                    null
+                );
+            }
+            return new ExecutionDecision(
+                "done",
+                "execution complete",
+                "finish",
+                false,
+                false,
+                null
+            );
+        }
+
+        @Override
+        public CompletionDecision judgeCompletion(JudgmentContext context) {
+            String stage = metadataString(context.task().metadata(), "orchestration_stage");
+            if ("plan_pending".equals(stage)) {
+                return new CompletionDecision(
+                    "done",
+                    "high",
+                    "planner output accepted as delegation brief",
+                    "delegate to executor"
+                );
+            }
+            return new CompletionDecision(
+                "done",
+                "high",
+                "execution output satisfies the goal",
+                "complete"
+            );
+        }
+
+        private JudgmentContext contextAt(int index) {
+            return executionContexts.get(index);
         }
     }
 }

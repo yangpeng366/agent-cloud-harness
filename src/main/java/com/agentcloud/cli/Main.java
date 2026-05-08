@@ -31,6 +31,7 @@ import com.agentcloud.tool.ToolRegistry;
 import com.agentcloud.tool.WriteFileTool;
 import com.agentcloud.tool.WriteFilesTool;
 import com.agentcloud.worker.DefaultWorkerExecutor;
+import com.agentcloud.worker.CodexAppServerWorkerExecutor;
 import com.agentcloud.worker.ProviderCliWorkerExecutor;
 import com.agentcloud.worker.ToolAwareWorkerExecutor;
 import com.agentcloud.worker.WorkerExecutor;
@@ -137,8 +138,11 @@ public class Main {
         AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
         AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
         ProviderCliWorkerExecutor providerCliWorkerExecutor = new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry);
+        CodexAppServerWorkerExecutor codexAppServerWorkerExecutor =
+            new CodexAppServerWorkerExecutor(agentProviderRegistry, workerRegistry);
         WorkerExecutor workerExecutor = new WorkerExecutorRouter(
-            workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor, providerCliWorkerExecutor
+            workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor,
+            providerCliWorkerExecutor, codexAppServerWorkerExecutor
         );
         log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());
 

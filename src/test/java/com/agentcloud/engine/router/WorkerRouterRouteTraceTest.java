@@ -178,6 +178,40 @@ class WorkerRouterRouteTraceTest {
         }
     }
 
+    @Test
+    void explicitPreferredWorkerPinsRouteWhenRegisteredAndReady() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "preferred_worker", "codex"
+        )));
+
+        assertEquals("codex", route.selectedWorker());
+        assertEquals("task_pinned", route.routeSource());
+        assertEquals("codex", route.preferredWorkerHint());
+        assertTrue(route.routeReason().contains("task-pinned worker"));
+        assertNull(route.fallbackReason());
+    }
+
+    @Test
+    void explicitPreferredWorkerFallsBackWithReasonWhenWorkerMissing() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "preferred_worker", "missing-worker"
+        )));
+
+        assertEquals("codex", route.selectedWorker());
+        assertEquals("capability_match", route.routeSource());
+        assertEquals("missing-worker", route.preferredWorkerHint());
+        assertNotNull(route.fallbackReason());
+        assertTrue(route.fallbackReason().contains("not registered"));
+    }
+
     private Task task(String taskType) {
         return task(taskType, Map.of("task_type", taskType));
     }

@@ -194,12 +194,19 @@ class ExperimentRunServiceTest {
                 "Executor output is ready for final review.",
                 "medium",
                 null,
-                Map.of(
-                    "action", "done",
-                    "next_step", "handoff to strong evaluator",
-                    "needs_checkpoint", false,
-                    "needs_human", false,
-                    "selected_worker", "kimi"
+                Map.ofEntries(
+                    Map.entry("action", "done"),
+                    Map.entry("next_step", "handoff to strong evaluator"),
+                    Map.entry("needs_checkpoint", false),
+                    Map.entry("needs_human", false),
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("prompt_rendering_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_selection_trace_count", 1)
                 )
             ));
             decisionDao.insert(new Decision(
@@ -212,15 +219,22 @@ class ExperimentRunServiceTest {
                 "Acceptance criteria satisfied.",
                 "medium",
                 null,
-                Map.of(
-                    "status", "done",
-                    "alignment_level", "high",
-                    "evaluation_result", "done:high",
-                    "evaluation_reason", "strong evaluator accepted the delegated output",
-                    "evaluator_role", "strong_evaluator",
-                    "evaluator_model_tier", "strong",
-                    "evaluator_reason", "orchestrated mode uses strong-tier judgment to review delegated execution output",
-                    "orchestration_closed_loop_observed", true
+                Map.ofEntries(
+                    Map.entry("status", "done"),
+                    Map.entry("alignment_level", "high"),
+                    Map.entry("evaluation_result", "done:high"),
+                    Map.entry("evaluation_reason", "strong evaluator accepted the delegated output"),
+                    Map.entry("evaluator_role", "strong_evaluator"),
+                    Map.entry("evaluator_model_tier", "strong"),
+                    Map.entry("evaluator_reason", "orchestrated mode uses strong-tier judgment to review delegated execution output"),
+                    Map.entry("orchestration_closed_loop_observed", true),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("prompt_rendering_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_selection_trace_count", 1)
                 )
             ));
 
@@ -268,8 +282,14 @@ class ExperimentRunServiceTest {
             assertEquals("handoff to strong evaluator", run.metadata().get("execution_judgment_next_step"));
             assertEquals(Boolean.FALSE, run.metadata().get("execution_judgment_needs_checkpoint"));
             assertEquals(Boolean.FALSE, run.metadata().get("execution_judgment_needs_human"));
+            assertEquals("mounted_context_primary", run.metadata().get("execution_judgment_prompt_mode"));
+            assertEquals(Boolean.TRUE, run.metadata().get("execution_judgment_mounted_context_injected"));
+            assertEquals(7, ((Number) run.metadata().get("execution_judgment_mounted_context_panel_count")).intValue());
             assertEquals("done", run.metadata().get("completion_judgment_status"));
             assertEquals("high", run.metadata().get("completion_alignment_level"));
+            assertEquals("mounted_context_primary", run.metadata().get("completion_judgment_prompt_mode"));
+            assertEquals(Boolean.TRUE, run.metadata().get("completion_judgment_mounted_context_injected"));
+            assertEquals(7, ((Number) run.metadata().get("completion_judgment_mounted_context_panel_count")).intValue());
             assertEquals(Boolean.TRUE, run.metadata().get("has_route_evidence"));
             assertEquals(Boolean.TRUE, run.metadata().get("has_execution_judgment"));
             assertEquals(Boolean.TRUE, run.metadata().get("has_completion_judgment"));

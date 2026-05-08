@@ -4,6 +4,7 @@ import com.agentcloud.runtime.TaskRuntimeContext;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 将 mounted context 视图压缩成 prompt 可消费的文本摘要。
@@ -11,6 +12,17 @@ import java.util.List;
 public class MountedContextPromptRenderer {
     private static final int DEFAULT_OBJECT_LIMIT = 3;
     private static final int DEFAULT_PREVIEW_LIMIT = 180;
+    private static final int DEFAULT_SELECTION_TRACE_LIMIT = 4;
+    private static final int DEFAULT_LABEL_LIMIT = 72;
+    private static final Map<MountedContextPanelName, Integer> PANEL_OBJECT_LIMITS = Map.of(
+        MountedContextPanelName.PINNED, 3,
+        MountedContextPanelName.ACTIVE, 5,
+        MountedContextPanelName.ANCESTOR, 2,
+        MountedContextPanelName.SIBLING, 3,
+        MountedContextPanelName.EVIDENCE, 3,
+        MountedContextPanelName.INDEX, 2,
+        MountedContextPanelName.ARCHIVE_HANDLES, 2
+    );
 
     public String render(TaskRuntimeContext context) {
         if (context == null || context.mountedContextView() == null) {
@@ -34,16 +46,25 @@ public class MountedContextPromptRenderer {
             StringBuilder line = new StringBuilder();
             line.append("- ").append(panel.title())
                 .append(" (").append(objects.size()).append(")");
-            line.append(": ").append(renderObjects(objects));
+            line.append(": ").append(renderObjects(name, objects));
             panelLines.add(line.toString());
         }
 
-        List<String> traceLines = new ArrayList<>();
+        List<String> traceItems = new ArrayList<>();
         for (String item : view.selectionTrace()) {
             if (item == null || item.isBlank()) {
                 continue;
             }
-            traceLines.add("- " + truncate(item, DEFAULT_PREVIEW_LIMIT));
+            traceItems.add(item);
+        }
+
+        List<String> traceLines = new ArrayList<>();
+        int traceLimit = Math.min(DEFAULT_SELECTION_TRACE_LIMIT, traceItems.size());
+        for (int index = 0; index < traceLimit; index++) {
+            traceLines.add("- " + truncate(traceItems.get(index), DEFAULT_PREVIEW_LIMIT));
+        }
+        if (traceItems.size() > traceLimit) {
+            traceLines.add("- ... +" + (traceItems.size() - traceLimit) + " more");
         }
 
         if (panelLines.isEmpty() && traceLines.isEmpty()) {
@@ -64,9 +85,9 @@ public class MountedContextPromptRenderer {
         return sb.toString();
     }
 
-    private String renderObjects(List<ContextObject> objects) {
+    private String renderObjects(MountedContextPanelName panelName, List<ContextObject> objects) {
         List<String> lines = new ArrayList<>();
-        int limit = Math.min(DEFAULT_OBJECT_LIMIT, objects.size());
+        int limit = Math.min(objectLimit(panelName), objects.size());
         for (int index = 0; index < limit; index++) {
             ContextObject object = objects.get(index);
             if (object == null) {
@@ -75,9 +96,9 @@ public class MountedContextPromptRenderer {
             StringBuilder line = new StringBuilder();
             line.append(object.type()).append("/");
             line.append(object.retentionState()).append("/");
-            line.append(firstNonBlank(object.title(), object.id(), object.path(), "(untitled)"));
+            line.append(truncate(firstNonBlank(object.title(), object.id(), object.path(), "(untitled)"), DEFAULT_LABEL_LIMIT));
             String detail = firstNonBlank(object.summary(), object.contentPreview());
-            if (!detail.isBlank()) {
+            if (!detail.isBlank() && !isHandleOnlyPanel(panelName)) {
                 line.append(" -> ").append(truncate(detail, DEFAULT_PREVIEW_LIMIT));
             }
             lines.add(line.toString());
@@ -98,6 +119,18 @@ public class MountedContextPromptRenderer {
             }
         }
         return "";
+    }
+
+    private int objectLimit(MountedContextPanelName panelName) {
+        if (panelName == null) {
+            return DEFAULT_OBJECT_LIMIT;
+        }
+        return PANEL_OBJECT_LIMITS.getOrDefault(panelName, DEFAULT_OBJECT_LIMIT);
+    }
+
+    private boolean isHandleOnlyPanel(MountedContextPanelName panelName) {
+        return panelName == MountedContextPanelName.INDEX
+            || panelName == MountedContextPanelName.ARCHIVE_HANDLES;
     }
 
     private String truncate(String value, int maxChars) {

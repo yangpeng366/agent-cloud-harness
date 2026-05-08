@@ -2,6 +2,7 @@ package com.agentcloud.judgment;
 
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.Map;
@@ -15,8 +16,17 @@ public record JudgmentContext(
     TaskRuntimeContext runtimeContext,
     String workerOutput,
     String completionCriteria,
-    Map<String, Object> latestWorkerMetadata
+    Map<String, Object> latestWorkerMetadata,
+    RuntimeFactSet runtimeFactSet
 ) {
+    public JudgmentContext(Task task,
+                           TaskRuntimeContext runtimeContext,
+                           String workerOutput,
+                           String completionCriteria,
+                           Map<String, Object> latestWorkerMetadata) {
+        this(task, runtimeContext, workerOutput, completionCriteria, latestWorkerMetadata, null);
+    }
+
     public JudgmentContext {
         if (runtimeContext == null) {
             runtimeContext = new TaskRuntimeContext(
@@ -33,5 +43,6 @@ public record JudgmentContext(
         if (workerOutput == null) workerOutput = "";
         if (completionCriteria == null) completionCriteria = "";
         if (latestWorkerMetadata == null) latestWorkerMetadata = Map.of();
+        if (runtimeFactSet == null) runtimeFactSet = RuntimeFactSet.empty(task);
     }
 }

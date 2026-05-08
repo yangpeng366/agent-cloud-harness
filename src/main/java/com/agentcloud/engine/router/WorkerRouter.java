@@ -32,6 +32,47 @@ public class WorkerRouter {
         String taskType = task.metadata() != null && task.metadata().get("task_type") instanceof String
             ? (String) task.metadata().get("task_type") : "general";
         String preferredModelTier = resolvePreferredModelTier(task);
+        String pinnedWorker = resolvePinnedWorker(task);
+
+        if (pinnedWorker != null) {
+            Worker pinned = registry.get(pinnedWorker);
+            if (pinned != null && registry.checkReadiness(pinnedWorker).ready()) {
+                List<Worker> capable = registry.findCapable(taskType);
+                List<String> candidateWorkers = capable.isEmpty()
+                    ? registry.listReady().stream().map(Worker::workerId).toList()
+                    : capable.stream().map(Worker::workerId).toList();
+                String reason = "selected by task-pinned worker: taskType=" + taskType + ", worker=" + pinned.workerId();
+                log.info(reason);
+                return routeResult(task.id(), pinned, List.of(), reason,
+                    "task_pinned", taskType, pinnedWorker, false, candidateWorkers, null);
+            }
+            String fallbackReason = pinned == null
+                ? "task-pinned worker '" + pinnedWorker + "' not registered"
+                : "task-pinned worker '" + pinnedWorker + "' not ready";
+            RouteResult fallback = selectWorkerWithoutPinned(task, taskType, preferredModelTier);
+            return new RouteResult(
+                fallback.taskId(),
+                fallback.selectedWorker(),
+                fallback.fallbackWorkers(),
+                fallback.routeReason(),
+                fallback.routeSource(),
+                fallback.taskType(),
+                pinnedWorker,
+                fallback.learningHintApplied(),
+                fallback.candidateWorkers(),
+                fallback.selectedWorkerType(),
+                fallback.selectedModelTier(),
+                fallback.selectedExecutionRole(),
+                fallback.selectionScope(),
+                fallback.whySelected(),
+                mergeReasons(fallbackReason, fallback.fallbackReason())
+            );
+        }
+
+        return selectWorkerWithoutPinned(task, taskType, preferredModelTier);
+    }
+
+    private RouteResult selectWorkerWithoutPinned(Task task, String taskType, String preferredModelTier) {
 
         String preferredWorker = learningMemoryService != null
             ? learningMemoryService.selectPreferredWorker(taskType)
@@ -225,6 +266,23 @@ public class WorkerRouter {
         }
     }
 
+    private String resolvePinnedWorker(Task task) {
+        if (task == null) {
+            return null;
+        }
+        String assignedWorker = blankToNull(task.assignedWorker());
+        if (assignedWorker != null) {
+            return assignedWorker;
+        }
+        return firstNonBlank(
+            metadataString(task.metadata(), "assigned_worker"),
+            metadataString(task.metadata(), "target_worker"),
+            metadataString(task.metadata(), "preferred_worker"),
+            metadataString(task.metadata(), "provider_worker"),
+            metadataString(task.metadata(), "execution_worker")
+        );
+    }
+
     private String mergeReasons(String left, String right) {
         String normalizedLeft = blankToNull(left);
         String normalizedRight = blankToNull(right);
@@ -239,6 +297,18 @@ public class WorkerRouter {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     public record RouteResult(

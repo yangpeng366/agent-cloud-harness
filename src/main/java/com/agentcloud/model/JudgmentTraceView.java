@@ -1,6 +1,7 @@
 package com.agentcloud.model;
 
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
@@ -17,5 +18,7 @@ public record JudgmentTraceView(
     String recommendedNextStep,
     Decision executionJudgment,
     Decision completionJudgment,
-    TaskRuntimeContext runtimeContext
+    RuntimeFactSet.ExecutionBoundary executionBoundary,
+    TaskRuntimeContext runtimeContext,
+    RuntimeFactSet runtimeFacts
 ) {}

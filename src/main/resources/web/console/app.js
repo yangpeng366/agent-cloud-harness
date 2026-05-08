@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
     sessions: [],
     tasks: [],
     workers: [],
@@ -154,7 +154,7 @@ async function refreshAll(loud) {
 async function loadHealth() {
     const health = await api("/api/v1/health");
     dom.healthBadge.dataset.state = health.status === "up" ? "up" : "down";
-    dom.healthBadge.textContent = health.status === "up" ? `healthy · v${health.version}` : "down";
+    dom.healthBadge.textContent = health.status === "up" ? `healthy 路 v${health.version}` : "down";
 }
 
 async function loadWorkers() {
@@ -732,7 +732,7 @@ function renderTimeline() {
                         const startMode = taskStartMode(task);
                         const roundLabel = taskIndex === 0 ? "root" : `round ${taskIndex + 1}`;
                         return `
-                            <article class="thread ${active}" data-task-id="${escapeHtml(task.id)}" role="button" tabindex="0" aria-label="查看任务 ${escapeHtml(task.title || task.id)}">
+                            <article class="thread ${active}" data-task-id="${escapeHtml(task.id)}" role="button" tabindex="0" aria-label="当前任务： ${escapeHtml(task.title || task.id)}">
                                 <div class="thread__rail">
                                     <span class="thread__stamp">${escapeHtml(roundLabel)}</span>
                                     <span class="thread__time">${formatTime(task.created_at || task.createdAt)}</span>
@@ -785,17 +785,17 @@ function renderInspector() {
     const task = flow?.task || state.tasks.find((item) => item.id === state.selectedTaskId);
 
     if (!task) {
-        dom.inspectorTitle.textContent = "选择一个任务";
-        dom.taskOverview.innerHTML = emptyState("右侧会显示 status、control node、worker、tool trace 和连续性摘要。");
-        dom.agentExecution.innerHTML = emptyState("选择任务后显示 provider selection、latest run、事件与产物。");
-        dom.chainContext.innerHTML = emptyState("选中一个任务后，可在这里查看当前迭代链并跳转前后轮。");
-        dom.continuitySummary.innerHTML = emptyState("暂无任务详情");
+        dom.inspectorTitle.textContent = "当前任务";
+        dom.taskOverview.innerHTML = emptyState("当前任务没有状态、控制节点、工作节点、工具 trace 等信息。");
+        dom.agentExecution.innerHTML = emptyState("当前任务没有执行信息。");
+        dom.chainContext.innerHTML = emptyState("当前任务没有上下文信息。");
+        dom.continuitySummary.innerHTML = emptyState("当前任务没有连续性信息。");
         dom.continuityChips.innerHTML = "";
-        dom.routeBox.innerHTML = emptyState("暂无路由信息");
-        dom.experimentSummary.innerHTML = emptyState("当前任务不属于 experiment batch。");
-        dom.decisionList.innerHTML = emptyState("暂无 judgment");
-        dom.artifactList.innerHTML = emptyState("暂无 artifact");
-        dom.toolList.innerHTML = emptyState("暂无 tool trace");
+        dom.routeBox.innerHTML = emptyState("当前任务没有路由信息");
+        dom.experimentSummary.innerHTML = emptyState("当前任务没有实验信息");
+        dom.decisionList.innerHTML = emptyState("当前任务没有判断 judgment");
+        dom.artifactList.innerHTML = emptyState("当前任务没有实验 artifact");
+        dom.toolList.innerHTML = emptyState("当前任务没有实验 tool trace");
         dom.rawJson.textContent = "";
         state.providerSelection = null;
         state.agentRun = null;
@@ -829,15 +829,18 @@ function renderInspector() {
     const toolFacts = toolChainFacts(flow, tools);
     const toolLabel = toolChainLabel(flow, tools);
     const toolSummary = toolChainNarrative(flow, tools);
+    const executionFacts = executionBoundaryFacts(flow, tools);
 
     dom.inspectorTitle.textContent = task.title || task.id;
     dom.taskOverview.innerHTML = [
         overviewCard("状态", task.status),
-        overviewCard("控制节点", task.control_node || task.controlNode || "intake"),
-        overviewCard("当前 worker", task.assigned_worker || task.assignedWorker || "unassigned"),
+        overviewCard("控制节点", task.control_node || task.controlNode || "intake"),    
+        overviewCard("工作节点", task.worker || task.worker || "intake"),
+        overviewCard("工具 trace", task.assigned_worker || task.assignedWorker || "unassigned"),
         overviewCard("实验模式", humanizeToken(experimentMode) || experimentMode),
         overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none"),
-        overviewCard("Tool chain", toolLabel || "none")
+        overviewCard("Tool chain", toolLabel || "none"),
+        overviewCard("Execution", executionFacts.label || "none")
     ].join("");
     dom.agentExecution.innerHTML = renderAgentExecution(flow, task);
     renderAgentDetail();
@@ -849,8 +852,7 @@ function renderInspector() {
         activeContext.continuitySummary ||
         task.summary ||
         latestPacket?.active_task_summary ||
-        latestPacket?.activeTaskSummary ||
-        "还没有足够的连续性摘要。";
+        "当前任务没有延续摘要。";
 
     dom.continuitySummary.textContent = continuitySummary;
 
@@ -867,12 +869,13 @@ function renderInspector() {
 
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
+    const judgmentExecutionBoundary = judgmentTrace.execution_boundary || judgmentTrace.executionBoundary;
     const decisionCards = [];
     if (executionJudgment) {
-        decisionCards.push(decisionCard("execution_judgment", executionJudgment));
+        decisionCards.push(decisionCard("execution_judgment", executionJudgment, judgmentExecutionBoundary));
     }
     if (completionJudgment) {
-        decisionCards.push(decisionCard("completion_judgment", completionJudgment));
+        decisionCards.push(decisionCard("completion_judgment", completionJudgment, judgmentExecutionBoundary));
     }
     decisions.slice(0, 4).forEach((decision) => {
         decisionCards.push(decisionCard(decision.decision_type || decision.decisionType || "decision", decision));
@@ -906,7 +909,10 @@ function renderInspector() {
     if (toolSummary) {
         toolCards.unshift(renderToolChainSummaryCard(toolFacts, toolLabel, toolSummary));
     }
-    dom.toolList.innerHTML = toolCards.length > 0 ? toolCards.join("") : emptyState("当前任务还没有 tool trace");
+    if (executionFacts.label || executionFacts.traceSummary || executionFacts.executionId) {
+        toolCards.unshift(renderExecutionSummaryCard(executionFacts));
+    }
+    dom.toolList.innerHTML = toolCards.length > 0 ? toolCards.join("") : emptyState("暂无 tool trace");
 
     dom.rawJson.textContent = JSON.stringify(flow, null, 2);
     setTaskActionState(true);
@@ -928,7 +934,7 @@ function renderAgentInventory() {
     dom.readyAgentCount.textContent = String(readyCount);
     dom.agentInventory.innerHTML = agents.length > 0
         ? agents.map(renderAgentInventoryCard).join("")
-        : emptyState("暂无 Agent Provider。");
+        : emptyState("暂无 Agent Provider");
 }
 
 function renderRuntimeHealth() {
@@ -947,7 +953,7 @@ function renderRuntimeHealth() {
     dom.activeRunCount.textContent = String(activeRunCount);
 
     if (!health.checked_at && !health.checkedAt) {
-        dom.runtimeHealth.innerHTML = emptyState("Runtime health 尚未加载。");
+        dom.runtimeHealth.innerHTML = emptyState("暂无 Runtime health 数据");
         return;
     }
 
@@ -1013,7 +1019,7 @@ function renderRuntimeHealth() {
             return `
                 <button class="agent-trace-row agent-trace-row--clickable" type="button" data-provider-id="${escapeHtml(providerId)}">
                     <span class="task-badge" data-tone="${authStatus === "auth_needed" ? "manual" : "paused"}">${escapeHtml(providerId)}</span>
-                    <span>${escapeHtml(authStatus)} · ${escapeHtml(preview(reason, 120))}</span>
+                    <span>${escapeHtml(authStatus)} 路 ${escapeHtml(preview(reason, 120))}</span>
                 </button>
             `;
         }).join("");
@@ -1057,7 +1063,7 @@ function renderProviderRuntimeStatsRow(stat) {
         `${failedRuns} failed`,
         crashedRuns > 0 ? `${crashedRuns} crashed` : null,
         cancelledRuns > 0 ? `${cancelledRuns} cancelled` : null
-    ].filter(Boolean).join(" · ");
+    ].filter(Boolean).join(" 路 ");
     return `
         <button class="artifact-item runtime-health__row runtime-health__row--clickable provider-stats-row" type="button" data-provider-id="${escapeHtml(providerId)}">
             <div>
@@ -1068,7 +1074,7 @@ function renderProviderRuntimeStatsRow(stat) {
                     <span>avg ${escapeHtml(averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))}</span>
                 </div>
                 <strong>${escapeHtml(providerId)}</strong>
-                <p>${escapeHtml(summary || "no completed status yet")}${lastRunAt ? ` · last ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
+                <p>${escapeHtml(summary || "no completed status yet")}${lastRunAt ? ` 路 last ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
                 ${lastFailureSummary ? `<p class="agent-warning">Last failure: ${escapeHtml(preview(lastFailureSummary, 140))}</p>` : ""}
             </div>
         </button>
@@ -1228,7 +1234,7 @@ function renderAgentExecution(flow, task) {
                 ${selectedModelTier ? `<span>${escapeHtml(selectedModelTier)}</span>` : ""}
             </div>
             <strong>${escapeHtml(displayName)}</strong>
-            <p class="mono">${escapeHtml([providerId, selectedWorker, runId].filter(Boolean).join(" · "))}</p>
+            <p class="mono">${escapeHtml([providerId, selectedWorker, runId].filter(Boolean).join(" 路 "))}</p>
             <div class="agent-run-card__grid">
                 ${runId ? overviewCard("Run ID", runId) : ""}
                 ${run.started_at || run.startedAt ? overviewCard("Started", formatTime(run.started_at || run.startedAt)) : ""}
@@ -1372,8 +1378,8 @@ function renderProviderRuntimeDiagnostics(agent, runs) {
                     <span class="task-badge" data-tone="failed">last failure</span>
                     <span>
                         ${escapeHtml(formatTime(lastFailure.started_at || lastFailure.startedAt))}
-                        ${lastFailureExitCode === null ? "" : ` · exit ${escapeHtml(String(lastFailureExitCode))}`}
-                        · ${escapeHtml(preview(lastFailureSummary, 140))}
+                        ${lastFailureExitCode === null ? "" : ` 路 exit ${escapeHtml(String(lastFailureExitCode))}`}
+                        路 ${escapeHtml(preview(lastFailureSummary, 140))}
                     </span>
                 </button>
             ` : emptyState("最近 provider runs 里没有失败记录。")}
@@ -1473,7 +1479,7 @@ function renderAgentRunSearchRow(run) {
                     ${durationMs === null ? "" : `<span>${escapeHtml(formatDurationMs(durationMs))}</span>`}
                 </div>
                 <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
-                <p>${escapeHtml(taskId)} · ${escapeHtml(preview(summary, 160))}</p>
+                <p>${escapeHtml(taskId)} 路 ${escapeHtml(preview(summary, 160))}</p>
             </div>
         </button>
     `;
@@ -1540,12 +1546,25 @@ function overviewCard(label, value) {
     `;
 }
 
-function decisionCard(type, decision) {
+function decisionCard(type, decision, executionBoundary = null) {
+    const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
     return `
         <div class="decision-item">
             <div class="decision-item__type">${escapeHtml(type)}</div>
             <strong>${escapeHtml(decision.summary || "no summary")}</strong>
             ${decision.rationale ? `<p>${escapeHtml(preview(decision.rationale, 220))}</p>` : ""}
+            ${boundaryFacts.label || boundaryFacts.traceSummary || boundaryFacts.executionId
+                ? `
+                    <div class="decision-item__execution">
+                        <div class="decision-item__meta">
+                            <span class="task-badge" data-tone="active">execution</span>
+                            ${boundaryFacts.executionId ? `<span>${escapeHtml(`id ${boundaryFacts.executionId}`)}</span>` : ""}
+                            ${boundaryFacts.workerId ? `<span>${escapeHtml(`worker ${boundaryFacts.workerId}`)}</span>` : ""}
+                        </div>
+                        <p>${escapeHtml(preview(boundaryFacts.traceSummary || boundaryFacts.label || "execution boundary captured", 180))}</p>
+                    </div>
+                `
+                : ""}
         </div>
     `;
 }
@@ -1644,7 +1663,7 @@ function renderComposerContext() {
     const nextLine = nextStep ? `参考下一步：${preview(nextStep, 96)}` : null;
     dom.composerTaskHint.textContent = [selectedLine, followupLine, !followupParent ? `可基于 ${contextTask.title || contextTask.id} 生成 follow-up。` : null, nextLine, followupParent ? `当前上下文：${status}/${node}` : null]
         .filter(Boolean)
-        .join(" · ");
+        .join(" 路 ");
     dom.followupButton.disabled = !task;
     dom.clearFollowupButton.disabled = !followupParent;
 }
@@ -1755,6 +1774,10 @@ function renderRouteBox(flow, task) {
         learningHintApplied === true ? "learning: applied" : null,
         learningHintApplied === false ? "learning: observed, not applied" : null
     ].filter(Boolean);
+    const executionFacts = executionBoundaryFacts(flow);
+    if (executionFacts.chips.length > 0) {
+        routeChips.push(...executionFacts.chips);
+    }
     if (!selectedWorker && !routeReason && candidateWorkers.length === 0 && routeChips.length === 0) {
         return emptyState("暂无 route preview");
     }
@@ -1905,7 +1928,7 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
                 <span>${escapeHtml(humanizeToken(completionStatus) || completionStatus)}</span>
             </div>
             <strong>${escapeHtml(humanizeToken(acceptanceResult) || acceptanceResult)}</strong>
-            <p>${escapeHtml(`steps ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} · cost ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
+            <p>${escapeHtml(`steps ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} 路 cost ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
         </div>
     `;
 }
@@ -1970,7 +1993,7 @@ function toolChainLabel(flow, tools = []) {
         facts.terminationReason ? humanizeToken(facts.terminationReason) : null,
         !facts.terminationReason && facts.toolExecutionMode ? humanizeToken(facts.toolExecutionMode) : null
     ].filter(Boolean);
-    return parts.length > 0 ? parts.join(" · ") : null;
+    return parts.length > 0 ? parts.join(" 路 ") : null;
 }
 
 function toolChainNarrative(flow, tools = []) {
@@ -1985,9 +2008,58 @@ function toolChainNarrative(flow, tools = []) {
     if (facts.toolNames.length === 0) {
         return label;
     }
-    return [label, facts.toolNames.map(humanizeToken).join(" -> ")].filter(Boolean).join(" · ");
+    return [label, facts.toolNames.map(humanizeToken).join(" -> ")].filter(Boolean).join(" 路 ");
 }
 
+function executionBoundaryFacts(flow, tools = []) {
+    const boundary = flow?.execution_boundary || flow?.executionBoundary || {};
+    const metadata = boundary.metadata || {};
+    const status = firstNonBlank(
+        boundary.execution_status,
+        boundary.executionStatus,
+        metadata.execution_status,
+        metadata.executionStatus
+    );
+    const durationMs = numberOrNull(
+        boundary.duration_ms,
+        boundary.durationMs
+    );
+    const toolInvocationCount = numericValue(
+        boundary.tool_invocation_count,
+        boundary.toolInvocationCount
+    ) ?? (Array.isArray(tools) ? tools.length : null);
+    const workerId = firstNonBlank(
+        boundary.worker_id,
+        boundary.workerId
+    );
+    const traceSummary = firstNonBlank(
+        boundary.trace_summary,
+        boundary.traceSummary
+    );
+    const executionId = firstNonBlank(
+        boundary.execution_id,
+        boundary.executionId
+    );
+    const labelParts = [
+        status ? humanizeToken(status) : null,
+        toolInvocationCount ? formatCount(toolInvocationCount, "call") : null,
+        durationMs !== null ? formatDurationMs(durationMs) : null
+    ].filter(Boolean);
+    const chips = [
+        executionId ? `exec: ${executionId}` : null,
+        workerId ? `worker: ${workerId}` : null
+    ].filter(Boolean);
+    return {
+        status,
+        durationMs,
+        toolInvocationCount,
+        workerId,
+        traceSummary,
+        executionId,
+        label: labelParts.length > 0 ? labelParts.join(" · ") : null,
+        chips
+    };
+}
 function renderToolChainSummaryCard(facts, label, summary) {
     const metaParts = [
         label,
@@ -2000,6 +2072,27 @@ function renderToolChainSummaryCard(facts, label, summary) {
                 ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
             </div>
             <p>${escapeHtml(preview(summary, 220))}</p>
+        </div>
+    `;
+}
+
+function renderExecutionSummaryCard(facts) {
+    const metaParts = [
+        facts.label,
+        facts.executionId ? `id ${facts.executionId}` : null,
+        facts.workerId ? `worker ${facts.workerId}` : null
+    ].filter(Boolean);
+    const body = facts.traceSummary || facts.label || "execution boundary captured";
+    return `
+        <div class="tool-item">
+            <div class="tool-item__meta">
+                <span class="task-badge" data-tone="active">execution</span>
+                ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
+            </div>
+            <p>${escapeHtml(preview(body, 220))}</p>
+            ${facts.traceSummary && facts.traceSummary !== body
+                ? `<p class="tool-item__detail">${escapeHtml(preview(facts.traceSummary, 220))}</p>`
+                : ""}
         </div>
     `;
 }
@@ -2081,7 +2174,7 @@ function summarizeCountMap(map) {
     }
     return entries.slice(0, 3)
         .map(([key, count]) => `${humanizeToken(key) || key} ${count}`)
-        .join(" · ");
+        .join(" 路 ");
 }
 
 function maxToolStepIndex(tools = []) {
@@ -2534,3 +2627,10 @@ function startPolling() {
         }
     }, 5000);
 }
+
+
+
+
+
+
+

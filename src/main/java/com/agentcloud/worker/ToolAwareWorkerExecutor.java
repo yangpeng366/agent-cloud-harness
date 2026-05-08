@@ -852,15 +852,23 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                                      int maxToolRounds,
                                                                      long startMs) {
         ImageInputDiagnostics imageDiagnostics = imageInputDiagnostics(context);
-        String visualBrief = resolveVisualBrief(context, worker, imageDiagnostics);
-        AutoWriteFilesDraft draft = generateAutoWriteFilesDraft(
+        VisualBriefResolution visualBriefResolution = resolveVisualBriefResolution(
             context,
             worker,
-            toolStateBefore,
-            originalPlan,
             imageDiagnostics,
-            visualBrief
+            toolStateBefore.outputDirPath()
         );
+        String visualBrief = visualBriefResolution.visualBrief();
+        AutoWriteFilesDraft draft = visualBriefResolution.preparedDraft() != null
+            ? visualBriefResolution.preparedDraft()
+            : generateAutoWriteFilesDraft(
+                context,
+                worker,
+                toolStateBefore,
+                originalPlan,
+                imageDiagnostics,
+                visualBrief
+            );
         if (draft.basePath().isBlank() || draft.files().isEmpty()) {
             draft = minimalDirectoryFallbackDraft(
                 context,
@@ -1614,7 +1622,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 json.path("suggested_next_step").asText(""),
                 json.path("confidence").asText("medium"),
                 safeRaw,
-                files.isEmpty() ? "empty_files" : ""
+                ""
             );
         } catch (Exception e) {
             log.warn("Failed to parse auto-write-files JSON output: {}", e.getMessage());
@@ -3556,11 +3564,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         return paths;
     }
 
-    private String resolveVisualBrief(TaskRuntimeContext context,
-                                      Worker worker,
-                                      ImageInputDiagnostics imageDiagnostics) {
+    private VisualBriefResolution resolveVisualBriefResolution(TaskRuntimeContext context,
+                                                               Worker worker,
+                                                               ImageInputDiagnostics imageDiagnostics,
+                                                               String defaultBasePath) {
         if (imageDiagnostics == null || imageDiagnostics.availableInputs().isEmpty()) {
-            return "";
+            return new VisualBriefResolution("", null);
         }
         try {
             String raw = llmClient.chat(
@@ -3568,14 +3577,41 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 buildVisualBriefUserPrompt(context, imageDiagnostics),
                 imageDiagnostics.availableInputs()
             );
-            return truncateSingleLine(firstNonBlank(raw, ""), 1200);
+            AutoWriteFilesDraft structuredDraft = tryReuseStructuredVisualBriefDraft(raw, defaultBasePath);
+            if (structuredDraft != null) {
+                log.info("Visual brief helper returned reusable structured draft. task={} worker={} fileCount={}",
+                    context != null && context.task() != null ? context.task().id() : "",
+                    worker != null ? worker.workerId() : "",
+                    structuredDraft.files().size());
+                return new VisualBriefResolution("", structuredDraft);
+            }
+            return new VisualBriefResolution(truncateSingleLine(firstNonBlank(raw, ""), 1200), null);
         } catch (Exception e) {
             log.warn("Visual brief generation failed. task={} worker={} reason={}",
                 context != null && context.task() != null ? context.task().id() : "",
                 worker != null ? worker.workerId() : "",
                 e.getMessage());
-            return "";
+            return new VisualBriefResolution("", null);
         }
+    }
+
+    private AutoWriteFilesDraft tryReuseStructuredVisualBriefDraft(String raw, String defaultBasePath) {
+        String safeRaw = raw == null ? "" : raw.trim();
+        if (!looksLikeStructuredAutoWriteFilesDraft(safeRaw)) {
+            return null;
+        }
+        AutoWriteFilesDraft parsed = parseAutoWriteFilesDraft(safeRaw, defaultBasePath);
+        if (!parsed.failureReason().isBlank() || parsed.files().isEmpty()) {
+            return null;
+        }
+        return parsed;
+    }
+
+    private boolean looksLikeStructuredAutoWriteFilesDraft(String raw) {
+        return raw != null
+            && raw.startsWith("{")
+            && raw.contains("\"files\"")
+            && (raw.contains("\"base_path\"") || raw.contains("\"summary\""));
     }
 
     private String buildVisualBriefSystemPrompt(Worker worker) {
@@ -3777,6 +3813,15 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             if (confidence == null || confidence.isBlank()) confidence = "medium";
             if (rawResponse == null) rawResponse = "";
             if (failureReason == null) failureReason = "";
+        }
+    }
+
+    private record VisualBriefResolution(
+        String visualBrief,
+        AutoWriteFilesDraft preparedDraft
+    ) {
+        private VisualBriefResolution {
+            if (visualBrief == null) visualBrief = "";
         }
     }
 

@@ -13,7 +13,7 @@ import java.util.List;
 
 /**
  * 按 worker 合同选择执行器的统一门面。
- * 当前区分 default / tool-aware / provider-native-cli 三条执行路径。
+ * 当前区分 default / tool-aware / provider-native-cli / provider-app-server 四条执行路径。
  */
 public class WorkerExecutorRouter implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(WorkerExecutorRouter.class);
@@ -22,15 +22,18 @@ public class WorkerExecutorRouter implements WorkerExecutor {
     private final WorkerExecutor defaultExecutor;
     private final WorkerExecutor toolAwareExecutor;
     private final ProviderCliWorkerExecutor providerCliExecutor;
+    private final CodexAppServerWorkerExecutor codexAppServerExecutor;
 
     public WorkerExecutorRouter(WorkerRegistry workerRegistry,
                                 WorkerExecutor defaultExecutor,
                                 WorkerExecutor toolAwareExecutor,
-                                ProviderCliWorkerExecutor providerCliExecutor) {
+                                ProviderCliWorkerExecutor providerCliExecutor,
+                                CodexAppServerWorkerExecutor codexAppServerExecutor) {
         this.workerRegistry = workerRegistry;
         this.defaultExecutor = defaultExecutor;
         this.toolAwareExecutor = toolAwareExecutor;
         this.providerCliExecutor = providerCliExecutor;
+        this.codexAppServerExecutor = codexAppServerExecutor;
     }
 
     @Override
@@ -75,6 +78,12 @@ public class WorkerExecutorRouter implements WorkerExecutor {
         if (worker.suggestOnly()) {
             return defaultExecutor;
         }
+        if (codexAppServerExecutor != null && codexAppServerExecutor.supports(workerId, worker)
+            && shouldUseProviderAppServer(worker)) {
+            log.info("Routing worker to provider app-server executor. worker={} type={}",
+                worker.workerId(), worker.workerType());
+            return codexAppServerExecutor;
+        }
         if (providerCliExecutor != null && providerCliExecutor.supports(workerId, worker)
             && !shouldPreferToolAware(worker)) {
             log.info("Routing worker to provider-native cli executor. worker={} type={}",
@@ -91,13 +100,32 @@ public class WorkerExecutorRouter implements WorkerExecutor {
 
     private boolean shouldPreferToolAware(Worker worker) {
         if (worker == null || worker.metadata() == null) {
-            return worker != null && worker.toolCapabilities() != null && !worker.toolCapabilities().isEmpty();
+            return false;
         }
         Object backend = worker.metadata().get("execution_backend");
         if (backend != null && "provider_native_cli".equalsIgnoreCase(backend.toString())) {
             return false;
         }
-        return worker.toolCapabilities() != null && !worker.toolCapabilities().isEmpty();
+        if (backend != null && "tool_aware".equalsIgnoreCase(backend.toString())) {
+            return true;
+        }
+        if (backend != null && ("provider_app_server".equalsIgnoreCase(backend.toString())
+            || "default_llm".equalsIgnoreCase(backend.toString()))) {
+            return false;
+        }
+        Object preferHarnessTools = worker.metadata().get("prefer_harness_tools");
+        if (preferHarnessTools != null) {
+            return Boolean.parseBoolean(preferHarnessTools.toString());
+        }
+        return false;
+    }
+
+    private boolean shouldUseProviderAppServer(Worker worker) {
+        if (worker == null || worker.metadata() == null) {
+            return false;
+        }
+        Object backend = worker.metadata().get("execution_backend");
+        return backend != null && "provider_app_server".equalsIgnoreCase(backend.toString());
     }
 
     @SuppressWarnings("unchecked")

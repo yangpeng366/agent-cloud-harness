@@ -7,6 +7,10 @@ import com.agentcloud.judgment.JudgmentService;
 import com.agentcloud.model.*;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
+import com.agentcloud.runtime.context.MountedContextPromptMetrics;
+import com.agentcloud.runtime.context.MountedContextPromptRenderer;
+import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.*;
 import com.agentcloud.worker.WorkerExecutor;
 import com.agentcloud.worker.WorkerExecutionResult;
@@ -24,6 +28,7 @@ import java.util.Map;
  */
 public class ControlNodeGraph {
     private static final Logger log = LoggerFactory.getLogger(ControlNodeGraph.class);
+    private static final MountedContextPromptRenderer JUDGMENT_PROMPT_RENDERER = new MountedContextPromptRenderer();
     private final TaskDao taskDao;
     private final EventDao eventDao;
     private final SessionDao sessionDao;
@@ -134,6 +139,11 @@ public class ControlNodeGraph {
             AgentRunRecord agentRun = null;
             try {
                 executionResult = workerExecutor.executeOneRound(ctx, task.assignedWorker());
+                Task updatedTask = mergeProviderContinuationMetadata(task, executionResult);
+                if (!sameState(task, updatedTask)) {
+                    taskDao.updateState(updatedTask);
+                    task = updatedTask;
+                }
                 agentRun = recordCompletedAgentRun(task, route, selectedWorker, executionResult, runStartedAt, Instant.now());
             } catch (RuntimeException e) {
                 AgentRunRecord failedRun = recordFailedAgentRun(task, route, selectedWorker, runStartedAt, Instant.now(), e);
@@ -256,7 +266,9 @@ public class ControlNodeGraph {
         );
         String fallbackReason = stringValue(latestWorkerMetadata.get("fallback_reason"));
         String selectionScope = resolveSelectionScope(task, executionRole);
-        JudgmentContext jctx = new JudgmentContext(task, ctx, latestOutput, null, latestWorkerMetadata);
+        RuntimeFactSet factSet = buildJudgmentFactSet(task, ctx, latestOutput, latestWorkerMetadata);
+        JudgmentContext jctx = new JudgmentContext(task, ctx, latestOutput, null, latestWorkerMetadata, factSet);
+        MountedContextPromptMetrics judgmentPromptMetrics = buildJudgmentPromptMetrics(task, ctx);
 
         // Execution Judgment
         var execDecision = judgmentService.judgeExecution(jctx);
@@ -283,7 +295,7 @@ public class ControlNodeGraph {
             "Execution judgment: " + execDecision.action(),
             execDecision.reason(),
             "medium", null,
-            metadataOf(
+            withJudgmentPromptMetadata(metadataOf(
                 "action", execDecision.action(),
                 "judgment_actor", "judgment_service",
                 "judgment_stage", "execution",
@@ -302,7 +314,7 @@ public class ControlNodeGraph {
                 "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker()),
                 "retry_decision", execDecision.retryDecision(),
                 "escalation_decision", execDecision.escalationDecision()
-            )
+            ), judgmentPromptMetrics)
         );
         decisionDao.insert(judgmentRecord);
 
@@ -312,7 +324,7 @@ public class ControlNodeGraph {
             "Completion judgment: " + completionDecision.status(),
             completionDecision.reason(),
             "medium", null,
-            metadataOf(
+            withJudgmentPromptMetadata(metadataOf(
                 "judgment_actor", "judgment_service",
                 "judgment_stage", "completion",
                 "selected_worker", selectedWorkerId,
@@ -332,7 +344,7 @@ public class ControlNodeGraph {
                 "orchestration_closed_loop_observed", orchestrationClosedLoopObserved,
                 "retry_decision", execDecision.retryDecision(),
                 "escalation_decision", execDecision.escalationDecision()
-            )
+            ), judgmentPromptMetrics)
         );
         decisionDao.insert(completionRecord);
 
@@ -560,8 +572,46 @@ public class ControlNodeGraph {
     @SuppressWarnings("unchecked")
     private Map<String, Object> resolveLatestWorkerMetadata(TaskRuntimeContext ctx, WorkerExecutionResult executionResult) {
         Map<String, Object> currentRoundMetadata = selectLatestWorkerMetadata(executionResult != null ? executionResult.metadata() : null);
+        if (executionResult != null) {
+            currentRoundMetadata = augmentLatestWorkerMetadata(currentRoundMetadata, executionResult);
+        }
+        Map<String, Object> latestArtifactMetadata = extractLatestWorkerMetadataFromArtifacts(ctx);
         if (!currentRoundMetadata.isEmpty()) {
+            if (!latestArtifactMetadata.isEmpty()) {
+                return mergeLatestWorkerMetadata(latestArtifactMetadata, currentRoundMetadata);
+            }
             return currentRoundMetadata;
+        }
+        return latestArtifactMetadata;
+    }
+
+    private Map<String, Object> augmentLatestWorkerMetadata(Map<String, Object> metadata,
+                                                            WorkerExecutionResult executionResult) {
+        if (executionResult == null) {
+            return metadata == null ? Map.of() : metadata;
+        }
+        Map<String, Object> enriched = metadata == null || metadata.isEmpty()
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(metadata);
+        if (executionResult.executionStatus() != null && !executionResult.executionStatus().isBlank()) {
+            enriched.putIfAbsent("execution_status", executionResult.executionStatus());
+        }
+        if (executionResult.durationMs() != null) {
+            enriched.putIfAbsent("duration_ms", executionResult.durationMs());
+        }
+        if (executionResult.evidenceRefs() != null && !executionResult.evidenceRefs().isEmpty()) {
+            enriched.putIfAbsent("evidence_refs", executionResult.evidenceRefs());
+        }
+        if (executionResult.unfinishedItems() != null && !executionResult.unfinishedItems().isEmpty()) {
+            enriched.putIfAbsent("unfinished_items", executionResult.unfinishedItems());
+        }
+        return enriched.isEmpty() ? Map.of() : enriched;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> extractLatestWorkerMetadataFromArtifacts(TaskRuntimeContext ctx) {
+        if (ctx == null || ctx.recentArtifacts() == null || ctx.recentArtifacts().isEmpty()) {
+            return Map.of();
         }
         for (Artifact artifact : ctx.recentArtifacts()) {
             if (artifact == null || artifact.metadata() == null || artifact.metadata().isEmpty()) {
@@ -586,6 +636,225 @@ public class ControlNodeGraph {
             }
         }
         return Map.of();
+    }
+
+    private RuntimeFactSet buildJudgmentFactSet(Task task,
+                                                TaskRuntimeContext runtimeContext,
+                                                String latestOutput,
+                                                Map<String, Object> latestWorkerMetadata) {
+        RuntimeFactSet.ExecutionBoundary executionBoundary = buildExecutionBoundary(latestWorkerMetadata);
+        WorkerRouter.RouteResult routePreview = buildRoutePreview(task, latestWorkerMetadata);
+        Decision executionJudgment = latestDecision(runtimeContext, "execution_judgment");
+        Decision completionJudgment = latestDecision(runtimeContext, "completion_judgment");
+        return new RuntimeFactSet(
+            task != null ? task.id() : "",
+            task != null ? task.sessionId() : "",
+            task != null ? task.status() : "",
+            task != null ? task.controlNode() : "",
+            task != null ? task.assignedWorker() : "",
+            firstNonBlank(latestOutput),
+            executionJudgment != null && executionJudgment.metadata() != null
+                ? stringValue(executionJudgment.metadata().get("action"))
+                : null,
+            firstNonBlank(
+                executionJudgment != null && executionJudgment.metadata() != null
+                    ? stringValue(executionJudgment.metadata().get("next_step"))
+                    : null,
+                completionJudgment != null && completionJudgment.metadata() != null
+                    ? stringValue(completionJudgment.metadata().get("suggested_next_action"))
+                    : null,
+                task != null ? task.nextStep() : null
+            ),
+            runtimeContext,
+            runtimeContext != null ? runtimeContext.latestPacket() : null,
+            runtimeContext != null ? runtimeContext.latestCheckpoint() : null,
+            executionJudgment,
+            completionJudgment,
+            List.of(),
+            executionBoundary,
+            routePreview,
+            buildJudgmentFactMetadata(runtimeContext, latestWorkerMetadata, executionBoundary, routePreview)
+        );
+    }
+
+    private RuntimeFactSet.ExecutionBoundary buildExecutionBoundary(Map<String, Object> latestWorkerMetadata) {
+        if (latestWorkerMetadata == null || latestWorkerMetadata.isEmpty()) {
+            return null;
+        }
+        String executionId = firstNonBlank(
+            metadataString(latestWorkerMetadata, "execution_id"),
+            metadataString(latestWorkerMetadata, "tool_invocation_id")
+        );
+        String executionStatus = firstNonBlank(
+            metadataString(latestWorkerMetadata, "execution_status"),
+            metadataString(latestWorkerMetadata, "tool_chain_termination_reason")
+        );
+        Long durationMs = metadataLong(latestWorkerMetadata, "execution_duration_ms");
+        if (durationMs == null) {
+            durationMs = metadataLong(latestWorkerMetadata, "duration_ms");
+        }
+        List<String> toolInvocationIds = metadataStringList(latestWorkerMetadata, "tool_invocation_ids");
+        Integer toolInvocationCount = metadataInt(latestWorkerMetadata, "tool_chain_step_count");
+        if ((executionId == null || executionId.isBlank())
+            && (executionStatus == null || executionStatus.isBlank())
+            && toolInvocationIds.isEmpty()
+            && toolInvocationCount == null) {
+            return null;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        copyMetadataKey(latestWorkerMetadata, metadata, "tool_execution_mode");
+        copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_step_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_termination_reason");
+        copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_trace");
+        copyMetadataKey(latestWorkerMetadata, metadata, "evidence_refs");
+        copyMetadataKey(latestWorkerMetadata, metadata, "unfinished_items");
+        copyMetadataKey(latestWorkerMetadata, metadata, "grounded_output_present");
+        copyMetadataKey(latestWorkerMetadata, metadata, "missing_required_current_round_write");
+        return new RuntimeFactSet.ExecutionBoundary(
+            firstNonBlank(executionId, ""),
+            firstNonBlank(executionStatus, ""),
+            metadataString(latestWorkerMetadata, "execution_started_at"),
+            metadataString(latestWorkerMetadata, "execution_finished_at"),
+            durationMs,
+            firstNonBlank(
+                metadataString(latestWorkerMetadata, "selected_worker"),
+                metadataString(latestWorkerMetadata, "executor_worker")
+            ),
+            toolInvocationIds,
+            toolInvocationCount,
+            buildExecutionTraceSummary(latestWorkerMetadata),
+            metadata
+        );
+    }
+
+    private WorkerRouter.RouteResult buildRoutePreview(Task task, Map<String, Object> latestWorkerMetadata) {
+        if ((latestWorkerMetadata == null || latestWorkerMetadata.isEmpty()) && router == null) {
+            return null;
+        }
+        String selectedWorker = firstNonBlank(
+            metadataString(latestWorkerMetadata, "selected_worker"),
+            metadataString(latestWorkerMetadata, "executor_worker"),
+            task != null ? task.assignedWorker() : null
+        );
+        String routeSource = firstNonBlank(
+            metadataString(latestWorkerMetadata, "route_source"),
+            selectedWorker != null ? "judgment_context" : null
+        );
+        String routeReason = firstNonBlank(
+            metadataString(latestWorkerMetadata, "why_selected"),
+            metadataString(latestWorkerMetadata, "preassigned_selection_reason")
+        );
+        String selectedModelTier = metadataString(latestWorkerMetadata, "selected_model_tier");
+        String selectedExecutionRole = metadataString(latestWorkerMetadata, "execution_role");
+        String selectionScope = resolveSelectionScope(task, selectedExecutionRole);
+        List<String> candidateWorkers = metadataStringList(latestWorkerMetadata, "candidate_workers");
+        if (selectedWorker == null && routeSource == null && routeReason == null
+            && selectedModelTier == null && selectedExecutionRole == null && candidateWorkers.isEmpty()) {
+            return router != null && task != null ? router.selectWorker(task) : null;
+        }
+        return new WorkerRouter.RouteResult(
+            task != null ? task.id() : null,
+            selectedWorker,
+            List.of(),
+            routeReason,
+            routeSource,
+            metadataString(task != null ? task.metadata() : null, "task_type"),
+            metadataString(latestWorkerMetadata, "preferred_worker_hint"),
+            Boolean.parseBoolean(metadataString(latestWorkerMetadata, "learning_hint_applied")),
+            candidateWorkers,
+            metadataString(latestWorkerMetadata, "selected_worker_type"),
+            selectedModelTier,
+            selectedExecutionRole,
+            selectionScope,
+            routeReason,
+            metadataString(latestWorkerMetadata, "fallback_reason")
+        );
+    }
+
+    private Map<String, Object> buildJudgmentFactMetadata(TaskRuntimeContext runtimeContext,
+                                                          Map<String, Object> latestWorkerMetadata,
+                                                          RuntimeFactSet.ExecutionBoundary executionBoundary,
+                                                          WorkerRouter.RouteResult routePreview) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("has_runtime_context", runtimeContext != null);
+        metadata.put("has_latest_packet", runtimeContext != null && runtimeContext.latestPacket() != null);
+        metadata.put("has_latest_checkpoint", runtimeContext != null && runtimeContext.latestCheckpoint() != null);
+        metadata.put("has_execution_boundary", executionBoundary != null);
+        metadata.put("has_route_preview", routePreview != null);
+        if (latestWorkerMetadata != null && !latestWorkerMetadata.isEmpty()) {
+            metadata.put("has_latest_worker_metadata", true);
+        }
+        if (executionBoundary != null) {
+            metadata.put("execution_id", executionBoundary.executionId());
+            metadata.put("execution_status", executionBoundary.executionStatus());
+            metadata.put("execution_duration_ms", executionBoundary.durationMs());
+            metadata.put("execution_tool_invocation_count", executionBoundary.toolInvocationCount());
+            metadata.put("execution_trace_summary", executionBoundary.traceSummary());
+        }
+        if (routePreview != null) {
+            putIfNonBlank(metadata, "route_source", routePreview.routeSource());
+            putIfNonBlank(metadata, "selected_worker", routePreview.selectedWorker());
+            putIfNonBlank(metadata, "selected_model_tier", routePreview.selectedModelTier());
+            putIfNonBlank(metadata, "execution_role", routePreview.selectedExecutionRole());
+            putIfNonBlank(metadata, "selection_scope", routePreview.selectionScope());
+            putIfNonBlank(metadata, "why_selected", routePreview.whySelected());
+            putIfNonBlank(metadata, "fallback_reason", routePreview.fallbackReason());
+        }
+        return metadata;
+    }
+
+    private Decision latestDecision(TaskRuntimeContext runtimeContext, String decisionType) {
+        if (runtimeContext == null || runtimeContext.recentDecisions() == null || decisionType == null || decisionType.isBlank()) {
+            return null;
+        }
+        return runtimeContext.recentDecisions().stream()
+            .filter(decision -> decision != null && decisionType.equals(decision.decisionType()))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private String buildExecutionTraceSummary(Map<String, Object> latestWorkerMetadata) {
+        Integer stepCount = metadataInt(latestWorkerMetadata, "tool_chain_step_count");
+        String terminationReason = metadataString(latestWorkerMetadata, "tool_chain_termination_reason");
+        List<String> toolNames = toolNamesFromTrace(latestWorkerMetadata != null
+            ? latestWorkerMetadata.get("tool_chain_trace")
+            : null);
+        if (stepCount == null && terminationReason == null && toolNames.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder();
+        if (stepCount != null) {
+            sb.append(stepCount).append(" step").append(stepCount == 1 ? "" : "s");
+        }
+        if (terminationReason != null && !terminationReason.isBlank()) {
+            if (!sb.isEmpty()) {
+                sb.append(" · ");
+            }
+            sb.append(terminationReason);
+        }
+        if (!toolNames.isEmpty()) {
+            if (!sb.isEmpty()) {
+                sb.append(" · ");
+            }
+            sb.append(String.join(" -> ", toolNames));
+        }
+        return sb.toString();
+    }
+
+    private List<String> toolNamesFromTrace(Object traceValue) {
+        if (!(traceValue instanceof List<?> rawTrace) || rawTrace.isEmpty()) {
+            return List.of();
+        }
+        List<String> toolNames = new java.util.ArrayList<>();
+        for (Object entry : rawTrace) {
+            if (entry instanceof Map<?, ?> map) {
+                Object toolName = map.get("tool_name");
+                if (toolName != null && !toolName.toString().isBlank()) {
+                    toolNames.add(toolName.toString());
+                }
+            }
+        }
+        return toolNames;
     }
 
     private boolean hasMeaningfulOutput(WorkerExecutionResult result) {
@@ -738,7 +1007,9 @@ public class ControlNodeGraph {
         if (router == null) {
             return null;
         }
-        return router.selectWorker(withMetadataEntries(task, "orchestration_stage", "execution_pending"));
+        // 规划阶段当前的 assignedWorker 是 planner，本轮为 executor 选型时不能把它当成显式 pin。
+        Task executionSelectionTask = task.withAssignedWorker(null);
+        return router.selectWorker(withMetadataEntries(executionSelectionTask, "orchestration_stage", "execution_pending"));
     }
 
     private Task markOrchestrationCompleted(Task task) {
@@ -952,6 +1223,58 @@ public class ControlNodeGraph {
         return value == null ? null : value.toString();
     }
 
+    private Integer metadataInt(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Long metadataLong(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value.toString());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object value = metadata.get(key);
+        if (!(value instanceof List<?> rawList) || rawList.isEmpty()) {
+            return List.of();
+        }
+        return rawList.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(Object::toString)
+            .filter(item -> !item.isBlank())
+            .toList();
+    }
+
     private String mergeReasons(String left, String right) {
         String normalizedLeft = firstNonBlank(left);
         String normalizedRight = firstNonBlank(right);
@@ -972,6 +1295,30 @@ public class ControlNodeGraph {
                 ? "task already assigned to worker=" + task.assignedWorker()
                 : null
         );
+    }
+
+    private MountedContextPromptMetrics buildJudgmentPromptMetrics(Task task, TaskRuntimeContext context) {
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(task);
+        String mountedPrompt = renderingMode.shouldRenderMountedPrompt()
+            ? JUDGMENT_PROMPT_RENDERER.render(context)
+            : "";
+        return MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt);
+    }
+
+    private Map<String, Object> withJudgmentPromptMetadata(Map<String, Object> metadata,
+                                                           MountedContextPromptMetrics metrics) {
+        if (metrics == null) {
+            return metadata;
+        }
+        Map<String, Object> enriched = metadata == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(metadata);
+        for (Map.Entry<String, Object> entry : metrics.toMetadata().entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+                enriched.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return enriched;
     }
 
     private Map<String, Object> buildWorkerArtifactMetadata(WorkerExecutionResult executionResult, Object... entries) {
@@ -1031,10 +1378,24 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "selected_model_tier");
         copyMetadataKey(source, selected, "execution_role");
         copyMetadataKey(source, selected, "why_selected");
+        copyMetadataKey(source, selected, "candidate_workers");
         copyMetadataKey(source, selected, "preferred_worker_hint");
         copyMetadataKey(source, selected, "learning_hint_applied");
         copyMetadataKey(source, selected, "fallback_reason");
         copyMetadataKey(source, selected, "route_source");
+        copyMetadataKey(source, selected, "provider_id");
+        copyMetadataKey(source, selected, "execution_backend");
+        copyMetadataKey(source, selected, "execution_id");
+        copyMetadataKey(source, selected, "execution_started_at");
+        copyMetadataKey(source, selected, "execution_finished_at");
+        copyMetadataKey(source, selected, "execution_duration_ms");
+        copyMetadataKey(source, selected, "duration_ms");
+        copyMetadataKey(source, selected, "execution_status");
+        copyMetadataKey(source, selected, "tool_invocation_id");
+        copyMetadataKey(source, selected, "tool_invocation_ids");
+        copyMetadataKey(source, selected, "provider_session_id");
+        copyMetadataKey(source, selected, "provider_thread_id");
+        copyMetadataKey(source, selected, "resume_provider_session_id");
         copyMetadataKey(source, selected, "model_mode");
         copyMetadataKey(source, selected, "orchestration_stage");
         copyMetadataKey(source, selected, "planner_worker");
@@ -1056,6 +1417,8 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "output_dir_entry_count");
         copyMetadataKey(source, selected, "file_backed_artifact");
         copyMetadataKey(source, selected, "directory_backed_artifact");
+        copyMetadataKey(source, selected, "evidence_refs");
+        copyMetadataKey(source, selected, "unfinished_items");
         copyMetadataKey(source, selected, "grounded_output_present");
         copyMetadataKey(source, selected, "grounding_mode");
         copyMetadataKey(source, selected, "more_declared_rounds_remain");
@@ -1070,6 +1433,28 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "tool_chain_termination_reason");
         copyMetadataKey(source, selected, "tool_chain_trace");
         return selected;
+    }
+
+    private Task mergeProviderContinuationMetadata(Task task, WorkerExecutionResult executionResult) {
+        if (task == null || executionResult == null || executionResult.metadata() == null || executionResult.metadata().isEmpty()) {
+            return task;
+        }
+        Map<String, Object> metadata = executionResult.metadata();
+        String providerId = metadataString(metadata, "provider_id");
+        String executionBackend = metadataString(metadata, "execution_backend");
+        String providerSessionId = metadataString(metadata, "provider_session_id");
+        String providerThreadId = metadataString(metadata, "provider_thread_id");
+        String resumeProviderSessionId = metadataString(metadata, "resume_provider_session_id");
+        return withMetadataEntries(task,
+            "provider_id", providerId,
+            "execution_backend", executionBackend,
+            "provider_session_id", providerSessionId,
+            "provider_thread_id", providerThreadId,
+            "resume_provider_session_id", resumeProviderSessionId,
+            "codex_thread_id", "codex".equalsIgnoreCase(providerId)
+                ? firstNonBlank(providerThreadId, providerSessionId)
+                : null
+        );
     }
 
     private void copyMetadataKey(Map<String, Object> source, Map<String, Object> target, String key) {
@@ -1136,6 +1521,13 @@ public class ControlNodeGraph {
             }
         }
         return metadata;
+    }
+
+    private void putIfNonBlank(Map<String, Object> target, String key, String value) {
+        if (target == null || key == null || key.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        target.put(key, value);
     }
 
     private record OrchestrationJudgment(

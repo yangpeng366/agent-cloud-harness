@@ -3,6 +3,7 @@ package com.agentcloud.runtime.context;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -140,6 +141,85 @@ class MountedContextPromptRendererTest {
         assertFalse(prompt.contains("null"));
         assertFalse(prompt.contains("Artifact 4 ->"));
         assertTrue(prompt.contains("..."));
+    }
+
+    @Test
+    void renderAppliesPerPanelCapsAndHandleOnlySectionsStayCompact() {
+        String longSummary = "archive handle summary should stay out of the rendered line because handle panels must remain compact. "
+            .repeat(5);
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_budgeted",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.ACTIVE,
+                    "Active",
+                    List.of(
+                        object("active_1", "Active 1", "第一条 active", ContextRetentionState.HOT_RAW),
+                        object("active_2", "Active 2", "第二条 active", ContextRetentionState.HOT_RAW),
+                        object("active_3", "Active 3", "第三条 active", ContextRetentionState.HOT_RAW),
+                        object("active_4", "Active 4", "第四条 active", ContextRetentionState.HOT_RAW),
+                        object("active_5", "Active 5", "第五条 active", ContextRetentionState.HOT_RAW),
+                        object("active_6", "Active 6", "第六条 active，不应完整展开", ContextRetentionState.HOT_RAW)
+                    )
+                ),
+                new MountedContextPanel(
+                    MountedContextPanelName.ARCHIVE_HANDLES,
+                    "Archive Handles",
+                    List.of(
+                        object("archive_1", "Archive Handle 1", longSummary, ContextRetentionState.ARCHIVED_HANDLE),
+                        object("archive_2", "Archive Handle 2", longSummary, ContextRetentionState.ARCHIVED_HANDLE),
+                        object("archive_3", "Archive Handle 3", longSummary, ContextRetentionState.ARCHIVED_HANDLE)
+                    )
+                )
+            ),
+            List.of()
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+
+        assertTrue(prompt.contains("Active (6)"));
+        assertTrue(prompt.contains("... +1 more"));
+        assertTrue(prompt.contains("Active 5"));
+        assertFalse(prompt.contains("Active 6 ->"));
+        assertTrue(prompt.contains("Archive Handles (3)"));
+        assertTrue(prompt.contains("artifact/archived_handle/Archive Handle 1"));
+        assertFalse(prompt.contains("Archive Handle 1 ->"));
+        assertFalse(prompt.contains(longSummary.substring(0, 40)));
+        assertTrue(prompt.contains("... +1 more"));
+    }
+
+    @Test
+    void renderBoundsSelectionTraceEntries() {
+        List<String> selectionTrace = new ArrayList<>();
+        selectionTrace.add("compat_mode=task_runtime_context_preserved");
+        selectionTrace.add("pinned=1");
+        selectionTrace.add("active=2");
+        selectionTrace.add("evidence=3");
+        selectionTrace.add("archive_handles=4");
+        selectionTrace.add("very_long_trace=" + "x".repeat(260));
+
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_trace_budget",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(object("goal", "Goal", "trace budget", ContextRetentionState.PINNED))
+                )
+            ),
+            selectionTrace
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+
+        assertTrue(prompt.contains("Mounted Context Selection Trace:"));
+        assertTrue(prompt.contains("compat_mode=task_runtime_context_preserved"));
+        assertTrue(prompt.contains("evidence=3"));
+        assertFalse(prompt.contains("archive_handles=4"));
+        assertFalse(prompt.contains("very_long_trace="));
+        assertTrue(prompt.contains("... +2 more"));
     }
 
     private ContextObject object(String id,

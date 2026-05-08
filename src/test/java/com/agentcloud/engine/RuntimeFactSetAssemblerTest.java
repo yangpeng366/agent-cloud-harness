@@ -147,11 +147,24 @@ class RuntimeFactSetAssemblerTest {
         assertEquals("review generated draft", facts.recommendedNextStep());
         assertEquals(1, facts.toolInvocations().size());
         assertEquals("write_file", facts.toolInvocations().get(0).toolName());
+        assertNotNull(facts.executionBoundary());
+        assertEquals("exec_1", facts.executionBoundary().executionId());
+        assertEquals("codex", facts.executionBoundary().workerId());
+        assertEquals("succeeded", facts.executionBoundary().executionStatus());
+        assertEquals(1, facts.executionBoundary().toolInvocationCount());
+        assertEquals(List.of("tool_1"), facts.executionBoundary().toolInvocationIds());
+        assertEquals("1 tool call · succeeded · write_file", facts.executionBoundary().traceSummary());
         assertNotNull(facts.routePreview());
         assertEquals("codex", facts.routePreview().selectedWorker());
         assertTrue((Boolean) facts.metadata().get("has_runtime_context"));
         assertTrue((Boolean) facts.metadata().get("has_execution_judgment"));
         assertTrue((Boolean) facts.metadata().get("has_completion_judgment"));
+        assertTrue((Boolean) facts.metadata().get("has_execution_boundary"));
+        assertEquals("exec_1", facts.metadata().get("execution_id"));
+        assertEquals("succeeded", facts.metadata().get("execution_status"));
+        assertEquals(21L, facts.metadata().get("execution_duration_ms"));
+        assertEquals(1, facts.metadata().get("execution_tool_invocation_count"));
+        assertEquals("1 tool call · succeeded · write_file", facts.metadata().get("execution_trace_summary"));
         assertFalse((Boolean) facts.metadata().get("has_latest_packet"));
     }
 
@@ -166,6 +179,7 @@ class RuntimeFactSetAssemblerTest {
         assertEquals("", facts.latestOutput());
         assertEquals(List.of(), facts.toolInvocations());
         assertEquals(Map.of(), facts.metadata());
+        assertEquals(null, facts.executionBoundary());
     }
 
     private WorkerRouter routerWithCodex() {

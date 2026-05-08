@@ -61,6 +61,7 @@ public class RuntimeFactSetAssembler {
             task.nextStep()
         );
 
+        RuntimeFactSet.ExecutionBoundary executionBoundary = buildExecutionBoundary(toolInvocations);
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("tool_invocation_count", toolInvocations.size());
         metadata.put("has_runtime_context", runtimeContext != null);
@@ -68,6 +69,14 @@ public class RuntimeFactSetAssembler {
         metadata.put("has_latest_checkpoint", runtimeContext != null && runtimeContext.latestCheckpoint() != null);
         metadata.put("has_execution_judgment", executionJudgment != null);
         metadata.put("has_completion_judgment", completionJudgment != null);
+        metadata.put("has_execution_boundary", executionBoundary != null);
+        if (executionBoundary != null) {
+            metadata.put("execution_id", executionBoundary.executionId());
+            metadata.put("execution_status", executionBoundary.executionStatus());
+            metadata.put("execution_duration_ms", executionBoundary.durationMs());
+            metadata.put("execution_tool_invocation_count", executionBoundary.toolInvocationCount());
+            metadata.put("execution_trace_summary", executionBoundary.traceSummary());
+        }
 
         return new RuntimeFactSet(
             task.id(),
@@ -84,9 +93,106 @@ public class RuntimeFactSetAssembler {
             executionJudgment,
             completionJudgment,
             toolInvocations,
+            executionBoundary,
             routePreview,
             metadata
         );
+    }
+
+    private RuntimeFactSet.ExecutionBoundary buildExecutionBoundary(List<ToolInvocationRecord> toolInvocations) {
+        if (toolInvocations == null || toolInvocations.isEmpty()) {
+            return null;
+        }
+        ToolInvocationRecord latest = toolInvocations.get(0);
+        String executionId = firstNonBlank(latest.executionId());
+        if (executionId == null) {
+            return null;
+        }
+        List<ToolInvocationRecord> sameExecution = toolInvocations.stream()
+            .filter(record -> record != null && executionId.equals(firstNonBlank(record.executionId())))
+            .toList();
+        List<String> toolInvocationIds = sameExecution.stream()
+            .map(ToolInvocationRecord::id)
+            .filter(id -> id != null && !id.isBlank())
+            .toList();
+        long durationMs = sameExecution.stream()
+            .map(ToolInvocationRecord::elapsedMs)
+            .filter(value -> value != null && value > 0)
+            .mapToLong(Integer::longValue)
+            .sum();
+        String executionStatus = firstNonBlank(
+            stringMetadata(latest.metadata(), "execution_status"),
+            latest.status(),
+            latest.success() ? "succeeded" : "failed"
+        );
+        String workerId = firstNonBlank(latest.workerId());
+        String startedAt = sameExecution.stream()
+            .map(ToolInvocationRecord::createdAt)
+            .filter(java.util.Objects::nonNull)
+            .min(java.time.Instant::compareTo)
+            .map(java.time.Instant::toString)
+            .orElse(null);
+        String finishedAt = sameExecution.stream()
+            .map(ToolInvocationRecord::createdAt)
+            .filter(java.util.Objects::nonNull)
+            .max(java.time.Instant::compareTo)
+            .map(java.time.Instant::toString)
+            .orElse(null);
+        String traceSummary = buildExecutionTraceSummary(executionStatus, sameExecution);
+
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_execution_mode");
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_chain_step_count");
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_chain_termination_reason");
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_chain_trace");
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_invocation_ids");
+        copyMetadataIfPresent(metadata, latest.metadata(), "tool_scope");
+        metadata.put("latest_tool_name", latest.toolName());
+
+        return new RuntimeFactSet.ExecutionBoundary(
+            executionId,
+            executionStatus,
+            startedAt,
+            finishedAt,
+            durationMs > 0 ? durationMs : null,
+            workerId,
+            toolInvocationIds,
+            sameExecution.size(),
+            traceSummary,
+            metadata
+        );
+    }
+
+    private String buildExecutionTraceSummary(String executionStatus, List<ToolInvocationRecord> sameExecution) {
+        if (sameExecution == null || sameExecution.isEmpty()) {
+            return null;
+        }
+        String tools = sameExecution.stream()
+            .map(ToolInvocationRecord::toolName)
+            .filter(name -> name != null && !name.isBlank())
+            .distinct()
+            .reduce((left, right) -> left + " -> " + right)
+            .orElse("tool_execution");
+        return sameExecution.size() + " tool call" + (sameExecution.size() == 1 ? "" : "s")
+            + " · " + firstNonBlank(executionStatus, "unknown")
+            + " · " + tools;
+    }
+
+    private void copyMetadataIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {
+        if (target == null || source == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private String stringMetadata(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        return stringValue(metadata.get(key));
     }
 
     private Decision latestDecision(TaskRuntimeContext runtimeContext, String decisionType) {
