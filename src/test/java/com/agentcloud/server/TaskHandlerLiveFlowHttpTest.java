@@ -46,6 +46,7 @@ import java.util.concurrent.Executors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TaskHandlerLiveFlowHttpTest {
 
@@ -232,12 +233,19 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(1, ((Number) timelineByStage.get("execution").get("mounted_context_rendered_selection_trace_count")).intValue());
             assertEquals(0, ((Number) timelineByStage.get("execution").get("mounted_context_hidden_selection_trace_count")).intValue());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution").get("mounted_context_budget_truncated"));
+            assertEquals("proof=tool:exec_http_cognition_1, evidence:tool:read_file:input.txt",
+                timelineByStage.get("execution").get("proof_summary"));
+            assertTrue(String.valueOf(timelineByStage.get("execution").get("summary")).contains("proof=tool:exec_http_cognition_1"));
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("aligned_with_previous_prompt_mode"));
             assertEquals(3, ((Number) timelineByStage.get("execution_judgment").get("mounted_context_rendered_object_count")).intValue());
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("mounted_context_budget_truncated"));
+            assertEquals("proof=evidence:tool:read_file:input.txt",
+                timelineByStage.get("execution_judgment").get("proof_summary"));
             assertEquals(1, ((Number) timelineByStage.get("completion_judgment").get("mounted_context_hidden_object_count")).intValue());
+            assertEquals("proof=evidence:tool:read_file:input.txt",
+                timelineByStage.get("completion_judgment").get("proof_summary"));
             assertEquals("codex", timelineByStage.get("route").get("worker_id"));
             assertNotNull(traceSurface);
             assertEquals("exec_http_cognition_1", traceExecution.get("execution_id"));
@@ -245,6 +253,8 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(1, ((Number) traceExecution.get("mounted_context_selection_trace_count")).intValue());
             assertEquals(3, ((Number) traceExecution.get("mounted_context_rendered_object_count")).intValue());
             assertEquals(Boolean.TRUE, traceExecution.get("mounted_context_budget_truncated"));
+            assertEquals("proof=tool:exec_http_cognition_1, evidence:tool:read_file:input.txt",
+                traceExecution.get("proof_summary"));
             assertEquals(List.of("tool:read_file:input.txt"), traceExecution.get("evidence_refs"));
         }
     }

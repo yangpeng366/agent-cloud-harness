@@ -448,13 +448,19 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedEvidenceCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedArchiveCount());
             assertEquals(List.of("exec_fact_1"), trace.runtimeCognitionSurface().execution().toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                trace.runtimeCognitionSurface().execution().proofSummary());
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeCognitionSurface().execution().evidenceRefs());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedRenderUsed());
             assertEquals(2, trace.runtimeCognitionSurface().executionJudgment().mountedContextNonEmptyPanelCount());
             assertEquals(3, trace.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedContextBudgetTruncated());
             assertEquals(List.of("exec_fact_1"), trace.runtimeCognitionSurface().executionJudgment().toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                trace.runtimeCognitionSurface().executionJudgment().proofSummary());
             assertEquals(2, trace.runtimeCognitionSurface().completionJudgment().mountedActiveCount());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                trace.runtimeCognitionSurface().completionJudgment().proofSummary());
             assertEquals(Boolean.TRUE,
                 trace.runtimeCognitionSurface().alignment().routeWorkerMatchesExecutionWorker());
             assertEquals(Boolean.TRUE,
@@ -479,10 +485,16 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().mountedContextBudgetTruncated());
             assertEquals(2, flow.runtimeCognitionSurface().execution().mountedActiveCount());
             assertEquals(List.of("exec_fact_1"), flow.runtimeCognitionSurface().execution().toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                flow.runtimeCognitionSurface().execution().proofSummary());
             assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
             assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
             assertEquals(3, flow.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                flow.runtimeCognitionSurface().executionJudgment().proofSummary());
             assertEquals(List.of("exec_fact_1"), flow.runtimeCognitionSurface().completionJudgment().toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                flow.runtimeCognitionSurface().completionJudgment().proofSummary());
             assertEquals(1, flow.runtimeCognitionSurface().completionJudgment().mountedArchiveCount());
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().completionJudgment().mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE,
@@ -502,12 +514,21 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(0, timelineByStage.get("execution").mountedContextHiddenSelectionTraceCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution").mountedContextBudgetTruncated());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("execution").toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                timelineByStage.get("execution").proofSummary());
+            assertTrue(timelineByStage.get("execution").summary().contains("proof=tool:exec_fact_1"));
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
             assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("execution_judgment").toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                timelineByStage.get("execution_judgment").proofSummary());
+            assertTrue(timelineByStage.get("execution_judgment").summary().contains("proof=tool:exec_fact_1"));
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("completion_judgment").toolInvocationIds());
+            assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
+                timelineByStage.get("completion_judgment").proofSummary());
+            assertTrue(timelineByStage.get("completion_judgment").summary().contains("proof=tool:exec_fact_1"));
             assertEquals(List.of("tool:read_file:input.txt"),
                 timelineByStage.get("completion_judgment").evidenceRefs());
         }

@@ -157,6 +157,16 @@ class ControlNodeGraphOrchestrationFlowTest {
                     && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
                     && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
             ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && d.summary() != null
+                    && d.summary().contains("proof=tool:orchestrator_plan_1")
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && d.summary() != null
+                    && d.summary().contains("proof=tool:orchestrator_exec_1")
+            ));
         }
     }
 
@@ -595,7 +605,9 @@ class ControlNodeGraphOrchestrationFlowTest {
                         Map.entry("execution_role", "planner"),
                         Map.entry("execution_status", "completed"),
                         Map.entry("tool_chain_step_count", 1),
-                        Map.entry("tool_chain_termination_reason", "planner_brief_ready")
+                        Map.entry("tool_chain_termination_reason", "planner_brief_ready"),
+                        Map.entry("tool_invocation_ids", List.of("orchestrator_plan_1")),
+                        Map.entry("evidence_refs", List.of("tool:read_file:runtime-brief.md"))
                     )
                 );
             }
@@ -616,7 +628,9 @@ class ControlNodeGraphOrchestrationFlowTest {
                     Map.entry("execution_role", "executor"),
                     Map.entry("execution_status", "completed"),
                     Map.entry("tool_chain_step_count", 1),
-                    Map.entry("tool_chain_termination_reason", "executor_step_done")
+                    Map.entry("tool_chain_termination_reason", "executor_step_done"),
+                    Map.entry("tool_invocation_ids", List.of("orchestrator_exec_1")),
+                    Map.entry("evidence_refs", List.of("tool:patch_file:runtime-path.java"))
                 )
             );
         }

@@ -21,6 +21,7 @@ public record RuntimeCognitionTimelineEntryView(
     String routeSource,
     String executionStatus,
     Integer toolInvocationCount,
+    String proofSummary,
     Boolean mountedContextRendered,
     Boolean mountedContextInjected,
     Integer mountedContextPanelCount,

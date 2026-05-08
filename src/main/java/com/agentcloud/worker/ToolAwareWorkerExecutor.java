@@ -290,6 +290,21 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                     }
                 }
                 if (!toolChain.isEmpty() && !plan.needsTool()) {
+                    if (shouldAutoGroundFileWrite(worker, currentToolState)) {
+                        WorkerExecutionResult autoWriteResult = autoGroundedFileWriteFallback(
+                            context,
+                            worker,
+                            currentToolState,
+                            plan,
+                            toolChain,
+                            stepIndex,
+                            maxToolRounds,
+                            startMs
+                        );
+                        if (autoWriteResult != null) {
+                            return autoWriteResult;
+                        }
+                    }
                     if (shouldAutoGroundDirectoryWrite(worker, currentToolState)) {
                         WorkerExecutionResult autoWriteResult = autoGroundedDirectoryWriteFallback(
                             context,
@@ -316,6 +331,21 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
             String repeatedGuardReason = repeatedToolGuardReason(plan, toolChain);
             if (!repeatedGuardReason.isBlank()) {
+                if (shouldAutoGroundFileWrite(worker, currentToolState)) {
+                    WorkerExecutionResult autoWriteResult = autoGroundedFileWriteFallback(
+                        context,
+                        worker,
+                        currentToolState,
+                        plan,
+                        updateLastWhyNextStep(toolChain, repeatedGuardReason),
+                        stepIndex,
+                        maxToolRounds,
+                        startMs
+                    );
+                    if (autoWriteResult != null) {
+                        return autoWriteResult;
+                    }
+                }
                 if (toolChain.isEmpty()) {
                     return delegateWithMetadata(
                         context,
@@ -847,6 +877,81 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private WorkerExecutionResult autoGroundedFileWriteFallback(TaskRuntimeContext context,
+                                                                Worker worker,
+                                                                TaskToolState toolStateBefore,
+                                                                ToolPlan originalPlan,
+                                                                List<ToolChainStep> priorToolChain,
+                                                                int nextStepIndex,
+                                                                int maxToolRounds,
+                                                                long startMs) {
+        AutoWriteDraft draft = generateAutoWriteDraft(context, worker, toolStateBefore, originalPlan);
+        if (draft.content().isBlank()) {
+            return null;
+        }
+
+        LinkedHashMap<String, Object> writeArguments = new LinkedHashMap<>();
+        writeArguments.put("path", toolStateBefore.outputFilePath());
+        writeArguments.put("content", draft.content());
+        ToolPlan syntheticWritePlan = new ToolPlan(
+            true,
+            "write_file",
+            writeArguments,
+            "auto_grounded_required_write",
+            firstNonBlank(originalPlan.rawResponse(), draft.rawResponse())
+        );
+
+        ToolExecutionOutcome outcome = invokeTool(context, worker, syntheticWritePlan, "multi_tool_round", nextStepIndex);
+        TaskToolState toolStateAfter = inspectTaskToolState(context);
+        List<ToolChainStep> toolChain = new ArrayList<>(priorToolChain == null ? List.of() : priorToolChain);
+        toolChain.add(new ToolChainStep(
+            nextStepIndex,
+            "write_file",
+            writeArguments,
+            outcome.result().summary(),
+            firstNonBlank(draft.summary(), "auto generated grounded file write"),
+            "stop: auto grounded file write completed",
+            outcome.result().success(),
+            outcome.elapsedMs(),
+            truncate(outcome.result().output(), 1200),
+            stringValue(outcome.traceMetadata().get("tool_invocation_id"))
+        ));
+
+        long totalDurationMs = System.currentTimeMillis() - startMs;
+        WorkerExecutionResult generated = new WorkerExecutionResult(
+            firstNonBlank(draft.summary(), outcome.result().summary(), "已自动生成并写入 grounded 输出文件。"),
+            "",
+            outcome.result().success(),
+            firstNonBlank(draft.artifactTitle(), fileName(toolStateAfter.outputFilePath())),
+            draft.content(),
+            firstNonBlank(draft.suggestedNextStep(), toolStateAfter.currentRoundInstruction()),
+            draft.confidence(),
+            0,
+            totalDurationMs,
+            Map.of(
+                "parser", "auto_write_generation",
+                "auto_write_raw", truncate(draft.rawResponse(), 1200),
+                "auto_write_original_plan_reason", originalPlan.reason(),
+                "auto_write_original_plan_raw", truncate(originalPlan.rawResponse(), 1200),
+                "auto_write_content_length", draft.content().length(),
+                "auto_write_generation_mode", autoWriteGenerationMode(draft)
+            )
+        );
+
+        return attachMultiToolMetadata(
+            worker,
+            generated,
+            toolChain,
+            toolStateBefore,
+            syntheticWritePlan,
+            outcome,
+            toolStateAfter,
+            maxToolRounds,
+            "auto_grounded_required_write",
+            totalDurationMs
+        );
+    }
+
     private WorkerExecutionResult autoGroundedDirectoryWriteFallback(TaskRuntimeContext context,
                                                                      Worker worker,
                                                                      TaskToolState toolStateBefore,
@@ -1244,7 +1349,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         metadata.put("grounded_output_present", groundedArtifact);
         Object existingAutoWriteMode = metadata.get("auto_write_generation_mode");
         if (existingAutoWriteMode == null || String.valueOf(existingAutoWriteMode).isBlank()) {
-            if ("auto_grounded_directory_write".equals(terminationReason)) {
+            if ("auto_grounded_directory_write".equals(terminationReason)
+                || "auto_grounded_required_write".equals(terminationReason)) {
                 metadata.put("auto_write_generation_mode", "generated");
             }
         }
@@ -1412,6 +1518,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             sb.append(" The round stopped because the latest tool step made no usable progress.");
         } else if ("planner_no_additional_tool".equals(terminationReason)) {
             sb.append(" The planner requested finalization after the current evidence.");
+        } else if ("auto_grounded_required_write".equals(terminationReason)) {
+            sb.append(" The round auto-generated the required grounded file write after planning stopped before the final write.");
         }
         if (groundedArtifact) {
             sb.append(toolState.outputDirExists()
@@ -2912,8 +3020,14 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             }
         }
 
-        String outputFilePath = metadataString(context.task().metadata(), "output_file");
-        String outputDirPath = metadataString(context.task().metadata(), "output_dir");
+        String outputFilePath = firstNonBlank(
+            metadataString(context.task().metadata(), "output_file"),
+            metadataString(context.task().metadata(), "desired_output_file")
+        );
+        String outputDirPath = firstNonBlank(
+            metadataString(context.task().metadata(), "output_dir"),
+            metadataString(context.task().metadata(), "desired_output_dir")
+        );
         TaskToolState groundedOutputState = buildGroundedOutputState(outputFilePath, outputDirPath);
 
         int declaredRoundCount = countDeclaredRounds(context.task());
@@ -3184,6 +3298,19 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return false;
         }
         return registeredToolCapabilities(worker).contains("write_files");
+    }
+
+    private boolean shouldAutoGroundFileWrite(Worker worker, TaskToolState toolState) {
+        if (worker == null || toolState == null) {
+            return false;
+        }
+        if (!toolState.outputFileRequired() || toolState.groundedOutputExists()) {
+            return false;
+        }
+        if (toolState.outputFilePath().isBlank()) {
+            return false;
+        }
+        return registeredToolCapabilities(worker).contains("write_file");
     }
 
     private ToolPlan buildInitialProbePlan(Worker worker, TaskToolState toolState, ToolPlan originalPlan) {

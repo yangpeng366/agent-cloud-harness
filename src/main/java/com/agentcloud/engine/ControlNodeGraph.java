@@ -20,9 +20,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Runtime Control Node Graph
@@ -294,7 +296,7 @@ public class ControlNodeGraph {
         Decision judgmentRecord = new Decision(
             IdGenerator.newId("dec"), task.sessionId(), task.id(), Instant.now(),
             "execution_judgment",
-            "Execution judgment: " + execDecision.action(),
+            appendProofSummary("Execution judgment: " + execDecision.action(), latestWorkerMetadata),
             execDecision.reason(),
             "medium", null,
             withJudgmentPromptMetadata(metadataOf(
@@ -323,7 +325,7 @@ public class ControlNodeGraph {
         Decision completionRecord = new Decision(
             IdGenerator.newId("dec"), task.sessionId(), task.id(), Instant.now(),
             "completion_judgment",
-            "Completion judgment: " + completionDecision.status(),
+            appendProofSummary("Completion judgment: " + completionDecision.status(), latestWorkerMetadata),
             completionDecision.reason(),
             "medium", null,
             withJudgmentPromptMetadata(metadataOf(
@@ -1323,6 +1325,94 @@ public class ControlNodeGraph {
             }
         }
         return enriched;
+    }
+
+    private String appendProofSummary(String baseSummary, Map<String, Object> metadata) {
+        String summary = firstNonBlank(baseSummary);
+        String proof = buildProofSummary(metadata);
+        if (summary == null) {
+            return proof;
+        }
+        if (proof == null) {
+            return summary;
+        }
+        return joinSummary(summary, proof);
+    }
+
+    private String buildProofSummary(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        appendProofSummaryParts(parts, prefixedValues("tool", metadataStringList(metadata, "tool_invocation_ids")));
+        appendProofSummaryParts(parts, prefixedValues("evidence", metadataStringList(metadata, "evidence_refs")));
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return "proof=" + String.join(", ", parts);
+    }
+
+    private void appendProofSummaryParts(List<String> target, List<String> values) {
+        if (values == null || values.isEmpty() || target.size() >= 2) {
+            return;
+        }
+        for (String value : values) {
+            String normalized = truncateProofLabel(value);
+            if (normalized == null) {
+                continue;
+            }
+            target.add(normalized);
+            if (target.size() >= 2) {
+                return;
+            }
+        }
+    }
+
+    private List<String> prefixedValues(String prefix, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            String normalized = blankToNull(value);
+            if (normalized == null) {
+                continue;
+            }
+            result.add(prefix + ":" + normalized);
+        }
+        return result;
+    }
+
+    private String truncateProofLabel(String value) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        String compact = normalized.replaceAll("\\s+", " ").trim();
+        if (compact.length() <= 72) {
+            return compact;
+        }
+        return compact.substring(0, 69) + "...";
+    }
+
+    private String joinSummary(String... parts) {
+        if (parts == null || parts.length == 0) {
+            return null;
+        }
+        return java.util.Arrays.stream(parts)
+            .map(this::blankToNull)
+            .filter(Objects::nonNull)
+            .distinct()
+            .reduce((left, right) -> left + " · " + right)
+            .orElse(null);
+    }
+
+    private String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private Map<String, Object> buildWorkerArtifactMetadata(WorkerExecutionResult executionResult, Object... entries) {

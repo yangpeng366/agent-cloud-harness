@@ -36,6 +36,7 @@ public record RuntimeCognitionSurfaceView(
         Long durationMs,
         Integer toolInvocationCount,
         List<String> toolInvocationIds,
+        String proofSummary,
         String traceSummary,
         String promptMode,
         Boolean mountedContextRendered,
@@ -87,6 +88,7 @@ public record RuntimeCognitionSurfaceView(
         Integer mountedArchiveCount,
         List<String> candidateWorkers,
         List<String> toolInvocationIds,
+        String proofSummary,
         List<String> evidenceRefs,
         List<String> unfinishedItems
     ) {}

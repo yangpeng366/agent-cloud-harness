@@ -308,3 +308,69 @@ Result:
 ### Next likely slice
 
 - carry the same proof-edge visibility into prompt/body diagnostics returned by judgment/live-flow endpoints, so rendered mounted context, runtime fact metadata, and persisted decision summaries all expose the same bounded evidence chain without requiring metadata spelunking
+
+## 10. 2026-05-08 proof summary diagnostic slice
+
+### What changed
+
+- added bounded `proof_summary` to runtime cognition execution/judgment surfaces and timeline entries so live-flow and judgment-trace payloads expose the same proof edge already present in mounted context metadata
+- folded the same bounded `proof=...` fragment into persisted `execution_judgment` and `completion_judgment` summaries, so decision summaries no longer lose tool/evidence linkage after storage
+
+### Files changed
+
+- `src/main/java/com/agentcloud/model/RuntimeCognitionSurfaceView.java`
+- `src/main/java/com/agentcloud/model/RuntimeCognitionTimelineEntryView.java`
+- `src/main/java/com/agentcloud/engine/TaskService.java`
+- `src/main/java/com/agentcloud/engine/ControlNodeGraph.java`
+- `src/test/java/com/agentcloud/engine/TaskServiceLiveFlowViewTest.java`
+- `src/test/java/com/agentcloud/server/TaskHandlerLiveFlowHttpTest.java`
+- `src/test/java/com/agentcloud/engine/ControlNodeGraphOrchestrationFlowTest.java`
+
+### Why this slice
+
+Section 9 closed the metadata and mounted-prompt side of the proof edge, but operator-facing endpoint bodies still required metadata spelunking to see the same bounded evidence chain, and stored judgment summaries still collapsed back to plain action/status text.
+
+This slice makes the three observer layers align:
+
+- mounted prompt rendering
+- live-flow / judgment-trace runtime cognition payloads
+- persisted decision summaries
+
+### Contract/result
+
+- `RuntimeCognitionSurfaceView.ExecutionSurface` now exposes nullable `proofSummary`
+- `RuntimeCognitionSurfaceView.JudgmentSurface` now exposes nullable `proofSummary`
+- `RuntimeCognitionTimelineEntryView` now exposes nullable `proofSummary`
+- `TaskService` now derives bounded proof text from `tool_invocation_ids` + `evidence_refs` for:
+  - execution surface
+  - execution/completion judgment surfaces
+  - execution/judgment/checkpoint/resume/control-action timeline entries
+  - timeline summary strings
+- `ControlNodeGraph` now appends the same bounded proof fragment into persisted execution/completion judgment summaries using latest worker metadata
+
+The proof fragment remains bounded:
+
+- max 2 parts
+- `tool:` and `evidence:` prefixes
+- labels truncated at 72 chars
+
+### Validation
+
+Ran:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -Test com.agentcloud.engine.TaskServiceLiveFlowViewTest
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -Test com.agentcloud.server.TaskHandlerLiveFlowHttpTest
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -Test com.agentcloud.engine.ControlNodeGraphOrchestrationFlowTest
+```
+
+Repo script still executed full `mvn test`.
+
+Result:
+
+- `223 tests, 0 failures`
+
+### Next likely slice
+
+- if staying on the same Phase 2B line, push proof visibility one step further into any remaining human/operator textual diagnostics that still summarize judgments without mounted evidence reopen semantics
+- otherwise, once the exact reopen-policy draft path is clarified, start the next seam around continuity-aware evidence reopen / remount policy instead of only bounded proof display

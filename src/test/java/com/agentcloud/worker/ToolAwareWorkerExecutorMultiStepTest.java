@@ -507,6 +507,124 @@ class ToolAwareWorkerExecutorMultiStepTest {
     }
 
     @Test
+    void noToolAfterEvidenceAutoWritesDesiredOutputFile() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("workspace-auto-file"));
+        Files.writeString(workspace.resolve("loop.md"), "# Loop\nGrounded source.\n");
+        Path outputFile = workspace.resolve("notes.md");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("multi-tool-auto-file.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-auto-file",
+                "codex",
+                List.of("research"),
+                List.of("read_file", "write_file"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ReadFileTool(workerRegistry, toolPolicy))
+                .register(new WriteFileTool(workerRegistry, toolPolicy));
+
+            SequencedLlmClient llmClient = new SequencedLlmClient(List.of(
+                """
+                {"needs_tool":true,"tool_name":"read_file","tool_arguments":{"path":"loop.md"},"reason":"Read the source document first."}
+                """,
+                """
+                {"needs_tool":false,"tool_name":"","tool_arguments":{},"reason":"Enough grounded evidence collected; produce the notes file now."}
+                """,
+                """
+                {"summary":"Grounded notes prepared.","artifact_title":"notes.md","content":"# Notes\\nGrounded summary from the loop doc.\\n","suggested_next_step":"","confidence":"high"}
+                """,
+                """
+                {"summary":"Grounded notes file created.","output_text":"The required notes file was written from grounded evidence.","produced_artifact":true,"artifact_title":"notes.md","artifact_content":"","suggested_next_step":"","confidence":"high"}
+                """
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_auto_file",
+                "session_multi_auto_file",
+                null,
+                "desired output file auto write",
+                "active",
+                "high",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "Create grounded notes from the loop document.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Read the source loop doc and produce grounded notes.",
+                    "desired_output_file", outputFile.toString()
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "multi tool auto file", "active"));
+            taskDao.insert(task);
+
+            TaskRuntimeContext context = new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null);
+            WorkerExecutionResult result = executor.executeOneRound(context, worker.workerId());
+
+            assertTrue(result.producedArtifact());
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals("auto_grounded_required_write", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("generated", result.metadata().get("auto_write_generation_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("grounded_output_present"));
+            assertEquals(Boolean.TRUE, result.metadata().get("file_backed_artifact"));
+            assertEquals(outputFile.toString(), result.metadata().get("output_file_path"));
+            assertTrue(Files.exists(outputFile));
+            assertEquals("# Notes\nGrounded summary from the loop doc.\n", Files.readString(outputFile));
+
+            Object rawTrace = result.metadata().get("tool_chain_trace");
+            assertInstanceOf(List.class, rawTrace);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> trace = (List<Map<String, Object>>) rawTrace;
+            assertEquals(2, trace.size());
+            assertEquals("read_file", trace.get(0).get("selected_tool"));
+            assertEquals("write_file", trace.get(1).get("selected_tool"));
+
+            List<ToolInvocationRecord> invocations = toolInvocationDao.listByTask(task.id(), 10);
+            assertEquals(2, invocations.size());
+            assertEquals("write_file", invocations.get(0).toolName());
+            assertEquals("read_file", invocations.get(1).toolName());
+        }
+    }
+
+    @Test
     void autoWriteFilesTimeoutFallsBackToMinimalRunnableScaffold() throws Exception {
         Path workspace = Files.createDirectories(tempDir.resolve("workspace-fallback"));
         Path outputDir = workspace.resolve("demo-project");

@@ -362,6 +362,12 @@ public class TaskService {
                 executionBoundary.durationMs(),
                 executionBoundary.toolInvocationCount(),
                 executionBoundary.toolInvocationIds() == null ? List.of() : executionBoundary.toolInvocationIds(),
+                proofSummary(
+                    executionBoundary.toolInvocationIds(),
+                    metadataStringList(executionMetadata, "evidence_refs").isEmpty()
+                        ? metadataStringList(runtimeMetadata, "evidence_refs")
+                        : metadataStringList(executionMetadata, "evidence_refs")
+                ),
                 blankToNull(executionBoundary.traceSummary()),
                 firstNonBlank(
                     metadataString(executionMetadata, "prompt_mode"),
@@ -554,6 +560,7 @@ public class TaskService {
             null,
             null,
             null,
+            null,
             route.candidateWorkers() == null ? List.of() : route.candidateWorkers(),
             List.of(),
             List.of(),
@@ -590,6 +597,7 @@ public class TaskService {
             null,
             blankToNull(execution.executionStatus()),
             execution.toolInvocationCount(),
+            blankToNull(execution.proofSummary()),
             execution.mountedContextRendered(),
             execution.mountedContextInjected(),
             execution.mountedContextPanelCount(),
@@ -635,6 +643,7 @@ public class TaskService {
             null,
             null,
             null,
+            blankToNull(surface.proofSummary()),
             surface.mountedContextRendered(),
             surface.mountedContextInjected(),
             surface.mountedContextPanelCount(),
@@ -721,6 +730,7 @@ public class TaskService {
             null,
             null,
             null,
+            proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
             metadataBoolean(payload, "mounted_context_rendered", Map.of()),
             metadataBoolean(payload, "mounted_context_injected", Map.of()),
             metadataInteger(payload, "mounted_context_panel_count"),
@@ -774,6 +784,7 @@ public class TaskService {
             null,
             null,
             null,
+            proofSummary(metadataStringList(refinedPacket, "tool_invocation_ids"), metadataStringList(refinedPacket, "evidence_refs")),
             null,
             null,
             null,
@@ -827,6 +838,7 @@ public class TaskService {
             null,
             blankToNull(resumePacket.currentStatus()),
             null,
+            proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
             null,
             null,
             null,
@@ -889,6 +901,7 @@ public class TaskService {
         String status = blankToNull(execution.executionStatus());
         String promptMode = blankToNull(execution.promptMode());
         String trace = blankToNull(execution.traceSummary());
+        String proof = blankToNull(execution.proofSummary());
         String tools = execution.toolInvocationCount() == null ? null : execution.toolInvocationCount() + " tools";
         String budget = mountedBudgetSummary(
             execution.mountedContextRenderedObjectCount(),
@@ -898,8 +911,8 @@ public class TaskService {
             execution.mountedContextBudgetTruncated()
         );
         return firstNonBlank(
-            joinSummary(status, promptMode, tools, budget, trace),
-            joinSummary(status, promptMode, budget, trace),
+            joinSummary(status, promptMode, tools, budget, proof, trace),
+            joinSummary(status, promptMode, budget, proof, trace),
             status
         );
     }
@@ -909,6 +922,7 @@ public class TaskService {
         String promptMode = surface != null ? blankToNull(surface.promptMode()) : null;
         String action = decision != null ? metadataString(decision.metadata(), "action") : null;
         String status = decision != null ? metadataString(decision.metadata(), "status") : null;
+        String proof = surface != null ? blankToNull(surface.proofSummary()) : null;
         String budget = surface == null ? null : mountedBudgetSummary(
             surface.mountedContextRenderedObjectCount(),
             surface.mountedContextHiddenObjectCount(),
@@ -917,8 +931,8 @@ public class TaskService {
             surface.mountedContextBudgetTruncated()
         );
         return firstNonBlank(
-            joinSummary(promptMode, action, status, budget),
-            joinSummary(promptMode, status, budget),
+            joinSummary(promptMode, action, status, budget, proof),
+            joinSummary(promptMode, status, budget, proof),
             promptMode
         );
     }
@@ -1039,6 +1053,59 @@ public class TaskService {
             .orElse(null);
     }
 
+    private String proofSummary(List<String> toolInvocationIds, List<String> evidenceRefs) {
+        List<String> parts = new ArrayList<>();
+        appendProofSummaryParts(parts, prefixedValues("tool", toolInvocationIds));
+        appendProofSummaryParts(parts, prefixedValues("evidence", evidenceRefs));
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return "proof=" + String.join(", ", parts);
+    }
+
+    private void appendProofSummaryParts(List<String> target, List<String> values) {
+        if (values == null || values.isEmpty() || target.size() >= 2) {
+            return;
+        }
+        for (String value : values) {
+            String normalized = truncateProofLabel(value);
+            if (normalized == null) {
+                continue;
+            }
+            target.add(normalized);
+            if (target.size() >= 2) {
+                return;
+            }
+        }
+    }
+
+    private List<String> prefixedValues(String prefix, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            String normalized = blankToNull(value);
+            if (normalized == null) {
+                continue;
+            }
+            result.add(prefix + ":" + normalized);
+        }
+        return result;
+    }
+
+    private String truncateProofLabel(String value) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        String compact = normalized.replaceAll("\\s+", " ").trim();
+        if (compact.length() <= 72) {
+            return compact;
+        }
+        return compact.substring(0, 69) + "...";
+    }
+
     private RuntimeCognitionSurfaceView.JudgmentSurface buildJudgmentSurface(Decision decision,
                                                                              Map<String, Object> runtimeMetadata) {
         if (decision == null) {
@@ -1124,6 +1191,14 @@ public class TaskService {
             metadataStringList(decisionMetadata, "tool_invocation_ids").isEmpty()
                 ? metadataStringList(runtimeMetadata, "tool_invocation_ids")
                 : metadataStringList(decisionMetadata, "tool_invocation_ids"),
+            proofSummary(
+                metadataStringList(decisionMetadata, "tool_invocation_ids").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "tool_invocation_ids")
+                    : metadataStringList(decisionMetadata, "tool_invocation_ids"),
+                metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "evidence_refs")
+                    : metadataStringList(decisionMetadata, "evidence_refs")
+            ),
             metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
                 ? metadataStringList(runtimeMetadata, "evidence_refs")
                 : metadataStringList(decisionMetadata, "evidence_refs"),
