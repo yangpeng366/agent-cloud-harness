@@ -252,3 +252,59 @@ When done, report only these sections:
 
 ### SuggestedHandoffEdits
 - what to append/update in this handoff file
+
+## 9. 2026-05-08 proof edge continuity slice
+
+### What changed
+
+- threaded `tool_invocation_ids` through live-flow runtime cognition diagnostics instead of leaving them implicit inside `executionBoundary` or loose metadata
+- made mounted-context prompt rendering expose bounded proof edges for evidence objects, so prompt-visible evidence now surfaces concrete tool links rather than only summaries
+
+### Files changed
+
+- `src/main/java/com/agentcloud/model/RuntimeCognitionSurfaceView.java`
+- `src/main/java/com/agentcloud/model/RuntimeCognitionTimelineEntryView.java`
+- `src/main/java/com/agentcloud/engine/TaskService.java`
+- `src/main/java/com/agentcloud/runtime/context/MountedContextPromptRenderer.java`
+- `src/test/java/com/agentcloud/engine/TaskServiceLiveFlowViewTest.java`
+- `src/test/java/com/agentcloud/runtime/context/MountedContextPromptRendererTest.java`
+
+### Why this slice
+
+The previous Phase 2B slices already promoted tool evidence and durable judgments into mounted context, but two observer layers still hid the actual proof edge:
+
+- mounted prompt rendering only emitted `title + summary`
+- live-flow/runtime-cognition views emitted `evidence_refs` but not explicit `tool_invocation_ids`
+
+That meant the same proof chain was available in raw metadata, but not visible end-to-end in the operator-facing or prompt-facing surfaces.
+
+### Contract/result
+
+- `RuntimeCognitionSurfaceView.ExecutionSurface` now exposes nullable `toolInvocationIds`
+- `RuntimeCognitionSurfaceView.JudgmentSurface` now exposes nullable `toolInvocationIds`
+- `RuntimeCognitionTimelineEntryView` now exposes nullable `toolInvocationIds`
+- `TaskService` now fills those fields from execution boundary / decision metadata / continuity payloads
+- `MountedContextPromptRenderer` now appends bounded `proof=...` segments for non-handle objects using:
+  - `tool_invocation_ids`
+  - `evidence_refs`
+  - mounted `refs`
+
+The renderer remains bounded: it only emits up to two proof-edge fragments per object and keeps archive/index panels compact.
+
+### Validation
+
+Ran:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -Test com.agentcloud.runtime.context.MountedContextPromptRendererTest,com.agentcloud.engine.TaskServiceLiveFlowViewTest
+```
+
+Repo script still executed full `mvn test`.
+
+Result:
+
+- `222 tests, 0 failures`
+
+### Next likely slice
+
+- carry the same proof-edge visibility into prompt/body diagnostics returned by judgment/live-flow endpoints, so rendered mounted context, runtime fact metadata, and persisted decision summaries all expose the same bounded evidence chain without requiring metadata spelunking

@@ -361,6 +361,7 @@ public class TaskService {
                 blankToNull(executionBoundary.executionStatus()),
                 executionBoundary.durationMs(),
                 executionBoundary.toolInvocationCount(),
+                executionBoundary.toolInvocationIds() == null ? List.of() : executionBoundary.toolInvocationIds(),
                 blankToNull(executionBoundary.traceSummary()),
                 firstNonBlank(
                     metadataString(executionMetadata, "prompt_mode"),
@@ -556,6 +557,7 @@ public class TaskService {
             route.candidateWorkers() == null ? List.of() : route.candidateWorkers(),
             List.of(),
             List.of(),
+            List.of(),
             summary
         );
     }
@@ -598,6 +600,7 @@ public class TaskService {
             execution.mountedContextBudgetTruncated(),
             null,
             List.of(),
+            execution.toolInvocationIds() == null ? List.of() : execution.toolInvocationIds(),
             execution.evidenceRefs() == null ? List.of() : execution.evidenceRefs(),
             execution.unfinishedItems() == null ? List.of() : execution.unfinishedItems(),
             summary
@@ -642,6 +645,7 @@ public class TaskService {
             surface.mountedContextBudgetTruncated(),
             alignmentFlag(executionPromptMode, judgmentPromptMode),
             surface.candidateWorkers() == null ? List.of() : surface.candidateWorkers(),
+            surface.toolInvocationIds() == null ? List.of() : surface.toolInvocationIds(),
             surface.evidenceRefs() == null ? List.of() : surface.evidenceRefs(),
             surface.unfinishedItems() == null ? List.of() : surface.unfinishedItems(),
             summary
@@ -727,6 +731,7 @@ public class TaskService {
             metadataBoolean(payload, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, Map.of()),
             null,
             metadataStringList(payload, "candidate_workers"),
+            metadataStringList(payload, "tool_invocation_ids"),
             metadataStringList(payload, "evidence_refs"),
             metadataStringList(payload, "unfinished_items"),
             summary
@@ -779,6 +784,7 @@ public class TaskService {
             null,
             null,
             metadataStringList(refinedPacket, "candidate_workers"),
+            metadataStringList(refinedPacket, "tool_invocation_ids"),
             metadataStringList(refinedPacket, "evidence_refs"),
             metadataStringList(refinedPacket, "open_questions"),
             summary
@@ -831,6 +837,7 @@ public class TaskService {
             null,
             null,
             metadataStringList(payload, "candidate_workers"),
+            metadataStringList(payload, "tool_invocation_ids"),
             metadataStringList(payload, "evidence_refs"),
             resumePacket.openQuestions() == null ? List.of() : resumePacket.openQuestions(),
             summary
@@ -1114,6 +1121,9 @@ public class TaskService {
             metadataStringList(decisionMetadata, "candidate_workers").isEmpty()
                 ? metadataStringList(runtimeMetadata, "candidate_workers")
                 : metadataStringList(decisionMetadata, "candidate_workers"),
+            metadataStringList(decisionMetadata, "tool_invocation_ids").isEmpty()
+                ? metadataStringList(runtimeMetadata, "tool_invocation_ids")
+                : metadataStringList(decisionMetadata, "tool_invocation_ids"),
             metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
                 ? metadataStringList(runtimeMetadata, "evidence_refs")
                 : metadataStringList(decisionMetadata, "evidence_refs"),

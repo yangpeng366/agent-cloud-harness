@@ -341,6 +341,7 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("tool_invocation_ids", List.of("exec_fact_1")),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
                 )
@@ -379,6 +380,7 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("tool_invocation_ids", List.of("exec_fact_1")),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
                 )
@@ -445,11 +447,13 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(2, trace.runtimeCognitionSurface().execution().mountedActiveCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedEvidenceCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedArchiveCount());
+            assertEquals(List.of("exec_fact_1"), trace.runtimeCognitionSurface().execution().toolInvocationIds());
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeCognitionSurface().execution().evidenceRefs());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedRenderUsed());
             assertEquals(2, trace.runtimeCognitionSurface().executionJudgment().mountedContextNonEmptyPanelCount());
             assertEquals(3, trace.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedContextBudgetTruncated());
+            assertEquals(List.of("exec_fact_1"), trace.runtimeCognitionSurface().executionJudgment().toolInvocationIds());
             assertEquals(2, trace.runtimeCognitionSurface().completionJudgment().mountedActiveCount());
             assertEquals(Boolean.TRUE,
                 trace.runtimeCognitionSurface().alignment().routeWorkerMatchesExecutionWorker());
@@ -474,9 +478,11 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(1, flow.runtimeCognitionSurface().execution().mountedContextHiddenObjectCount());
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().mountedContextBudgetTruncated());
             assertEquals(2, flow.runtimeCognitionSurface().execution().mountedActiveCount());
+            assertEquals(List.of("exec_fact_1"), flow.runtimeCognitionSurface().execution().toolInvocationIds());
             assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
             assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
             assertEquals(3, flow.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
+            assertEquals(List.of("exec_fact_1"), flow.runtimeCognitionSurface().completionJudgment().toolInvocationIds());
             assertEquals(1, flow.runtimeCognitionSurface().completionJudgment().mountedArchiveCount());
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().completionJudgment().mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE,
@@ -495,10 +501,13 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(1, timelineByStage.get("execution").mountedContextRenderedSelectionTraceCount());
             assertEquals(0, timelineByStage.get("execution").mountedContextHiddenSelectionTraceCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution").mountedContextBudgetTruncated());
+            assertEquals(List.of("exec_fact_1"), timelineByStage.get("execution").toolInvocationIds());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
             assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
+            assertEquals(List.of("exec_fact_1"), timelineByStage.get("execution_judgment").toolInvocationIds());
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
+            assertEquals(List.of("exec_fact_1"), timelineByStage.get("completion_judgment").toolInvocationIds());
             assertEquals(List.of("tool:read_file:input.txt"),
                 timelineByStage.get("completion_judgment").evidenceRefs());
         }

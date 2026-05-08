@@ -31,6 +31,7 @@ public record RuntimeCognitionTimelineEntryView(
     Boolean mountedContextBudgetTruncated,
     Boolean alignedWithPreviousPromptMode,
     List<String> candidateWorkers,
+    List<String> toolInvocationIds,
     List<String> evidenceRefs,
     List<String> unfinishedItems,
     String summary

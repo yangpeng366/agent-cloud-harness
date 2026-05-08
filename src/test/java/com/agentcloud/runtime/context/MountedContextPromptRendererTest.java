@@ -145,6 +145,45 @@ class MountedContextPromptRendererTest {
     }
 
     @Test
+    void renderIncludesBoundedProofEdgesForEvidenceObjects() {
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_evidence_proof",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.EVIDENCE,
+                    "Evidence",
+                    List.of(new ContextObject(
+                        "decision_1",
+                        "/sessions/s1/tasks/task_evidence_proof/decisions/decision_1",
+                        ContextObjectType.DECISION,
+                        "",
+                        "Execution Judgment",
+                        "基于最新工具证据继续执行",
+                        "",
+                        Instant.parse("2026-05-06T06:12:00Z"),
+                        ContextRetentionState.WARM_SUMMARY,
+                        List.of(new ContextReference("tool_invocation", "/tools/tool_42", "tool_42")),
+                        List.of(),
+                        Map.of(
+                            "tool_invocation_ids", List.of("tool_42", "tool_99"),
+                            "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")
+                        )
+                    ))
+                )
+            ),
+            List.of()
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+
+        assertTrue(prompt.contains("decision/warm_summary/Execution Judgment"));
+        assertTrue(prompt.contains("[proof=tool:tool_42, tool:tool_99]"));
+        assertFalse(prompt.contains("evidence:tool:read_file:input.txt"));
+        assertFalse(prompt.contains("ref:tool_42"));
+    }
+
+    @Test
     void renderResultExposesBudgetDiagnostics() {
         MountedContextView denseView = new MountedContextView(
             null,
