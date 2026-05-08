@@ -11,6 +11,8 @@ import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.Decision;
+import com.agentcloud.model.Event;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
 import com.agentcloud.model.ToolInvocationRecord;
@@ -244,6 +246,131 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(3, ((Number) traceExecution.get("mounted_context_rendered_object_count")).intValue());
             assertEquals(Boolean.TRUE, traceExecution.get("mounted_context_budget_truncated"));
             assertEquals(List.of("tool:read_file:input.txt"), traceExecution.get("evidence_refs"));
+        }
+    }
+
+    @Test
+    void liveFlowHttpExposesContinuityTimelineEntries() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-continuity.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http continuity task", "continuation", "user", "high",
+                "检查 live_flow 是否透出 continuity timeline", "HTTP contract should expose continuity entries",
+                null, null, Map.of("prompt_mode", "mounted_context_primary"), false
+            ));
+
+            harness.db.jdbi().onDemand(EventDao.class).insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-08T09:00:00Z"),
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: pause",
+                Map.of(
+                    "action", "pause",
+                    "action_category", "task_control",
+                    "reason", "need human confirmation",
+                    "assigned_worker", "codex",
+                    "prompt_mode", "mounted_context_primary"
+                )
+            ));
+            harness.db.jdbi().onDemand(CheckpointDao.class).insert(new com.agentcloud.model.Checkpoint(
+                IdGenerator.newId("cp"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-08T09:01:00Z"),
+                "handoff_before",
+                "handoff checkpoint captured",
+                Map.of(
+                    "assigned_worker", "codex",
+                    "prompt_mode", "mounted_context_primary",
+                    "open_questions", List.of("confirm executor after handoff")
+                ),
+                Map.of(),
+                Map.of("artifact_count", 0)
+            ));
+            harness.db.jdbi().onDemand(EventDao.class).insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-08T09:02:00Z"),
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: handoff",
+                Map.of(
+                    "action", "handoff",
+                    "action_category", "task_control",
+                    "previous_worker", "codex",
+                    "assigned_worker", "kimi",
+                    "target_worker", "kimi",
+                    "prompt_mode", "mounted_context_primary"
+                )
+            ));
+            harness.db.jdbi().onDemand(ResumePacketDao.class).insert(new ResumePacket(
+                IdGenerator.newId("packet"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-08T09:03:00Z"),
+                "1.1",
+                "http resume packet summary",
+                "http decision snapshot",
+                "http artifact snapshot",
+                List.of("confirm packet replay"),
+                "resume scheduler after handoff",
+                Map.of(
+                    "assigned_worker", "kimi",
+                    "current_status", "waiting",
+                    "current_node", "packet",
+                    "prompt_mode", "mounted_context_primary",
+                    "resume_hint", "continue from saved packet",
+                    "open_questions", List.of("confirm packet replay")
+                )
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            List<Map<String, Object>> timeline = harness.list(flowData.get("runtime_cognition_timeline"));
+            Map<String, Object> pauseEntry = timeline.stream()
+                .filter(item -> "continuity_action".equals(String.valueOf(item.get("stage"))))
+                .filter(item -> "pause".equals(String.valueOf(item.get("continuity_action"))))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> handoffEntry = timeline.stream()
+                .filter(item -> "continuity_action".equals(String.valueOf(item.get("stage"))))
+                .filter(item -> "handoff".equals(String.valueOf(item.get("continuity_action"))))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> checkpointEntry = timeline.stream()
+                .filter(item -> "checkpoint".equals(String.valueOf(item.get("stage"))))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> packetEntry = timeline.stream()
+                .filter(item -> "resume_packet".equals(String.valueOf(item.get("stage"))))
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("need human confirmation", pauseEntry.get("reason"));
+            assertEquals("mounted_context_primary", pauseEntry.get("prompt_mode"));
+            assertEquals("kimi", handoffEntry.get("worker_id"));
+            assertEquals("kimi", handoffEntry.get("target_worker"));
+            assertEquals("handoff_before", checkpointEntry.get("checkpoint_type"));
+            assertEquals("mounted_context_primary", checkpointEntry.get("prompt_mode"));
+            assertEquals(List.of("confirm executor after handoff"), checkpointEntry.get("unfinished_items"));
+            assertEquals("resume_packet", packetEntry.get("continuity_action"));
+            assertEquals("mounted_context_primary", packetEntry.get("prompt_mode"));
+            assertEquals("waiting", packetEntry.get("execution_status"));
+            assertEquals("continue from saved packet", packetEntry.get("reason"));
+            assertEquals(List.of("confirm packet replay"), packetEntry.get("unfinished_items"));
         }
     }
 

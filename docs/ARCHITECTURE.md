@@ -18,7 +18,7 @@ Agent Cloud Harness 是一个面向多轮、长时程、可恢复任务执行的
 - 为 task identity over time 提供控制面
 - 为多轮执行提供显式 working-memory surface
 - 为 execution / judgment / handoff 提供共享 runtime cognition seam
-- 为单任务观测提供 `runtime_cognition_surface` / `runtime_cognition_timeline`，显式暴露 route、execution、judgment 的认知边界与漂移
+- 为单任务观测提供 `runtime_cognition_surface` / `runtime_cognition_timeline`，显式暴露 route、execution、judgment 的认知边界与漂移，并把 pause / resume / checkpoint / handoff / resume packet 收口到同一条 continuity timeline
 - 为 pause / resume / checkpoint / handoff / recovery 提供 continuity semantics
 - 为 tool trace、artifact、decision、learning hint 提供可追踪 evidence surface
 - 为未来 loop / routine / async / background execution 提供演进基础

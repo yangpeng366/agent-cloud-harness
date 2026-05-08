@@ -32,6 +32,9 @@ public interface ResumePacketDao extends SqlObject {
     @SqlQuery("SELECT * FROM resume_packets WHERE session_id = :sessionId AND task_id = :taskId ORDER BY created_at DESC LIMIT 1")
     Optional<ResumePacket> getLatestByTask(@Bind("sessionId") String sessionId, @Bind("taskId") String taskId);
 
+    @SqlQuery("SELECT * FROM resume_packets WHERE session_id = :sessionId AND task_id = :taskId ORDER BY created_at DESC LIMIT :limit")
+    List<ResumePacket> listByTask(@Bind("sessionId") String sessionId, @Bind("taskId") String taskId, @Bind("limit") int limit);
+
     @SqlQuery("SELECT * FROM resume_packets WHERE session_id = :sessionId ORDER BY created_at DESC LIMIT :limit")
     List<ResumePacket> listBySession(@Bind("sessionId") String sessionId, @Bind("limit") int limit);
 }

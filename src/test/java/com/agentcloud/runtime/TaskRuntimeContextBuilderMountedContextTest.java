@@ -281,6 +281,11 @@ class TaskRuntimeContextBuilderMountedContextTest {
         }
 
         @Override
+        public List<ResumePacket> listByTask(String sessionId, String taskId, int limit) {
+            return List.of(packet);
+        }
+
+        @Override
         public List<ResumePacket> listBySession(String sessionId, int limit) {
             return List.of(packet);
         }

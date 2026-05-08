@@ -268,6 +268,9 @@ public class TaskService {
         TaskRuntimeContext runtimeContext = facts.runtimeContext();
         JudgmentTraceView judgmentTrace = buildJudgmentTraceView(task, facts);
         List<Checkpoint> checkpoints = consolidationService.listByTask(taskId, boundedLimit);
+        List<ResumePacket> resumePackets = packetDao != null
+            ? nullToEmpty(packetDao.listByTask(task.sessionId(), task.id(), boundedLimit))
+            : List.of();
         List<LearningMemory> learningMemories = learningMemoryService.listByTask(taskId, boundedLimit);
         List<ToolInvocationRecord> toolInvocations = facts.toolInvocations();
         RuntimeFactSet.ExecutionBoundary executionBoundary = facts.executionBoundary();
@@ -293,7 +296,7 @@ public class TaskService {
             judgmentTrace,
             facts,
             buildRuntimeCognitionSurface(facts),
-            buildRuntimeCognitionTimeline(task, facts, checkpoints),
+            buildRuntimeCognitionTimeline(task, facts, checkpoints, resumePackets),
             checkpoints,
             learningMemories,
             toolInvocations,
@@ -467,12 +470,13 @@ public class TaskService {
 
     private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(Task task,
                                                                                   RuntimeFactSet facts,
-                                                                                  List<Checkpoint> checkpoints) {
+                                                                                  List<Checkpoint> checkpoints,
+                                                                                  List<ResumePacket> resumePackets) {
         RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
         RuntimeCognitionSurfaceView surface = buildRuntimeCognitionSurface(runtimeFacts);
         List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
 
-        entries.addAll(buildContinuityTimelineEntries(task, checkpoints));
+        entries.addAll(buildContinuityTimelineEntries(task, checkpoints, resumePackets));
 
         RuntimeCognitionTimelineEntryView routeEntry = buildRouteTimelineEntry(runtimeFacts, surface);
         if (routeEntry != null) {
@@ -645,7 +649,8 @@ public class TaskService {
     }
 
     private List<RuntimeCognitionTimelineEntryView> buildContinuityTimelineEntries(Task task,
-                                                                                   List<Checkpoint> checkpoints) {
+                                                                                   List<Checkpoint> checkpoints,
+                                                                                   List<ResumePacket> resumePackets) {
         List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
         if (task == null) {
             return entries;
@@ -661,6 +666,12 @@ public class TaskService {
         }
         for (Checkpoint checkpoint : nullToEmpty(checkpoints)) {
             RuntimeCognitionTimelineEntryView entry = buildCheckpointTimelineEntry(checkpoint);
+            if (entry != null) {
+                entries.add(entry);
+            }
+        }
+        for (ResumePacket resumePacket : nullToEmpty(resumePackets)) {
+            RuntimeCognitionTimelineEntryView entry = buildResumePacketTimelineEntry(resumePacket);
             if (entry != null) {
                 entries.add(entry);
             }
@@ -764,9 +775,64 @@ public class TaskService {
             null,
             null,
             null,
+            null,
+            null,
+            null,
             metadataStringList(refinedPacket, "candidate_workers"),
             metadataStringList(refinedPacket, "evidence_refs"),
             metadataStringList(refinedPacket, "open_questions"),
+            summary
+        );
+    }
+
+    private RuntimeCognitionTimelineEntryView buildResumePacketTimelineEntry(ResumePacket resumePacket) {
+        if (resumePacket == null) {
+            return null;
+        }
+        Map<String, Object> payload = resumePacket.payload() == null ? Map.of() : resumePacket.payload();
+        String workerId = firstNonBlank(
+            blankToNull(resumePacket.assignedWorker()),
+            metadataString(payload, "assigned_worker")
+        );
+        String promptMode = firstNonBlank(
+            metadataString(payload, "prompt_mode"),
+            metadataString(payload, "mounted_context_mode"),
+            metadataString(payload, "prompt_rendering_mode")
+        );
+        String reason = firstNonBlank(
+            metadataString(payload, "resume_hint"),
+            blankToNull(resumePacket.nextStep())
+        );
+        String summary = firstNonBlank(
+            summarizeResumePacketTimeline(resumePacket, workerId, promptMode),
+            blankToNull(resumePacket.latestSummary()),
+            blankToNull(resumePacket.activeTaskSummary())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            "resume_packet",
+            "Resume Packet",
+            resumePacket.createdAt() != null ? resumePacket.createdAt().toString() : null,
+            workerId,
+            "resume_packet",
+            null,
+            reason,
+            null,
+            promptMode,
+            null,
+            blankToNull(resumePacket.currentStatus()),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            metadataStringList(payload, "candidate_workers"),
+            metadataStringList(payload, "evidence_refs"),
+            resumePacket.openQuestions() == null ? List.of() : resumePacket.openQuestions(),
             summary
         );
     }
@@ -872,6 +938,24 @@ public class TaskService {
             joinSummary(checkpointType, workerId),
             blankToNull(consolidationSummary),
             checkpointType
+        );
+    }
+
+    private String summarizeResumePacketTimeline(ResumePacket resumePacket,
+                                                 String workerId,
+                                                 String promptMode) {
+        if (resumePacket == null) {
+            return null;
+        }
+        String currentNode = blankToNull(resumePacket.currentNode());
+        String currentStatus = blankToNull(resumePacket.currentStatus());
+        String nextStep = blankToNull(resumePacket.nextStep());
+        return firstNonBlank(
+            joinSummary("resume packet", workerId, currentNode, currentStatus, promptMode, nextStep),
+            joinSummary("resume packet", workerId, currentNode, currentStatus, promptMode),
+            joinSummary("resume packet", workerId, currentNode, currentStatus),
+            joinSummary("resume packet", workerId, nextStep),
+            "resume packet"
         );
     }
 

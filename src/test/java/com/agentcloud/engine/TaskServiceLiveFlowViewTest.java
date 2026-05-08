@@ -8,6 +8,7 @@ import com.agentcloud.model.AgentRunRecord;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
@@ -500,6 +501,152 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("tool:read_file:input.txt"),
                 timelineByStage.get("completion_judgment").evidenceRefs());
+        }
+    }
+
+    @Test
+    void getLiveFlowExtendsRuntimeCognitionTimelineWithContinuityBoundaries() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-continuity-timeline.db"))) {
+            TaskService service = service(db);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "continuity timeline task", "continuation", "user", "high",
+                "把 pause resume handoff checkpoint 拉进同一条 runtime cognition timeline",
+                "验证 continuity boundary 可见", null, null,
+                Map.of("prompt_mode", "mounted_context_primary"), false
+            ));
+
+            Instant pausedAt = Instant.parse("2026-05-08T08:00:00Z");
+            Instant checkpointAt = Instant.parse("2026-05-08T08:01:00Z");
+            Instant resumedAt = Instant.parse("2026-05-08T08:02:00Z");
+            Instant handoffAt = Instant.parse("2026-05-08T08:03:00Z");
+            Instant packetAt = Instant.parse("2026-05-08T08:04:00Z");
+
+            eventDao.insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                pausedAt,
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: pause",
+                Map.of(
+                    "action", "pause",
+                    "action_category", "task_control",
+                    "reason", "waiting for human review",
+                    "assigned_worker", "codex",
+                    "prompt_mode", "mounted_context_primary"
+                )
+            ));
+            checkpointDao.insert(new com.agentcloud.model.Checkpoint(
+                IdGenerator.newId("cp"),
+                task.sessionId(),
+                task.id(),
+                checkpointAt,
+                "pause_before",
+                "pause checkpoint captured before waiting",
+                Map.of(
+                    "assigned_worker", "codex",
+                    "prompt_mode", "mounted_context_primary",
+                    "open_questions", List.of("confirm handoff target")
+                ),
+                Map.of(),
+                Map.of("artifact_count", 0)
+            ));
+            eventDao.insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                resumedAt,
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: resume",
+                Map.of(
+                    "action", "resume",
+                    "action_category", "task_control",
+                    "assigned_worker", "codex",
+                    "prompt_mode", "mounted_context_primary"
+                )
+            ));
+            eventDao.insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                handoffAt,
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: handoff",
+                Map.of(
+                    "action", "handoff",
+                    "action_category", "task_control",
+                    "previous_worker", "codex",
+                    "assigned_worker", "kimi",
+                    "target_worker", "kimi",
+                    "prompt_mode", "mounted_context_primary"
+                )
+            ));
+            db.jdbi().onDemand(ResumePacketDao.class).insert(new ResumePacket(
+                IdGenerator.newId("packet"),
+                task.sessionId(),
+                task.id(),
+                packetAt,
+                "1.1",
+                "resume packet summary",
+                "decision snapshot",
+                "artifact snapshot",
+                List.of("confirm resume sequencing"),
+                "resume scheduler after handoff",
+                Map.of(
+                    "assigned_worker", "kimi",
+                    "current_status", "waiting",
+                    "current_node", "packet",
+                    "prompt_mode", "mounted_context_primary",
+                    "resume_hint", "continue from packet boundary",
+                    "open_questions", List.of("confirm resume sequencing")
+                )
+            ));
+
+            var flow = service.getLiveFlow(task.id(), 10);
+
+            assertNotNull(flow.runtimeCognitionTimeline());
+            assertTrue(flow.runtimeCognitionTimeline().size() >= 4);
+            var continuityEntries = flow.runtimeCognitionTimeline().stream()
+                .filter(entry -> "continuity_action".equals(entry.stage()))
+                .toList();
+            assertEquals(3, continuityEntries.size());
+            assertEquals("pause", continuityEntries.get(0).continuityAction());
+            assertEquals("waiting for human review", continuityEntries.get(0).reason());
+            assertEquals("mounted_context_primary", continuityEntries.get(0).promptMode());
+            assertEquals("resume", continuityEntries.get(1).continuityAction());
+            assertEquals("handoff", continuityEntries.get(2).continuityAction());
+            assertEquals("kimi", continuityEntries.get(2).workerId());
+            assertEquals("kimi", continuityEntries.get(2).targetWorker());
+            assertTrue(continuityEntries.get(2).summary().contains("handoff"));
+
+            var checkpointEntries = flow.runtimeCognitionTimeline().stream()
+                .filter(entry -> "checkpoint".equals(entry.stage()))
+                .toList();
+            assertEquals(1, checkpointEntries.size());
+            assertEquals("pause_before", checkpointEntries.get(0).checkpointType());
+            assertEquals("codex", checkpointEntries.get(0).workerId());
+            assertEquals("mounted_context_primary", checkpointEntries.get(0).promptMode());
+            assertEquals(List.of("confirm handoff target"), checkpointEntries.get(0).unfinishedItems());
+
+            var packetEntries = flow.runtimeCognitionTimeline().stream()
+                .filter(entry -> "resume_packet".equals(entry.stage()))
+                .toList();
+            assertEquals(1, packetEntries.size());
+            assertEquals("resume_packet", packetEntries.get(0).continuityAction());
+            assertEquals("kimi", packetEntries.get(0).workerId());
+            assertEquals("mounted_context_primary", packetEntries.get(0).promptMode());
+            assertEquals("waiting", packetEntries.get(0).executionStatus());
+            assertEquals("continue from packet boundary", packetEntries.get(0).reason());
+            assertEquals(List.of("confirm resume sequencing"), packetEntries.get(0).unfinishedItems());
         }
     }
 

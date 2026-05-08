@@ -182,9 +182,10 @@
 
 该接口适合本地 live validation、回归排查和提示词调优时使用，避免在同一任务上手工拉取多个观测接口。
 
-其中 `runtime_cognition_timeline` 用来把同一任务最近一轮 route / execution / judgment 的认知边界按时间线显式展开，当前 entry 主要包含：
+其中 `runtime_cognition_timeline` 用来把同一任务最近一轮 route / execution / judgment 的认知边界，以及 pause / resume / handoff / checkpoint / resume packet 这些 continuity boundary 按时间线显式展开，当前 entry 主要包含：
 
 - `stage` / `label` / `occurred_at`
+- `continuity_action` / `checkpoint_type` / `reason` / `target_worker`
 - `worker_id` / `route_source` / `prompt_mode` / `execution_status`
 - `tool_invocation_count`
 - `mounted_context_rendered` / `mounted_context_injected` / `mounted_context_panel_count`
