@@ -1589,6 +1589,51 @@ function renderExperimentModeCard(modeSummary, currentMode) {
         modeSummary?.averageToolChainStepCount
     ) ?? 0;
     const routeSourceCounts = modeSummary?.route_source_counts || modeSummary?.routeSourceCounts || {};
+    const workerPromptModeCounts = modeSummary?.prompt_mode_counts || modeSummary?.promptModeCounts || {};
+    const workerPromptModeSampleCount = numberOrNull(
+        modeSummary?.runs_with_prompt_mode_data,
+        modeSummary?.runsWithPromptModeData
+    ) ?? 0;
+    const workerMountedRenderedRate = numberOrNull(
+        modeSummary?.mounted_context_rendered_rate,
+        modeSummary?.mountedContextRenderedRate
+    );
+    const workerMountedInjectedRate = numberOrNull(
+        modeSummary?.mounted_context_injected_rate,
+        modeSummary?.mountedContextInjectedRate
+    );
+    const averageMountedContextPanelCount = numberOrNull(
+        modeSummary?.average_mounted_context_panel_count,
+        modeSummary?.averageMountedContextPanelCount
+    );
+    const executionJudgmentPromptModeCounts =
+        modeSummary?.execution_judgment_prompt_mode_counts || modeSummary?.executionJudgmentPromptModeCounts || {};
+    const executionJudgmentPromptModeSampleCount = numberOrNull(
+        modeSummary?.runs_with_execution_judgment_prompt_mode_data,
+        modeSummary?.runsWithExecutionJudgmentPromptModeData
+    ) ?? 0;
+    const executionJudgmentMountedRenderedRate = numberOrNull(
+        modeSummary?.execution_judgment_mounted_context_rendered_rate,
+        modeSummary?.executionJudgmentMountedContextRenderedRate
+    );
+    const executionJudgmentMountedInjectedRate = numberOrNull(
+        modeSummary?.execution_judgment_mounted_context_injected_rate,
+        modeSummary?.executionJudgmentMountedContextInjectedRate
+    );
+    const completionJudgmentPromptModeCounts =
+        modeSummary?.completion_judgment_prompt_mode_counts || modeSummary?.completionJudgmentPromptModeCounts || {};
+    const completionJudgmentPromptModeSampleCount = numberOrNull(
+        modeSummary?.runs_with_completion_judgment_prompt_mode_data,
+        modeSummary?.runsWithCompletionJudgmentPromptModeData
+    ) ?? 0;
+    const completionJudgmentMountedRenderedRate = numberOrNull(
+        modeSummary?.completion_judgment_mounted_context_rendered_rate,
+        modeSummary?.completionJudgmentMountedContextRenderedRate
+    );
+    const completionJudgmentMountedInjectedRate = numberOrNull(
+        modeSummary?.completion_judgment_mounted_context_injected_rate,
+        modeSummary?.completionJudgmentMountedContextInjectedRate
+    );
     const isCurrent = modelMode === currentMode ? " is-current" : "";
     return `
         <div class="experiment-mode-card${isCurrent}">
@@ -1599,6 +1644,29 @@ function renderExperimentModeCard(modeSummary, currentMode) {
             </div>
             <strong>${escapeHtml(`${formatRate(completionRate)} done · ${formatRate(learningHintAppliedRate)} learned hint applied`)}</strong>
             <p>${escapeHtml(`${formatDecimal(averageToolChainStepCount)} avg tool steps · ${summarizeCountMap(routeSourceCounts)}`)}</p>
+            <div class="experiment-rollout-grid">
+                ${renderExperimentRolloutBlock("worker", workerPromptModeCounts, workerPromptModeSampleCount, workerMountedRenderedRate, workerMountedInjectedRate, averageMountedContextPanelCount)}
+                ${renderExperimentRolloutBlock("exec judge", executionJudgmentPromptModeCounts, executionJudgmentPromptModeSampleCount, executionJudgmentMountedRenderedRate, executionJudgmentMountedInjectedRate)}
+                ${renderExperimentRolloutBlock("done judge", completionJudgmentPromptModeCounts, completionJudgmentPromptModeSampleCount, completionJudgmentMountedRenderedRate, completionJudgmentMountedInjectedRate)}
+            </div>
+        </div>
+    `;
+}
+
+function renderExperimentRolloutBlock(label, promptModeCounts, sampleCount, renderedRate, injectedRate, averagePanelCount = null) {
+    const metrics = [
+        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
+        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`,
+        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`
+    ].filter(Boolean);
+    return `
+        <div class="experiment-rollout-block">
+            <div class="experiment-rollout-block__meta">
+                <span class="task-badge">${escapeHtml(label)}</span>
+                <span>${escapeHtml(String(sampleCount))} sampled</span>
+            </div>
+            <strong>${escapeHtml(summarizeFrequencyMap(promptModeCounts, "no prompt sample"))}</strong>
+            <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "no mounted-context telemetry")}</p>
         </div>
     `;
 }
@@ -1810,6 +1878,27 @@ function summarizeCountMap(map) {
         });
     if (entries.length === 0) {
         return "no route sample";
+    }
+    return entries.slice(0, 3)
+        .map(([key, count]) => `${humanizeToken(key) || key} ${count}`)
+        .join(" · ");
+}
+
+function summarizeFrequencyMap(map, emptyLabel = "no sample") {
+    const entries = Object.entries(map || {})
+        .filter(([, count]) => {
+            const number = numberOrNull(count);
+            return number !== null && number > 0;
+        })
+        .sort((left, right) => {
+            const countDiff = Number(right[1]) - Number(left[1]);
+            if (countDiff !== 0) {
+                return countDiff;
+            }
+            return String(left[0]).localeCompare(String(right[0]));
+        });
+    if (entries.length === 0) {
+        return emptyLabel;
     }
     return entries.slice(0, 3)
         .map(([key, count]) => `${humanizeToken(key) || key} ${count}`)

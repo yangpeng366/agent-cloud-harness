@@ -407,6 +407,71 @@ mounted context 的长期方向应该支撑热温冷分层：
 - hard-case eval matrix
 - harness evolution ledger
 
+### 8.3 自主改善边界
+
+这个项目可以朝“自主改善”演进，但不应朝“无边界自改主线代码”演进。
+
+更准确的方向是：
+
+**evidence-driven, rollback-aware, controlled self-evolution**
+
+也就是：
+- 允许系统基于 runtime trace 识别改进机会
+- 允许系统生成 change hypothesis 与 patch candidate
+- 允许系统在隔离分支或 sandbox 中做小范围验证
+- 只有在评测、验收、回滚边界都明确时，才允许变更被提升
+
+不应发生的是：
+- 没有 trace/eval 证据就直接改主线
+- 把频繁 prompt 改动误当作学习
+- 单次失败就触发大范围架构重写
+- 无法说明假设、收益、风险、回滚条件的自改行为
+
+### 8.4 建议的成熟度阶梯
+
+#### Level 0: observe only
+- 记录失败模式、连续性断裂、执行/判断偏差
+- 不直接提出代码变更
+
+#### Level 1: suggest only
+- 生成 change hypothesis
+- 标出影响组件、预期收益、验证计划、回滚条件
+
+#### Level 2: patch with approval
+- 自动生成 patch candidate
+- 自动跑 targeted tests / eval
+- 仍需人工批准后才能合并
+
+#### Level 3: sandboxed closed-loop improvement
+- 仅在 trace 质量、eval 质量、rollback discipline 足够稳定后
+- 才允许系统在隔离 branch / sandbox 中自动闭环迭代
+- 即便如此，进入 shared/default runtime 行为仍应有明确 acceptance gate
+
+### 8.5 先从哪些面开始自优化
+
+更安全的早期自优化面包括：
+- routing heuristics
+- context retention / demotion policy
+- evidence budgeting policy
+- judgment / evaluator prompt policy
+- capability metadata
+- benchmark adapter / diagnostic surface
+
+高风险面应更晚开放：
+- lifecycle semantics
+- persistence schema
+- checkpoint / resume contract
+- handoff packet structure
+- broad cross-module refactor
+
+### 8.6 一条总规则
+
+建议把这条原则写死：
+
+**没有证据，不做自优化；没有评测，不做提升；没有回滚，不做默认推广。**
+
+这能保证项目继续保持 continuity-first identity，而不是滑向 noisy self-editing system。
+
 ## 9. 当前最重要的工程优先级
 
 如果对照最新代码现状，项目的最优先顺序应是：

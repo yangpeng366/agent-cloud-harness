@@ -52,21 +52,32 @@ class TaskHandlerExperimentSummaryHttpTest {
 
             fixture.insertRouteArtifact(strongTask, Map.of(
                 "route_source", "capability_match",
-                "selected_model_tier", "strong"
+                "selected_model_tier", "strong",
+                "prompt_mode", "active_context_only",
+                "mounted_context_rendered", false,
+                "mounted_context_injected", false
             ));
             fixture.insertRouteArtifact(smallTask, Map.of(
                 "route_source", "capability_match",
                 "preferred_worker_hint", "codex",
                 "learning_hint_applied", false,
                 "fallback_reason", "hint filtered by model tier",
-                "selected_model_tier", "small"
+                "selected_model_tier", "small",
+                "prompt_mode", "mounted_context_shadow",
+                "mounted_context_rendered", true,
+                "mounted_context_injected", false,
+                "mounted_context_panel_count", 5
             ));
             fixture.insertRouteArtifact(orchestratedTask, Map.of(
                 "route_source", "learning_memory",
                 "preferred_worker_hint", "kimi",
                 "learning_hint_applied", true,
                 "fallback_reason", "hint survived tier filter",
-                "selected_model_tier", "small"
+                "selected_model_tier", "small",
+                "prompt_mode", "mounted_context_primary",
+                "mounted_context_rendered", true,
+                "mounted_context_injected", true,
+                "mounted_context_panel_count", 7
             ));
 
             fixture.service.updateTaskState(strongTask.id(), "done", "baseline strong completed");
@@ -93,6 +104,13 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(0, orchestratedSummary.path("runs_with_judgment_surface_refs").asInt());
             assertEquals(0, orchestratedSummary.path("runs_with_tool_trace_surface_refs").asInt());
             assertEquals(1, orchestratedSummary.path("route_source_counts").path("learning_memory").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_prompt_mode_data").asInt());
+            assertEquals(1, orchestratedSummary.path("prompt_mode_counts").path("mounted_context_primary").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_rendered").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_injected").asInt());
+            assertEquals(1.0, orchestratedSummary.path("mounted_context_rendered_rate").asDouble());
+            assertEquals(1.0, orchestratedSummary.path("mounted_context_injected_rate").asDouble());
+            assertEquals(7.0, orchestratedSummary.path("average_mounted_context_panel_count").asDouble());
             assertEquals("needs_followup",
                 body.path("data").path("case_comparisons").get(0).path("runs_by_mode").path("orchestrated").path("acceptance_result").asText());
         }

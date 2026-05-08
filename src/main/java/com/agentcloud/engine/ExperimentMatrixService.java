@@ -238,6 +238,94 @@ public class ExperimentMatrixService {
             double learningHintAppliedRate = runsWithLearningHint == 0
                 ? 0.0
                 : roundToThree((double) learningHintAppliedCount / runsWithLearningHint);
+            int runsWithPromptModeData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataString(metadata, "prompt_mode"))
+                .filter(value -> value != null && !value.isBlank())
+                .count();
+            int runsWithMountedContextRendered = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "mounted_context_rendered"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            int runsWithMountedContextInjected = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "mounted_context_injected"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            List<Integer> observedMountedContextPanelCounts = runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> firstPositiveInt(
+                    metadataInt(metadata, "mounted_context_panel_count"),
+                    metadataInt(metadata, "mounted_panel_count")
+                ))
+                .filter(value -> value != null && value >= 0)
+                .toList();
+            double mountedContextRenderedRate = runsWithPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithMountedContextRendered / runsWithPromptModeData);
+            double mountedContextInjectedRate = runsWithPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithMountedContextInjected / runsWithPromptModeData);
+            double averageMountedContextPanelCount = observedMountedContextPanelCounts.isEmpty()
+                ? 0.0
+                : roundToThree(observedMountedContextPanelCounts.stream()
+                    .mapToInt(Integer::intValue)
+                    .average()
+                    .orElse(0.0));
+            int runsWithExecutionJudgmentPromptModeData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataString(metadata, "execution_judgment_prompt_mode"))
+                .filter(value -> value != null && !value.isBlank())
+                .count();
+            int runsWithExecutionJudgmentMountedContextRendered = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_context_rendered"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            int runsWithExecutionJudgmentMountedContextInjected = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_context_injected"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double executionJudgmentMountedContextRenderedRate = runsWithExecutionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithExecutionJudgmentMountedContextRendered
+                    / runsWithExecutionJudgmentPromptModeData);
+            double executionJudgmentMountedContextInjectedRate = runsWithExecutionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithExecutionJudgmentMountedContextInjected
+                    / runsWithExecutionJudgmentPromptModeData);
+            int runsWithCompletionJudgmentPromptModeData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataString(metadata, "completion_judgment_prompt_mode"))
+                .filter(value -> value != null && !value.isBlank())
+                .count();
+            int runsWithCompletionJudgmentMountedContextRendered = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_context_rendered"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            int runsWithCompletionJudgmentMountedContextInjected = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_context_injected"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double completionJudgmentMountedContextRenderedRate = runsWithCompletionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithCompletionJudgmentMountedContextRendered
+                    / runsWithCompletionJudgmentPromptModeData);
+            double completionJudgmentMountedContextInjectedRate = runsWithCompletionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithCompletionJudgmentMountedContextInjected
+                    / runsWithCompletionJudgmentPromptModeData);
+            Map<String, Integer> promptModeCounts = countMetadataValues(runsByMode, "prompt_mode");
+            Map<String, Integer> executionJudgmentPromptModeCounts = countMetadataValues(
+                runsByMode, "execution_judgment_prompt_mode"
+            );
+            Map<String, Integer> completionJudgmentPromptModeCounts = countMetadataValues(
+                runsByMode, "completion_judgment_prompt_mode"
+            );
             List<Integer> observedToolChainSteps = runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataInt(metadata, "tool_chain_step_count"))
@@ -299,6 +387,25 @@ public class ExperimentMatrixService {
                 runsWithLearningHint,
                 learningHintAppliedCount,
                 learningHintAppliedRate,
+                runsWithPromptModeData,
+                promptModeCounts,
+                runsWithMountedContextRendered,
+                runsWithMountedContextInjected,
+                mountedContextRenderedRate,
+                mountedContextInjectedRate,
+                averageMountedContextPanelCount,
+                runsWithExecutionJudgmentPromptModeData,
+                executionJudgmentPromptModeCounts,
+                runsWithExecutionJudgmentMountedContextRendered,
+                runsWithExecutionJudgmentMountedContextInjected,
+                executionJudgmentMountedContextRenderedRate,
+                executionJudgmentMountedContextInjectedRate,
+                runsWithCompletionJudgmentPromptModeData,
+                completionJudgmentPromptModeCounts,
+                runsWithCompletionJudgmentMountedContextRendered,
+                runsWithCompletionJudgmentMountedContextInjected,
+                completionJudgmentMountedContextRenderedRate,
+                completionJudgmentMountedContextInjectedRate,
                 routeSourceCounts,
                 executionActionCounts,
                 completionJudgmentStatusCounts,
@@ -502,6 +609,18 @@ public class ExperimentMatrixService {
                 (left, right) -> left,
                 LinkedHashMap::new
             ));
+    }
+
+    private Integer firstPositiveInt(Integer... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Integer value : values) {
+            if (value != null && value >= 0) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private boolean hasTaskSurfaceRefs(Map<String, Object> metadata) {

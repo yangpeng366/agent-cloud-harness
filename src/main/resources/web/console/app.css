@@ -1019,6 +1019,36 @@ button {
     line-height: 1.55;
 }
 
+.experiment-rollout-grid {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.experiment-rollout-block {
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid rgba(18, 32, 45, 0.06);
+    border-radius: var(--radius-sm);
+    background: rgba(18, 32, 45, 0.035);
+}
+
+.experiment-rollout-block__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: var(--ink-soft);
+    font-size: 12px;
+}
+
+.experiment-rollout-block strong,
+.experiment-rollout-block p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 .experiment-summary__chips {
     margin-top: 0;
 }

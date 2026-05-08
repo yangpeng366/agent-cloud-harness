@@ -486,6 +486,29 @@
 - `tool_execution_mode_counts`
 - `tool_chain_termination_reason_counts`
 
+同一结构当前也会补充 mounted-context rollout 对比字段，便于直接比较
+`active_context_only / mounted_context_shadow / mounted_context_primary` 三种 prompt mode：
+
+- `runs_with_prompt_mode_data`
+- `prompt_mode_counts`
+- `runs_with_mounted_context_rendered`
+- `runs_with_mounted_context_injected`
+- `mounted_context_rendered_rate`
+- `mounted_context_injected_rate`
+- `average_mounted_context_panel_count`
+- `runs_with_execution_judgment_prompt_mode_data`
+- `execution_judgment_prompt_mode_counts`
+- `runs_with_execution_judgment_mounted_context_rendered`
+- `runs_with_execution_judgment_mounted_context_injected`
+- `execution_judgment_mounted_context_rendered_rate`
+- `execution_judgment_mounted_context_injected_rate`
+- `runs_with_completion_judgment_prompt_mode_data`
+- `completion_judgment_prompt_mode_counts`
+- `runs_with_completion_judgment_mounted_context_rendered`
+- `runs_with_completion_judgment_mounted_context_injected`
+- `completion_judgment_mounted_context_rendered_rate`
+- `completion_judgment_mounted_context_injected_rate`
+
 ### 1.9 Health
 
 | 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |

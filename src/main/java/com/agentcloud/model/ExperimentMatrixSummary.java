@@ -48,6 +48,25 @@ public record ExperimentMatrixSummary(
         Integer runsWithLearningHint,
         Integer learningHintAppliedCount,
         Double learningHintAppliedRate,
+        Integer runsWithPromptModeData,
+        Map<String, Integer> promptModeCounts,
+        Integer runsWithMountedContextRendered,
+        Integer runsWithMountedContextInjected,
+        Double mountedContextRenderedRate,
+        Double mountedContextInjectedRate,
+        Double averageMountedContextPanelCount,
+        Integer runsWithExecutionJudgmentPromptModeData,
+        Map<String, Integer> executionJudgmentPromptModeCounts,
+        Integer runsWithExecutionJudgmentMountedContextRendered,
+        Integer runsWithExecutionJudgmentMountedContextInjected,
+        Double executionJudgmentMountedContextRenderedRate,
+        Double executionJudgmentMountedContextInjectedRate,
+        Integer runsWithCompletionJudgmentPromptModeData,
+        Map<String, Integer> completionJudgmentPromptModeCounts,
+        Integer runsWithCompletionJudgmentMountedContextRendered,
+        Integer runsWithCompletionJudgmentMountedContextInjected,
+        Double completionJudgmentMountedContextRenderedRate,
+        Double completionJudgmentMountedContextInjectedRate,
         Map<String, Integer> routeSourceCounts,
         Map<String, Integer> executionActionCounts,
         Map<String, Integer> completionJudgmentStatusCounts,
@@ -92,6 +111,64 @@ public record ExperimentMatrixSummary(
             if (runsWithLearningHint == null || runsWithLearningHint < 0) runsWithLearningHint = 0;
             if (learningHintAppliedCount == null || learningHintAppliedCount < 0) learningHintAppliedCount = 0;
             if (learningHintAppliedRate == null || learningHintAppliedRate < 0) learningHintAppliedRate = 0.0;
+            if (runsWithPromptModeData == null || runsWithPromptModeData < 0) runsWithPromptModeData = 0;
+            if (promptModeCounts == null) promptModeCounts = Map.of();
+            if (runsWithMountedContextRendered == null || runsWithMountedContextRendered < 0) {
+                runsWithMountedContextRendered = 0;
+            }
+            if (runsWithMountedContextInjected == null || runsWithMountedContextInjected < 0) {
+                runsWithMountedContextInjected = 0;
+            }
+            if (mountedContextRenderedRate == null || mountedContextRenderedRate < 0) {
+                mountedContextRenderedRate = 0.0;
+            }
+            if (mountedContextInjectedRate == null || mountedContextInjectedRate < 0) {
+                mountedContextInjectedRate = 0.0;
+            }
+            if (averageMountedContextPanelCount == null || averageMountedContextPanelCount < 0) {
+                averageMountedContextPanelCount = 0.0;
+            }
+            if (runsWithExecutionJudgmentPromptModeData == null || runsWithExecutionJudgmentPromptModeData < 0) {
+                runsWithExecutionJudgmentPromptModeData = 0;
+            }
+            if (executionJudgmentPromptModeCounts == null) executionJudgmentPromptModeCounts = Map.of();
+            if (runsWithExecutionJudgmentMountedContextRendered == null
+                || runsWithExecutionJudgmentMountedContextRendered < 0) {
+                runsWithExecutionJudgmentMountedContextRendered = 0;
+            }
+            if (runsWithExecutionJudgmentMountedContextInjected == null
+                || runsWithExecutionJudgmentMountedContextInjected < 0) {
+                runsWithExecutionJudgmentMountedContextInjected = 0;
+            }
+            if (executionJudgmentMountedContextRenderedRate == null
+                || executionJudgmentMountedContextRenderedRate < 0) {
+                executionJudgmentMountedContextRenderedRate = 0.0;
+            }
+            if (executionJudgmentMountedContextInjectedRate == null
+                || executionJudgmentMountedContextInjectedRate < 0) {
+                executionJudgmentMountedContextInjectedRate = 0.0;
+            }
+            if (runsWithCompletionJudgmentPromptModeData == null
+                || runsWithCompletionJudgmentPromptModeData < 0) {
+                runsWithCompletionJudgmentPromptModeData = 0;
+            }
+            if (completionJudgmentPromptModeCounts == null) completionJudgmentPromptModeCounts = Map.of();
+            if (runsWithCompletionJudgmentMountedContextRendered == null
+                || runsWithCompletionJudgmentMountedContextRendered < 0) {
+                runsWithCompletionJudgmentMountedContextRendered = 0;
+            }
+            if (runsWithCompletionJudgmentMountedContextInjected == null
+                || runsWithCompletionJudgmentMountedContextInjected < 0) {
+                runsWithCompletionJudgmentMountedContextInjected = 0;
+            }
+            if (completionJudgmentMountedContextRenderedRate == null
+                || completionJudgmentMountedContextRenderedRate < 0) {
+                completionJudgmentMountedContextRenderedRate = 0.0;
+            }
+            if (completionJudgmentMountedContextInjectedRate == null
+                || completionJudgmentMountedContextInjectedRate < 0) {
+                completionJudgmentMountedContextInjectedRate = 0.0;
+            }
             if (routeSourceCounts == null) routeSourceCounts = Map.of();
             if (executionActionCounts == null) executionActionCounts = Map.of();
             if (completionJudgmentStatusCounts == null) completionJudgmentStatusCounts = Map.of();
