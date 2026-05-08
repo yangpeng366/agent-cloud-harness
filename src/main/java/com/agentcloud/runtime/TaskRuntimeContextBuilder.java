@@ -7,6 +7,7 @@ import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.context.ContextViewBuilder;
 import com.agentcloud.runtime.context.MountedContextView;
 import com.agentcloud.store.ArtifactDao;
@@ -15,6 +16,7 @@ import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionMessageDao;
+import com.agentcloud.store.ToolInvocationDao;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,6 +34,7 @@ public class TaskRuntimeContextBuilder {
     private final ArtifactDao artifactDao;
     private final ResumePacketDao packetDao;
     private final CheckpointDao checkpointDao;
+    private final ToolInvocationDao toolInvocationDao;
     private final SessionMessageDao sessionMessageDao;
     private final ActiveContextBuilder activeContextBuilder;
     private final LearningMemoryService learningMemoryService;
@@ -41,7 +44,8 @@ public class TaskRuntimeContextBuilder {
                                      ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
                                      ActiveContextBuilder activeContextBuilder,
                                      LearningMemoryService learningMemoryService) {
-        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, null, activeContextBuilder, learningMemoryService, null);
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, null, null,
+            activeContextBuilder, learningMemoryService, null);
     }
 
     public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
@@ -49,7 +53,17 @@ public class TaskRuntimeContextBuilder {
                                      SessionMessageDao sessionMessageDao,
                                      ActiveContextBuilder activeContextBuilder,
                                      LearningMemoryService learningMemoryService) {
-        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, sessionMessageDao,
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, null, sessionMessageDao,
+            activeContextBuilder, learningMemoryService, null);
+    }
+
+    public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
+                                     ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
+                                     ToolInvocationDao toolInvocationDao,
+                                     SessionMessageDao sessionMessageDao,
+                                     ActiveContextBuilder activeContextBuilder,
+                                     LearningMemoryService learningMemoryService) {
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, toolInvocationDao, sessionMessageDao,
             activeContextBuilder, learningMemoryService, null);
     }
 
@@ -59,11 +73,23 @@ public class TaskRuntimeContextBuilder {
                                      ActiveContextBuilder activeContextBuilder,
                                      LearningMemoryService learningMemoryService,
                                      ContextViewBuilder contextViewBuilder) {
+        this(eventDao, decisionDao, artifactDao, packetDao, checkpointDao, null, sessionMessageDao,
+            activeContextBuilder, learningMemoryService, contextViewBuilder);
+    }
+
+    public TaskRuntimeContextBuilder(EventDao eventDao, DecisionDao decisionDao,
+                                     ArtifactDao artifactDao, ResumePacketDao packetDao, CheckpointDao checkpointDao,
+                                     ToolInvocationDao toolInvocationDao,
+                                     SessionMessageDao sessionMessageDao,
+                                     ActiveContextBuilder activeContextBuilder,
+                                     LearningMemoryService learningMemoryService,
+                                     ContextViewBuilder contextViewBuilder) {
         this.eventDao = eventDao;
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.packetDao = packetDao;
         this.checkpointDao = checkpointDao;
+        this.toolInvocationDao = toolInvocationDao;
         this.sessionMessageDao = sessionMessageDao;
         this.activeContextBuilder = activeContextBuilder;
         this.learningMemoryService = learningMemoryService;
@@ -88,6 +114,12 @@ public class TaskRuntimeContextBuilder {
         log.info("[RuntimeContext] query artifacts task={}", taskId);
         List<Artifact> artifacts = safeList(() -> artifactDao.listBySessionAndTask(sessionId, taskId, 20));
         log.info("[RuntimeContext] artifacts loaded task={} count={}", taskId, artifacts.size());
+
+        log.info("[RuntimeContext] query tool invocations task={}", taskId);
+        List<ToolInvocationRecord> toolInvocations = toolInvocationDao == null
+            ? List.of()
+            : safeList(() -> toolInvocationDao.listBySessionAndTask(sessionId, taskId, 12));
+        log.info("[RuntimeContext] tool invocations loaded task={} count={}", taskId, toolInvocations.size());
 
         log.info("[RuntimeContext] query recent task messages task={}", taskId);
         List<SessionMessage> messages = sessionMessageDao == null
@@ -120,11 +152,11 @@ public class TaskRuntimeContextBuilder {
         log.info("[RuntimeContext] build done task={} durationMs={}", taskId, System.currentTimeMillis() - startedAt);
 
         TaskRuntimeContext baseContext = new TaskRuntimeContext(
-            task, packet, latestCheckpoint, events, decisions, artifacts, messages, activeContext
+            task, packet, latestCheckpoint, events, decisions, artifacts, toolInvocations, messages, activeContext
         );
         MountedContextView mountedContextView = contextViewBuilder.build(baseContext);
         return new TaskRuntimeContext(
-            task, packet, latestCheckpoint, events, decisions, artifacts, messages, activeContext, mountedContextView
+            task, packet, latestCheckpoint, events, decisions, artifacts, toolInvocations, messages, activeContext, mountedContextView
         );
     }
 

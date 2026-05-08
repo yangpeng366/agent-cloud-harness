@@ -129,6 +129,25 @@ Known green at last solid checkpoint:
   - `resumePacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent`
   - `checkpointRefinedPacketKeepsPacketOnlyPromptModeAliasWhenTaskMetadataIsSilent`
 
+### 7. 2026-05-08 mounted evidence Phase-2B slice
+- extended `TaskRuntimeContext` / `TaskRuntimeContextBuilder` to carry recent `ToolInvocationRecord` entries without breaking older constructor call sites
+- mounted-context `EVIDENCE` panel now treats tool invocations as first-class evidence alongside artifacts and events
+- mounted-context `INDEX` and `ARCHIVE_HANDLES` now expose `tool_invocations` as a reloadable collection / history handle
+- added targeted regressions:
+  - `ContextViewBuilderTest.buildsMountedViewPanelsFromExistingRuntimeContext`
+  - `TaskRuntimeContextBuilderMountedContextTest.buildAttachesMountedContextViewWithoutChangingExistingRuntimeFields`
+- full Java-21 suite remained green after this slice: `221 tests, 0 failures`
+
+### 8. 2026-05-08 durable judgment evidence slice
+- mounted-context `EVIDENCE` now also promotes only durable runtime-proof decisions: `execution_judgment` and `completion_judgment`
+- mounted-context `ACTIVE` still keeps the bounded recent-decision window; this duplication is intentional because `ACTIVE` preserves live deliberation continuity while `EVIDENCE` surfaces the subset that acts as execution proof
+- `ContextObjectAdapter.decision(...)` now exposes judgment metadata such as `judgment_stage`, `selected_worker`, `action`, `status`, `alignment_level`, `next_step`, `suggested_next_action`, plus linked `tool_invocation_ids` / `evidence_refs`
+- selection trace now includes `evidence_decision_window=x/y` so durable-evidence boundedness can be reasoned about separately from the generic `decision_window`
+- regression intent:
+  - durable judgments appear in `EVIDENCE`
+  - non-durable route/debug decisions do not get promoted there
+  - full Java-21 suite remained green after this slice: `221 tests, 0 failures`
+
 ## Historical Note
 
 ### Previous suspected blocker
@@ -187,6 +206,7 @@ Return to the main roadmap path:
   - execution judgment
   - completion judgment
   - evidence interpretation
+  - next likely slice: thread `evidence_refs` / `tool_invocation_ids` through prompt rendering and live-flow diagnostics so proof edges stay visible end-to-end
 
 ## Guardrails
 

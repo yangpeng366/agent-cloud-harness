@@ -103,7 +103,7 @@ public class Main {
         // Runtime Context Builder
         TaskRuntimeContextBuilder runtimeContextBuilder =
             new TaskRuntimeContextBuilder(
-                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, sessionMessageDao,
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, toolInvocationDao, sessionMessageDao,
                 activeContextBuilder, learningMemoryService
             );
 

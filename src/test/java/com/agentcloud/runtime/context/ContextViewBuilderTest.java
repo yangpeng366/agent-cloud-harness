@@ -7,6 +7,7 @@ import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import org.junit.jupiter.api.Test;
@@ -82,7 +83,7 @@ class ContextViewBuilderTest {
             Map.of(),
             Map.of()
         );
-        Decision decision = new Decision(
+        Decision executionDecision = new Decision(
             "decision_1",
             task.sessionId(),
             task.id(),
@@ -92,7 +93,44 @@ class ContextViewBuilderTest {
             "先并行构建 mounted view，再观察 live flow 和 runtime_context 响应。",
             "high",
             null,
-            Map.of("next_step", "补 builder seam 测试")
+            Map.of(
+                "judgment_stage", "execution",
+                "selected_worker", "codex",
+                "action", "continue",
+                "next_step", "补 builder seam 测试",
+                "tool_invocation_ids", List.of("tool_1"),
+                "evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java")
+            )
+        );
+        Decision completionDecision = new Decision(
+            "decision_2",
+            task.sessionId(),
+            task.id(),
+            now.plusSeconds(3),
+            "completion_judgment",
+            "继续推进",
+            "当前阶段已对齐目标，但仍需补 mounted seam 回归。",
+            "medium",
+            null,
+            Map.of(
+                "judgment_stage", "completion",
+                "selected_worker", "codex",
+                "status", "partially_done",
+                "alignment_level", "medium",
+                "suggested_next_action", "补 mounted seam 回归测试"
+            )
+        );
+        Decision routingDecision = new Decision(
+            "decision_3",
+            task.sessionId(),
+            task.id(),
+            now.plusSeconds(3),
+            "route_preview",
+            "预览选路",
+            "仅作为调试视图，不应升入 evidence。",
+            "low",
+            null,
+            Map.of("selected_worker", "codex")
         );
         Artifact artifact = new Artifact(
             "artifact_1",
@@ -105,6 +143,22 @@ class ContextViewBuilderTest {
             null,
             "草图包含 pinned、active、evidence、index panel。",
             Map.of("suggested_next_step", "接入 TaskRuntimeContextBuilder")
+        );
+        ToolInvocationRecord toolInvocation = new ToolInvocationRecord(
+            "tool_1",
+            task.sessionId(),
+            task.id(),
+            "codex",
+            "exec_1",
+            "patch_file",
+            Map.of("path", "src/main/java/com/agentcloud/runtime/context/ContextViewBuilder.java"),
+            "已把 tool trace 纳入 mounted evidence。",
+            "succeeded",
+            true,
+            142,
+            List.of("src/main/java/com/agentcloud/runtime/context/ContextViewBuilder.java"),
+            now.plusSeconds(4),
+            Map.of("source_surface", "tool_trace")
         );
         Event event = new Event(
             "event_1",
@@ -157,8 +211,9 @@ class ContextViewBuilderTest {
             packet,
             checkpoint,
             List.of(event),
-            List.of(decision),
+            List.of(executionDecision, completionDecision, routingDecision),
             List.of(artifact),
+            List.of(toolInvocation),
             List.of(oldMessage, recentMessage),
             activeContext
         );
@@ -181,18 +236,43 @@ class ContextViewBuilderTest {
         assertTrue(mountedView.objects(MountedContextPanelName.ACTIVE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.SESSION_MESSAGE
                 && object.retentionState() == ContextRetentionState.HOT_RAW));
+        assertEquals(3, mountedView.objects(MountedContextPanelName.ACTIVE).stream()
+            .filter(object -> object.type() == ContextObjectType.DECISION)
+            .count());
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.ARTIFACT
                 && object.retentionState() == ContextRetentionState.WARM_SUMMARY));
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.TOOL_INVOCATION
+                && object.summary().contains("mounted evidence")));
+        assertEquals(2, mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .filter(object -> object.type() == ContextObjectType.DECISION)
+            .count());
+        assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.DECISION
+                && "execution".equals(object.metadata().get("judgment_stage"))
+                && "codex".equals(object.metadata().get("selected_worker"))
+                && object.summary().contains("action=continue")));
+        assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .noneMatch(object -> object.type() == ContextObjectType.DECISION
+                && "route_preview".equals(object.metadata().get("decision_type"))));
+        assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.EVENT));
         assertEquals(1, mountedView.objects(MountedContextPanelName.INDEX).size());
+        assertTrue(mountedView.objects(MountedContextPanelName.INDEX).stream()
+            .anyMatch(object -> object.summary().contains("tool_invocations=1")));
         assertTrue(mountedView.objects(MountedContextPanelName.ANCESTOR).stream()
             .anyMatch(object -> object.retentionState() == ContextRetentionState.ARCHIVED_HANDLE));
         assertEquals(2, mountedView.objects(MountedContextPanelName.SIBLING).size());
         assertFalse(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).isEmpty());
+        assertTrue(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
+            .anyMatch(object -> object.summary().contains("tool invocation evidence")));
         assertTrue(mountedView.selectionTrace().stream()
             .anyMatch(item -> item.contains("compat_mode=task_runtime_context_preserved")));
+        assertTrue(mountedView.selectionTrace().stream()
+            .anyMatch(item -> item.contains("evidence_decision_window=2/2")));
+        assertTrue(mountedView.selectionTrace().stream()
+            .anyMatch(item -> item.contains("tool_window=1/1")));
     }
 
     @Test

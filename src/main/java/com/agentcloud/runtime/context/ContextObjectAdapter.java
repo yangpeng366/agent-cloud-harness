@@ -7,6 +7,7 @@ import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 
@@ -139,24 +140,71 @@ public class ContextObjectAdapter {
             return null;
         }
         String taskPath = taskPath(task);
+        Map<String, Object> decisionMetadata = decision.metadata() == null ? Map.of() : decision.metadata();
+        List<String> toolInvocationIds = stringList(decisionMetadata, "tool_invocation_ids");
+        List<String> evidenceRefs = stringList(decisionMetadata, "evidence_refs");
+        List<ContextReference> refs = new ArrayList<>();
+        for (String toolInvocationId : toolInvocationIds) {
+            refs.add(new ContextReference(
+                "tool_invocation",
+                taskPath + "/tool_invocations/" + toolInvocationId,
+                toolInvocationId
+            ));
+        }
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "decision_type", decision.decisionType());
         putIfNotBlank(metadata, "impact_level", decision.impactLevel());
         putIfNotBlank(metadata, "supersedes_decision_id", decision.supersedesDecisionId());
+        putIfNotBlank(metadata, "judgment_stage", metadataString(decisionMetadata, "judgment_stage"));
+        putIfNotBlank(metadata, "selected_worker", metadataString(decisionMetadata, "selected_worker"));
+        putIfNotBlank(metadata, "selected_model_tier", metadataString(decisionMetadata, "selected_model_tier"));
+        putIfNotBlank(metadata, "action", metadataString(decisionMetadata, "action"));
+        putIfNotBlank(metadata, "status", metadataString(decisionMetadata, "status"));
+        putIfNotBlank(metadata, "alignment_level", metadataString(decisionMetadata, "alignment_level"));
+        putIfNotBlank(metadata, "next_step", metadataString(decisionMetadata, "next_step"));
+        putIfNotBlank(metadata, "suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"));
+        if (!toolInvocationIds.isEmpty()) {
+            metadata.put("tool_invocation_ids", toolInvocationIds);
+            metadata.put("tool_invocation_count", toolInvocationIds.size());
+        }
+        if (!evidenceRefs.isEmpty()) {
+            metadata.put("evidence_refs", evidenceRefs);
+            metadata.put("evidence_ref_count", evidenceRefs.size());
+        }
         return new ContextObject(
             decision.id(),
             taskPath + "/decisions/" + decision.id(),
             ContextObjectType.DECISION,
             taskPath,
             firstNonBlank(decision.summary(), decision.decisionType(), "decision"),
-            preview(firstNonBlank(decision.summary(), decision.rationale())),
+            preview(firstNonBlank(
+                joinSummary(
+                    labeledValue("judgment_stage", metadataString(decisionMetadata, "judgment_stage")),
+                    labeledValue("selected_worker", metadataString(decisionMetadata, "selected_worker")),
+                    labeledValue("action", metadataString(decisionMetadata, "action")),
+                    labeledValue("status", metadataString(decisionMetadata, "status")),
+                    labeledValue("next_step", metadataString(decisionMetadata, "next_step")),
+                    labeledValue("suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"))
+                ),
+                decision.summary(),
+                decision.rationale()
+            )),
             preview(multiline(
                 "summary", decision.summary(),
-                "rationale", decision.rationale()
+                "rationale", decision.rationale(),
+                "judgment_stage", metadataString(decisionMetadata, "judgment_stage"),
+                "selected_worker", metadataString(decisionMetadata, "selected_worker"),
+                "action", metadataString(decisionMetadata, "action"),
+                "status", metadataString(decisionMetadata, "status"),
+                "alignment_level", metadataString(decisionMetadata, "alignment_level"),
+                "next_step", metadataString(decisionMetadata, "next_step"),
+                "suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"),
+                "tool_invocation_ids", joinList(toolInvocationIds),
+                "evidence_refs", joinList(evidenceRefs)
             )),
             decision.createdAt(),
             ContextRetentionState.WARM_SUMMARY,
-            List.of(),
+            List.copyOf(refs),
             List.of(),
             metadata
         );
@@ -186,6 +234,59 @@ public class ContextObjectAdapter {
             artifact.createdAt(),
             ContextRetentionState.WARM_SUMMARY,
             List.of(),
+            List.of(),
+            metadata
+        );
+    }
+
+    public ContextObject toolInvocation(Task task, ToolInvocationRecord invocation) {
+        if (task == null || invocation == null) {
+            return null;
+        }
+        String taskPath = taskPath(task);
+        List<ContextReference> refs = new ArrayList<>();
+        if (!invocation.touchedPaths().isEmpty()) {
+            for (String touchedPath : invocation.touchedPaths()) {
+                if (touchedPath == null || touchedPath.isBlank()) {
+                    continue;
+                }
+                refs.add(new ContextReference("path", touchedPath, touchedPath));
+            }
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        putIfNotBlank(metadata, "tool_name", invocation.toolName());
+        putIfNotBlank(metadata, "worker_id", invocation.workerId());
+        putIfNotBlank(metadata, "execution_id", invocation.executionId());
+        putIfNotBlank(metadata, "status", invocation.status());
+        metadata.put("success", invocation.success());
+        if (invocation.elapsedMs() != null) {
+            metadata.put("elapsed_ms", invocation.elapsedMs());
+        }
+        if (!invocation.arguments().isEmpty()) {
+            metadata.put("argument_keys", invocation.arguments().keySet().stream().sorted().toList());
+        }
+        if (!invocation.touchedPaths().isEmpty()) {
+            metadata.put("touched_path_count", invocation.touchedPaths().size());
+        }
+        if (!invocation.metadata().isEmpty()) {
+            metadata.put("trace_metadata_keys", invocation.metadata().keySet().stream().sorted().toList());
+        }
+        return new ContextObject(
+            invocation.id(),
+            taskPath + "/tool_invocations/" + invocation.id(),
+            ContextObjectType.TOOL_INVOCATION,
+            taskPath,
+            firstNonBlank(invocation.toolName(), "tool invocation"),
+            preview(firstNonBlank(invocation.resultSummary(), invocation.status(), invocation.toolName())),
+            preview(multiline(
+                "tool", invocation.toolName(),
+                "status", invocation.status(),
+                "result", invocation.resultSummary(),
+                "touched_paths", joinList(invocation.touchedPaths())
+            )),
+            invocation.createdAt(),
+            ContextRetentionState.WARM_SUMMARY,
+            List.copyOf(refs),
             List.of(),
             metadata
         );
@@ -294,6 +395,7 @@ public class ContextObjectAdapter {
             new ContextReference("collection", taskPath + "/messages", "recent messages"),
             new ContextReference("collection", taskPath + "/decisions", "recent decisions"),
             new ContextReference("collection", taskPath + "/artifacts", "recent artifacts"),
+            new ContextReference("collection", taskPath + "/tool_invocations", "recent tool invocations"),
             new ContextReference("collection", taskPath + "/events", "recent events"),
             new ContextReference("collection", taskPath + "/checkpoints", "checkpoints"),
             new ContextReference("collection", taskPath + "/packets", "resume packets")
@@ -302,6 +404,7 @@ public class ContextObjectAdapter {
         metadata.put("message_count", context.recentMessages().size());
         metadata.put("decision_count", context.recentDecisions().size());
         metadata.put("artifact_count", context.recentArtifacts().size());
+        metadata.put("tool_invocation_count", context.recentToolInvocations().size());
         metadata.put("event_count", context.recentEvents().size());
         metadata.put("has_latest_packet", context.latestPacket() != null);
         metadata.put("has_latest_checkpoint", context.latestCheckpoint() != null);
@@ -311,10 +414,11 @@ public class ContextObjectAdapter {
             ContextObjectType.INDEX,
             taskPath,
             "Mounted Context Index",
-            "messages=%d, decisions=%d, artifacts=%d, events=%d".formatted(
+            "messages=%d, decisions=%d, artifacts=%d, tool_invocations=%d, events=%d".formatted(
                 context.recentMessages().size(),
                 context.recentDecisions().size(),
                 context.recentArtifacts().size(),
+                context.recentToolInvocations().size(),
                 context.recentEvents().size()
             ),
             "Use collection refs for targeted reload and retrieval.",
@@ -389,6 +493,26 @@ public class ContextObjectAdapter {
         return String.join(" | ", values);
     }
 
+    private String joinSummary(String... values) {
+        if (values == null || values.length == 0) {
+            return null;
+        }
+        List<String> present = new ArrayList<>();
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                present.add(value);
+            }
+        }
+        return present.isEmpty() ? null : String.join(" | ", present);
+    }
+
+    private String labeledValue(String label, String value) {
+        if (label == null || label.isBlank() || value == null || value.isBlank()) {
+            return null;
+        }
+        return label + "=" + value;
+    }
+
     private String multiline(String... lines) {
         List<String> values = new ArrayList<>();
         for (int i = 0; i + 1 < lines.length; i += 2) {
@@ -422,6 +546,18 @@ public class ContextObjectAdapter {
             }
         }
         return "";
+    }
+
+    private String metadataString(Map<String, Object> payload, String key) {
+        if (payload == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object raw = payload.get(key);
+        if (raw == null) {
+            return null;
+        }
+        String value = raw.toString().trim();
+        return value.isEmpty() ? null : value;
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {

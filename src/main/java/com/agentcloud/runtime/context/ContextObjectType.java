@@ -12,6 +12,7 @@ public enum ContextObjectType {
     SESSION_MESSAGE("session_message"),
     DECISION("decision"),
     ARTIFACT("artifact"),
+    TOOL_INVOCATION("tool_invocation"),
     CHECKPOINT("checkpoint"),
     RESUME_PACKET("resume_packet"),
     EVENT("event"),

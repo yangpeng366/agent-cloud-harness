@@ -5,6 +5,7 @@ import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.TaskRuntimeContext;
 
 import java.util.ArrayList;
@@ -17,6 +18,8 @@ public class ContextViewBuilder {
     private static final int ACTIVE_MESSAGE_LIMIT = 4;
     private static final int ACTIVE_DECISION_LIMIT = 3;
     private static final int EVIDENCE_ARTIFACT_LIMIT = 4;
+    private static final int EVIDENCE_DECISION_LIMIT = 3;
+    private static final int EVIDENCE_TOOL_INVOCATION_LIMIT = 3;
     private static final int EVIDENCE_EVENT_LIMIT = 3;
 
     private final ContextObjectAdapter adapter;
@@ -34,6 +37,7 @@ public class ContextViewBuilder {
             return MountedContextView.empty(null);
         }
         Task task = context.task();
+        List<Decision> durableEvidenceDecisions = durableEvidenceDecisions(context.recentDecisions());
 
         List<MountedContextPanel> panels = List.of(
             panel(MountedContextPanelName.PINNED, pinned(context)),
@@ -55,7 +59,9 @@ public class ContextViewBuilder {
             "archive_handles=" + panelCount(panels, MountedContextPanelName.ARCHIVE_HANDLES),
             "retention_states=pinned,hot_raw,warm_summary,archived_handle",
             "message_window=" + Math.min(context.recentMessages().size(), ACTIVE_MESSAGE_LIMIT) + "/" + context.recentMessages().size(),
-            "decision_window=" + Math.min(context.recentDecisions().size(), ACTIVE_DECISION_LIMIT) + "/" + context.recentDecisions().size()
+            "decision_window=" + Math.min(context.recentDecisions().size(), ACTIVE_DECISION_LIMIT) + "/" + context.recentDecisions().size(),
+            "evidence_decision_window=" + Math.min(durableEvidenceDecisions.size(), EVIDENCE_DECISION_LIMIT) + "/" + durableEvidenceDecisions.size(),
+            "tool_window=" + Math.min(context.recentToolInvocations().size(), EVIDENCE_TOOL_INVOCATION_LIMIT) + "/" + context.recentToolInvocations().size()
         );
         return new MountedContextView(null, task.id(), panels, selectionTrace);
     }
@@ -119,6 +125,12 @@ public class ContextViewBuilder {
         for (Artifact artifact : limit(context.recentArtifacts(), EVIDENCE_ARTIFACT_LIMIT)) {
             addIfPresent(objects, adapter.artifact(context.task(), artifact));
         }
+        for (ToolInvocationRecord invocation : limit(context.recentToolInvocations(), EVIDENCE_TOOL_INVOCATION_LIMIT)) {
+            addIfPresent(objects, adapter.toolInvocation(context.task(), invocation));
+        }
+        for (Decision decision : limit(durableEvidenceDecisions(context.recentDecisions()), EVIDENCE_DECISION_LIMIT)) {
+            addIfPresent(objects, adapter.decision(context.task(), decision));
+        }
         for (Event event : limit(context.recentEvents(), EVIDENCE_EVENT_LIMIT)) {
             addIfPresent(objects, adapter.event(context.task(), event));
         }
@@ -143,6 +155,9 @@ public class ContextViewBuilder {
         }
         if (!context.recentArtifacts().isEmpty()) {
             addIfPresent(objects, adapter.handle(task, "artifact-history", "Artifact History", "Reload artifact summaries or raw outputs on demand", taskPath + "/artifacts"));
+        }
+        if (!context.recentToolInvocations().isEmpty()) {
+            addIfPresent(objects, adapter.handle(task, "tool-invocation-history", "Tool Invocation History", "Reload tool invocation evidence on demand", taskPath + "/tool_invocations"));
         }
         if (!context.recentDecisions().isEmpty()) {
             addIfPresent(objects, adapter.handle(task, "decision-history", "Decision History", "Reload decision trace on demand", taskPath + "/decisions"));
@@ -175,6 +190,23 @@ public class ContextViewBuilder {
         if (target != null && value != null) {
             target.add(value);
         }
+    }
+
+    private List<Decision> durableEvidenceDecisions(List<Decision> decisions) {
+        if (decisions == null || decisions.isEmpty()) {
+            return List.of();
+        }
+        return decisions.stream()
+            .filter(this::isDurableEvidenceDecision)
+            .toList();
+    }
+
+    private boolean isDurableEvidenceDecision(Decision decision) {
+        if (decision == null || decision.decisionType() == null || decision.decisionType().isBlank()) {
+            return false;
+        }
+        return "execution_judgment".equalsIgnoreCase(decision.decisionType())
+            || "completion_judgment".equalsIgnoreCase(decision.decisionType());
     }
 
     private int panelCount(List<MountedContextPanel> panels, MountedContextPanelName target) {

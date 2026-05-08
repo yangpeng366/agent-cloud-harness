@@ -8,6 +8,7 @@ import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.context.ContextRetentionState;
 import com.agentcloud.runtime.context.ContextObjectType;
 import com.agentcloud.runtime.context.MountedContextPanelName;
@@ -17,6 +18,7 @@ import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionMessageDao;
+import com.agentcloud.store.ToolInvocationDao;
 import org.jdbi.v3.core.Handle;
 import org.jdbi.v3.core.HandleCallback;
 import org.junit.jupiter.api.Test;
@@ -76,7 +78,14 @@ class TaskRuntimeContextBuilderMountedContextTest {
             "风险可控，继续构建并行视图。",
             "medium",
             null,
-            Map.of()
+            Map.of(
+                "judgment_stage", "execution",
+                "selected_worker", "codex",
+                "action", "continue",
+                "next_step", "观察 seam 是否稳定",
+                "tool_invocation_ids", List.of("tool_1"),
+                "evidence_refs", List.of("tool:read_file:docs/ARCHITECTURE.md")
+            )
         );
         Artifact artifact = new Artifact(
             "artifact_1",
@@ -99,6 +108,22 @@ class TaskRuntimeContextBuilderMountedContextTest {
             "mounted context view 已生成。",
             Instant.parse("2026-05-06T05:00:04Z"),
             Map.of()
+        );
+        ToolInvocationRecord toolInvocation = new ToolInvocationRecord(
+            "tool_1",
+            task.sessionId(),
+            task.id(),
+            "codex",
+            "exec_1",
+            "read_file",
+            Map.of("path", "docs/ARCHITECTURE.md"),
+            "读取 architecture 文档并提取 Phase 2B 要点。",
+            "succeeded",
+            true,
+            88,
+            List.of("docs/ARCHITECTURE.md"),
+            Instant.parse("2026-05-06T05:00:04Z"),
+            Map.of("trace_kind", "tool")
         );
         ResumePacket packet = new ResumePacket(
             "packet_1",
@@ -135,6 +160,7 @@ class TaskRuntimeContextBuilderMountedContextTest {
             new StubArtifactDao(artifact),
             new StubResumePacketDao(packet),
             new StubCheckpointDao(checkpoint),
+            new StubToolInvocationDao(toolInvocation),
             new StubSessionMessageDao(message),
             new ActiveContextBuilder(
                 new ActiveContextBuilder.DefaultActiveContextPolicy(),
@@ -149,6 +175,7 @@ class TaskRuntimeContextBuilderMountedContextTest {
         assertEquals(1, runtimeContext.recentEvents().size());
         assertEquals(1, runtimeContext.recentDecisions().size());
         assertEquals(1, runtimeContext.recentArtifacts().size());
+        assertEquals(1, runtimeContext.recentToolInvocations().size());
         assertEquals(1, runtimeContext.recentMessages().size());
         assertNotNull(runtimeContext.activeContext());
         assertNotNull(runtimeContext.mountedContextView());
@@ -159,7 +186,18 @@ class TaskRuntimeContextBuilderMountedContextTest {
             .anyMatch(object -> object.type() == ContextObjectType.RESUME_PACKET));
         assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.ARTIFACT));
-        assertFalse(runtimeContext.mountedContextView().selectionTrace().isEmpty());
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.TOOL_INVOCATION
+                && object.summary().contains("architecture")));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.DECISION
+                && "execution".equals(object.metadata().get("judgment_stage"))
+                && "codex".equals(object.metadata().get("selected_worker"))
+                && object.summary().contains("action=continue")));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.INDEX).stream()
+            .anyMatch(object -> object.summary().contains("tool_invocations=1")));
+        assertTrue(runtimeContext.mountedContextView().selectionTrace().stream()
+            .anyMatch(item -> item.contains("evidence_decision_window=1/1")));
     }
 
     private static final class StubLearningMemoryService extends LearningMemoryService {
@@ -352,6 +390,33 @@ class TaskRuntimeContextBuilderMountedContextTest {
         @Override
         public void insert(String id, String sessionId, String taskId, String role, String messageType, String content, Instant createdAt, String metadataJson) {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Handle getHandle() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <R, X extends Exception> R withHandle(HandleCallback<R, X> callback) throws X {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    private record StubToolInvocationDao(ToolInvocationRecord record) implements ToolInvocationDao {
+        @Override
+        public void insertRaw(String id, String sessionId, String taskId, String workerId, String executionId, String toolName, String arguments, String resultSummary, String status, boolean success, Integer elapsedMs, String touchedPaths, Instant createdAt, String metadata) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<ToolInvocationRecord> listByTask(String taskId, int limit) {
+            return List.of(record);
+        }
+
+        @Override
+        public List<ToolInvocationRecord> listBySessionAndTask(String sessionId, String taskId, int limit) {
+            return List.of(record);
         }
 
         @Override
