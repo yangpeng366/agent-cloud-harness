@@ -159,6 +159,8 @@
 - 当前推荐动作 `recommended_action`
 - 当前推荐下一步 `recommended_next_step`
 - 触发这些判断时可见的 `runtime_context`
+- 同轮执行边界 `execution_boundary`
+- 可直接复用到诊断 UI 的 `runtime_facts`（含 route preview、tool summary、prompt mode、mounted-context rollout 信号、candidate workers、evidence refs、unfinished items）
 
 `GET /api/v1/tasks/{id}/live_flow` 当前会一次性聚合：
 
@@ -167,6 +169,8 @@
 - `route_preview`
 - `runtime_context`
 - `judgment_trace`
+- `runtime_facts`
+- `execution_boundary`
 - `checkpoints`
 - `learning_memories`
 - `tool_invocations`

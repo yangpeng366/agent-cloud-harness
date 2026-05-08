@@ -20,5 +20,6 @@ public record JudgmentTraceView(
     Decision completionJudgment,
     RuntimeFactSet.ExecutionBoundary executionBoundary,
     TaskRuntimeContext runtimeContext,
-    RuntimeFactSet runtimeFacts
+    RuntimeFactSet runtimeFacts,
+    RuntimeCognitionSurfaceView runtimeCognitionSurface
 ) {}

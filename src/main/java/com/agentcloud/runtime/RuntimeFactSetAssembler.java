@@ -41,7 +41,10 @@ public class RuntimeFactSetAssembler {
         List<ToolInvocationRecord> toolInvocations = toolInvocationDao != null
             ? toolInvocationDao.listByTask(task.id(), boundedLimit(limit))
             : List.of();
-        Map<String, Object> latestWorkerMetadata = resolveLatestWorkerMetadata(runtimeContext);
+        Map<String, Object> latestWorkerMetadata = mergeLatestWorkerMetadata(
+            latestToolInvocationMetadata(toolInvocations),
+            resolveLatestWorkerMetadata(runtimeContext)
+        );
         WorkerRouter.RouteResult routePreview = buildRoutePreview(task, latestWorkerMetadata);
 
         String latestOutput = runtimeContext == null || runtimeContext.recentArtifacts().isEmpty()
@@ -117,6 +120,44 @@ public class RuntimeFactSetAssembler {
             Map<String, Object> extracted = extractLatestWorkerMetadata(artifact.metadata());
             if (!extracted.isEmpty()) {
                 return extracted;
+            }
+        }
+        return Map.of();
+    }
+
+    private Map<String, Object> latestToolInvocationMetadata(List<ToolInvocationRecord> toolInvocations) {
+        if (toolInvocations == null || toolInvocations.isEmpty()) {
+            return Map.of();
+        }
+        for (ToolInvocationRecord invocation : toolInvocations) {
+            if (invocation == null || invocation.metadata() == null || invocation.metadata().isEmpty()) {
+                continue;
+            }
+            Map<String, Object> selected = selectLatestWorkerMetadata(invocation.metadata());
+            if (!selected.isEmpty()) {
+                if (firstNonBlank(metadataString(selected, "tool_invocation_id"), invocation.id()) != null) {
+                    selected.putIfAbsent("tool_invocation_id", invocation.id());
+                }
+                if (firstNonBlank(metadataString(selected, "execution_id"), invocation.executionId()) != null) {
+                    selected.putIfAbsent("execution_id", invocation.executionId());
+                }
+                if (firstNonBlank(metadataString(selected, "selected_worker"), invocation.workerId()) != null) {
+                    selected.putIfAbsent("selected_worker", invocation.workerId());
+                }
+                if (firstNonBlank(metadataString(selected, "execution_status"), invocation.status()) != null) {
+                    selected.putIfAbsent(
+                        "execution_status",
+                        firstNonBlank(invocation.status(), invocation.success() ? "succeeded" : "failed")
+                    );
+                }
+                if (metadataLong(selected, "duration_ms") == null && invocation.elapsedMs() != null) {
+                    selected.put("duration_ms", invocation.elapsedMs().longValue());
+                }
+                if (firstNonBlank(metadataString(selected, "tool_name"), invocation.toolName()) != null) {
+                    selected.putIfAbsent("tool_name", invocation.toolName());
+                }
+                selected.putIfAbsent("tool_success", invocation.success());
+                return selected;
             }
         }
         return Map.of();
@@ -398,8 +439,8 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(latestWorkerMetadata, metadata, "grounded_output_present");
         copyMetadataKey(latestWorkerMetadata, metadata, "missing_required_current_round_write");
         String latestToolName = firstNonBlank(
-            metadataString(latestWorkerMetadata, "tool_name"),
             latestToolNameFromTrace(latestWorkerMetadata.get("tool_chain_trace")),
+            metadataString(latestWorkerMetadata, "tool_name"),
             latestToolName(toolInvocations)
         );
         if (latestToolName != null) {
@@ -468,6 +509,14 @@ public class RuntimeFactSetAssembler {
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_chain_trace");
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_invocation_ids");
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_scope");
+        copyMetadataIfPresent(metadata, latest.metadata(), "prompt_mode");
+        copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_rendered");
+        copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_injected");
+        copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_panel_count");
+        copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_non_empty_panel_count");
+        copyMetadataIfPresent(metadata, latest.metadata(), "candidate_workers");
+        copyMetadataIfPresent(metadata, latest.metadata(), "evidence_refs");
+        copyMetadataIfPresent(metadata, latest.metadata(), "unfinished_items");
         metadata.put("latest_tool_name", latest.toolName());
 
         return new RuntimeFactSet.ExecutionBoundary(

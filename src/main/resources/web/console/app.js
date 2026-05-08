@@ -870,12 +870,13 @@ function renderInspector() {
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
     const judgmentExecutionBoundary = judgmentTrace.execution_boundary || judgmentTrace.executionBoundary;
+    const judgmentRuntimeFacts = judgmentTrace.runtime_facts || judgmentTrace.runtimeFacts || {};
     const decisionCards = [];
     if (executionJudgment) {
-        decisionCards.push(decisionCard("execution_judgment", executionJudgment, judgmentExecutionBoundary));
+        decisionCards.push(decisionCard("execution_judgment", executionJudgment, judgmentExecutionBoundary, judgmentRuntimeFacts));
     }
     if (completionJudgment) {
-        decisionCards.push(decisionCard("completion_judgment", completionJudgment, judgmentExecutionBoundary));
+        decisionCards.push(decisionCard("completion_judgment", completionJudgment, judgmentExecutionBoundary, judgmentRuntimeFacts));
     }
     decisions.slice(0, 4).forEach((decision) => {
         decisionCards.push(decisionCard(decision.decision_type || decision.decisionType || "decision", decision));
@@ -1546,8 +1547,9 @@ function overviewCard(label, value) {
     `;
 }
 
-function decisionCard(type, decision, executionBoundary = null) {
+function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
     const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
+    const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
     return `
         <div class="decision-item">
             <div class="decision-item__type">${escapeHtml(type)}</div>
@@ -1565,6 +1567,141 @@ function decisionCard(type, decision, executionBoundary = null) {
                     </div>
                 `
                 : ""}
+            ${renderDecisionDiagnostics(diagnostics)}
+        </div>
+    `;
+}
+
+function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundary = null) {
+    const surface = runtimeFacts?.runtime_cognition_surface || runtimeFacts?.runtimeCognitionSurface || {};
+    const executionSurface = surface.execution || {};
+    const executionJudgmentSurface = surface.execution_judgment || surface.executionJudgment || {};
+    const completionJudgmentSurface = surface.completion_judgment || surface.completionJudgment || {};
+    const alignmentSurface = surface.alignment || {};
+    const decisionMetadata = decision?.metadata || {};
+    const runtimeMetadata = runtimeFacts?.metadata || {};
+    const boundaryMetadata = executionBoundary?.metadata || {};
+    const promptMode = firstNonBlank(
+        decisionMetadata.prompt_mode,
+        decisionMetadata.promptMode,
+        runtimeMetadata.prompt_mode,
+        runtimeMetadata.promptMode
+    );
+    const mountedRendered = booleanValue(
+        decisionMetadata.mounted_context_rendered,
+        decisionMetadata.mountedContextRendered,
+        runtimeMetadata.mounted_context_rendered,
+        runtimeMetadata.mountedContextRendered
+    );
+    const mountedInjected = booleanValue(
+        decisionMetadata.mounted_context_injected,
+        decisionMetadata.mountedContextInjected,
+        runtimeMetadata.mounted_context_injected,
+        runtimeMetadata.mountedContextInjected
+    );
+    const panelCount = numericValue(
+        decisionMetadata.mounted_context_panel_count,
+        decisionMetadata.mountedContextPanelCount,
+        runtimeMetadata.mounted_context_panel_count,
+        runtimeMetadata.mountedContextPanelCount
+    );
+    const nonEmptyPanelCount = numericValue(
+        decisionMetadata.mounted_context_non_empty_panel_count,
+        decisionMetadata.mountedContextNonEmptyPanelCount,
+        runtimeMetadata.mounted_context_non_empty_panel_count,
+        runtimeMetadata.mountedContextNonEmptyPanelCount
+    );
+    const candidateWorkers = normalizeTextList(
+        runtimeMetadata.candidate_workers,
+        runtimeMetadata.candidateWorkers
+    );
+    const evidenceRefs = normalizeTextList(
+        decisionMetadata.evidence_refs,
+        decisionMetadata.evidenceRefs,
+        runtimeMetadata.evidence_refs,
+        runtimeMetadata.evidenceRefs,
+        boundaryMetadata.evidence_refs,
+        boundaryMetadata.evidenceRefs
+    );
+    const unfinishedItems = normalizeTextList(
+        decisionMetadata.unfinished_items,
+        decisionMetadata.unfinishedItems,
+        runtimeMetadata.unfinished_items,
+        runtimeMetadata.unfinishedItems,
+        boundaryMetadata.unfinished_items,
+        boundaryMetadata.unfinishedItems
+    );
+    const metrics = [
+        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "mounted rendered" : null,
+        mountedRendered === false ? "mounted not rendered" : null,
+        mountedInjected === true ? "mounted injected" : null,
+        mountedInjected === false ? "mounted not injected" : null,
+        panelCount ? `${panelCount} panels` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null
+    ].filter(Boolean);
+    const cognitionRows = [
+        summarizeExecutionSurface(executionSurface),
+        summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
+        summarizeJudgmentSurface("done judge", completionJudgmentSurface)
+    ].filter(Boolean);
+    const alignmentChips = summarizeAlignmentSurface(alignmentSurface);
+    return {
+        metrics,
+        candidateWorkers,
+        evidenceRefs,
+        unfinishedItems,
+        cognitionRows,
+        alignmentChips
+    };
+}
+
+function renderDecisionDiagnostics(diagnostics) {
+    const metrics = diagnostics?.metrics || [];
+    const candidateWorkers = diagnostics?.candidateWorkers || [];
+    const evidenceRefs = diagnostics?.evidenceRefs || [];
+    const unfinishedItems = diagnostics?.unfinishedItems || [];
+    const cognitionRows = diagnostics?.cognitionRows || [];
+    const alignmentChips = diagnostics?.alignmentChips || [];
+    if (metrics.length === 0
+        && candidateWorkers.length === 0
+        && evidenceRefs.length === 0
+        && unfinishedItems.length === 0
+        && cognitionRows.length === 0
+        && alignmentChips.length === 0) {
+        return "";
+    }
+    return `
+        <div class="decision-item__diagnostics">
+            ${metrics.length > 0 ? `
+                <div class="chip-list decision-item__chips">
+                    ${metrics.map((metric) => `<span class="chip">${escapeHtml(metric)}</span>`).join("")}
+                </div>
+            ` : ""}
+            ${renderCognitionSurfaceRows(cognitionRows)}
+            ${alignmentChips.length > 0 ? `
+                <div class="chip-list decision-item__chips">
+                    ${alignmentChips.map((metric) => `<span class="chip">${escapeHtml(metric)}</span>`).join("")}
+                </div>
+            ` : ""}
+            ${candidateWorkers.length > 0 ? `
+                <div class="decision-item__fact-row">
+                    <span class="task-badge">candidates</span>
+                    <strong>${escapeHtml(candidateWorkers.join(", "))}</strong>
+                </div>
+            ` : ""}
+            ${evidenceRefs.length > 0 ? `
+                <div class="decision-item__fact-row">
+                    <span class="task-badge">evidence</span>
+                    <span>${escapeHtml(evidenceRefs.join(" · "))}</span>
+                </div>
+            ` : ""}
+            ${unfinishedItems.length > 0 ? `
+                <div class="decision-item__fact-row">
+                    <span class="task-badge">unfinished</span>
+                    <span>${escapeHtml(unfinishedItems.join(" · "))}</span>
+                </div>
+            ` : ""}
         </div>
     `;
 }
@@ -2716,9 +2853,6 @@ function startPolling() {
         }
     }, 5000);
 }
-
-
-
 
 
 

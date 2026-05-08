@@ -1145,6 +1145,12 @@ button {
     border-top: 1px solid rgba(18, 32, 45, 0.08);
 }
 
+.decision-item__diagnostics {
+    margin-top: 12px;
+    display: grid;
+    gap: 8px;
+}
+
 .decision-item__meta {
     display: flex;
     flex-wrap: wrap;
@@ -1152,6 +1158,23 @@ button {
     color: var(--ink-soft);
     font-size: 12px;
     margin-bottom: 8px;
+}
+
+.decision-item__chips {
+    gap: 8px;
+}
+
+.decision-item__fact-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: baseline;
+    color: var(--ink-soft);
+    font-size: 12px;
+}
+
+.decision-item__fact-row strong {
+    color: var(--ink);
 }
 
 .raw-box summary {

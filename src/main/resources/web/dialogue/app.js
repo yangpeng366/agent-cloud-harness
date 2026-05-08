@@ -735,11 +735,13 @@ function renderDetails() {
     const decisionCards = [];
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
+    const judgmentExecutionBoundary = judgmentTrace.execution_boundary || judgmentTrace.executionBoundary;
+    const judgmentRuntimeFacts = judgmentTrace.runtime_facts || judgmentTrace.runtimeFacts || {};
     if (executionJudgment) {
-        decisionCards.push(decisionCard("execution", executionJudgment));
+        decisionCards.push(decisionCard("execution", executionJudgment, judgmentExecutionBoundary, judgmentRuntimeFacts));
     }
     if (completionJudgment) {
-        decisionCards.push(decisionCard("completion", completionJudgment));
+        decisionCards.push(decisionCard("completion", completionJudgment, judgmentExecutionBoundary, judgmentRuntimeFacts));
     }
     decisions.slice(0, 4).forEach((decision) => {
         decisionCards.push(decisionCard(decision.decision_type || decision.decisionType || "decision", decision));
@@ -1195,13 +1197,111 @@ function overviewCard(label, value) {
     `;
 }
 
-function decisionCard(type, decision) {
+function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
+    const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
+    const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
+    const bodyParts = [
+        preview(decision.rationale || decision.reason || "", 220),
+        boundaryFacts.label || boundaryFacts.traceSummary
+            ? `Execution: ${preview(boundaryFacts.traceSummary || boundaryFacts.label, 120)}`
+            : null,
+        diagnostics.metrics.length > 0 ? diagnostics.metrics.join(" · ") : null,
+        diagnostics.cognitionRows.length > 0 ? diagnostics.cognitionRows.map((row) => `${row.label}: ${row.value}`).join(" · ") : null,
+        diagnostics.alignmentChips.length > 0 ? diagnostics.alignmentChips.join(" · ") : null,
+        diagnostics.candidateWorkers.length > 0 ? `Candidates: ${diagnostics.candidateWorkers.join(", ")}` : null,
+        diagnostics.evidenceRefs.length > 0 ? `Evidence: ${diagnostics.evidenceRefs.join(" · ")}` : null,
+        diagnostics.unfinishedItems.length > 0 ? `Unfinished: ${diagnostics.unfinishedItems.join(" · ")}` : null
+    ].filter(Boolean);
     return stackItem(
         type,
         decision.summary || "no summary",
-        preview(decision.rationale || decision.reason || "", 220),
+        bodyParts.join("\n"),
         decision.created_at || decision.createdAt ? formatTime(decision.created_at || decision.createdAt) : ""
     );
+}
+
+function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundary = null) {
+    const surface = runtimeFacts?.runtime_cognition_surface || runtimeFacts?.runtimeCognitionSurface || {};
+    const executionSurface = surface.execution || {};
+    const executionJudgmentSurface = surface.execution_judgment || surface.executionJudgment || {};
+    const completionJudgmentSurface = surface.completion_judgment || surface.completionJudgment || {};
+    const alignmentSurface = surface.alignment || {};
+    const decisionMetadata = decision?.metadata || {};
+    const runtimeMetadata = runtimeFacts?.metadata || {};
+    const boundaryMetadata = executionBoundary?.metadata || {};
+    const promptMode = firstNonBlank(
+        decisionMetadata.prompt_mode,
+        decisionMetadata.promptMode,
+        runtimeMetadata.prompt_mode,
+        runtimeMetadata.promptMode
+    );
+    const mountedRendered = booleanValue(
+        decisionMetadata.mounted_context_rendered,
+        decisionMetadata.mountedContextRendered,
+        runtimeMetadata.mounted_context_rendered,
+        runtimeMetadata.mountedContextRendered
+    );
+    const mountedInjected = booleanValue(
+        decisionMetadata.mounted_context_injected,
+        decisionMetadata.mountedContextInjected,
+        runtimeMetadata.mounted_context_injected,
+        runtimeMetadata.mountedContextInjected
+    );
+    const panelCount = numericValue(
+        decisionMetadata.mounted_context_panel_count,
+        decisionMetadata.mountedContextPanelCount,
+        runtimeMetadata.mounted_context_panel_count,
+        runtimeMetadata.mountedContextPanelCount
+    );
+    const nonEmptyPanelCount = numericValue(
+        decisionMetadata.mounted_context_non_empty_panel_count,
+        decisionMetadata.mountedContextNonEmptyPanelCount,
+        runtimeMetadata.mounted_context_non_empty_panel_count,
+        runtimeMetadata.mountedContextNonEmptyPanelCount
+    );
+    const candidateWorkers = normalizeTextList(
+        runtimeMetadata.candidate_workers,
+        runtimeMetadata.candidateWorkers
+    );
+    const evidenceRefs = normalizeTextList(
+        decisionMetadata.evidence_refs,
+        decisionMetadata.evidenceRefs,
+        runtimeMetadata.evidence_refs,
+        runtimeMetadata.evidenceRefs,
+        boundaryMetadata.evidence_refs,
+        boundaryMetadata.evidenceRefs
+    );
+    const unfinishedItems = normalizeTextList(
+        decisionMetadata.unfinished_items,
+        decisionMetadata.unfinishedItems,
+        runtimeMetadata.unfinished_items,
+        runtimeMetadata.unfinishedItems,
+        boundaryMetadata.unfinished_items,
+        boundaryMetadata.unfinishedItems
+    );
+    const metrics = [
+        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "mounted rendered" : null,
+        mountedRendered === false ? "mounted not rendered" : null,
+        mountedInjected === true ? "mounted injected" : null,
+        mountedInjected === false ? "mounted not injected" : null,
+        panelCount ? `${panelCount} panels` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null
+    ].filter(Boolean);
+    const cognitionRows = [
+        summarizeExecutionSurface(executionSurface),
+        summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
+        summarizeJudgmentSurface("done judge", completionJudgmentSurface)
+    ].filter(Boolean);
+    const alignmentChips = summarizeAlignmentSurface(alignmentSurface);
+    return {
+        metrics,
+        candidateWorkers,
+        evidenceRefs,
+        unfinishedItems,
+        cognitionRows,
+        alignmentChips
+    };
 }
 
 function stackItem(label, title, body, meta) {

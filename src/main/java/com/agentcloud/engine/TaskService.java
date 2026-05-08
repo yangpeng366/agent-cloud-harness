@@ -289,6 +289,7 @@ public class TaskService {
             runtimeContext,
             judgmentTrace,
             facts,
+            buildRuntimeCognitionSurface(facts),
             checkpoints,
             learningMemories,
             toolInvocations,
@@ -316,7 +317,114 @@ public class TaskService {
             runtimeFacts.completionJudgment(),
             runtimeFacts.executionBoundary(),
             runtimeFacts.runtimeContext(),
-            runtimeFacts
+            runtimeFacts,
+            buildRuntimeCognitionSurface(runtimeFacts)
+        );
+    }
+
+    private RuntimeCognitionSurfaceView buildRuntimeCognitionSurface(RuntimeFactSet facts) {
+        RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
+        WorkerRouter.RouteResult routePreview = runtimeFacts.routePreview();
+        RuntimeFactSet.ExecutionBoundary executionBoundary = runtimeFacts.executionBoundary();
+        Decision executionJudgment = runtimeFacts.executionJudgment();
+        Decision completionJudgment = runtimeFacts.completionJudgment();
+        Map<String, Object> runtimeMetadata = runtimeFacts.metadata();
+        Map<String, Object> executionMetadata = executionBoundary != null ? executionBoundary.metadata() : Map.of();
+
+        RuntimeCognitionSurfaceView.RouteSurface routeSurface = routePreview == null ? null
+            : new RuntimeCognitionSurfaceView.RouteSurface(
+                blankToNull(routePreview.selectedWorker()),
+                blankToNull(routePreview.routeSource()),
+                blankToNull(routePreview.selectedModelTier()),
+                blankToNull(routePreview.selectedExecutionRole()),
+                blankToNull(routePreview.selectionScope()),
+                routePreview.candidateWorkers() == null ? List.of() : routePreview.candidateWorkers(),
+                blankToNull(routePreview.preferredWorkerHint()),
+                routePreview.learningHintApplied(),
+                blankToNull(routePreview.fallbackReason())
+            );
+
+        RuntimeCognitionSurfaceView.ExecutionSurface executionSurface = executionBoundary == null ? null
+            : new RuntimeCognitionSurfaceView.ExecutionSurface(
+                firstNonBlank(
+                    blankToNull(executionBoundary.workerId()),
+                    metadataString(executionMetadata, "selected_worker")
+                ),
+                blankToNull(executionBoundary.executionId()),
+                blankToNull(executionBoundary.executionStatus()),
+                executionBoundary.durationMs(),
+                executionBoundary.toolInvocationCount(),
+                blankToNull(executionBoundary.traceSummary()),
+                firstNonBlank(
+                    metadataString(executionMetadata, "prompt_mode"),
+                    metadataString(runtimeMetadata, "prompt_mode")
+                ),
+                metadataBoolean(executionMetadata, "mounted_context_rendered", runtimeMetadata),
+                metadataBoolean(executionMetadata, "mounted_context_injected", runtimeMetadata),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_context_panel_count"),
+                    metadataInteger(runtimeMetadata, "mounted_context_panel_count")
+                ),
+                metadataStringList(executionMetadata, "evidence_refs").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "evidence_refs")
+                    : metadataStringList(executionMetadata, "evidence_refs"),
+                metadataStringList(executionMetadata, "unfinished_items").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "unfinished_items")
+                    : metadataStringList(executionMetadata, "unfinished_items")
+            );
+
+        RuntimeCognitionSurfaceView.JudgmentSurface executionJudgmentSurface =
+            buildJudgmentSurface(executionJudgment, runtimeMetadata);
+        RuntimeCognitionSurfaceView.JudgmentSurface completionJudgmentSurface =
+            buildJudgmentSurface(completionJudgment, runtimeMetadata);
+
+        String routedWorker = routeSurface != null ? routeSurface.selectedWorker() : null;
+        String executedWorker = executionSurface != null ? executionSurface.workerId() : null;
+        String executionPromptMode = executionSurface != null ? executionSurface.promptMode() : null;
+        String executionJudgmentPromptMode = executionJudgmentSurface != null ? executionJudgmentSurface.promptMode() : null;
+        String completionJudgmentPromptMode = completionJudgmentSurface != null ? completionJudgmentSurface.promptMode() : null;
+
+        RuntimeCognitionSurfaceView.AlignmentSurface alignment = new RuntimeCognitionSurfaceView.AlignmentSurface(
+            alignmentFlag(routedWorker, executedWorker),
+            alignmentFlag(executionPromptMode, executionJudgmentPromptMode),
+            alignmentFlag(executionPromptMode, completionJudgmentPromptMode)
+        );
+
+        return new RuntimeCognitionSurfaceView(
+            routeSurface,
+            executionSurface,
+            executionJudgmentSurface,
+            completionJudgmentSurface,
+            alignment
+        );
+    }
+
+    private RuntimeCognitionSurfaceView.JudgmentSurface buildJudgmentSurface(Decision decision,
+                                                                             Map<String, Object> runtimeMetadata) {
+        if (decision == null) {
+            return null;
+        }
+        Map<String, Object> decisionMetadata = decision.metadata() == null ? Map.of() : decision.metadata();
+        return new RuntimeCognitionSurfaceView.JudgmentSurface(
+            firstNonBlank(
+                metadataString(decisionMetadata, "prompt_mode"),
+                metadataString(runtimeMetadata, "prompt_mode")
+            ),
+            metadataBoolean(decisionMetadata, "mounted_context_rendered", runtimeMetadata),
+            metadataBoolean(decisionMetadata, "mounted_context_injected", runtimeMetadata),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_context_panel_count"),
+                metadataInteger(runtimeMetadata, "mounted_context_panel_count")
+            ),
+            metadataStringList(decisionMetadata, "candidate_workers").isEmpty()
+                ? metadataStringList(runtimeMetadata, "candidate_workers")
+                : metadataStringList(decisionMetadata, "candidate_workers"),
+            metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
+                ? metadataStringList(runtimeMetadata, "evidence_refs")
+                : metadataStringList(decisionMetadata, "evidence_refs"),
+            metadataStringList(decisionMetadata, "unfinished_items").isEmpty()
+                ? metadataStringList(runtimeMetadata, "unfinished_items")
+                : metadataStringList(decisionMetadata, "unfinished_items")
         );
     }
 
@@ -523,6 +631,60 @@ public class TaskService {
             return null;
         }
         return stringValue(metadata.get(key));
+    }
+
+    private Boolean metadataBoolean(Map<String, Object> primary, String key, Map<String, Object> fallback) {
+        Boolean value = objectBoolean(primary != null ? primary.get(key) : null);
+        return value != null ? value : objectBoolean(fallback != null ? fallback.get(key) : null);
+    }
+
+    private Integer metadataInteger(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Integer.parseInt(text);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Boolean objectBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Boolean.parseBoolean(text);
+        }
+        return null;
+    }
+
+    private Integer firstNonNullInt(Integer... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Integer value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Boolean alignmentFlag(String left, String right) {
+        String normalizedLeft = blankToNull(left);
+        String normalizedRight = blankToNull(right);
+        if (normalizedLeft == null || normalizedRight == null) {
+            return null;
+        }
+        return normalizedLeft.equals(normalizedRight);
     }
 
     private void supplementHarnessMetadataFromToolInvocations(Map<String, Object> target, List<ToolInvocationRecord> invocations) {

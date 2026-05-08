@@ -6,6 +6,7 @@ import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.AgentRunRecord;
 import com.agentcloud.model.Artifact;
+import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
@@ -289,6 +290,125 @@ class TaskServiceLiveFlowViewTest {
     }
 
     @Test
+    void getJudgmentTraceAndLiveFlowExposeMountedContextRuntimeFacts() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-trace-runtime-facts.db"))) {
+            TaskService service = service(db);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "runtime facts task", "coding", "user", "high",
+                "把 mounted context rollout 信号带进单任务诊断面", "确认 judgment trace 和 live flow 都能读到 runtime facts", null, null, Map.of(), false
+            ));
+
+            toolInvocationDao.insert(new ToolInvocationRecord(
+                "exec_runtime_facts_1",
+                task.sessionId(),
+                task.id(),
+                "codex",
+                "exec_runtime_facts_1",
+                "read_file",
+                Map.of("path", "input.txt"),
+                "input loaded",
+                "succeeded",
+                true,
+                24,
+                List.of("input.txt"),
+                Instant.now(),
+                Map.of(
+                    "execution_status", "succeeded",
+                    "tool_execution_mode", "single_tool_round",
+                    "prompt_mode", "mounted_context_primary",
+                    "mounted_context_rendered", true,
+                    "mounted_context_injected", true,
+                    "mounted_context_panel_count", 3,
+                    "mounted_context_non_empty_panel_count", 2,
+                    "candidate_workers", List.of("codex", "kimi"),
+                    "evidence_refs", List.of("tool:read_file:input.txt"),
+                    "unfinished_items", List.of("manual_review")
+                )
+            ));
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "execution_judgment",
+                "Execution judgment: continue",
+                "judgment sees the same mounted context surface",
+                "medium",
+                null,
+                Map.of(
+                    "action", "continue",
+                    "prompt_mode", "mounted_context_primary",
+                    "mounted_context_rendered", true,
+                    "mounted_context_injected", true,
+                    "mounted_context_panel_count", 3,
+                    "candidate_workers", List.of("codex", "kimi"),
+                    "evidence_refs", List.of("tool:read_file:input.txt"),
+                    "unfinished_items", List.of("manual_review")
+                )
+            ));
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "completion_judgment",
+                "Completion judgment: partial",
+                "completion judgment also sees the same mounted context surface",
+                "medium",
+                null,
+                Map.of(
+                    "status", "partially_done",
+                    "prompt_mode", "mounted_context_primary",
+                    "mounted_context_rendered", true,
+                    "mounted_context_injected", true,
+                    "mounted_context_panel_count", 3,
+                    "candidate_workers", List.of("codex", "kimi"),
+                    "evidence_refs", List.of("tool:read_file:input.txt"),
+                    "unfinished_items", List.of("manual_review")
+                )
+            ));
+
+            var trace = service.getJudgmentTrace(task.id());
+            var flow = service.getLiveFlow(task.id(), 10);
+
+            assertEquals("mounted_context_primary", trace.runtimeFacts().metadata().get("prompt_mode"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("mounted_context_rendered"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("mounted_context_injected"));
+            assertEquals(3, ((Number) trace.runtimeFacts().metadata().get("mounted_context_panel_count")).intValue());
+            assertEquals(List.of("codex", "kimi"), trace.runtimeFacts().metadata().get("candidate_workers"));
+            assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeFacts().metadata().get("evidence_refs"));
+            assertEquals(List.of("manual_review"), trace.runtimeFacts().metadata().get("unfinished_items"));
+            assertNotNull(trace.runtimeCognitionSurface());
+            assertEquals("codex", trace.runtimeCognitionSurface().route().selectedWorker());
+            assertEquals("codex", trace.runtimeCognitionSurface().execution().workerId());
+            assertEquals("mounted_context_primary", trace.runtimeCognitionSurface().execution().promptMode());
+            assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeCognitionSurface().execution().evidenceRefs());
+            assertEquals(Boolean.TRUE,
+                trace.runtimeCognitionSurface().alignment().routeWorkerMatchesExecutionWorker());
+            assertEquals(Boolean.TRUE,
+                trace.runtimeCognitionSurface().alignment().executionAndExecutionJudgmentPromptModeAligned());
+
+            assertEquals("mounted_context_primary", flow.runtimeFacts().metadata().get("prompt_mode"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("mounted_context_rendered"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("mounted_context_injected"));
+            assertEquals(3, ((Number) flow.runtimeFacts().metadata().get("mounted_context_panel_count")).intValue());
+            assertEquals(List.of("codex", "kimi"), flow.runtimeFacts().metadata().get("candidate_workers"));
+            assertEquals(List.of("tool:read_file:input.txt"), flow.runtimeFacts().metadata().get("evidence_refs"));
+            assertEquals(List.of("manual_review"), flow.runtimeFacts().metadata().get("unfinished_items"));
+            assertNotNull(flow.runtimeCognitionSurface());
+            assertEquals("codex", flow.runtimeCognitionSurface().route().selectedWorker());
+            assertEquals("single_tool_round", flow.executionBoundary().metadata().get("tool_execution_mode"));
+            assertEquals("mounted_context_primary", flow.runtimeCognitionSurface().execution().promptMode());
+            assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
+            assertEquals(Boolean.TRUE,
+                flow.runtimeCognitionSurface().alignment().executionAndCompletionJudgmentPromptModeAligned());
+        }
+    }
+
+    @Test
     void getLiveFlowIncludesAgentRunProjection() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-agent-run.db"))) {
             TaskService service = service(db);
@@ -463,7 +583,7 @@ class TaskServiceLiveFlowViewTest {
         }
     }
 
-    private TaskService service(DatabaseManager db) {
+    TaskService service(DatabaseManager db) {
         TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
         SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
         EventDao eventDao = db.jdbi().onDemand(EventDao.class);
