@@ -25,28 +25,43 @@ public class MountedContextPromptRenderer {
     );
 
     public String render(TaskRuntimeContext context) {
+        return renderResult(context).prompt();
+    }
+
+    public MountedContextPromptRenderResult renderResult(TaskRuntimeContext context) {
         if (context == null || context.mountedContextView() == null) {
-            return "";
+            return MountedContextPromptRenderResult.empty();
         }
-        return render(context.mountedContextView());
+        return renderResult(context.mountedContextView());
     }
 
     public String render(MountedContextView view) {
+        return renderResult(view).prompt();
+    }
+
+    public MountedContextPromptRenderResult renderResult(MountedContextView view) {
         if (view == null) {
-            return "";
+            return MountedContextPromptRenderResult.empty();
         }
 
         List<String> panelLines = new ArrayList<>();
+        int renderedPanelCount = 0;
+        int renderedObjectCount = 0;
+        int hiddenObjectCount = 0;
         for (MountedContextPanelName name : MountedContextPanelName.values()) {
             MountedContextPanel panel = view.panel(name);
             List<ContextObject> objects = nonNullObjects(panel.objects());
-            if (objects == null || objects.isEmpty()) {
+            if (objects.isEmpty()) {
                 continue;
             }
+            renderedPanelCount++;
             StringBuilder line = new StringBuilder();
             line.append("- ").append(panel.title())
                 .append(" (").append(objects.size()).append(")");
-            line.append(": ").append(renderObjects(name, objects));
+            RenderedObjectSection renderedSection = renderObjects(name, objects);
+            renderedObjectCount += renderedSection.renderedObjectCount();
+            hiddenObjectCount += renderedSection.hiddenObjectCount();
+            line.append(": ").append(renderedSection.text());
             panelLines.add(line.toString());
         }
 
@@ -63,12 +78,13 @@ public class MountedContextPromptRenderer {
         for (int index = 0; index < traceLimit; index++) {
             traceLines.add("- " + truncate(traceItems.get(index), DEFAULT_PREVIEW_LIMIT));
         }
-        if (traceItems.size() > traceLimit) {
-            traceLines.add("- ... +" + (traceItems.size() - traceLimit) + " more");
+        int hiddenSelectionTraceCount = Math.max(0, traceItems.size() - traceLimit);
+        if (hiddenSelectionTraceCount > 0) {
+            traceLines.add("- ... +" + hiddenSelectionTraceCount + " more");
         }
 
         if (panelLines.isEmpty() && traceLines.isEmpty()) {
-            return "";
+            return MountedContextPromptRenderResult.empty();
         }
 
         StringBuilder sb = new StringBuilder();
@@ -82,10 +98,18 @@ public class MountedContextPromptRenderer {
                 sb.append(line).append("\n");
             }
         }
-        return sb.toString();
+        return new MountedContextPromptRenderResult(
+            sb.toString(),
+            renderedPanelCount,
+            0,
+            renderedObjectCount,
+            hiddenObjectCount,
+            traceLimit,
+            hiddenSelectionTraceCount
+        );
     }
 
-    private String renderObjects(MountedContextPanelName panelName, List<ContextObject> objects) {
+    private RenderedObjectSection renderObjects(MountedContextPanelName panelName, List<ContextObject> objects) {
         List<String> lines = new ArrayList<>();
         int limit = Math.min(objectLimit(panelName), objects.size());
         for (int index = 0; index < limit; index++) {
@@ -106,7 +130,11 @@ public class MountedContextPromptRenderer {
         if (objects.size() > limit) {
             lines.add("... +" + (objects.size() - limit) + " more");
         }
-        return String.join(" | ", lines);
+        return new RenderedObjectSection(
+            String.join(" | ", lines),
+            limit,
+            Math.max(0, objects.size() - limit)
+        );
     }
 
     private List<ContextObject> nonNullObjects(List<ContextObject> objects) {
@@ -156,4 +184,6 @@ public class MountedContextPromptRenderer {
         }
         return normalized.substring(0, Math.max(0, maxChars - 3)) + "...";
     }
+
+    private record RenderedObjectSection(String text, int renderedObjectCount, int hiddenObjectCount) {}
 }

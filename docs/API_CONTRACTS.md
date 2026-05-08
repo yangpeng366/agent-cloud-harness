@@ -188,6 +188,9 @@
 - `worker_id` / `route_source` / `prompt_mode` / `execution_status`
 - `tool_invocation_count`
 - `mounted_context_rendered` / `mounted_context_injected` / `mounted_context_panel_count`
+- `mounted_context_rendered_object_count` / `mounted_context_hidden_object_count`
+- `mounted_context_rendered_selection_trace_count` / `mounted_context_hidden_selection_trace_count`
+- `mounted_context_budget_truncated`
 - `aligned_with_previous_prompt_mode`
 - `candidate_workers`
 - `evidence_refs`
@@ -549,18 +552,39 @@
 - `mounted_context_rendered_rate`
 - `mounted_context_injected_rate`
 - `average_mounted_context_panel_count`
+- `runs_with_mounted_context_budget_data`
+- `runs_with_mounted_context_budget_truncated`
+- `mounted_context_budget_truncated_rate`
+- `average_mounted_context_rendered_object_count`
+- `average_mounted_context_hidden_object_count`
+- `average_mounted_context_rendered_selection_trace_count`
+- `average_mounted_context_hidden_selection_trace_count`
 - `runs_with_execution_judgment_prompt_mode_data`
 - `execution_judgment_prompt_mode_counts`
 - `runs_with_execution_judgment_mounted_context_rendered`
 - `runs_with_execution_judgment_mounted_context_injected`
 - `execution_judgment_mounted_context_rendered_rate`
 - `execution_judgment_mounted_context_injected_rate`
+- `runs_with_execution_judgment_mounted_context_budget_data`
+- `runs_with_execution_judgment_mounted_context_budget_truncated`
+- `execution_judgment_mounted_context_budget_truncated_rate`
+- `average_execution_judgment_mounted_context_rendered_object_count`
+- `average_execution_judgment_mounted_context_hidden_object_count`
+- `average_execution_judgment_mounted_context_rendered_selection_trace_count`
+- `average_execution_judgment_mounted_context_hidden_selection_trace_count`
 - `runs_with_completion_judgment_prompt_mode_data`
 - `completion_judgment_prompt_mode_counts`
 - `runs_with_completion_judgment_mounted_context_rendered`
 - `runs_with_completion_judgment_mounted_context_injected`
 - `completion_judgment_mounted_context_rendered_rate`
 - `completion_judgment_mounted_context_injected_rate`
+- `runs_with_completion_judgment_mounted_context_budget_data`
+- `runs_with_completion_judgment_mounted_context_budget_truncated`
+- `completion_judgment_mounted_context_budget_truncated_rate`
+- `average_completion_judgment_mounted_context_rendered_object_count`
+- `average_completion_judgment_mounted_context_hidden_object_count`
+- `average_completion_judgment_mounted_context_rendered_selection_trace_count`
+- `average_completion_judgment_mounted_context_hidden_selection_trace_count`
 
 ### 1.9 Health
 

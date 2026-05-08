@@ -119,6 +119,13 @@ class ExperimentRunServiceTest {
                     Map.entry("prompt_mode", "mounted_context_primary"),
                     Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_rendered_panel_count", 6),
+                    Map.entry("mounted_context_hidden_panel_count", 0),
+                    Map.entry("mounted_context_rendered_object_count", 18),
+                    Map.entry("mounted_context_hidden_object_count", 4),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 4),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true),
                     Map.entry("image_input_count", 2),
                     Map.entry("image_input_used", true),
                     Map.entry("latest_worker_metadata", Map.of(
@@ -206,7 +213,10 @@ class ExperimentRunServiceTest {
                     Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", true),
                     Map.entry("mounted_context_panel_count", 7),
-                    Map.entry("mounted_context_selection_trace_count", 1)
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 18),
+                    Map.entry("mounted_context_hidden_object_count", 4),
+                    Map.entry("mounted_context_budget_truncated", true)
                 )
             ));
             decisionDao.insert(new Decision(
@@ -234,7 +244,10 @@ class ExperimentRunServiceTest {
                     Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", true),
                     Map.entry("mounted_context_panel_count", 7),
-                    Map.entry("mounted_context_selection_trace_count", 1)
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 18),
+                    Map.entry("mounted_context_hidden_object_count", 4),
+                    Map.entry("mounted_context_budget_truncated", true)
                 )
             ));
 
@@ -267,6 +280,9 @@ class ExperimentRunServiceTest {
             assertEquals("mounted_context_primary", run.metadata().get("prompt_mode"));
             assertEquals(Boolean.TRUE, run.metadata().get("mounted_render_used"));
             assertEquals(7, ((Number) run.metadata().get("mounted_context_panel_count")).intValue());
+            assertEquals(18, ((Number) run.metadata().get("mounted_context_rendered_object_count")).intValue());
+            assertEquals(4, ((Number) run.metadata().get("mounted_context_hidden_object_count")).intValue());
+            assertEquals(Boolean.TRUE, run.metadata().get("mounted_context_budget_truncated"));
             assertEquals(2, ((Number) run.metadata().get("image_input_count")).intValue());
             assertEquals(Boolean.TRUE, run.metadata().get("image_input_used"));
             assertEquals("multi_tool_round", run.metadata().get("tool_execution_mode"));
@@ -285,11 +301,15 @@ class ExperimentRunServiceTest {
             assertEquals("mounted_context_primary", run.metadata().get("execution_judgment_prompt_mode"));
             assertEquals(Boolean.TRUE, run.metadata().get("execution_judgment_mounted_context_injected"));
             assertEquals(7, ((Number) run.metadata().get("execution_judgment_mounted_context_panel_count")).intValue());
+            assertEquals(18, ((Number) run.metadata().get("execution_judgment_mounted_context_rendered_object_count")).intValue());
+            assertEquals(Boolean.TRUE, run.metadata().get("execution_judgment_mounted_context_budget_truncated"));
             assertEquals("done", run.metadata().get("completion_judgment_status"));
             assertEquals("high", run.metadata().get("completion_alignment_level"));
             assertEquals("mounted_context_primary", run.metadata().get("completion_judgment_prompt_mode"));
             assertEquals(Boolean.TRUE, run.metadata().get("completion_judgment_mounted_context_injected"));
             assertEquals(7, ((Number) run.metadata().get("completion_judgment_mounted_context_panel_count")).intValue());
+            assertEquals(4, ((Number) run.metadata().get("completion_judgment_mounted_context_hidden_object_count")).intValue());
+            assertEquals(Boolean.TRUE, run.metadata().get("completion_judgment_mounted_context_budget_truncated"));
             assertEquals(Boolean.TRUE, run.metadata().get("has_route_evidence"));
             assertEquals(Boolean.TRUE, run.metadata().get("has_execution_judgment"));
             assertEquals(Boolean.TRUE, run.metadata().get("has_completion_judgment"));

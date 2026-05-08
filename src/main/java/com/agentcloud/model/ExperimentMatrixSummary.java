@@ -55,18 +55,39 @@ public record ExperimentMatrixSummary(
         Double mountedContextRenderedRate,
         Double mountedContextInjectedRate,
         Double averageMountedContextPanelCount,
+        Integer runsWithMountedContextBudgetData,
+        Integer runsWithMountedContextBudgetTruncated,
+        Double mountedContextBudgetTruncatedRate,
+        Double averageMountedContextRenderedObjectCount,
+        Double averageMountedContextHiddenObjectCount,
+        Double averageMountedContextRenderedSelectionTraceCount,
+        Double averageMountedContextHiddenSelectionTraceCount,
         Integer runsWithExecutionJudgmentPromptModeData,
         Map<String, Integer> executionJudgmentPromptModeCounts,
         Integer runsWithExecutionJudgmentMountedContextRendered,
         Integer runsWithExecutionJudgmentMountedContextInjected,
         Double executionJudgmentMountedContextRenderedRate,
         Double executionJudgmentMountedContextInjectedRate,
+        Integer runsWithExecutionJudgmentMountedContextBudgetData,
+        Integer runsWithExecutionJudgmentMountedContextBudgetTruncated,
+        Double executionJudgmentMountedContextBudgetTruncatedRate,
+        Double averageExecutionJudgmentMountedContextRenderedObjectCount,
+        Double averageExecutionJudgmentMountedContextHiddenObjectCount,
+        Double averageExecutionJudgmentMountedContextRenderedSelectionTraceCount,
+        Double averageExecutionJudgmentMountedContextHiddenSelectionTraceCount,
         Integer runsWithCompletionJudgmentPromptModeData,
         Map<String, Integer> completionJudgmentPromptModeCounts,
         Integer runsWithCompletionJudgmentMountedContextRendered,
         Integer runsWithCompletionJudgmentMountedContextInjected,
         Double completionJudgmentMountedContextRenderedRate,
         Double completionJudgmentMountedContextInjectedRate,
+        Integer runsWithCompletionJudgmentMountedContextBudgetData,
+        Integer runsWithCompletionJudgmentMountedContextBudgetTruncated,
+        Double completionJudgmentMountedContextBudgetTruncatedRate,
+        Double averageCompletionJudgmentMountedContextRenderedObjectCount,
+        Double averageCompletionJudgmentMountedContextHiddenObjectCount,
+        Double averageCompletionJudgmentMountedContextRenderedSelectionTraceCount,
+        Double averageCompletionJudgmentMountedContextHiddenSelectionTraceCount,
         Map<String, Integer> routeSourceCounts,
         Map<String, Integer> executionActionCounts,
         Map<String, Integer> completionJudgmentStatusCounts,
@@ -128,6 +149,29 @@ public record ExperimentMatrixSummary(
             if (averageMountedContextPanelCount == null || averageMountedContextPanelCount < 0) {
                 averageMountedContextPanelCount = 0.0;
             }
+            if (runsWithMountedContextBudgetData == null || runsWithMountedContextBudgetData < 0) {
+                runsWithMountedContextBudgetData = 0;
+            }
+            if (runsWithMountedContextBudgetTruncated == null || runsWithMountedContextBudgetTruncated < 0) {
+                runsWithMountedContextBudgetTruncated = 0;
+            }
+            if (mountedContextBudgetTruncatedRate == null || mountedContextBudgetTruncatedRate < 0) {
+                mountedContextBudgetTruncatedRate = 0.0;
+            }
+            if (averageMountedContextRenderedObjectCount == null || averageMountedContextRenderedObjectCount < 0) {
+                averageMountedContextRenderedObjectCount = 0.0;
+            }
+            if (averageMountedContextHiddenObjectCount == null || averageMountedContextHiddenObjectCount < 0) {
+                averageMountedContextHiddenObjectCount = 0.0;
+            }
+            if (averageMountedContextRenderedSelectionTraceCount == null
+                || averageMountedContextRenderedSelectionTraceCount < 0) {
+                averageMountedContextRenderedSelectionTraceCount = 0.0;
+            }
+            if (averageMountedContextHiddenSelectionTraceCount == null
+                || averageMountedContextHiddenSelectionTraceCount < 0) {
+                averageMountedContextHiddenSelectionTraceCount = 0.0;
+            }
             if (runsWithExecutionJudgmentPromptModeData == null || runsWithExecutionJudgmentPromptModeData < 0) {
                 runsWithExecutionJudgmentPromptModeData = 0;
             }
@@ -147,6 +191,34 @@ public record ExperimentMatrixSummary(
             if (executionJudgmentMountedContextInjectedRate == null
                 || executionJudgmentMountedContextInjectedRate < 0) {
                 executionJudgmentMountedContextInjectedRate = 0.0;
+            }
+            if (runsWithExecutionJudgmentMountedContextBudgetData == null
+                || runsWithExecutionJudgmentMountedContextBudgetData < 0) {
+                runsWithExecutionJudgmentMountedContextBudgetData = 0;
+            }
+            if (runsWithExecutionJudgmentMountedContextBudgetTruncated == null
+                || runsWithExecutionJudgmentMountedContextBudgetTruncated < 0) {
+                runsWithExecutionJudgmentMountedContextBudgetTruncated = 0;
+            }
+            if (executionJudgmentMountedContextBudgetTruncatedRate == null
+                || executionJudgmentMountedContextBudgetTruncatedRate < 0) {
+                executionJudgmentMountedContextBudgetTruncatedRate = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextRenderedObjectCount == null
+                || averageExecutionJudgmentMountedContextRenderedObjectCount < 0) {
+                averageExecutionJudgmentMountedContextRenderedObjectCount = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextHiddenObjectCount == null
+                || averageExecutionJudgmentMountedContextHiddenObjectCount < 0) {
+                averageExecutionJudgmentMountedContextHiddenObjectCount = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextRenderedSelectionTraceCount == null
+                || averageExecutionJudgmentMountedContextRenderedSelectionTraceCount < 0) {
+                averageExecutionJudgmentMountedContextRenderedSelectionTraceCount = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextHiddenSelectionTraceCount == null
+                || averageExecutionJudgmentMountedContextHiddenSelectionTraceCount < 0) {
+                averageExecutionJudgmentMountedContextHiddenSelectionTraceCount = 0.0;
             }
             if (runsWithCompletionJudgmentPromptModeData == null
                 || runsWithCompletionJudgmentPromptModeData < 0) {
@@ -168,6 +240,34 @@ public record ExperimentMatrixSummary(
             if (completionJudgmentMountedContextInjectedRate == null
                 || completionJudgmentMountedContextInjectedRate < 0) {
                 completionJudgmentMountedContextInjectedRate = 0.0;
+            }
+            if (runsWithCompletionJudgmentMountedContextBudgetData == null
+                || runsWithCompletionJudgmentMountedContextBudgetData < 0) {
+                runsWithCompletionJudgmentMountedContextBudgetData = 0;
+            }
+            if (runsWithCompletionJudgmentMountedContextBudgetTruncated == null
+                || runsWithCompletionJudgmentMountedContextBudgetTruncated < 0) {
+                runsWithCompletionJudgmentMountedContextBudgetTruncated = 0;
+            }
+            if (completionJudgmentMountedContextBudgetTruncatedRate == null
+                || completionJudgmentMountedContextBudgetTruncatedRate < 0) {
+                completionJudgmentMountedContextBudgetTruncatedRate = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextRenderedObjectCount == null
+                || averageCompletionJudgmentMountedContextRenderedObjectCount < 0) {
+                averageCompletionJudgmentMountedContextRenderedObjectCount = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextHiddenObjectCount == null
+                || averageCompletionJudgmentMountedContextHiddenObjectCount < 0) {
+                averageCompletionJudgmentMountedContextHiddenObjectCount = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextRenderedSelectionTraceCount == null
+                || averageCompletionJudgmentMountedContextRenderedSelectionTraceCount < 0) {
+                averageCompletionJudgmentMountedContextRenderedSelectionTraceCount = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextHiddenSelectionTraceCount == null
+                || averageCompletionJudgmentMountedContextHiddenSelectionTraceCount < 0) {
+                averageCompletionJudgmentMountedContextHiddenSelectionTraceCount = 0.0;
             }
             if (routeSourceCounts == null) routeSourceCounts = Map.of();
             if (executionActionCounts == null) executionActionCounts = Map.of();

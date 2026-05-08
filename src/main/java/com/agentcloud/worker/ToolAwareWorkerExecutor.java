@@ -9,6 +9,7 @@ import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.model.Worker;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
@@ -99,10 +100,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return fallbackExecutor.executeOneRound(context, workerId);
         }
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context);
+        MountedContextPromptRenderResult mountedRenderResult = renderingMode.shouldRenderMountedPrompt()
+            ? mountedContextPromptRenderer.renderResult(context)
+            : MountedContextPromptRenderResult.empty();
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
             context,
             renderingMode,
-            renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : ""
+            mountedRenderResult
         );
         log.info("Tool-aware prompt mode selected. task={}, worker={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
             context.task().id(),
@@ -114,10 +118,10 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         TaskToolState toolStateBefore = inspectTaskToolState(context);
         if (shouldUseLegacySingleToolPath(toolStateBefore)) {
             return withPromptRenderingMetadata(executeSingleToolRound(context, worker, toolStateBefore, renderingMode),
-                context, renderingMode);
+                context, renderingMode, mountedRenderResult);
         }
         return withPromptRenderingMetadata(executeMultiToolRound(context, worker, toolStateBefore, renderingMode),
-            context, renderingMode);
+            context, renderingMode, mountedRenderResult);
     }
 
     private boolean shouldUseLegacySingleToolPath(TaskToolState toolState) {
@@ -2546,7 +2550,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (task.nextStep() != null && !task.nextStep().isBlank()) {
             sb.append("Next Step: ").append(task.nextStep()).append("\n");
         }
-        appendMountedContext(sb, context, renderingMode);
+        appendMountedContext(sb, renderingMode, mountedContextPromptRenderer.renderResult(context));
         if (includeFullActiveContext
             && context.activeContext() != null
             && !context.activeContext().synthesizedContext().isBlank()) {
@@ -2569,12 +2573,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private void appendMountedContext(StringBuilder sb,
-                                      TaskRuntimeContext context,
-                                      PromptRenderingMode renderingMode) {
+                                      PromptRenderingMode renderingMode,
+                                      MountedContextPromptRenderResult mountedRenderResult) {
         if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
             return;
         }
-        String mountedPrompt = mountedContextPromptRenderer.render(context);
+        String mountedPrompt = mountedRenderResult == null ? "" : mountedRenderResult.prompt();
         if (mountedPrompt.isBlank()) {
             return;
         }
@@ -2583,13 +2587,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
 
     private WorkerExecutionResult withPromptRenderingMetadata(WorkerExecutionResult result,
                                                               TaskRuntimeContext context,
-                                                              PromptRenderingMode renderingMode) {
+                                                              PromptRenderingMode renderingMode,
+                                                              MountedContextPromptRenderResult mountedRenderResult) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         if (result.metadata() != null) {
             metadata.putAll(result.metadata());
         }
-        String mountedPrompt = renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : "";
-        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt).toMetadata());
+        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult).toMetadata());
         appendImageDiagnosticsMetadata(metadata, imageInputDiagnostics(context));
         return new WorkerExecutionResult(
             result.summary(),

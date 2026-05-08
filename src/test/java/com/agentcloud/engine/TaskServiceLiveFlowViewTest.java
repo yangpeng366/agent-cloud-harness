@@ -325,6 +325,13 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_context_panel_count", 3),
                     Map.entry("mounted_context_non_empty_panel_count", 2),
                     Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_context_rendered_panel_count", 2),
+                    Map.entry("mounted_context_hidden_panel_count", 0),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 1),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", true),
                     Map.entry("mounted_pinned_count", 1),
                     Map.entry("mounted_active_count", 2),
                     Map.entry("mounted_ancestor_count", 1),
@@ -356,6 +363,13 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_context_panel_count", 3),
                     Map.entry("mounted_context_non_empty_panel_count", 2),
                     Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_context_rendered_panel_count", 2),
+                    Map.entry("mounted_context_hidden_panel_count", 0),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 1),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", true),
                     Map.entry("mounted_pinned_count", 1),
                     Map.entry("mounted_active_count", 2),
                     Map.entry("mounted_ancestor_count", 1),
@@ -387,6 +401,13 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_context_panel_count", 3),
                     Map.entry("mounted_context_non_empty_panel_count", 2),
                     Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_context_rendered_panel_count", 2),
+                    Map.entry("mounted_context_hidden_panel_count", 0),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 1),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", true),
                     Map.entry("mounted_pinned_count", 1),
                     Map.entry("mounted_active_count", 2),
                     Map.entry("mounted_ancestor_count", 1),
@@ -417,12 +438,17 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().execution().mountedRenderUsed());
             assertEquals(2, trace.runtimeCognitionSurface().execution().mountedContextNonEmptyPanelCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedContextSelectionTraceCount());
+            assertEquals(3, trace.runtimeCognitionSurface().execution().mountedContextRenderedObjectCount());
+            assertEquals(1, trace.runtimeCognitionSurface().execution().mountedContextHiddenObjectCount());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().execution().mountedContextBudgetTruncated());
             assertEquals(2, trace.runtimeCognitionSurface().execution().mountedActiveCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedEvidenceCount());
             assertEquals(1, trace.runtimeCognitionSurface().execution().mountedArchiveCount());
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeCognitionSurface().execution().evidenceRefs());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedRenderUsed());
             assertEquals(2, trace.runtimeCognitionSurface().executionJudgment().mountedContextNonEmptyPanelCount());
+            assertEquals(3, trace.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedContextBudgetTruncated());
             assertEquals(2, trace.runtimeCognitionSurface().completionJudgment().mountedActiveCount());
             assertEquals(Boolean.TRUE,
                 trace.runtimeCognitionSurface().alignment().routeWorkerMatchesExecutionWorker());
@@ -443,10 +469,15 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().mountedRenderUsed());
             assertEquals(2, flow.runtimeCognitionSurface().execution().mountedContextNonEmptyPanelCount());
             assertEquals(1, flow.runtimeCognitionSurface().execution().mountedContextSelectionTraceCount());
+            assertEquals(3, flow.runtimeCognitionSurface().execution().mountedContextRenderedObjectCount());
+            assertEquals(1, flow.runtimeCognitionSurface().execution().mountedContextHiddenObjectCount());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().mountedContextBudgetTruncated());
             assertEquals(2, flow.runtimeCognitionSurface().execution().mountedActiveCount());
             assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
             assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
+            assertEquals(3, flow.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(1, flow.runtimeCognitionSurface().completionJudgment().mountedArchiveCount());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().completionJudgment().mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE,
                 flow.runtimeCognitionSurface().alignment().executionAndCompletionJudgmentPromptModeAligned());
             assertNotNull(flow.runtimeCognitionTimeline());
@@ -458,7 +489,15 @@ class TaskServiceLiveFlowViewTest {
                 ));
             assertEquals("codex", timelineByStage.get("route").workerId());
             assertEquals("mounted_context_primary", timelineByStage.get("execution").promptMode());
+            assertEquals(3, timelineByStage.get("execution").mountedContextRenderedObjectCount());
+            assertEquals(1, timelineByStage.get("execution").mountedContextHiddenObjectCount());
+            assertEquals(1, timelineByStage.get("execution").mountedContextRenderedSelectionTraceCount());
+            assertEquals(0, timelineByStage.get("execution").mountedContextHiddenSelectionTraceCount());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution").mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
+            assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
+            assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("tool:read_file:input.txt"),
                 timelineByStage.get("completion_judgment").evidenceRefs());
         }

@@ -22,17 +22,45 @@ public record MountedContextPromptMetrics(
     int siblingCount,
     int evidenceCount,
     int indexCount,
-    int archiveCount
+    int archiveCount,
+    int renderedPanelCount,
+    int hiddenPanelCount,
+    int renderedObjectCount,
+    int hiddenObjectCount,
+    int renderedSelectionTraceCount,
+    int hiddenSelectionTraceCount,
+    boolean budgetTruncated
 ) {
     public static MountedContextPromptMetrics from(TaskRuntimeContext context,
                                                    PromptRenderingMode renderingMode,
                                                    String mountedPrompt) {
+        return from(
+            context,
+            renderingMode,
+            new MountedContextPromptRenderResult(
+                mountedPrompt == null ? "" : mountedPrompt,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            )
+        );
+    }
+
+    public static MountedContextPromptMetrics from(TaskRuntimeContext context,
+                                                   PromptRenderingMode renderingMode,
+                                                   MountedContextPromptRenderResult renderResult) {
         MountedContextView view = context == null ? null : context.mountedContextView();
         PromptRenderingMode safeMode = renderingMode == null
             ? PromptRenderingMode.ACTIVE_CONTEXT_ONLY
             : renderingMode;
+        MountedContextPromptRenderResult safeRenderResult = renderResult == null
+            ? MountedContextPromptRenderResult.empty()
+            : renderResult;
         boolean mountedRendered = safeMode.shouldRenderMountedPrompt();
-        boolean mountedRenderUsed = mountedRendered && mountedPrompt != null && !mountedPrompt.isBlank();
+        boolean mountedRenderUsed = mountedRendered && safeRenderResult.hasPrompt();
         return new MountedContextPromptMetrics(
             safeMode.wireName(),
             mountedRendered,
@@ -47,7 +75,14 @@ public record MountedContextPromptMetrics(
             objectCount(view, MountedContextPanelName.SIBLING),
             objectCount(view, MountedContextPanelName.EVIDENCE),
             objectCount(view, MountedContextPanelName.INDEX),
-            objectCount(view, MountedContextPanelName.ARCHIVE_HANDLES)
+            objectCount(view, MountedContextPanelName.ARCHIVE_HANDLES),
+            safeRenderResult.renderedPanelCount(),
+            safeRenderResult.hiddenPanelCount(),
+            safeRenderResult.renderedObjectCount(),
+            safeRenderResult.hiddenObjectCount(),
+            safeRenderResult.renderedSelectionTraceCount(),
+            safeRenderResult.hiddenSelectionTraceCount(),
+            safeRenderResult.budgetTruncated()
         );
     }
 
@@ -71,6 +106,13 @@ public record MountedContextPromptMetrics(
         metadata.put("mounted_evidence_count", evidenceCount);
         metadata.put("mounted_index_count", indexCount);
         metadata.put("mounted_archive_count", archiveCount);
+        metadata.put(MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT, renderedPanelCount);
+        metadata.put(MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT, hiddenPanelCount);
+        metadata.put(MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT, renderedObjectCount);
+        metadata.put(MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT, hiddenObjectCount);
+        metadata.put(MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT, renderedSelectionTraceCount);
+        metadata.put(MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT, hiddenSelectionTraceCount);
+        metadata.put(MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, budgetTruncated);
         return metadata;
     }
 

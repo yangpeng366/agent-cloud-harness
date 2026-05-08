@@ -6,6 +6,7 @@ import com.agentcloud.model.*;
 import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
+import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
@@ -292,7 +293,7 @@ public class TaskService {
             judgmentTrace,
             facts,
             buildRuntimeCognitionSurface(facts),
-            buildRuntimeCognitionTimeline(facts),
+            buildRuntimeCognitionTimeline(task, facts, checkpoints),
             checkpoints,
             learningMemories,
             toolInvocations,
@@ -378,6 +379,31 @@ public class TaskService {
                     metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
                 ),
                 firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT)
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT)
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
+                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
+                ),
+                metadataBoolean(executionMetadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, runtimeMetadata),
+                firstNonNullInt(
                     metadataInteger(executionMetadata, "mounted_pinned_count"),
                     metadataInteger(runtimeMetadata, "mounted_pinned_count")
                 ),
@@ -439,10 +465,14 @@ public class TaskService {
         );
     }
 
-    private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(RuntimeFactSet facts) {
+    private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(Task task,
+                                                                                  RuntimeFactSet facts,
+                                                                                  List<Checkpoint> checkpoints) {
         RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
         RuntimeCognitionSurfaceView surface = buildRuntimeCognitionSurface(runtimeFacts);
         List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
+
+        entries.addAll(buildContinuityTimelineEntries(task, checkpoints));
 
         RuntimeCognitionTimelineEntryView routeEntry = buildRouteTimelineEntry(runtimeFacts, surface);
         if (routeEntry != null) {
@@ -503,7 +533,16 @@ public class TaskService {
             occurredAt,
             blankToNull(route.selectedWorker()),
             null,
+            null,
+            null,
+            null,
+            null,
             blankToNull(route.routeSource()),
+            null,
+            null,
+            null,
+            null,
+            null,
             null,
             null,
             null,
@@ -537,6 +576,10 @@ public class TaskService {
             "Execution Boundary",
             resolveExecutionOccurredAt(facts.executionBoundary()),
             blankToNull(execution.workerId()),
+            null,
+            null,
+            null,
+            null,
             blankToNull(execution.promptMode()),
             null,
             blankToNull(execution.executionStatus()),
@@ -544,6 +587,11 @@ public class TaskService {
             execution.mountedContextRendered(),
             execution.mountedContextInjected(),
             execution.mountedContextPanelCount(),
+            execution.mountedContextRenderedObjectCount(),
+            execution.mountedContextHiddenObjectCount(),
+            execution.mountedContextRenderedSelectionTraceCount(),
+            execution.mountedContextHiddenSelectionTraceCount(),
+            execution.mountedContextBudgetTruncated(),
             null,
             List.of(),
             execution.evidenceRefs() == null ? List.of() : execution.evidenceRefs(),
@@ -572,6 +620,10 @@ public class TaskService {
             label,
             decision.createdAt() != null ? decision.createdAt().toString() : null,
             null,
+            null,
+            null,
+            null,
+            null,
             judgmentPromptMode,
             null,
             null,
@@ -579,10 +631,142 @@ public class TaskService {
             surface.mountedContextRendered(),
             surface.mountedContextInjected(),
             surface.mountedContextPanelCount(),
+            surface.mountedContextRenderedObjectCount(),
+            surface.mountedContextHiddenObjectCount(),
+            surface.mountedContextRenderedSelectionTraceCount(),
+            surface.mountedContextHiddenSelectionTraceCount(),
+            surface.mountedContextBudgetTruncated(),
             alignmentFlag(executionPromptMode, judgmentPromptMode),
             surface.candidateWorkers() == null ? List.of() : surface.candidateWorkers(),
             surface.evidenceRefs() == null ? List.of() : surface.evidenceRefs(),
             surface.unfinishedItems() == null ? List.of() : surface.unfinishedItems(),
+            summary
+        );
+    }
+
+    private List<RuntimeCognitionTimelineEntryView> buildContinuityTimelineEntries(Task task,
+                                                                                   List<Checkpoint> checkpoints) {
+        List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
+        if (task == null) {
+            return entries;
+        }
+        List<Event> events = eventDao == null
+            ? List.of()
+            : nullToEmpty(eventDao.listBySessionAndTask(task.sessionId(), task.id(), 20));
+        for (Event event : events) {
+            RuntimeCognitionTimelineEntryView entry = buildControlActionTimelineEntry(event);
+            if (entry != null) {
+                entries.add(entry);
+            }
+        }
+        for (Checkpoint checkpoint : nullToEmpty(checkpoints)) {
+            RuntimeCognitionTimelineEntryView entry = buildCheckpointTimelineEntry(checkpoint);
+            if (entry != null) {
+                entries.add(entry);
+            }
+        }
+        return entries;
+    }
+
+    private RuntimeCognitionTimelineEntryView buildControlActionTimelineEntry(Event event) {
+        if (event == null || !"task_control_action".equals(event.eventType())) {
+            return null;
+        }
+        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        String action = metadataString(payload, "action");
+        if (action == null) {
+            return null;
+        }
+        String workerId = firstNonBlank(
+            metadataString(payload, "assigned_worker"),
+            metadataString(payload, "current_worker"),
+            metadataString(payload, "previous_worker")
+        );
+        String promptMode = firstNonBlank(
+            metadataString(payload, "prompt_mode"),
+            metadataString(payload, "mounted_context_mode"),
+            metadataString(payload, "prompt_rendering_mode")
+        );
+        String targetWorker = metadataString(payload, "target_worker");
+        String reason = metadataString(payload, "reason");
+        String summary = firstNonBlank(
+            summarizeControlActionTimeline(action, workerId, targetWorker, promptMode, reason),
+            blankToNull(event.summary())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            "continuity_action",
+            continuityActionLabel(action),
+            event.createdAt() != null ? event.createdAt().toString() : null,
+            workerId,
+            action,
+            null,
+            reason,
+            targetWorker,
+            promptMode,
+            null,
+            null,
+            null,
+            metadataBoolean(payload, "mounted_context_rendered", Map.of()),
+            metadataBoolean(payload, "mounted_context_injected", Map.of()),
+            metadataInteger(payload, "mounted_context_panel_count"),
+            metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
+            metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
+            metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
+            metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
+            metadataBoolean(payload, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, Map.of()),
+            null,
+            metadataStringList(payload, "candidate_workers"),
+            metadataStringList(payload, "evidence_refs"),
+            metadataStringList(payload, "unfinished_items"),
+            summary
+        );
+    }
+
+    private RuntimeCognitionTimelineEntryView buildCheckpointTimelineEntry(Checkpoint checkpoint) {
+        if (checkpoint == null) {
+            return null;
+        }
+        String checkpointType = blankToNull(checkpoint.checkpointType());
+        if (checkpointType == null) {
+            return null;
+        }
+        Map<String, Object> refinedPacket = checkpoint.refinedPacket() == null ? Map.of() : checkpoint.refinedPacket();
+        Map<String, Object> metadata = checkpoint.metadata() == null ? Map.of() : checkpoint.metadata();
+        String workerId = firstNonBlank(
+            metadataString(refinedPacket, "assigned_worker"),
+            metadataString(metadata, "assigned_worker")
+        );
+        String promptMode = firstNonBlank(
+            metadataString(refinedPacket, "prompt_mode"),
+            metadataString(refinedPacket, "mounted_context_mode"),
+            metadataString(refinedPacket, "prompt_rendering_mode")
+        );
+        String summary = firstNonBlank(
+            summarizeCheckpointTimeline(checkpointType, workerId, promptMode, checkpoint.consolidationSummary()),
+            blankToNull(checkpoint.consolidationSummary())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            "checkpoint",
+            checkpointLabel(checkpointType),
+            checkpoint.createdAt() != null ? checkpoint.createdAt().toString() : null,
+            workerId,
+            null,
+            checkpointType,
+            null,
+            null,
+            promptMode,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            metadataStringList(refinedPacket, "candidate_workers"),
+            metadataStringList(refinedPacket, "evidence_refs"),
+            metadataStringList(refinedPacket, "open_questions"),
             summary
         );
     }
@@ -633,9 +817,16 @@ public class TaskService {
         String promptMode = blankToNull(execution.promptMode());
         String trace = blankToNull(execution.traceSummary());
         String tools = execution.toolInvocationCount() == null ? null : execution.toolInvocationCount() + " tools";
+        String budget = mountedBudgetSummary(
+            execution.mountedContextRenderedObjectCount(),
+            execution.mountedContextHiddenObjectCount(),
+            execution.mountedContextRenderedSelectionTraceCount(),
+            execution.mountedContextHiddenSelectionTraceCount(),
+            execution.mountedContextBudgetTruncated()
+        );
         return firstNonBlank(
-            joinSummary(status, promptMode, tools, trace),
-            joinSummary(status, promptMode, trace),
+            joinSummary(status, promptMode, tools, budget, trace),
+            joinSummary(status, promptMode, budget, trace),
             status
         );
     }
@@ -645,10 +836,103 @@ public class TaskService {
         String promptMode = surface != null ? blankToNull(surface.promptMode()) : null;
         String action = decision != null ? metadataString(decision.metadata(), "action") : null;
         String status = decision != null ? metadataString(decision.metadata(), "status") : null;
+        String budget = surface == null ? null : mountedBudgetSummary(
+            surface.mountedContextRenderedObjectCount(),
+            surface.mountedContextHiddenObjectCount(),
+            surface.mountedContextRenderedSelectionTraceCount(),
+            surface.mountedContextHiddenSelectionTraceCount(),
+            surface.mountedContextBudgetTruncated()
+        );
         return firstNonBlank(
-            joinSummary(promptMode, action, status),
-            joinSummary(promptMode, status),
+            joinSummary(promptMode, action, status, budget),
+            joinSummary(promptMode, status, budget),
             promptMode
+        );
+    }
+
+    private String summarizeControlActionTimeline(String action,
+                                                  String workerId,
+                                                  String targetWorker,
+                                                  String promptMode,
+                                                  String reason) {
+        String workerTransition = joinArrow(workerId, targetWorker);
+        return firstNonBlank(
+            joinSummary(action, workerTransition, promptMode, reason),
+            joinSummary(action, workerTransition, promptMode),
+            action
+        );
+    }
+
+    private String summarizeCheckpointTimeline(String checkpointType,
+                                               String workerId,
+                                               String promptMode,
+                                               String consolidationSummary) {
+        return firstNonBlank(
+            joinSummary(checkpointType, workerId, promptMode),
+            joinSummary(checkpointType, workerId),
+            blankToNull(consolidationSummary),
+            checkpointType
+        );
+    }
+
+    private String joinArrow(String left, String right) {
+        String normalizedLeft = blankToNull(left);
+        String normalizedRight = blankToNull(right);
+        if (normalizedLeft == null && normalizedRight == null) {
+            return null;
+        }
+        if (normalizedLeft == null) {
+            return normalizedRight;
+        }
+        if (normalizedRight == null) {
+            return normalizedLeft;
+        }
+        if (normalizedLeft.equals(normalizedRight)) {
+            return normalizedLeft;
+        }
+        return normalizedLeft + " -> " + normalizedRight;
+    }
+
+    private String continuityActionLabel(String action) {
+        return switch (action == null ? "" : action) {
+            case "pause" -> "Paused";
+            case "resume" -> "Resumed";
+            case "continue" -> "Continued";
+            case "handoff" -> "Handed Off";
+            case "escalate" -> "Escalated";
+            default -> "Continuity Action";
+        };
+    }
+
+    private String checkpointLabel(String checkpointType) {
+        return switch (checkpointType == null ? "" : checkpointType) {
+            case "pause_before" -> "Pause Checkpoint";
+            case "handoff_before" -> "Handoff Checkpoint";
+            case "escalate_before" -> "Escalation Checkpoint";
+            case "halt_before" -> "Halt Checkpoint";
+            case "session_end" -> "Session End Checkpoint";
+            case "periodic" -> "Periodic Checkpoint";
+            default -> "Checkpoint";
+        };
+    }
+
+    private String mountedBudgetSummary(Integer renderedObjectCount,
+                                        Integer hiddenObjectCount,
+                                        Integer renderedSelectionTraceCount,
+                                        Integer hiddenSelectionTraceCount,
+                                        Boolean budgetTruncated) {
+        String objects = renderedObjectCount == null && hiddenObjectCount == null
+            ? null
+            : firstNonNullInt(renderedObjectCount, 0) + "/" + firstNonNullInt(hiddenObjectCount, 0) + " objects";
+        String traces = renderedSelectionTraceCount == null && hiddenSelectionTraceCount == null
+            ? null
+            : firstNonNullInt(renderedSelectionTraceCount, 0) + "/" + firstNonNullInt(hiddenSelectionTraceCount, 0)
+                + " traces";
+        String truncated = Boolean.TRUE.equals(budgetTruncated) ? "budget truncated" : null;
+        return firstNonBlank(
+            joinSummary(objects, traces, truncated),
+            joinSummary(objects, traces),
+            truncated
         );
     }
 
@@ -690,6 +974,31 @@ public class TaskService {
                 metadataInteger(decisionMetadata, "mounted_context_selection_trace_count"),
                 metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
             ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
+                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
+            ),
+            metadataBoolean(decisionMetadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, runtimeMetadata),
             firstNonNullInt(
                 metadataInteger(decisionMetadata, "mounted_pinned_count"),
                 metadataInteger(runtimeMetadata, "mounted_pinned_count")

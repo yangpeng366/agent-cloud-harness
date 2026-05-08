@@ -273,6 +273,49 @@ public class ExperimentMatrixService {
                     .mapToInt(Integer::intValue)
                     .average()
                     .orElse(0.0));
+            List<Integer> observedMountedContextRenderedObjectCounts = metadataInts(
+                runsByMode,
+                "mounted_context_rendered_object_count"
+            );
+            List<Integer> observedMountedContextHiddenObjectCounts = metadataInts(
+                runsByMode,
+                "mounted_context_hidden_object_count"
+            );
+            List<Integer> observedMountedContextRenderedSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "mounted_context_rendered_selection_trace_count"
+            );
+            List<Integer> observedMountedContextHiddenSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "mounted_context_hidden_selection_trace_count"
+            );
+            int runsWithMountedContextBudgetData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> hasAnyMetadataKey(
+                    metadata,
+                    "mounted_context_rendered_object_count",
+                    "mounted_context_hidden_object_count",
+                    "mounted_context_rendered_selection_trace_count",
+                    "mounted_context_hidden_selection_trace_count",
+                    "mounted_context_budget_truncated"
+                ))
+                .count();
+            int runsWithMountedContextBudgetTruncated = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "mounted_context_budget_truncated"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double mountedContextBudgetTruncatedRate = runsWithMountedContextBudgetData == 0
+                ? 0.0
+                : roundToThree((double) runsWithMountedContextBudgetTruncated / runsWithMountedContextBudgetData);
+            double averageMountedContextRenderedObjectCount = averageIntList(observedMountedContextRenderedObjectCounts);
+            double averageMountedContextHiddenObjectCount = averageIntList(observedMountedContextHiddenObjectCounts);
+            double averageMountedContextRenderedSelectionTraceCount = averageIntList(
+                observedMountedContextRenderedSelectionTraceCounts
+            );
+            double averageMountedContextHiddenSelectionTraceCount = averageIntList(
+                observedMountedContextHiddenSelectionTraceCounts
+            );
             int runsWithExecutionJudgmentPromptModeData = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataString(metadata, "execution_judgment_prompt_mode"))
@@ -296,6 +339,55 @@ public class ExperimentMatrixService {
                 ? 0.0
                 : roundToThree((double) runsWithExecutionJudgmentMountedContextInjected
                     / runsWithExecutionJudgmentPromptModeData);
+            List<Integer> observedExecutionJudgmentMountedContextRenderedObjectCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_context_rendered_object_count"
+            );
+            List<Integer> observedExecutionJudgmentMountedContextHiddenObjectCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_context_hidden_object_count"
+            );
+            List<Integer> observedExecutionJudgmentMountedContextRenderedSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_context_rendered_selection_trace_count"
+            );
+            List<Integer> observedExecutionJudgmentMountedContextHiddenSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_context_hidden_selection_trace_count"
+            );
+            int runsWithExecutionJudgmentMountedContextBudgetData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> hasAnyMetadataKey(
+                    metadata,
+                    "execution_judgment_mounted_context_rendered_object_count",
+                    "execution_judgment_mounted_context_hidden_object_count",
+                    "execution_judgment_mounted_context_rendered_selection_trace_count",
+                    "execution_judgment_mounted_context_hidden_selection_trace_count",
+                    "execution_judgment_mounted_context_budget_truncated"
+                ))
+                .count();
+            int runsWithExecutionJudgmentMountedContextBudgetTruncated = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_context_budget_truncated"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double executionJudgmentMountedContextBudgetTruncatedRate =
+                runsWithExecutionJudgmentMountedContextBudgetData == 0
+                    ? 0.0
+                    : roundToThree((double) runsWithExecutionJudgmentMountedContextBudgetTruncated
+                        / runsWithExecutionJudgmentMountedContextBudgetData);
+            double averageExecutionJudgmentMountedContextRenderedObjectCount = averageIntList(
+                observedExecutionJudgmentMountedContextRenderedObjectCounts
+            );
+            double averageExecutionJudgmentMountedContextHiddenObjectCount = averageIntList(
+                observedExecutionJudgmentMountedContextHiddenObjectCounts
+            );
+            double averageExecutionJudgmentMountedContextRenderedSelectionTraceCount = averageIntList(
+                observedExecutionJudgmentMountedContextRenderedSelectionTraceCounts
+            );
+            double averageExecutionJudgmentMountedContextHiddenSelectionTraceCount = averageIntList(
+                observedExecutionJudgmentMountedContextHiddenSelectionTraceCounts
+            );
             int runsWithCompletionJudgmentPromptModeData = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataString(metadata, "completion_judgment_prompt_mode"))
@@ -319,6 +411,55 @@ public class ExperimentMatrixService {
                 ? 0.0
                 : roundToThree((double) runsWithCompletionJudgmentMountedContextInjected
                     / runsWithCompletionJudgmentPromptModeData);
+            List<Integer> observedCompletionJudgmentMountedContextRenderedObjectCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_context_rendered_object_count"
+            );
+            List<Integer> observedCompletionJudgmentMountedContextHiddenObjectCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_context_hidden_object_count"
+            );
+            List<Integer> observedCompletionJudgmentMountedContextRenderedSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_context_rendered_selection_trace_count"
+            );
+            List<Integer> observedCompletionJudgmentMountedContextHiddenSelectionTraceCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_context_hidden_selection_trace_count"
+            );
+            int runsWithCompletionJudgmentMountedContextBudgetData = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> hasAnyMetadataKey(
+                    metadata,
+                    "completion_judgment_mounted_context_rendered_object_count",
+                    "completion_judgment_mounted_context_hidden_object_count",
+                    "completion_judgment_mounted_context_rendered_selection_trace_count",
+                    "completion_judgment_mounted_context_hidden_selection_trace_count",
+                    "completion_judgment_mounted_context_budget_truncated"
+                ))
+                .count();
+            int runsWithCompletionJudgmentMountedContextBudgetTruncated = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_context_budget_truncated"))
+                .filter(Boolean.TRUE::equals)
+                .count();
+            double completionJudgmentMountedContextBudgetTruncatedRate =
+                runsWithCompletionJudgmentMountedContextBudgetData == 0
+                    ? 0.0
+                    : roundToThree((double) runsWithCompletionJudgmentMountedContextBudgetTruncated
+                        / runsWithCompletionJudgmentMountedContextBudgetData);
+            double averageCompletionJudgmentMountedContextRenderedObjectCount = averageIntList(
+                observedCompletionJudgmentMountedContextRenderedObjectCounts
+            );
+            double averageCompletionJudgmentMountedContextHiddenObjectCount = averageIntList(
+                observedCompletionJudgmentMountedContextHiddenObjectCounts
+            );
+            double averageCompletionJudgmentMountedContextRenderedSelectionTraceCount = averageIntList(
+                observedCompletionJudgmentMountedContextRenderedSelectionTraceCounts
+            );
+            double averageCompletionJudgmentMountedContextHiddenSelectionTraceCount = averageIntList(
+                observedCompletionJudgmentMountedContextHiddenSelectionTraceCounts
+            );
             Map<String, Integer> promptModeCounts = countMetadataValues(runsByMode, "prompt_mode");
             Map<String, Integer> executionJudgmentPromptModeCounts = countMetadataValues(
                 runsByMode, "execution_judgment_prompt_mode"
@@ -394,18 +535,39 @@ public class ExperimentMatrixService {
                 mountedContextRenderedRate,
                 mountedContextInjectedRate,
                 averageMountedContextPanelCount,
+                runsWithMountedContextBudgetData,
+                runsWithMountedContextBudgetTruncated,
+                mountedContextBudgetTruncatedRate,
+                averageMountedContextRenderedObjectCount,
+                averageMountedContextHiddenObjectCount,
+                averageMountedContextRenderedSelectionTraceCount,
+                averageMountedContextHiddenSelectionTraceCount,
                 runsWithExecutionJudgmentPromptModeData,
                 executionJudgmentPromptModeCounts,
                 runsWithExecutionJudgmentMountedContextRendered,
                 runsWithExecutionJudgmentMountedContextInjected,
                 executionJudgmentMountedContextRenderedRate,
                 executionJudgmentMountedContextInjectedRate,
+                runsWithExecutionJudgmentMountedContextBudgetData,
+                runsWithExecutionJudgmentMountedContextBudgetTruncated,
+                executionJudgmentMountedContextBudgetTruncatedRate,
+                averageExecutionJudgmentMountedContextRenderedObjectCount,
+                averageExecutionJudgmentMountedContextHiddenObjectCount,
+                averageExecutionJudgmentMountedContextRenderedSelectionTraceCount,
+                averageExecutionJudgmentMountedContextHiddenSelectionTraceCount,
                 runsWithCompletionJudgmentPromptModeData,
                 completionJudgmentPromptModeCounts,
                 runsWithCompletionJudgmentMountedContextRendered,
                 runsWithCompletionJudgmentMountedContextInjected,
                 completionJudgmentMountedContextRenderedRate,
                 completionJudgmentMountedContextInjectedRate,
+                runsWithCompletionJudgmentMountedContextBudgetData,
+                runsWithCompletionJudgmentMountedContextBudgetTruncated,
+                completionJudgmentMountedContextBudgetTruncatedRate,
+                averageCompletionJudgmentMountedContextRenderedObjectCount,
+                averageCompletionJudgmentMountedContextHiddenObjectCount,
+                averageCompletionJudgmentMountedContextRenderedSelectionTraceCount,
+                averageCompletionJudgmentMountedContextHiddenSelectionTraceCount,
                 routeSourceCounts,
                 executionActionCounts,
                 completionJudgmentStatusCounts,
@@ -609,6 +771,36 @@ public class ExperimentMatrixService {
                 (left, right) -> left,
                 LinkedHashMap::new
             ));
+    }
+
+    private List<Integer> metadataInts(List<ExperimentRunRecord> runs, String key) {
+        if (runs == null || runs.isEmpty() || key == null || key.isBlank()) {
+            return List.of();
+        }
+        return runs.stream()
+            .map(ExperimentRunRecord::metadata)
+            .map(metadata -> metadataInt(metadata, key))
+            .filter(value -> value != null && value >= 0)
+            .toList();
+    }
+
+    private boolean hasAnyMetadataKey(Map<String, Object> metadata, String... keys) {
+        if (metadata == null || metadata.isEmpty() || keys == null) {
+            return false;
+        }
+        for (String key : keys) {
+            if (key != null && !key.isBlank() && metadata.containsKey(key) && metadata.get(key) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private double averageIntList(List<Integer> values) {
+        if (values == null || values.isEmpty()) {
+            return 0.0;
+        }
+        return roundToThree(values.stream().mapToInt(Integer::intValue).average().orElse(0.0));
     }
 
     private Integer firstPositiveInt(Integer... values) {

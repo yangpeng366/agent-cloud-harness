@@ -3,6 +3,7 @@ package com.agentcloud.judgment;
 import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.runtime.model.RuntimeFactSet;
@@ -246,6 +247,15 @@ public class PromptBasedJudgmentService implements JudgmentService {
             appendMetadataLine(sb, executionBoundary.metadata(), "tool_execution_mode");
             appendMetadataLine(sb, executionBoundary.metadata(), "tool_chain_step_count");
             appendMetadataLine(sb, executionBoundary.metadata(), "tool_chain_termination_reason");
+            appendMetadataLine(sb, executionBoundary.metadata(), "prompt_mode");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_rendered");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_render_used");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_injected");
+            appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+            appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+            appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+            appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+            appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
             appendMetadataLine(sb, executionBoundary.metadata(), "grounded_output_present");
             appendMetadataLine(sb, executionBoundary.metadata(), "missing_required_current_round_write");
             appendMetadataLine(sb, executionBoundary.metadata(), "evidence_refs");
@@ -286,6 +296,11 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendMetadataLine(sb, metadata, "has_route_preview");
         appendMetadataLine(sb, metadata, "has_latest_packet");
         appendMetadataLine(sb, metadata, "has_latest_checkpoint");
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
     }
 
     private void appendLatestWorkerMetadata(StringBuilder sb, Map<String, Object> metadata) {
@@ -331,6 +346,13 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendMetadataLine(sb, metadata, "missing_required_current_round_write");
         appendMetadataLine(sb, metadata, "current_round_instruction");
         appendMetadataLine(sb, metadata, "next_round_instruction");
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+        appendMetadataLine(sb, metadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
     }
 
     private void appendMetadataLine(StringBuilder sb, Map<String, Object> metadata, String key) {

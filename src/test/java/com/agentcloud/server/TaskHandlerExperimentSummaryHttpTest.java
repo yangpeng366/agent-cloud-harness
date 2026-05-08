@@ -50,35 +50,54 @@ class TaskHandlerExperimentSummaryHttpTest {
             Task smallTask = fixture.createExperimentTask("small_only");
             Task orchestratedTask = fixture.createExperimentTask("orchestrated");
 
-            fixture.insertRouteArtifact(strongTask, Map.of(
-                "route_source", "capability_match",
-                "selected_model_tier", "strong",
-                "prompt_mode", "active_context_only",
-                "mounted_context_rendered", false,
-                "mounted_context_injected", false
+            fixture.insertRouteArtifact(strongTask, Map.ofEntries(
+                Map.entry("route_source", "capability_match"),
+                Map.entry("selected_model_tier", "strong"),
+                Map.entry("prompt_mode", "active_context_only"),
+                Map.entry("mounted_context_rendered", false),
+                Map.entry("mounted_context_injected", false),
+                Map.entry("mounted_context_rendered_object_count", 0),
+                Map.entry("mounted_context_hidden_object_count", 0),
+                Map.entry("mounted_context_rendered_selection_trace_count", 0),
+                Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                Map.entry("mounted_context_budget_truncated", false)
             ));
-            fixture.insertRouteArtifact(smallTask, Map.of(
-                "route_source", "capability_match",
-                "preferred_worker_hint", "codex",
-                "learning_hint_applied", false,
-                "fallback_reason", "hint filtered by model tier",
-                "selected_model_tier", "small",
-                "prompt_mode", "mounted_context_shadow",
-                "mounted_context_rendered", true,
-                "mounted_context_injected", false,
-                "mounted_context_panel_count", 5
+            fixture.insertRouteArtifact(smallTask, Map.ofEntries(
+                Map.entry("route_source", "capability_match"),
+                Map.entry("preferred_worker_hint", "codex"),
+                Map.entry("learning_hint_applied", false),
+                Map.entry("fallback_reason", "hint filtered by model tier"),
+                Map.entry("selected_model_tier", "small"),
+                Map.entry("prompt_mode", "mounted_context_shadow"),
+                Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_context_injected", false),
+                Map.entry("mounted_context_panel_count", 5),
+                Map.entry("mounted_context_rendered_object_count", 6),
+                Map.entry("mounted_context_hidden_object_count", 2),
+                Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                Map.entry("mounted_context_budget_truncated", true)
             ));
-            fixture.insertRouteArtifact(orchestratedTask, Map.of(
-                "route_source", "learning_memory",
-                "preferred_worker_hint", "kimi",
-                "learning_hint_applied", true,
-                "fallback_reason", "hint survived tier filter",
-                "selected_model_tier", "small",
-                "prompt_mode", "mounted_context_primary",
-                "mounted_context_rendered", true,
-                "mounted_context_injected", true,
-                "mounted_context_panel_count", 7
+            fixture.insertRouteArtifact(orchestratedTask, Map.ofEntries(
+                Map.entry("route_source", "learning_memory"),
+                Map.entry("preferred_worker_hint", "kimi"),
+                Map.entry("learning_hint_applied", true),
+                Map.entry("fallback_reason", "hint survived tier filter"),
+                Map.entry("selected_model_tier", "small"),
+                Map.entry("prompt_mode", "mounted_context_primary"),
+                Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_context_injected", true),
+                Map.entry("mounted_context_panel_count", 7),
+                Map.entry("mounted_context_rendered_object_count", 9),
+                Map.entry("mounted_context_hidden_object_count", 1),
+                Map.entry("mounted_context_rendered_selection_trace_count", 3),
+                Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                Map.entry("mounted_context_budget_truncated", true)
             ));
+
+            fixture.insertJudgments(strongTask, "done", "done", "high");
+            fixture.insertJudgments(smallTask, "escalate", "misaligned", "low");
+            fixture.insertJudgments(orchestratedTask, "checkpoint", "partially_done", "medium");
 
             fixture.service.updateTaskState(strongTask.id(), "done", "baseline strong completed");
             fixture.service.updateTaskState(smallTask.id(), "failed", "baseline small stalled");
@@ -101,7 +120,7 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(1, orchestratedSummary.path("learning_hint_applied_count").asInt());
             assertEquals(1.0, orchestratedSummary.path("learning_hint_applied_rate").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_task_surface_refs").asInt());
-            assertEquals(0, orchestratedSummary.path("runs_with_judgment_surface_refs").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_judgment_surface_refs").asInt());
             assertEquals(0, orchestratedSummary.path("runs_with_tool_trace_surface_refs").asInt());
             assertEquals(1, orchestratedSummary.path("route_source_counts").path("learning_memory").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_prompt_mode_data").asInt());
@@ -111,6 +130,19 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(1.0, orchestratedSummary.path("mounted_context_rendered_rate").asDouble());
             assertEquals(1.0, orchestratedSummary.path("mounted_context_injected_rate").asDouble());
             assertEquals(7.0, orchestratedSummary.path("average_mounted_context_panel_count").asDouble());
+            assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_budget_data").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_budget_truncated").asInt());
+            assertEquals(1.0, orchestratedSummary.path("mounted_context_budget_truncated_rate").asDouble());
+            assertEquals(9.0, orchestratedSummary.path("average_mounted_context_rendered_object_count").asDouble());
+            assertEquals(1.0, orchestratedSummary.path("average_mounted_context_hidden_object_count").asDouble());
+            assertEquals(3.0, orchestratedSummary.path("average_mounted_context_rendered_selection_trace_count").asDouble());
+            assertEquals(0.0, orchestratedSummary.path("average_mounted_context_hidden_selection_trace_count").asDouble());
+            assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_data").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_truncated").asInt());
+            assertEquals(1.0, orchestratedSummary.path("execution_judgment_mounted_context_budget_truncated_rate").asDouble());
+            assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_data").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_truncated").asInt());
+            assertEquals(1.0, orchestratedSummary.path("completion_judgment_mounted_context_budget_truncated_rate").asDouble());
             assertEquals("needs_followup",
                 body.path("data").path("case_comparisons").get(0).path("runs_by_mode").path("orchestrated").path("acceptance_result").asText());
         }
@@ -142,6 +174,7 @@ class TaskHandlerExperimentSummaryHttpTest {
         private final DatabaseManager db;
         private final TaskService service;
         private final ArtifactDao artifactDao;
+        private final DecisionDao decisionDao;
         private final HttpServer server;
         private final ExecutorService executor;
         private final HttpClient client;
@@ -153,14 +186,14 @@ class TaskHandlerExperimentSummaryHttpTest {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
             EventDao eventDao = db.jdbi().onDemand(EventDao.class);
             ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
-            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            this.decisionDao = db.jdbi().onDemand(DecisionDao.class);
             this.artifactDao = db.jdbi().onDemand(ArtifactDao.class);
             ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
             ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
 
             ExperimentRunService experimentRunService = new ExperimentRunService(
                 experimentRunDao,
-                decisionDao,
+                this.decisionDao,
                 artifactDao,
                 eventDao,
                 toolInvocationDao
@@ -228,6 +261,96 @@ class TaskHandlerExperimentSummaryHttpTest {
                 "seed route metadata for experiment summary",
                 metadata
             ));
+        }
+
+        private void insertJudgments(Task task,
+                                     String executionAction,
+                                     String completionStatus,
+                                     String alignmentLevel) {
+            decisionDao.insert(new com.agentcloud.model.Decision(
+                com.agentcloud.engine.IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "execution_judgment",
+                "Execution judgment: " + executionAction,
+                "seed execution judgment for experiment summary http test",
+                "medium",
+                null,
+                executionMetadata(task, executionAction)
+            ));
+            decisionDao.insert(new com.agentcloud.model.Decision(
+                com.agentcloud.engine.IdGenerator.newId("dec"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "completion_judgment",
+                "Completion judgment: " + completionStatus,
+                "seed completion judgment for experiment summary http test",
+                "medium",
+                null,
+                completionMetadata(task, completionStatus, alignmentLevel)
+            ));
+        }
+
+        private Map<String, Object> executionMetadata(Task task, String action) {
+            var metadata = new java.util.LinkedHashMap<String, Object>();
+            metadata.put("action", action);
+            metadata.putAll(judgmentPromptMetadata(task));
+            if (task.assignedWorker() != null) {
+                metadata.put("selected_worker", task.assignedWorker());
+            }
+            return metadata;
+        }
+
+        private Map<String, Object> completionMetadata(Task task,
+                                                       String status,
+                                                       String alignmentLevel) {
+            var metadata = new java.util.LinkedHashMap<String, Object>();
+            metadata.put("status", status);
+            metadata.put("alignment_level", alignmentLevel);
+            metadata.putAll(judgmentPromptMetadata(task));
+            return metadata;
+        }
+
+        private Map<String, Object> judgmentPromptMetadata(Task task) {
+            String mode = task != null && task.metadata() != null
+                ? String.valueOf(task.metadata().getOrDefault("model_mode", "orchestrated"))
+                : "orchestrated";
+            return switch (mode) {
+                case "strong_only" -> Map.ofEntries(
+                    Map.entry("prompt_mode", "active_context_only"),
+                    Map.entry("mounted_context_rendered", false),
+                    Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_context_rendered_object_count", 0),
+                    Map.entry("mounted_context_hidden_object_count", 0),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 0),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", false)
+                );
+                case "small_only" -> Map.ofEntries(
+                    Map.entry("prompt_mode", "mounted_context_shadow"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_context_panel_count", 5),
+                    Map.entry("mounted_context_rendered_object_count", 6),
+                    Map.entry("mounted_context_hidden_object_count", 2),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true)
+                );
+                default -> Map.ofEntries(
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_rendered_object_count", 9),
+                    Map.entry("mounted_context_hidden_object_count", 1),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 3),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", true)
+                );
+            };
         }
 
         private URI uri(String path) {

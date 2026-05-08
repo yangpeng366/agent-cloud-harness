@@ -268,8 +268,11 @@ class PromptBasedJudgmentServiceTest {
         assertTrue(llmClient.executionPrompt.contains("Execution Boundary:"));
         assertTrue(llmClient.executionPrompt.contains("- execution_status: blocked"));
         assertTrue(llmClient.executionPrompt.contains("- trace_summary: 2 steps"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_context_hidden_object_count: 2"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_context_budget_truncated: true"));
         assertTrue(llmClient.executionPrompt.contains("- evidence_refs: [tool:read_file:input.txt, tool:write_file:draft.txt]"));
         assertTrue(llmClient.completionPrompt.contains("- has_route_preview: true"));
+        assertTrue(llmClient.completionPrompt.contains("- mounted_context_hidden_selection_trace_count: 1"));
     }
 
     private Task task(String promptRenderingMode) {
@@ -526,6 +529,11 @@ class PromptBasedJudgmentServiceTest {
                     "tool_execution_mode", "multi_tool_round",
                     "tool_chain_step_count", 2,
                     "tool_chain_termination_reason", "planner_no_additional_tool",
+                    "mounted_context_rendered_object_count", 3,
+                    "mounted_context_hidden_object_count", 2,
+                    "mounted_context_rendered_selection_trace_count", 4,
+                    "mounted_context_hidden_selection_trace_count", 1,
+                    "mounted_context_budget_truncated", true,
                     "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")
                 )
             ),
@@ -549,7 +557,8 @@ class PromptBasedJudgmentServiceTest {
             Map.of(
                 "has_route_preview", true,
                 "has_execution_boundary", true,
-                "execution_trace_summary", "2 steps · planner_no_additional_tool · read_file -> write_file"
+                "execution_trace_summary", "2 steps · planner_no_additional_tool · read_file -> write_file",
+                "mounted_context_hidden_selection_trace_count", 1
             )
         );
     }

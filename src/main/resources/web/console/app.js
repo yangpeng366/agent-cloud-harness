@@ -2308,6 +2308,26 @@ function summarizeExecutionSurface(surface) {
         surface.mounted_context_non_empty_panel_count,
         surface.mountedContextNonEmptyPanelCount
     );
+    const renderedObjectCount = numericValue(
+        surface.mounted_context_rendered_object_count,
+        surface.mountedContextRenderedObjectCount
+    );
+    const hiddenObjectCount = numericValue(
+        surface.mounted_context_hidden_object_count,
+        surface.mountedContextHiddenObjectCount
+    );
+    const renderedSelectionTraceCount = numericValue(
+        surface.mounted_context_rendered_selection_trace_count,
+        surface.mountedContextRenderedSelectionTraceCount
+    );
+    const hiddenSelectionTraceCount = numericValue(
+        surface.mounted_context_hidden_selection_trace_count,
+        surface.mountedContextHiddenSelectionTraceCount
+    );
+    const budgetTruncated = booleanValue(
+        surface.mounted_context_budget_truncated,
+        surface.mountedContextBudgetTruncated
+    );
     const activeCount = numericValue(surface.mounted_active_count, surface.mountedActiveCount);
     const evidenceCount = numericValue(surface.mounted_evidence_count, surface.mountedEvidenceCount);
     const archiveCount = numericValue(surface.mounted_archive_count, surface.mountedArchiveCount);
@@ -2323,6 +2343,13 @@ function summarizeExecutionSurface(surface) {
         mountedInjected === false ? "mounted not injected" : null,
         panelCount ? `${panelCount} panels` : null,
         nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        renderedObjectCount !== null || hiddenObjectCount !== null
+            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            : null,
+        renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
+            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            : null,
+        budgetTruncated === true ? "budget truncated" : null,
         activeCount ? `${activeCount} active` : null,
         evidenceCount ? `${evidenceCount} evidence` : null,
         archiveCount ? `${archiveCount} archive` : null
@@ -2346,6 +2373,26 @@ function summarizeJudgmentSurface(label, surface) {
         surface.mounted_context_non_empty_panel_count,
         surface.mountedContextNonEmptyPanelCount
     );
+    const renderedObjectCount = numericValue(
+        surface.mounted_context_rendered_object_count,
+        surface.mountedContextRenderedObjectCount
+    );
+    const hiddenObjectCount = numericValue(
+        surface.mounted_context_hidden_object_count,
+        surface.mountedContextHiddenObjectCount
+    );
+    const renderedSelectionTraceCount = numericValue(
+        surface.mounted_context_rendered_selection_trace_count,
+        surface.mountedContextRenderedSelectionTraceCount
+    );
+    const hiddenSelectionTraceCount = numericValue(
+        surface.mounted_context_hidden_selection_trace_count,
+        surface.mountedContextHiddenSelectionTraceCount
+    );
+    const budgetTruncated = booleanValue(
+        surface.mounted_context_budget_truncated,
+        surface.mountedContextBudgetTruncated
+    );
     const activeCount = numericValue(surface.mounted_active_count, surface.mountedActiveCount);
     const evidenceCount = numericValue(surface.mounted_evidence_count, surface.mountedEvidenceCount);
     const archiveCount = numericValue(surface.mounted_archive_count, surface.mountedArchiveCount);
@@ -2361,6 +2408,13 @@ function summarizeJudgmentSurface(label, surface) {
         mountedInjected === false ? "mounted not injected" : null,
         panelCount ? `${panelCount} panels` : null,
         nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        renderedObjectCount !== null || hiddenObjectCount !== null
+            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            : null,
+        renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
+            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            : null,
+        budgetTruncated === true ? "budget truncated" : null,
         activeCount ? `${activeCount} active` : null,
         evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
         evidenceCount ? `${evidenceCount} evidence budget` : null,
@@ -2459,6 +2513,10 @@ function renderCognitionTimelineEntry(entry) {
 
 function cognitionTimelineChips(entry) {
     const workerId = firstNonBlank(entry?.worker_id, entry?.workerId);
+    const continuityAction = firstNonBlank(entry?.continuity_action, entry?.continuityAction);
+    const checkpointType = firstNonBlank(entry?.checkpoint_type, entry?.checkpointType);
+    const reason = firstNonBlank(entry?.reason);
+    const targetWorker = firstNonBlank(entry?.target_worker, entry?.targetWorker);
     const promptMode = firstNonBlank(entry?.prompt_mode, entry?.promptMode);
     const routeSource = firstNonBlank(entry?.route_source, entry?.routeSource);
     const executionStatus = firstNonBlank(entry?.execution_status, entry?.executionStatus);
@@ -2466,11 +2524,34 @@ function cognitionTimelineChips(entry) {
     const mountedRendered = booleanValue(entry?.mounted_context_rendered, entry?.mountedContextRendered);
     const mountedInjected = booleanValue(entry?.mounted_context_injected, entry?.mountedContextInjected);
     const mountedPanelCount = numberOrNull(entry?.mounted_context_panel_count, entry?.mountedContextPanelCount);
+    const renderedObjectCount = numberOrNull(
+        entry?.mounted_context_rendered_object_count,
+        entry?.mountedContextRenderedObjectCount
+    );
+    const hiddenObjectCount = numberOrNull(
+        entry?.mounted_context_hidden_object_count,
+        entry?.mountedContextHiddenObjectCount
+    );
+    const renderedSelectionTraceCount = numberOrNull(
+        entry?.mounted_context_rendered_selection_trace_count,
+        entry?.mountedContextRenderedSelectionTraceCount
+    );
+    const hiddenSelectionTraceCount = numberOrNull(
+        entry?.mounted_context_hidden_selection_trace_count,
+        entry?.mountedContextHiddenSelectionTraceCount
+    );
+    const budgetTruncated = booleanValue(
+        entry?.mounted_context_budget_truncated,
+        entry?.mountedContextBudgetTruncated
+    );
     const aligned = booleanValue(entry?.aligned_with_previous_prompt_mode, entry?.alignedWithPreviousPromptMode);
     const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
     const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
     return [
         workerId ? `worker: ${workerId}` : null,
+        continuityAction ? `action: ${humanizeToken(continuityAction) || continuityAction}` : null,
+        checkpointType ? `checkpoint: ${humanizeToken(checkpointType) || checkpointType}` : null,
+        targetWorker ? `target: ${targetWorker}` : null,
         routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
         promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
         executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
@@ -2478,8 +2559,16 @@ function cognitionTimelineChips(entry) {
         mountedRendered === true ? "mounted rendered" : null,
         mountedInjected === true ? "mounted injected" : null,
         mountedPanelCount === null ? null : `${mountedPanelCount} panels`,
+        renderedObjectCount !== null || hiddenObjectCount !== null
+            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            : null,
+        renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
+            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            : null,
+        budgetTruncated === true ? "budget truncated" : null,
         aligned === true ? "prompt aligned" : null,
         aligned === false ? "prompt diverged" : null,
+        reason ? `reason: ${preview(reason, 48)}` : null,
         evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
         unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
     ].filter(Boolean);
@@ -2487,10 +2576,14 @@ function cognitionTimelineChips(entry) {
 
 function summarizeCognitionTimelineEntry(entry) {
     return [
+        firstNonBlank(entry?.continuity_action, entry?.continuityAction),
+        firstNonBlank(entry?.checkpoint_type, entry?.checkpointType),
         firstNonBlank(entry?.worker_id, entry?.workerId),
+        firstNonBlank(entry?.target_worker, entry?.targetWorker),
         firstNonBlank(entry?.prompt_mode, entry?.promptMode),
         firstNonBlank(entry?.execution_status, entry?.executionStatus),
-        firstNonBlank(entry?.route_source, entry?.routeSource)
+        firstNonBlank(entry?.route_source, entry?.routeSource),
+        firstNonBlank(entry?.reason)
     ].filter(Boolean).join(" · ");
 }
 

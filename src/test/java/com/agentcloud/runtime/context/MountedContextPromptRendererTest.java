@@ -145,6 +145,37 @@ class MountedContextPromptRendererTest {
     }
 
     @Test
+    void renderResultExposesBudgetDiagnostics() {
+        MountedContextView denseView = new MountedContextView(
+            null,
+            "task_dense_budget",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.EVIDENCE,
+                    "Evidence",
+                    List.of(
+                        object("artifact_1", "Artifact 1", "第一条", ContextRetentionState.HOT_RAW),
+                        object("artifact_2", "Artifact 2", "第二条", ContextRetentionState.WARM_SUMMARY),
+                        object("artifact_3", "Artifact 3", "第三条", ContextRetentionState.WARM_SUMMARY),
+                        object("artifact_4", "Artifact 4", "第四条", ContextRetentionState.COLD_CAPSULE)
+                    )
+                )
+            ),
+            List.of("first", "second", "third", "fourth", "fifth")
+        );
+
+        MountedContextPromptRenderResult result = new MountedContextPromptRenderer().renderResult(denseView);
+
+        assertTrue(result.hasPrompt());
+        assertEquals(1, result.renderedPanelCount());
+        assertEquals(3, result.renderedObjectCount());
+        assertEquals(1, result.hiddenObjectCount());
+        assertEquals(4, result.renderedSelectionTraceCount());
+        assertEquals(1, result.hiddenSelectionTraceCount());
+        assertTrue(result.budgetTruncated());
+    }
+
+    @Test
     void renderAppliesPerPanelCapsAndHandleOnlySectionsStayCompact() {
         String longSummary = "archive handle summary should stay out of the rendered line because handle panels must remain compact. "
             .repeat(5);

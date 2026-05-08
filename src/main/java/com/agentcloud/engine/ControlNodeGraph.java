@@ -6,6 +6,8 @@ import com.agentcloud.judgment.JudgmentContext;
 import com.agentcloud.judgment.JudgmentService;
 import com.agentcloud.model.*;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
+import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
@@ -1299,10 +1301,10 @@ public class ControlNodeGraph {
 
     private MountedContextPromptMetrics buildJudgmentPromptMetrics(Task task, TaskRuntimeContext context) {
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(task);
-        String mountedPrompt = renderingMode.shouldRenderMountedPrompt()
-            ? JUDGMENT_PROMPT_RENDERER.render(context)
-            : "";
-        return MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt);
+        MountedContextPromptRenderResult mountedRenderResult = renderingMode.shouldRenderMountedPrompt()
+            ? JUDGMENT_PROMPT_RENDERER.renderResult(context)
+            : MountedContextPromptRenderResult.empty();
+        return MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult);
     }
 
     private Map<String, Object> withJudgmentPromptMetadata(Map<String, Object> metadata,
@@ -1365,6 +1367,13 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "mounted_context_non_empty_panel_count");
         copyMetadataKey(source, selected, "mounted_non_empty_panel_count");
         copyMetadataKey(source, selected, "mounted_context_selection_trace_count");
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+        copyMetadataKey(source, selected, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
         copyMetadataKey(source, selected, "mounted_pinned_count");
         copyMetadataKey(source, selected, "mounted_active_count");
         copyMetadataKey(source, selected, "mounted_ancestor_count");

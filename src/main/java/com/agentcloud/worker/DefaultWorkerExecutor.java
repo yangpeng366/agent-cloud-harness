@@ -8,6 +8,7 @@ import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
@@ -46,19 +47,22 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
         long startMs = System.currentTimeMillis();
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context);
+        MountedContextPromptRenderResult mountedRenderResult = renderingMode.shouldRenderMountedPrompt()
+            ? mountedContextPromptRenderer.renderResult(context)
+            : MountedContextPromptRenderResult.empty();
 
         String systemPrompt = buildSystemPrompt(context, workerId);
-        String userPrompt = buildUserPrompt(context, renderingMode);
+        String userPrompt = buildUserPrompt(context, renderingMode, mountedRenderResult);
         List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
 
         String raw = llmClient.chat(systemPrompt, userPrompt, imageInputs);
         long durationMs = System.currentTimeMillis() - startMs;
         WorkerExecutionResult result = parseExecutionResult(raw, durationMs);
-        WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context, imageInputs);
+        WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context, imageInputs, mountedRenderResult);
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
             context,
             renderingMode,
-            renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : ""
+            mountedRenderResult
         );
 
         log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
@@ -107,7 +111,9 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             + "No markdown, no extra text.";
     }
 
-    private String buildUserPrompt(TaskRuntimeContext context, PromptRenderingMode renderingMode) {
+    private String buildUserPrompt(TaskRuntimeContext context,
+                                   PromptRenderingMode renderingMode,
+                                   MountedContextPromptRenderResult mountedRenderResult) {
         var t = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(t.title()).append("\n");
@@ -133,7 +139,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         } else if ("orchestrated".equalsIgnoreCase(modelMode) && isExecutionStage(orchestrationStage)) {
             sb.append("Execution Contract: execute the delegated next step before proposing broader replans.\n");
         }
-        appendMountedContext(sb, context, renderingMode);
+        appendMountedContext(sb, renderingMode, mountedRenderResult);
         if (context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
             sb.append("\nActive Context:\n");
             sb.append(context.activeContext().synthesizedContext()).append("\n");
@@ -177,11 +183,13 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         return sb.toString();
     }
 
-    private void appendMountedContext(StringBuilder sb, TaskRuntimeContext context, PromptRenderingMode renderingMode) {
+    private void appendMountedContext(StringBuilder sb,
+                                      PromptRenderingMode renderingMode,
+                                      MountedContextPromptRenderResult mountedRenderResult) {
         if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
             return;
         }
-        String mountedPrompt = mountedContextPromptRenderer.render(context);
+        String mountedPrompt = mountedRenderResult == null ? "" : mountedRenderResult.prompt();
         if (mountedPrompt.isBlank()) {
             return;
         }
@@ -191,13 +199,13 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     private WorkerExecutionResult attachRenderingMetadata(WorkerExecutionResult result,
                                                           PromptRenderingMode renderingMode,
                                                           TaskRuntimeContext context,
-                                                          List<LlmImageInput> imageInputs) {
+                                                          List<LlmImageInput> imageInputs,
+                                                          MountedContextPromptRenderResult mountedRenderResult) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         if (result.metadata() != null) {
             metadata.putAll(result.metadata());
         }
-        String mountedPrompt = renderingMode.shouldRenderMountedPrompt() ? mountedContextPromptRenderer.render(context) : "";
-        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedPrompt).toMetadata());
+        metadata.putAll(MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult).toMetadata());
         metadata.put("image_input_count", imageInputs == null ? 0 : imageInputs.size());
         metadata.put("image_input_used", imageInputs != null && !imageInputs.isEmpty());
         return new WorkerExecutionResult(

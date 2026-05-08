@@ -60,6 +60,11 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertEquals(false, result.metadata().get("mounted_context_injected"));
         assertEquals(true, result.metadata().get("mounted_render_used"));
         assertEquals(1, result.metadata().get("mounted_non_empty_panel_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_panel_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_object_count"));
+        assertEquals(0, result.metadata().get("mounted_context_hidden_object_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_selection_trace_count"));
+        assertEquals(false, result.metadata().get("mounted_context_budget_truncated"));
     }
 
     @Test
@@ -81,6 +86,12 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertEquals(true, result.metadata().get("mounted_context_injected"));
         assertEquals(true, result.metadata().get("mounted_render_used"));
         assertEquals(1, result.metadata().get("mounted_pinned_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_panel_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_object_count"));
+        assertEquals(0, result.metadata().get("mounted_context_hidden_object_count"));
+        assertEquals(1, result.metadata().get("mounted_context_rendered_selection_trace_count"));
+        assertEquals(0, result.metadata().get("mounted_context_hidden_selection_trace_count"));
+        assertEquals(false, result.metadata().get("mounted_context_budget_truncated"));
     }
 
     @Test
