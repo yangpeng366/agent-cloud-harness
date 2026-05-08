@@ -54,6 +54,7 @@ public record MountedContextPromptMetrics(
     public Map<String, Object> toMetadata() {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("prompt_rendering_mode", promptMode);
+        metadata.put("mounted_context_mode", promptMode);
         metadata.put("prompt_mode", promptMode);
         metadata.put("mounted_context_rendered", mountedRendered);
         metadata.put("mounted_render_used", mountedRenderUsed);

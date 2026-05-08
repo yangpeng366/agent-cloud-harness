@@ -315,17 +315,26 @@ class TaskServiceLiveFlowViewTest {
                 24,
                 List.of("input.txt"),
                 Instant.now(),
-                Map.of(
-                    "execution_status", "succeeded",
-                    "tool_execution_mode", "single_tool_round",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "mounted_context_non_empty_panel_count", 2,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("execution_status", "succeeded"),
+                    Map.entry("tool_execution_mode", "single_tool_round"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
             decisionDao.insert(new Decision(
@@ -338,15 +347,25 @@ class TaskServiceLiveFlowViewTest {
                 "judgment sees the same mounted context surface",
                 "medium",
                 null,
-                Map.of(
-                    "action", "continue",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("action", "continue"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
             decisionDao.insert(new Decision(
@@ -359,15 +378,25 @@ class TaskServiceLiveFlowViewTest {
                 "completion judgment also sees the same mounted context surface",
                 "medium",
                 null,
-                Map.of(
-                    "status", "partially_done",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("status", "partially_done"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
 
@@ -385,7 +414,16 @@ class TaskServiceLiveFlowViewTest {
             assertEquals("codex", trace.runtimeCognitionSurface().route().selectedWorker());
             assertEquals("codex", trace.runtimeCognitionSurface().execution().workerId());
             assertEquals("mounted_context_primary", trace.runtimeCognitionSurface().execution().promptMode());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().execution().mountedRenderUsed());
+            assertEquals(2, trace.runtimeCognitionSurface().execution().mountedContextNonEmptyPanelCount());
+            assertEquals(1, trace.runtimeCognitionSurface().execution().mountedContextSelectionTraceCount());
+            assertEquals(2, trace.runtimeCognitionSurface().execution().mountedActiveCount());
+            assertEquals(1, trace.runtimeCognitionSurface().execution().mountedEvidenceCount());
+            assertEquals(1, trace.runtimeCognitionSurface().execution().mountedArchiveCount());
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeCognitionSurface().execution().evidenceRefs());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedRenderUsed());
+            assertEquals(2, trace.runtimeCognitionSurface().executionJudgment().mountedContextNonEmptyPanelCount());
+            assertEquals(2, trace.runtimeCognitionSurface().completionJudgment().mountedActiveCount());
             assertEquals(Boolean.TRUE,
                 trace.runtimeCognitionSurface().alignment().routeWorkerMatchesExecutionWorker());
             assertEquals(Boolean.TRUE,
@@ -402,9 +440,27 @@ class TaskServiceLiveFlowViewTest {
             assertEquals("codex", flow.runtimeCognitionSurface().route().selectedWorker());
             assertEquals("single_tool_round", flow.executionBoundary().metadata().get("tool_execution_mode"));
             assertEquals("mounted_context_primary", flow.runtimeCognitionSurface().execution().promptMode());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().mountedRenderUsed());
+            assertEquals(2, flow.runtimeCognitionSurface().execution().mountedContextNonEmptyPanelCount());
+            assertEquals(1, flow.runtimeCognitionSurface().execution().mountedContextSelectionTraceCount());
+            assertEquals(2, flow.runtimeCognitionSurface().execution().mountedActiveCount());
             assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
+            assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
+            assertEquals(1, flow.runtimeCognitionSurface().completionJudgment().mountedArchiveCount());
             assertEquals(Boolean.TRUE,
                 flow.runtimeCognitionSurface().alignment().executionAndCompletionJudgmentPromptModeAligned());
+            assertNotNull(flow.runtimeCognitionTimeline());
+            assertEquals(4, flow.runtimeCognitionTimeline().size());
+            var timelineByStage = flow.runtimeCognitionTimeline().stream()
+                .collect(java.util.stream.Collectors.toMap(
+                    entry -> entry.stage(),
+                    entry -> entry
+                ));
+            assertEquals("codex", timelineByStage.get("route").workerId());
+            assertEquals("mounted_context_primary", timelineByStage.get("execution").promptMode());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
+            assertEquals(List.of("tool:read_file:input.txt"),
+                timelineByStage.get("completion_judgment").evidenceRefs());
         }
     }
 

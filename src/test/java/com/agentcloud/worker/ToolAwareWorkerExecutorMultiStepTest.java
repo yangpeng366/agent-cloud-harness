@@ -1086,6 +1086,185 @@ class ToolAwareWorkerExecutorMultiStepTest {
         }
     }
 
+    @Test
+    void planningPromptShadowModeKeepsMountedContextOutOfMainPrompt() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-shadow-workspace"));
+        Files.writeString(workspace.resolve("notes.txt"), "Reference note.\n");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-shadow.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-shadow",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this test.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_shadow",
+                "session_multi_shadow",
+                null,
+                "planning prompt shadow",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T06:56:00Z"),
+                Instant.parse("2026-05-06T06:56:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Ensure shadow mode computes mounted context without replacing the planning prompt.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Inspect mounted context in shadow mode before deciding tool use.",
+                    "prompt_rendering_mode", "mounted_context_shadow"
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "shadow planning", "active"));
+            taskDao.insert(task);
+
+            WorkerExecutionResult result = executor.executeOneRound(mountedRuntimeContext(task), worker.workerId());
+
+            assertFalse(llmClient.firstUserPrompt.contains("Mounted Context:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Active Context:"));
+            assertEquals("mounted_context_shadow", result.metadata().get("prompt_mode"));
+            assertEquals(true, result.metadata().get("mounted_context_rendered"));
+            assertEquals(false, result.metadata().get("mounted_context_injected"));
+            assertEquals(true, result.metadata().get("mounted_render_used"));
+            assertEquals(1, result.metadata().get("mounted_context_selection_trace_count"));
+        }
+    }
+
+    @Test
+    void planningPromptPrimaryModeHandlesEmptyMountedViewSafely() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-empty-mounted-workspace"));
+        Files.writeString(workspace.resolve("notes.txt"), "Reference note.\n");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-empty-mounted.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-empty-mounted",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this test.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_empty_mounted",
+                "session_multi_empty_mounted",
+                null,
+                "planning prompt primary empty mounted",
+                "active",
+                "high",
+                Instant.parse("2026-05-06T06:57:00Z"),
+                Instant.parse("2026-05-06T06:57:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Ensure primary mode remains safe when mounted view is empty.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "Keep primary mode continuity-safe even when mounted view is empty.",
+                    "prompt_rendering_mode", "mounted_context_primary"
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "primary empty mounted planning", "active"));
+            taskDao.insert(task);
+
+            WorkerExecutionResult result = executor.executeOneRound(emptyMountedRuntimeContext(task), worker.workerId());
+
+            assertFalse(llmClient.firstUserPrompt.contains("Mounted Context:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Active Context:"));
+            assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
+            assertEquals(true, result.metadata().get("mounted_context_rendered"));
+            assertEquals(false, result.metadata().get("mounted_context_injected"));
+            assertEquals(false, result.metadata().get("mounted_render_used"));
+            assertEquals(0, result.metadata().get("mounted_non_empty_panel_count"));
+            assertEquals(0, result.metadata().get("mounted_context_selection_trace_count"));
+        }
+    }
+
     private TaskRuntimeContext mountedRuntimeContext(Task task) {
         ActiveContext activeContext = new ActiveContext(
             "Mounted planning",
@@ -1128,6 +1307,35 @@ class ToolAwareWorkerExecutorMultiStepTest {
             List.of("compat_mode=task_runtime_context_preserved")
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, mountedView);
+    }
+
+    private TaskRuntimeContext emptyMountedRuntimeContext(Task task) {
+        ActiveContext activeContext = new ActiveContext(
+            "Mounted planning empty",
+            List.of("priority=high"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            "",
+            "Task Focus: mounted planning empty",
+            12
+        );
+        return new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            activeContext,
+            MountedContextView.empty(task.id())
+        );
     }
 
     private static class SequencedLlmClient implements LlmClient {

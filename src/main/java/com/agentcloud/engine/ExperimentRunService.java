@@ -1478,6 +1478,7 @@ public class ExperimentRunService {
         copyMetadata(source, target, "tool_aware_executor");
         copyMetadata(source, target, "tool_execution_mode");
         copyMetadata(source, target, "prompt_rendering_mode");
+        copyMetadata(source, target, "mounted_context_mode");
         copyMetadata(source, target, "prompt_mode");
         copyMetadata(source, target, "mounted_context_rendered");
         copyMetadata(source, target, "mounted_render_used");
@@ -1540,6 +1541,7 @@ public class ExperimentRunService {
             return;
         }
         copyDecisionMetadataKey(source, target, stagePrefix, "prompt_rendering_mode");
+        copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_mode");
         copyDecisionMetadataKey(source, target, stagePrefix, "prompt_mode");
         copyDecisionMetadataKey(source, target, stagePrefix, "mounted_context_rendered");
         copyDecisionMetadataKey(source, target, stagePrefix, "mounted_render_used");

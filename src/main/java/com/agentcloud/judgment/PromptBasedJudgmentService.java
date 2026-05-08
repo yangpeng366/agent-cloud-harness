@@ -121,7 +121,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
 
     private String buildExecutionPrompt(JudgmentContext context) {
         var t = context.task();
-        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(t);
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.runtimeContext());
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");
@@ -148,7 +148,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
 
     private String buildCompletionPrompt(JudgmentContext context) {
         var t = context.task();
-        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(t);
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.runtimeContext());
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");

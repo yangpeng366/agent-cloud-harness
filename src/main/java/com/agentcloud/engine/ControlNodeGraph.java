@@ -1355,6 +1355,7 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "tool_aware_executor");
         copyMetadataKey(source, selected, "tool_execution_mode");
         copyMetadataKey(source, selected, "prompt_rendering_mode");
+        copyMetadataKey(source, selected, "mounted_context_mode");
         copyMetadataKey(source, selected, "prompt_mode");
         copyMetadataKey(source, selected, "mounted_context_rendered");
         copyMetadataKey(source, selected, "mounted_render_used");

@@ -72,16 +72,26 @@ class TaskHandlerLiveFlowHttpTest {
                 24,
                 List.of("input.txt"),
                 Instant.now(),
-                Map.of(
-                    "execution_status", "succeeded",
-                    "tool_execution_mode", "single_tool_round",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("execution_status", "succeeded"),
+                    Map.entry("tool_execution_mode", "single_tool_round"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
             harness.decisionDao.insert(new Decision(
@@ -94,15 +104,25 @@ class TaskHandlerLiveFlowHttpTest {
                 "http execution judgment should carry prompt mode alignment",
                 "medium",
                 null,
-                Map.of(
-                    "action", "continue",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("action", "continue"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
             harness.decisionDao.insert(new Decision(
@@ -115,15 +135,25 @@ class TaskHandlerLiveFlowHttpTest {
                 "http completion judgment should carry prompt mode alignment",
                 "medium",
                 null,
-                Map.of(
-                    "status", "partially_done",
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 3,
-                    "candidate_workers", List.of("codex", "kimi"),
-                    "evidence_refs", List.of("tool:read_file:input.txt"),
-                    "unfinished_items", List.of("manual_review")
+                Map.ofEntries(
+                    Map.entry("status", "partially_done"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 3),
+                    Map.entry("mounted_context_non_empty_panel_count", 2),
+                    Map.entry("mounted_context_selection_trace_count", 1),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 1),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_index_count", 1),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
                 )
             ));
 
@@ -146,6 +176,7 @@ class TaskHandlerLiveFlowHttpTest {
             Map<String, Object> flowRoute = harness.map(flowSurface.get("route"));
             Map<String, Object> flowExecution = harness.map(flowSurface.get("execution"));
             Map<String, Object> flowAlignment = harness.map(flowSurface.get("alignment"));
+            List<Map<String, Object>> flowTimeline = harness.list(flowData.get("runtime_cognition_timeline"));
 
             Map<String, Object> tracePayload = harness.readJson(traceResponse.body());
             Map<String, Object> traceData = harness.map(tracePayload.get("data"));
@@ -157,10 +188,26 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals("codex", flowRoute.get("selected_worker"));
             assertEquals("codex", flowExecution.get("worker_id"));
             assertEquals("mounted_context_primary", flowExecution.get("prompt_mode"));
+            assertEquals(Boolean.TRUE, flowExecution.get("mounted_render_used"));
+            assertEquals(2, ((Number) flowExecution.get("mounted_context_non_empty_panel_count")).intValue());
+            assertEquals(2, ((Number) flowExecution.get("mounted_active_count")).intValue());
+            assertEquals(1, ((Number) flowExecution.get("mounted_archive_count")).intValue());
             assertEquals(Boolean.TRUE, flowAlignment.get("route_worker_matches_execution_worker"));
             assertEquals(Boolean.TRUE, flowAlignment.get("execution_and_execution_judgment_prompt_mode_aligned"));
+            assertEquals(4, flowTimeline.size());
+            Map<String, Map<String, Object>> timelineByStage = flowTimeline.stream()
+                .collect(java.util.stream.Collectors.toMap(
+                    item -> String.valueOf(item.get("stage")),
+                    item -> item
+                ));
+            assertEquals("mounted_context_primary", timelineByStage.get("execution").get("prompt_mode"));
+            assertEquals(Boolean.TRUE,
+                timelineByStage.get("execution_judgment").get("aligned_with_previous_prompt_mode"));
+            assertEquals("codex", timelineByStage.get("route").get("worker_id"));
             assertNotNull(traceSurface);
             assertEquals("exec_http_cognition_1", traceExecution.get("execution_id"));
+            assertEquals(Boolean.TRUE, traceExecution.get("mounted_render_used"));
+            assertEquals(1, ((Number) traceExecution.get("mounted_context_selection_trace_count")).intValue());
             assertEquals(List.of("tool:read_file:input.txt"), traceExecution.get("evidence_refs"));
         }
     }
@@ -201,6 +248,11 @@ class TaskHandlerLiveFlowHttpTest {
         @SuppressWarnings("unchecked")
         private Map<String, Object> map(Object value) {
             return (Map<String, Object>) value;
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> list(Object value) {
+            return (List<Map<String, Object>>) value;
         }
 
         private TaskService service(DatabaseManager db) {

@@ -137,6 +137,7 @@
 
 - `prompt_rendering_mode`
 - `mounted_context_mode`（兼容别名）
+- `prompt_mode`（continuity-safe 兼容别名；适用于 resume/handoff / experiment replay 仅保留 canonical prompt 指标字段的场景）
 
 当前稳定模式值为：
 
@@ -170,6 +171,8 @@
 - `runtime_context`
 - `judgment_trace`
 - `runtime_facts`
+- `runtime_cognition_surface`
+- `runtime_cognition_timeline`
 - `execution_boundary`
 - `checkpoints`
 - `learning_memories`
@@ -178,6 +181,34 @@
 - `experiment_run`
 
 该接口适合本地 live validation、回归排查和提示词调优时使用，避免在同一任务上手工拉取多个观测接口。
+
+其中 `runtime_cognition_timeline` 用来把同一任务最近一轮 route / execution / judgment 的认知边界按时间线显式展开，当前 entry 主要包含：
+
+- `stage` / `label` / `occurred_at`
+- `worker_id` / `route_source` / `prompt_mode` / `execution_status`
+- `tool_invocation_count`
+- `mounted_context_rendered` / `mounted_context_injected` / `mounted_context_panel_count`
+- `aligned_with_previous_prompt_mode`
+- `candidate_workers`
+- `evidence_refs`
+- `unfinished_items`
+- `summary`
+
+其中 `runtime_cognition_surface` / `judgment_trace.runtime_cognition_surface` 当前也会稳定暴露 mounted-context prompt budget 诊断，用于对齐 worker 与 judgment 的 working-memory 消耗面，主要包括：
+
+- `mounted_render_used`
+- `mounted_context_panel_count`
+- `mounted_context_non_empty_panel_count`
+- `mounted_context_selection_trace_count`
+- `mounted_pinned_count`
+- `mounted_active_count`
+- `mounted_ancestor_count`
+- `mounted_sibling_count`
+- `mounted_evidence_count`
+- `mounted_index_count`
+- `mounted_archive_count`
+
+它的目的不是替代 `judgment_trace.runtime_facts`，而是把 shared runtime cognition seam 在单任务观测面里做成可直接阅读的 timeline，便于定位 route、execution、execution judgment、completion judgment 之间的认知漂移。
 
 `GET /api/v1/tasks/{id}/experiment_summary` 会先根据该任务最新 `experiment_run.experiment_name` 自动定位实验，再返回：
 
@@ -252,6 +283,15 @@
 - `artifact_summary`
 - `payload.machine_readable_first=true`
 - `payload.next_step` 会镜像顶层 `next_step`
+- `payload.prompt_rendering_mode`
+- `payload.mounted_context_mode`
+- `payload.prompt_mode`
+
+其中 packet continuity 字段当前约定为：
+
+- `prompt_rendering_mode`：主 rollout 键
+- `mounted_context_mode`：兼容别名
+- `prompt_mode`：canonical continuity-safe alias，适用于 resume/handoff/replay 只保留统一 prompt 指标字段的场景
 
 `GET /api/v1/tasks/{id}/handoff_packet` 与 `POST /api/v1/tasks/{id}/handoff` 返回的 `HandoffPacket` 最小字段：
 
@@ -277,6 +317,12 @@
 - `machine_readable_first=true`
 - `metadata` 只承载扩展 trace，不替代最小字段
 
+当前 `HandoffPacket.metadata` 也会稳定镜像 mounted-context continuity 字段：
+
+- `prompt_rendering_mode`
+- `mounted_context_mode`
+- `prompt_mode`
+
 `GET /api/v1/checkpoints/{taskId}` 返回的 `Checkpoint.refined_packet` 当前也按同一套 continuity 语义收口。固定协议头为：
 
 - `packet_type=checkpoint_refined_packet`
@@ -296,6 +342,9 @@
 - `open_questions`
 - `recent_artifacts`
 - `recent_decisions`
+- `prompt_rendering_mode`
+- `mounted_context_mode`
+- `prompt_mode`
 
 `GET /api/v1/sessions/{id}/messages` 当前支持：
 

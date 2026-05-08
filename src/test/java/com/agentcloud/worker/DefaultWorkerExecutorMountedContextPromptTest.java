@@ -2,6 +2,7 @@ package com.agentcloud.worker;
 
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.llm.LlmImageInput;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -17,6 +18,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -34,6 +36,7 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("active_context_only", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("active_context_only", result.metadata().get("mounted_context_mode"));
         assertEquals("active_context_only", result.metadata().get("prompt_mode"));
         assertEquals(false, result.metadata().get("mounted_context_injected"));
         assertEquals(false, result.metadata().get("mounted_render_used"));
@@ -51,6 +54,7 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("mounted_context_shadow", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_shadow", result.metadata().get("mounted_context_mode"));
         assertEquals("mounted_context_shadow", result.metadata().get("prompt_mode"));
         assertEquals(true, result.metadata().get("mounted_context_rendered"));
         assertEquals(false, result.metadata().get("mounted_context_injected"));
@@ -72,10 +76,43 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertTrue(llmClient.lastUserPrompt.contains("compat_mode=task_runtime_context_preserved"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
         assertEquals("mounted_context_primary", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("mounted_context_mode"));
         assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
         assertEquals(true, result.metadata().get("mounted_context_injected"));
         assertEquals(true, result.metadata().get("mounted_render_used"));
         assertEquals(1, result.metadata().get("mounted_pinned_count"));
+    }
+
+    @Test
+    void executeOneRoundResolvesPrimaryModeFromPromptModeAlias() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContextFromPromptModeAlias("mounted_context_primary"), "codex");
+
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context Selection Trace:"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("mounted_context_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
+        assertEquals(true, result.metadata().get("mounted_context_injected"));
+        assertEquals(true, result.metadata().get("mounted_render_used"));
+    }
+
+    @Test
+    void executeOneRoundResolvesPrimaryModeFromLatestPacketAlias() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContextFromLatestPacketPromptModeAlias("mounted_context_primary"), "codex");
+
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Mounted Context Selection Trace:"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_rendering_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("mounted_context_mode"));
+        assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
+        assertEquals(true, result.metadata().get("mounted_context_injected"));
+        assertEquals(true, result.metadata().get("mounted_render_used"));
     }
 
     @Test
@@ -217,6 +254,117 @@ class DefaultWorkerExecutorMountedContextPromptTest {
             12
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, MountedContextView.empty(task.id()));
+    }
+
+    private TaskRuntimeContext runtimeContextFromPromptModeAlias(String promptMode) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("task_type", "coding");
+        metadata.put("intent", "Use the mounted context surface.");
+        if (promptMode != null) {
+            metadata.put("prompt_mode", promptMode);
+        }
+        Task task = new Task(
+            "task_alias_1",
+            "session_1",
+            null,
+            "mounted context alias prompt",
+            "active",
+            "high",
+            Instant.parse("2026-05-06T06:30:00Z"),
+            Instant.parse("2026-05-06T06:30:00Z"),
+            null,
+            null,
+            null,
+            "summary",
+            "验证 prompt_mode alias 兼容 mounted context",
+            "继续推进",
+            "codex",
+            "continue",
+            null,
+            metadata
+        );
+        ActiveContext activeContext = new ActiveContext(
+            "Mounted context alias prompt",
+            List.of("priority=high"),
+            List.of("[runtime_context_built] mounted context 已生成"),
+            List.of("继续推进"),
+            List.of("artifact summary"),
+            List.of("是否切换 judgment?"),
+            List.of("补 alias 测试"),
+            List.of("不要破坏兼容性"),
+            List.of("保留关键约束"),
+            List.of("budget=12"),
+            "summary",
+            "Task Focus: mounted context alias prompt",
+            12
+        );
+        MountedContextView mountedView = new MountedContextView(
+            null,
+            task.id(),
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(new ContextObject(
+                        "constraints",
+                        "/sessions/session_1/tasks/task_alias_1",
+                        ContextObjectType.CONSTRAINT,
+                        "",
+                        "Constraints",
+                        "保持兼容，不要破坏旧执行链",
+                        "",
+                        Instant.parse("2026-05-06T06:31:00Z"),
+                        ContextRetentionState.PINNED,
+                        List.of(),
+                        List.of(),
+                        Map.of()
+                    ))
+                )
+            ),
+            List.of("compat_mode=task_runtime_context_preserved")
+        );
+        return new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            activeContext,
+            mountedView
+        );
+    }
+
+    private TaskRuntimeContext runtimeContextFromLatestPacketPromptModeAlias(String promptMode) {
+        TaskRuntimeContext base = runtimeContext(null);
+        ResumePacket latestPacket = new ResumePacket(
+            UUID.randomUUID().toString(),
+            base.task().sessionId(),
+            base.task().id(),
+            Instant.parse("2026-05-06T06:32:00Z"),
+            "1.1",
+            "summary",
+            null,
+            null,
+            List.of(),
+            "继续推进",
+            Map.of(
+                "prompt_mode", promptMode,
+                "next_step", "继续推进"
+            )
+        );
+        return new TaskRuntimeContext(
+            base.task(),
+            latestPacket,
+            null,
+            base.recentEvents(),
+            base.recentDecisions(),
+            base.recentArtifacts(),
+            base.recentMessages(),
+            base.activeContext(),
+            base.mountedContextView()
+        );
     }
 
     private String responseJson() {

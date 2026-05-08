@@ -1177,6 +1177,44 @@ button {
     color: var(--ink);
 }
 
+.cognition-surface {
+    display: grid;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.cognition-surface__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 8px;
+    color: var(--ink-soft);
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+.cognition-timeline {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(28, 41, 52, 0.08);
+}
+
+.cognition-timeline__entry {
+    display: grid;
+    gap: 6px;
+}
+
+.cognition-timeline__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    color: var(--ink-soft);
+    font-size: 12px;
+}
+
 .raw-box summary {
     cursor: pointer;
     font-weight: 700;

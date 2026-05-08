@@ -45,7 +45,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     @Override
     public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
         long startMs = System.currentTimeMillis();
-        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.task());
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context);
 
         String systemPrompt = buildSystemPrompt(context, workerId);
         String userPrompt = buildUserPrompt(context, renderingMode);

@@ -3,6 +3,7 @@ package com.agentcloud.judgment;
 import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -19,6 +20,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -121,10 +123,117 @@ class PromptBasedJudgmentServiceTest {
     }
 
     @Test
+    void judgmentPromptsKeepMountedContextOutWhenShadowModeIsEnabled() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        JudgmentContext context = new JudgmentContext(
+            task("mounted_context_shadow"),
+            runtimeContext("mounted_context_shadow"),
+            "worker output",
+            "",
+            Map.of()
+        );
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        assertFalse(llmClient.executionPrompt.contains("Mounted Context:"));
+        assertFalse(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
+        assertTrue(llmClient.executionPrompt.contains("Active Context:"));
+        assertTrue(llmClient.completionPrompt.contains("Active Context:"));
+    }
+
+    @Test
     void judgmentPrimaryModeCanBeResolvedFromTaskMetadata() {
         Task task = task("mounted_context_primary");
         assertEquals("mounted_context_primary",
             com.agentcloud.runtime.context.PromptRenderingMode.resolve(task).wireName());
+    }
+
+    @Test
+    void judgmentPrimaryModeCanBeResolvedFromPromptModeAlias() {
+        Task task = taskWithPromptModeAlias("mounted_context_primary");
+        assertEquals("mounted_context_primary",
+            com.agentcloud.runtime.context.PromptRenderingMode.resolve(task).wireName());
+    }
+
+    @Test
+    void judgmentPromptsIncludeMountedContextWhenPromptModeAliasIsEnabled() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        JudgmentContext context = new JudgmentContext(
+            taskWithPromptModeAlias("mounted_context_primary"),
+            runtimeContextWithPromptModeAlias("mounted_context_primary"),
+            "worker output",
+            "",
+            Map.of()
+        );
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        assertTrue(llmClient.executionPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
+    }
+
+    @Test
+    void judgmentPromptsIncludeMountedContextWhenLatestPacketAliasIsEnabled() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        JudgmentContext context = new JudgmentContext(
+            task(null),
+            runtimeContextWithLatestPacketPromptModeAlias("mounted_context_primary"),
+            "worker output",
+            "",
+            Map.of()
+        );
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        assertTrue(llmClient.executionPrompt.contains("Mounted Context:"));
+        assertTrue(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
+    }
+
+    @Test
+    void judgmentPrimaryModeHandlesEmptyMountedViewSafely() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        JudgmentContext context = new JudgmentContext(
+            task("mounted_context_primary"),
+            runtimeContextWithEmptyMountedView("mounted_context_primary"),
+            "worker output",
+            "",
+            Map.of()
+        );
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        assertFalse(llmClient.executionPrompt.contains("Mounted Context:"));
+        assertFalse(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
+        assertTrue(llmClient.executionPrompt.contains("Active Context:"));
+        assertTrue(llmClient.completionPrompt.contains("Active Context:"));
     }
 
     @Test
@@ -174,6 +283,34 @@ class PromptBasedJudgmentServiceTest {
             "session-review",
             null,
             "review task",
+            "active",
+            "high",
+            Instant.now(),
+            Instant.now(),
+            Instant.now(),
+            null,
+            null,
+            null,
+            "evaluate output",
+            null,
+            null,
+            "continue",
+            null,
+            metadata
+        );
+    }
+
+    private Task taskWithPromptModeAlias(String promptMode) {
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("task_type", "coding");
+        if (promptMode != null) {
+            metadata.put("prompt_mode", promptMode);
+        }
+        return new Task(
+            "task-review-alias",
+            "session-review",
+            null,
+            "review task alias",
             "active",
             "high",
             Instant.now(),
@@ -242,6 +379,120 @@ class PromptBasedJudgmentServiceTest {
             List.of(),
             activeContext,
             mountedContextView
+        );
+    }
+
+    private TaskRuntimeContext runtimeContextWithPromptModeAlias(String promptMode) {
+        ActiveContext activeContext = new ActiveContext(
+            "Review task alias",
+            List.of("priority=high"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            "",
+            "Task Focus: review task alias",
+            12
+        );
+        MountedContextView mountedContextView = new MountedContextView(
+            null,
+            "task-review-alias",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(new ContextObject(
+                        "goal",
+                        "/sessions/session-review/tasks/task-review-alias",
+                        ContextObjectType.TASK,
+                        "",
+                        "Task Goal",
+                        "评估 prompt_mode alias 是否进入 judgment prompt",
+                        "",
+                        Instant.parse("2026-05-06T06:40:00Z"),
+                        ContextRetentionState.PINNED,
+                        List.of(),
+                        List.of(),
+                        Map.of()
+                    ))
+                )
+            ),
+            List.of("compat_mode=task_runtime_context_preserved")
+        );
+        return new TaskRuntimeContext(
+            taskWithPromptModeAlias(promptMode),
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            activeContext,
+            mountedContextView
+        );
+    }
+
+    private TaskRuntimeContext runtimeContextWithEmptyMountedView(String promptRenderingMode) {
+        ActiveContext activeContext = new ActiveContext(
+            "Review task empty mounted",
+            List.of("priority=high"),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            "",
+            "Task Focus: review task empty mounted",
+            12
+        );
+        return new TaskRuntimeContext(
+            task(promptRenderingMode),
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            activeContext,
+            MountedContextView.empty("task-review-empty-mounted")
+        );
+    }
+
+    private TaskRuntimeContext runtimeContextWithLatestPacketPromptModeAlias(String promptMode) {
+        TaskRuntimeContext base = runtimeContext(null);
+        ResumePacket latestPacket = new ResumePacket(
+            UUID.randomUUID().toString(),
+            base.task().sessionId(),
+            base.task().id(),
+            Instant.parse("2026-05-06T06:42:00Z"),
+            "1.1",
+            "review summary",
+            null,
+            null,
+            List.of(),
+            "evaluate output",
+            Map.of(
+                "prompt_mode", promptMode,
+                "next_step", "evaluate output"
+            )
+        );
+        return new TaskRuntimeContext(
+            base.task(),
+            latestPacket,
+            null,
+            base.recentEvents(),
+            base.recentDecisions(),
+            base.recentArtifacts(),
+            base.recentMessages(),
+            base.activeContext(),
+            base.mountedContextView()
         );
     }
 

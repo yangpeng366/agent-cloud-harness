@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -220,6 +221,34 @@ class MountedContextPromptRendererTest {
         assertFalse(prompt.contains("archive_handles=4"));
         assertFalse(prompt.contains("very_long_trace="));
         assertTrue(prompt.contains("... +2 more"));
+    }
+
+    @Test
+    void renderSkipsNullObjectsWithoutDroppingLaterValidEntries() {
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_null_objects",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    Arrays.asList(
+                        null,
+                        object("goal_1", "Goal 1", "第一条约束", ContextRetentionState.PINNED),
+                        null,
+                        object("goal_2", "Goal 2", "第二条约束", ContextRetentionState.PINNED)
+                    )
+                )
+            ),
+            List.of()
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+
+        assertTrue(prompt.contains("Pinned (2)"));
+        assertTrue(prompt.contains("artifact/pinned/Goal 1"));
+        assertTrue(prompt.contains("artifact/pinned/Goal 2"));
+        assertFalse(prompt.contains("... +"));
     }
 
     private ContextObject object(String id,

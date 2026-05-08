@@ -19,6 +19,7 @@ public record TaskLiveFlowView(
     JudgmentTraceView judgmentTrace,
     RuntimeFactSet runtimeFacts,
     RuntimeCognitionSurfaceView runtimeCognitionSurface,
+    List<RuntimeCognitionTimelineEntryView> runtimeCognitionTimeline,
     List<Checkpoint> checkpoints,
     List<LearningMemory> learningMemories,
     List<ToolInvocationRecord> toolInvocations,

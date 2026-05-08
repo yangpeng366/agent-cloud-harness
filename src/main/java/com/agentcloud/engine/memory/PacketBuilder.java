@@ -1,6 +1,7 @@
 package com.agentcloud.engine.memory;
 
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,7 @@ public class PacketBuilder {
         payload.put("task_status", task.status());
         payload.put("relevant_artifacts", artifacts.stream().map(Artifact::title).toList());
         payload.put("key_constraints", List.of());
+        putPromptModeContinuityFields(payload, task);
 
         return new ResumePacket(
             java.util.UUID.randomUUID().toString(),
@@ -124,6 +126,7 @@ public class PacketBuilder {
         copyMetadata(task.metadata(), metadata, "executor_worker");
         copyMetadata(task.metadata(), metadata, "selected_model_tier");
         copyMetadata(task.metadata(), metadata, "fallback_reason");
+        putPromptModeContinuityFields(metadata, task);
 
         log.info("Handoff packet built for task={} from={} to={}", task.id(), fromWorker, toWorker);
         return new HandoffPacket(
@@ -374,6 +377,16 @@ public class PacketBuilder {
         if (value != null) {
             target.put(key, value);
         }
+    }
+
+    private void putPromptModeContinuityFields(Map<String, Object> target, Task task) {
+        if (target == null) {
+            return;
+        }
+        String wireName = PromptRenderingMode.resolve(task).wireName();
+        target.put("prompt_rendering_mode", wireName);
+        target.put("mounted_context_mode", wireName);
+        target.put("prompt_mode", wireName);
     }
 
     private String firstNonBlank(String... values) {

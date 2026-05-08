@@ -1,6 +1,8 @@
 package com.agentcloud.runtime.context;
 
+import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.TaskRuntimeContext;
 import com.fasterxml.jackson.annotation.JsonValue;
 
 import java.util.Map;
@@ -36,10 +38,27 @@ public enum PromptRenderingMode {
         return resolve(task != null ? task.metadata() : null);
     }
 
+    public static PromptRenderingMode resolve(TaskRuntimeContext context) {
+        if (context == null) {
+            return ACTIVE_CONTEXT_ONLY;
+        }
+        Map<String, Object> taskMetadata = context.task() != null ? context.task().metadata() : null;
+        ResumePacket latestPacket = context.latestPacket();
+        return fromWireName(firstNonBlank(
+            metadataValue(taskMetadata, "prompt_rendering_mode"),
+            metadataValue(taskMetadata, "mounted_context_mode"),
+            metadataValue(taskMetadata, "prompt_mode"),
+            packetPayloadValue(latestPacket, "prompt_rendering_mode"),
+            packetPayloadValue(latestPacket, "mounted_context_mode"),
+            packetPayloadValue(latestPacket, "prompt_mode")
+        ));
+    }
+
     public static PromptRenderingMode resolve(Map<String, Object> metadata) {
         return fromWireName(firstNonBlank(
             metadataValue(metadata, "prompt_rendering_mode"),
-            metadataValue(metadata, "mounted_context_mode")
+            metadataValue(metadata, "mounted_context_mode"),
+            metadataValue(metadata, "prompt_mode")
         ));
     }
 
@@ -58,6 +77,14 @@ public enum PromptRenderingMode {
             return null;
         }
         Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private static String packetPayloadValue(ResumePacket packet, String key) {
+        if (packet == null || packet.payload() == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = packet.payload().get(key);
         return value == null ? null : value.toString();
     }
 

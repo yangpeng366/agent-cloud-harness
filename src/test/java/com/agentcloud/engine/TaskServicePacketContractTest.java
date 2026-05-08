@@ -67,6 +67,7 @@ class TaskServicePacketContractTest {
                 "Need one persisted protocol sample.",
                 Map.of(
                     "task_type", "coding",
+                    "prompt_mode", "mounted_context_primary",
                     "open_questions", List.of("Should the packet preserve legacy summaries?"),
                     "blockers", List.of("Need one persisted protocol sample.")
                 )
@@ -119,6 +120,9 @@ class TaskServicePacketContractTest {
             assertEquals("execution_judgment", persisted.recentDecisions().get(0).decisionType());
             assertEquals("Continue executor validation.", persisted.payload().get("next_step"));
             assertEquals(Boolean.TRUE, persisted.payload().get("machine_readable_first"));
+            assertEquals("mounted_context_primary", persisted.payload().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_primary", persisted.payload().get("mounted_context_mode"));
+            assertEquals("mounted_context_primary", persisted.payload().get("prompt_mode"));
             assertEquals(Boolean.TRUE, persisted.machineReadableFirst());
         }
     }
@@ -157,6 +161,7 @@ class TaskServicePacketContractTest {
                     "task_type", "coding",
                     "model_mode", "orchestrated",
                     "orchestration_stage", "execution_pending",
+                    "prompt_mode", "mounted_context_shadow",
                     "planner_worker", "codex",
                     "executor_worker", "kimi",
                     "open_questions", List.of("Should executor keep the current file layout?")
@@ -246,6 +251,9 @@ class TaskServicePacketContractTest {
             assertEquals("Apply the final executor patch.", view.handoffPacket().resumeHint());
             assertEquals("orchestrated", view.handoffPacket().metadata().get("model_mode"));
             assertEquals("execution_pending", view.handoffPacket().metadata().get("orchestration_stage"));
+            assertEquals("mounted_context_shadow", view.handoffPacket().metadata().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_shadow", view.handoffPacket().metadata().get("mounted_context_mode"));
+            assertEquals("mounted_context_shadow", view.handoffPacket().metadata().get("prompt_mode"));
         }
     }
 
@@ -283,6 +291,7 @@ class TaskServicePacketContractTest {
                 null,
                 Map.of(
                     "task_type", "coding",
+                    "prompt_mode", "mounted_context_primary",
                     "open_questions", List.of("Should pause emit a stored packet?")
                 )
             );
@@ -332,6 +341,9 @@ class TaskServicePacketContractTest {
             assertTrue(persistedPacket.blockers().contains("needs review"));
             assertTrue(persistedPacket.blockers().contains("task_paused"));
             assertTrue(persistedPacket.openQuestions().contains("Should pause emit a stored packet?"));
+            assertEquals("mounted_context_primary", persistedPacket.payload().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_primary", persistedPacket.payload().get("mounted_context_mode"));
+            assertEquals("mounted_context_primary", persistedPacket.payload().get("prompt_mode"));
 
             assertEquals("pause_before", persistedCheckpoint.checkpointType());
             @SuppressWarnings("unchecked")

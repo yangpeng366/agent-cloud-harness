@@ -63,6 +63,7 @@ class ConsolidationServiceProtocolTest {
                 "Need one pause-time continuity sample.",
                 Map.of(
                     "task_type", "coding",
+                    "prompt_mode", "mounted_context_shadow",
                     "open_questions", List.of("Should checkpoint reuse resume packet field names?"),
                     "blockers", List.of("Need one pause-time continuity sample.")
                 )
@@ -130,6 +131,9 @@ class ConsolidationServiceProtocolTest {
             assertEquals("Checkpoint summary draft is ready.", refinedPacket.get("latest_summary"));
             assertEquals("Persist refined packet fields.", refinedPacket.get("next_step"));
             assertEquals("pause_before", refinedPacket.get("trigger"));
+            assertEquals("mounted_context_shadow", refinedPacket.get("prompt_rendering_mode"));
+            assertEquals("mounted_context_shadow", refinedPacket.get("mounted_context_mode"));
+            assertEquals("mounted_context_shadow", refinedPacket.get("prompt_mode"));
 
             Map<?, ?> taskIdentity = assertInstanceOf(Map.class, refinedPacket.get("task_identity"));
             assertEquals("task_cp_1", taskIdentity.get("task_id"));

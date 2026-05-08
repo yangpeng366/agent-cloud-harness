@@ -98,7 +98,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (worker == null) {
             return fallbackExecutor.executeOneRound(context, workerId);
         }
-        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.task());
+        PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context);
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
             context,
             renderingMode,
@@ -1309,7 +1309,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                         TaskToolState toolStateBefore,
                                                         TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task())));
+        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1749,7 +1749,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                             TaskToolState toolState,
                                             ToolPlan originalPlan) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context.task())));
+        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1787,7 +1787,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                  ImageInputDiagnostics imageDiagnostics,
                                                  String visualBrief) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context.task())));
+        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -2492,7 +2492,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                TaskToolState toolStateBefore,
                                                TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task())));
+        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -2519,11 +2519,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context) {
-        return buildTaskPrompt(context, true, PromptRenderingMode.resolve(context.task()));
+        return buildTaskPrompt(context, true, PromptRenderingMode.resolve(context));
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context, boolean includeFullActiveContext) {
-        return buildTaskPrompt(context, includeFullActiveContext, PromptRenderingMode.resolve(context.task()));
+        return buildTaskPrompt(context, includeFullActiveContext, PromptRenderingMode.resolve(context));
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context,

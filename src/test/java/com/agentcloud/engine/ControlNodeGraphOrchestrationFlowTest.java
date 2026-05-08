@@ -145,11 +145,13 @@ class ControlNodeGraphOrchestrationFlowTest {
             ));
             assertTrue(decisions.stream().anyMatch(d ->
                 "execution_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "mounted_context_mode"))
                     && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
                     && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
             ));
             assertTrue(decisions.stream().anyMatch(d ->
                 "completion_judgment".equals(d.decisionType())
+                    && "mounted_context_primary".equals(metadataString(d.metadata(), "mounted_context_mode"))
                     && "mounted_context_primary".equals(metadataString(d.metadata(), "prompt_mode"))
                     && "true".equalsIgnoreCase(metadataString(d.metadata(), "mounted_context_injected"))
             ));

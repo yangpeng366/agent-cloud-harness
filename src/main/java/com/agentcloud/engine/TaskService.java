@@ -12,6 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -290,6 +292,7 @@ public class TaskService {
             judgmentTrace,
             facts,
             buildRuntimeCognitionSurface(facts),
+            buildRuntimeCognitionTimeline(facts),
             checkpoints,
             learningMemories,
             toolInvocations,
@@ -360,10 +363,47 @@ public class TaskService {
                     metadataString(runtimeMetadata, "prompt_mode")
                 ),
                 metadataBoolean(executionMetadata, "mounted_context_rendered", runtimeMetadata),
+                metadataBoolean(executionMetadata, "mounted_render_used", runtimeMetadata),
                 metadataBoolean(executionMetadata, "mounted_context_injected", runtimeMetadata),
                 firstNonNullInt(
                     metadataInteger(executionMetadata, "mounted_context_panel_count"),
                     metadataInteger(runtimeMetadata, "mounted_context_panel_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_context_non_empty_panel_count"),
+                    metadataInteger(runtimeMetadata, "mounted_context_non_empty_panel_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_context_selection_trace_count"),
+                    metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_pinned_count"),
+                    metadataInteger(runtimeMetadata, "mounted_pinned_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_active_count"),
+                    metadataInteger(runtimeMetadata, "mounted_active_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_ancestor_count"),
+                    metadataInteger(runtimeMetadata, "mounted_ancestor_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_sibling_count"),
+                    metadataInteger(runtimeMetadata, "mounted_sibling_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_evidence_count"),
+                    metadataInteger(runtimeMetadata, "mounted_evidence_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_index_count"),
+                    metadataInteger(runtimeMetadata, "mounted_index_count")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "mounted_archive_count"),
+                    metadataInteger(runtimeMetadata, "mounted_archive_count")
                 ),
                 metadataStringList(executionMetadata, "evidence_refs").isEmpty()
                     ? metadataStringList(runtimeMetadata, "evidence_refs")
@@ -399,6 +439,231 @@ public class TaskService {
         );
     }
 
+    private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(RuntimeFactSet facts) {
+        RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
+        RuntimeCognitionSurfaceView surface = buildRuntimeCognitionSurface(runtimeFacts);
+        List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
+
+        RuntimeCognitionTimelineEntryView routeEntry = buildRouteTimelineEntry(runtimeFacts, surface);
+        if (routeEntry != null) {
+            entries.add(routeEntry);
+        }
+        RuntimeCognitionTimelineEntryView executionEntry = buildExecutionTimelineEntry(runtimeFacts, surface);
+        if (executionEntry != null) {
+            entries.add(executionEntry);
+        }
+        RuntimeCognitionTimelineEntryView executionJudgmentEntry = buildJudgmentTimelineEntry(
+            "execution_judgment",
+            "Execution Judgment",
+            runtimeFacts.executionJudgment(),
+            surface != null ? surface.executionJudgment() : null,
+            surface != null ? surface.execution() : null
+        );
+        if (executionJudgmentEntry != null) {
+            entries.add(executionJudgmentEntry);
+        }
+        RuntimeCognitionTimelineEntryView completionJudgmentEntry = buildJudgmentTimelineEntry(
+            "completion_judgment",
+            "Completion Judgment",
+            runtimeFacts.completionJudgment(),
+            surface != null ? surface.completionJudgment() : null,
+            surface != null ? surface.execution() : null
+        );
+        if (completionJudgmentEntry != null) {
+            entries.add(completionJudgmentEntry);
+        }
+
+        entries.sort(Comparator.comparing(
+            RuntimeCognitionTimelineEntryView::occurredAt,
+            Comparator.nullsLast(String::compareTo)
+        ));
+        return entries;
+    }
+
+    private RuntimeCognitionTimelineEntryView buildRouteTimelineEntry(RuntimeFactSet facts,
+                                                                      RuntimeCognitionSurfaceView surface) {
+        if (facts == null || surface == null || surface.route() == null) {
+            return null;
+        }
+        RuntimeCognitionSurfaceView.RouteSurface route = surface.route();
+        if (blankToNull(route.selectedWorker()) == null
+            && blankToNull(route.routeSource()) == null
+            && (route.candidateWorkers() == null || route.candidateWorkers().isEmpty())) {
+            return null;
+        }
+        String occurredAt = resolveRouteOccurredAt(facts);
+        String summary = firstNonBlank(
+            summarizeRouteTimeline(route),
+            facts.routePreview() != null ? blankToNull(facts.routePreview().whySelected()) : null,
+            blankToNull(route.routeSource())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            "route",
+            "Route Selected",
+            occurredAt,
+            blankToNull(route.selectedWorker()),
+            null,
+            blankToNull(route.routeSource()),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            route.candidateWorkers() == null ? List.of() : route.candidateWorkers(),
+            List.of(),
+            List.of(),
+            summary
+        );
+    }
+
+    private RuntimeCognitionTimelineEntryView buildExecutionTimelineEntry(RuntimeFactSet facts,
+                                                                          RuntimeCognitionSurfaceView surface) {
+        if (facts == null || surface == null || surface.execution() == null) {
+            return null;
+        }
+        RuntimeCognitionSurfaceView.ExecutionSurface execution = surface.execution();
+        if (blankToNull(execution.workerId()) == null
+            && blankToNull(execution.executionStatus()) == null
+            && blankToNull(execution.executionId()) == null) {
+            return null;
+        }
+        String summary = firstNonBlank(
+            summarizeExecutionTimeline(execution),
+            blankToNull(execution.traceSummary())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            "execution",
+            "Execution Boundary",
+            resolveExecutionOccurredAt(facts.executionBoundary()),
+            blankToNull(execution.workerId()),
+            blankToNull(execution.promptMode()),
+            null,
+            blankToNull(execution.executionStatus()),
+            execution.toolInvocationCount(),
+            execution.mountedContextRendered(),
+            execution.mountedContextInjected(),
+            execution.mountedContextPanelCount(),
+            null,
+            List.of(),
+            execution.evidenceRefs() == null ? List.of() : execution.evidenceRefs(),
+            execution.unfinishedItems() == null ? List.of() : execution.unfinishedItems(),
+            summary
+        );
+    }
+
+    private RuntimeCognitionTimelineEntryView buildJudgmentTimelineEntry(String stage,
+                                                                         String label,
+                                                                         Decision decision,
+                                                                         RuntimeCognitionSurfaceView.JudgmentSurface surface,
+                                                                         RuntimeCognitionSurfaceView.ExecutionSurface executionSurface) {
+        if (decision == null || surface == null) {
+            return null;
+        }
+        String executionPromptMode = executionSurface != null ? blankToNull(executionSurface.promptMode()) : null;
+        String judgmentPromptMode = blankToNull(surface.promptMode());
+        String summary = firstNonBlank(
+            summarizeJudgmentTimeline(decision, surface),
+            blankToNull(decision.summary()),
+            blankToNull(decision.rationale())
+        );
+        return new RuntimeCognitionTimelineEntryView(
+            stage,
+            label,
+            decision.createdAt() != null ? decision.createdAt().toString() : null,
+            null,
+            judgmentPromptMode,
+            null,
+            null,
+            null,
+            surface.mountedContextRendered(),
+            surface.mountedContextInjected(),
+            surface.mountedContextPanelCount(),
+            alignmentFlag(executionPromptMode, judgmentPromptMode),
+            surface.candidateWorkers() == null ? List.of() : surface.candidateWorkers(),
+            surface.evidenceRefs() == null ? List.of() : surface.evidenceRefs(),
+            surface.unfinishedItems() == null ? List.of() : surface.unfinishedItems(),
+            summary
+        );
+    }
+
+    private String resolveRouteOccurredAt(RuntimeFactSet facts) {
+        if (facts == null || facts.runtimeContext() == null || facts.runtimeContext().recentArtifacts() == null) {
+            return null;
+        }
+        return facts.runtimeContext().recentArtifacts().stream()
+            .filter(Objects::nonNull)
+            .map(Artifact::createdAt)
+            .filter(Objects::nonNull)
+            .max(Instant::compareTo)
+            .map(Instant::toString)
+            .orElse(null);
+    }
+
+    private String resolveExecutionOccurredAt(RuntimeFactSet.ExecutionBoundary executionBoundary) {
+        if (executionBoundary == null) {
+            return null;
+        }
+        return firstNonBlank(
+            blankToNull(executionBoundary.finishedAt()),
+            blankToNull(executionBoundary.startedAt())
+        );
+    }
+
+    private String summarizeRouteTimeline(RuntimeCognitionSurfaceView.RouteSurface route) {
+        if (route == null) {
+            return null;
+        }
+        String worker = blankToNull(route.selectedWorker());
+        String source = blankToNull(route.routeSource());
+        String tier = blankToNull(route.selectedModelTier());
+        String role = blankToNull(route.selectedExecutionRole());
+        return firstNonBlank(
+            joinSummary(worker, source, tier, role),
+            joinSummary(worker, source),
+            worker
+        );
+    }
+
+    private String summarizeExecutionTimeline(RuntimeCognitionSurfaceView.ExecutionSurface execution) {
+        if (execution == null) {
+            return null;
+        }
+        String status = blankToNull(execution.executionStatus());
+        String promptMode = blankToNull(execution.promptMode());
+        String trace = blankToNull(execution.traceSummary());
+        String tools = execution.toolInvocationCount() == null ? null : execution.toolInvocationCount() + " tools";
+        return firstNonBlank(
+            joinSummary(status, promptMode, tools, trace),
+            joinSummary(status, promptMode, trace),
+            status
+        );
+    }
+
+    private String summarizeJudgmentTimeline(Decision decision,
+                                             RuntimeCognitionSurfaceView.JudgmentSurface surface) {
+        String promptMode = surface != null ? blankToNull(surface.promptMode()) : null;
+        String action = decision != null ? metadataString(decision.metadata(), "action") : null;
+        String status = decision != null ? metadataString(decision.metadata(), "status") : null;
+        return firstNonBlank(
+            joinSummary(promptMode, action, status),
+            joinSummary(promptMode, status),
+            promptMode
+        );
+    }
+
+    private String joinSummary(String... parts) {
+        if (parts == null || parts.length == 0) {
+            return null;
+        }
+        return java.util.Arrays.stream(parts)
+            .map(this::blankToNull)
+            .filter(Objects::nonNull)
+            .distinct()
+            .reduce((left, right) -> left + " · " + right)
+            .orElse(null);
+    }
+
     private RuntimeCognitionSurfaceView.JudgmentSurface buildJudgmentSurface(Decision decision,
                                                                              Map<String, Object> runtimeMetadata) {
         if (decision == null) {
@@ -411,10 +676,47 @@ public class TaskService {
                 metadataString(runtimeMetadata, "prompt_mode")
             ),
             metadataBoolean(decisionMetadata, "mounted_context_rendered", runtimeMetadata),
+            metadataBoolean(decisionMetadata, "mounted_render_used", runtimeMetadata),
             metadataBoolean(decisionMetadata, "mounted_context_injected", runtimeMetadata),
             firstNonNullInt(
                 metadataInteger(decisionMetadata, "mounted_context_panel_count"),
                 metadataInteger(runtimeMetadata, "mounted_context_panel_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_context_non_empty_panel_count"),
+                metadataInteger(runtimeMetadata, "mounted_context_non_empty_panel_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_context_selection_trace_count"),
+                metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_pinned_count"),
+                metadataInteger(runtimeMetadata, "mounted_pinned_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_active_count"),
+                metadataInteger(runtimeMetadata, "mounted_active_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_ancestor_count"),
+                metadataInteger(runtimeMetadata, "mounted_ancestor_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_sibling_count"),
+                metadataInteger(runtimeMetadata, "mounted_sibling_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_evidence_count"),
+                metadataInteger(runtimeMetadata, "mounted_evidence_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_index_count"),
+                metadataInteger(runtimeMetadata, "mounted_index_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(decisionMetadata, "mounted_archive_count"),
+                metadataInteger(runtimeMetadata, "mounted_archive_count")
             ),
             metadataStringList(decisionMetadata, "candidate_workers").isEmpty()
                 ? metadataStringList(runtimeMetadata, "candidate_workers")

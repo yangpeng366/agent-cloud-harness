@@ -58,6 +58,7 @@ class PacketBuilderProtocolTest {
                 null,
                 Map.of(
                     "task_type", "coding",
+                    "prompt_mode", "mounted_context_primary",
                     "open_questions", List.of("Should the packet expose task_type?"),
                     "blockers", List.of("Need a stable comparison target.")
                 )
@@ -110,6 +111,9 @@ class PacketBuilderProtocolTest {
             assertEquals("execution_judgment", packet.recentDecisions().get(0).decisionType());
             assertEquals("Finish executor handoff.", packet.payload().get("next_step"));
             assertEquals(Boolean.TRUE, packet.payload().get("machine_readable_first"));
+            assertEquals("mounted_context_primary", packet.payload().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_primary", packet.payload().get("mounted_context_mode"));
+            assertEquals("mounted_context_primary", packet.payload().get("prompt_mode"));
             assertEquals(Boolean.TRUE, packet.machineReadableFirst());
         }
     }
@@ -147,6 +151,7 @@ class PacketBuilderProtocolTest {
                     "task_type", "coding",
                     "model_mode", "orchestrated",
                     "orchestration_stage", "execution_pending",
+                    "prompt_mode", "mounted_context_shadow",
                     "planner_worker", "codex",
                     "executor_worker", "kimi",
                     "open_questions", List.of("Should executor keep current file layout?")
@@ -236,6 +241,9 @@ class PacketBuilderProtocolTest {
             assertTrue(packet.cautions().stream().anyMatch(item -> item.contains("Need executor continuation")));
             assertEquals("Implement the final execution steps.", packet.resumeHint());
             assertEquals("orchestrated", packet.metadata().get("model_mode"));
+            assertEquals("mounted_context_shadow", packet.metadata().get("prompt_rendering_mode"));
+            assertEquals("mounted_context_shadow", packet.metadata().get("mounted_context_mode"));
+            assertEquals("mounted_context_shadow", packet.metadata().get("prompt_mode"));
         }
     }
 }

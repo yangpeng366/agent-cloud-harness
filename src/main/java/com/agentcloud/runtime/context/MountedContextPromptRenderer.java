@@ -39,7 +39,7 @@ public class MountedContextPromptRenderer {
         List<String> panelLines = new ArrayList<>();
         for (MountedContextPanelName name : MountedContextPanelName.values()) {
             MountedContextPanel panel = view.panel(name);
-            List<ContextObject> objects = panel.objects();
+            List<ContextObject> objects = nonNullObjects(panel.objects());
             if (objects == null || objects.isEmpty()) {
                 continue;
             }
@@ -107,6 +107,19 @@ public class MountedContextPromptRenderer {
             lines.add("... +" + (objects.size() - limit) + " more");
         }
         return String.join(" | ", lines);
+    }
+
+    private List<ContextObject> nonNullObjects(List<ContextObject> objects) {
+        if (objects == null || objects.isEmpty()) {
+            return List.of();
+        }
+        List<ContextObject> filtered = new ArrayList<>();
+        for (ContextObject object : objects) {
+            if (object != null) {
+                filtered.add(object);
+            }
+        }
+        return filtered;
     }
 
     private String firstNonBlank(String... values) {

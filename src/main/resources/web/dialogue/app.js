@@ -1513,9 +1513,14 @@ async function loadTaskExperimentSummary(taskId, flow) {
 
 function renderRouteBox(flow, task) {
     const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const cognitionSurface = flow?.runtime_cognition_surface || flow?.runtimeCognitionSurface || {};
+    const cognitionTimeline = flow?.runtime_cognition_timeline || flow?.runtimeCognitionTimeline || [];
+    const routeSurface = cognitionSurface.route || {};
     const experimentRun = experimentRunView(flow);
     const metadata = experimentRunMetadata(flow);
     const selectedWorker = firstNonBlank(
+        routeSurface.selected_worker,
+        routeSurface.selectedWorker,
         routePreview.selected_worker,
         routePreview.selectedWorker,
         task?.assigned_worker,
@@ -1523,6 +1528,8 @@ function renderRouteBox(flow, task) {
         "unassigned"
     );
     const routeSource = firstNonBlank(
+        routeSurface.route_source,
+        routeSurface.routeSource,
         routePreview.route_source,
         routePreview.routeSource,
         metadata.route_source,
@@ -1545,6 +1552,8 @@ function renderRouteBox(flow, task) {
         metadata.modelMode
     );
     const preferredWorkerHint = firstNonBlank(
+        routeSurface.preferred_worker_hint,
+        routeSurface.preferredWorkerHint,
         routePreview.preferred_worker_hint,
         routePreview.preferredWorkerHint,
         metadata.preferred_worker_hint,
@@ -1555,27 +1564,39 @@ function renderRouteBox(flow, task) {
         metadata.fallbackReason
     );
     const learningHintApplied = booleanValue(
+        routeSurface.learning_hint_applied,
+        routeSurface.learningHintApplied,
         routePreview.learning_hint_applied,
         routePreview.learningHintApplied,
         metadata.learning_hint_applied,
         metadata.learningHintApplied
     );
     const candidateWorkers = normalizeTextList(
+        routeSurface.candidate_workers,
+        routeSurface.candidateWorkers,
         routePreview.candidate_workers,
         routePreview.candidateWorkers
     );
     const routeReason = firstNonBlank(
+        routeSurface.route_reason,
+        routeSurface.routeReason,
         routePreview.route_reason,
         routePreview.routeReason,
         routePreview.reason,
         routePreview.summary,
         fallbackReason
     );
+    const routeAlignment = booleanValue(
+        cognitionSurface?.alignment?.route_worker_matches_execution_worker,
+        cognitionSurface?.alignment?.routeWorkerMatchesExecutionWorker
+    );
     const routeChips = [
         modelMode ? `mode: ${humanizeToken(modelMode) || modelMode}` : null,
         preferredWorkerHint ? `hint: ${preferredWorkerHint}` : null,
         learningHintApplied === true ? "learning: applied" : null,
-        learningHintApplied === false ? "learning: observed, not applied" : null
+        learningHintApplied === false ? "learning: observed, not applied" : null,
+        routeAlignment === true ? "route/execution aligned" : null,
+        routeAlignment === false ? "route/execution diverged" : null
     ].filter(Boolean);
     if (!selectedWorker && !routeReason && candidateWorkers.length === 0 && routeChips.length === 0) {
         return emptyState("暂无 route preview");
@@ -1594,6 +1615,7 @@ function renderRouteBox(flow, task) {
                     ${routeChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
                 </div>
             ` : ""}
+            ${renderCognitionTimeline(cognitionTimeline)}
         </div>
     `;
 }
@@ -1800,16 +1822,90 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
     `;
 }
 
+function renderCognitionTimeline(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return "";
+    }
+    return `
+        <div class="cognition-timeline">
+            ${entries.map((entry) => renderCognitionTimelineEntry(entry)).join("")}
+        </div>
+    `;
+}
+
+function renderCognitionTimelineEntry(entry) {
+    const stage = firstNonBlank(entry?.stage, "unknown");
+    const label = firstNonBlank(entry?.label, humanizeToken(stage) || stage);
+    const summary = firstNonBlank(entry?.summary, summarizeCognitionTimelineEntry(entry), "no summary");
+    const chips = cognitionTimelineChips(entry);
+    return `
+        <div class="cognition-timeline__entry">
+            <div class="cognition-timeline__meta">
+                <span class="task-badge">${escapeHtml(label)}</span>
+                ${entry?.occurred_at || entry?.occurredAt ? `<span>${escapeHtml(formatTime(entry.occurred_at || entry.occurredAt))}</span>` : ""}
+            </div>
+            <strong>${escapeHtml(preview(summary, 220))}</strong>
+            ${chips.length > 0 ? `
+                <div class="chip-list experiment-summary__chips">
+                    ${chips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
+                </div>
+            ` : ""}
+        </div>
+    `;
+}
+
+function cognitionTimelineChips(entry) {
+    const workerId = firstNonBlank(entry?.worker_id, entry?.workerId);
+    const promptMode = firstNonBlank(entry?.prompt_mode, entry?.promptMode);
+    const routeSource = firstNonBlank(entry?.route_source, entry?.routeSource);
+    const executionStatus = firstNonBlank(entry?.execution_status, entry?.executionStatus);
+    const toolCount = numberOrNull(entry?.tool_invocation_count, entry?.toolInvocationCount);
+    const mountedRendered = booleanValue(entry?.mounted_context_rendered, entry?.mountedContextRendered);
+    const mountedInjected = booleanValue(entry?.mounted_context_injected, entry?.mountedContextInjected);
+    const mountedPanelCount = numberOrNull(entry?.mounted_context_panel_count, entry?.mountedContextPanelCount);
+    const aligned = booleanValue(entry?.aligned_with_previous_prompt_mode, entry?.alignedWithPreviousPromptMode);
+    const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
+    const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
+    return [
+        workerId ? `worker: ${workerId}` : null,
+        routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
+        promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
+        executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
+        toolCount === null ? null : `${toolCount} tools`,
+        mountedRendered === true ? "mounted rendered" : null,
+        mountedInjected === true ? "mounted injected" : null,
+        mountedPanelCount === null ? null : `${mountedPanelCount} panels`,
+        aligned === true ? "prompt aligned" : null,
+        aligned === false ? "prompt diverged" : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+    ].filter(Boolean);
+}
+
+function summarizeCognitionTimelineEntry(entry) {
+    return [
+        firstNonBlank(entry?.worker_id, entry?.workerId),
+        firstNonBlank(entry?.prompt_mode, entry?.promptMode),
+        firstNonBlank(entry?.execution_status, entry?.executionStatus),
+        firstNonBlank(entry?.route_source, entry?.routeSource)
+    ].filter(Boolean).join(" · ");
+}
+
 function routeSignal(flow) {
     const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const routeSurface = flow?.runtime_cognition_surface?.route || flow?.runtimeCognitionSurface?.route || {};
     const metadata = experimentRunMetadata(flow);
     const worker = firstNonBlank(
+        routeSurface.selected_worker,
+        routeSurface.selectedWorker,
         routePreview.selected_worker,
         routePreview.selectedWorker,
         metadata.assigned_worker,
         metadata.assignedWorker
     );
     const source = firstNonBlank(
+        routeSurface.route_source,
+        routeSurface.routeSource,
         routePreview.route_source,
         routePreview.routeSource,
         metadata.route_source,
@@ -1876,6 +1972,122 @@ function toolChainNarrative(flow, tools = []) {
         return label;
     }
     return [label, facts.toolNames.map(humanizeToken).join(" -> ")].filter(Boolean).join(" · ");
+}
+
+function summarizeExecutionSurface(surface) {
+    if (!surface || Object.keys(surface).length === 0) {
+        return null;
+    }
+    const worker = firstNonBlank(surface.worker_id, surface.workerId);
+    const status = firstNonBlank(surface.execution_status, surface.executionStatus);
+    const promptMode = firstNonBlank(surface.prompt_mode, surface.promptMode);
+    const mountedRendered = booleanValue(surface.mounted_context_rendered, surface.mountedContextRendered);
+    const mountedRenderUsed = booleanValue(surface.mounted_render_used, surface.mountedRenderUsed);
+    const mountedInjected = booleanValue(surface.mounted_context_injected, surface.mountedContextInjected);
+    const panelCount = numericValue(surface.mounted_context_panel_count, surface.mountedContextPanelCount);
+    const nonEmptyPanelCount = numericValue(
+        surface.mounted_context_non_empty_panel_count,
+        surface.mountedContextNonEmptyPanelCount
+    );
+    const activeCount = numericValue(surface.mounted_active_count, surface.mountedActiveCount);
+    const evidenceCount = numericValue(surface.mounted_evidence_count, surface.mountedEvidenceCount);
+    const archiveCount = numericValue(surface.mounted_archive_count, surface.mountedArchiveCount);
+    const parts = [
+        worker ? `worker ${worker}` : null,
+        status ? humanizeToken(status) || status : null,
+        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "mounted rendered" : null,
+        mountedRendered === false ? "mounted not rendered" : null,
+        mountedRenderUsed === true ? "mounted used" : null,
+        mountedRenderUsed === false ? "mounted unused" : null,
+        mountedInjected === true ? "mounted injected" : null,
+        mountedInjected === false ? "mounted not injected" : null,
+        panelCount ? `${panelCount} panels` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        activeCount ? `${activeCount} active` : null,
+        evidenceCount ? `${evidenceCount} evidence` : null,
+        archiveCount ? `${archiveCount} archive` : null
+    ].filter(Boolean);
+    if (parts.length === 0) {
+        return null;
+    }
+    return { label: "execution", value: parts.join(" · ") };
+}
+
+function summarizeJudgmentSurface(label, surface) {
+    if (!surface || Object.keys(surface).length === 0) {
+        return null;
+    }
+    const promptMode = firstNonBlank(surface.prompt_mode, surface.promptMode);
+    const mountedRendered = booleanValue(surface.mounted_context_rendered, surface.mountedContextRendered);
+    const mountedRenderUsed = booleanValue(surface.mounted_render_used, surface.mountedRenderUsed);
+    const mountedInjected = booleanValue(surface.mounted_context_injected, surface.mountedContextInjected);
+    const panelCount = numericValue(surface.mounted_context_panel_count, surface.mountedContextPanelCount);
+    const nonEmptyPanelCount = numericValue(
+        surface.mounted_context_non_empty_panel_count,
+        surface.mountedContextNonEmptyPanelCount
+    );
+    const activeCount = numericValue(surface.mounted_active_count, surface.mountedActiveCount);
+    const evidenceCount = numericValue(surface.mounted_evidence_count, surface.mountedEvidenceCount);
+    const archiveCount = numericValue(surface.mounted_archive_count, surface.mountedArchiveCount);
+    const evidenceRefs = normalizeTextList(surface.evidence_refs, surface.evidenceRefs);
+    const unfinishedItems = normalizeTextList(surface.unfinished_items, surface.unfinishedItems);
+    const parts = [
+        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "mounted rendered" : null,
+        mountedRendered === false ? "mounted not rendered" : null,
+        mountedRenderUsed === true ? "mounted used" : null,
+        mountedRenderUsed === false ? "mounted unused" : null,
+        mountedInjected === true ? "mounted injected" : null,
+        mountedInjected === false ? "mounted not injected" : null,
+        panelCount ? `${panelCount} panels` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        activeCount ? `${activeCount} active` : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
+        evidenceCount ? `${evidenceCount} evidence budget` : null,
+        archiveCount ? `${archiveCount} archive` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+    ].filter(Boolean);
+    if (parts.length === 0) {
+        return null;
+    }
+    return { label, value: parts.join(" · ") };
+}
+
+function summarizeAlignmentSurface(surface) {
+    if (!surface || Object.keys(surface).length === 0) {
+        return [];
+    }
+    return [
+        alignmentChip(
+            "route/execution",
+            booleanValue(surface.route_worker_matches_execution_worker, surface.routeWorkerMatchesExecutionWorker)
+        ),
+        alignmentChip(
+            "exec/judge prompt",
+            booleanValue(
+                surface.execution_and_execution_judgment_prompt_mode_aligned,
+                surface.executionAndExecutionJudgmentPromptModeAligned
+            )
+        ),
+        alignmentChip(
+            "exec/done prompt",
+            booleanValue(
+                surface.execution_and_completion_judgment_prompt_mode_aligned,
+                surface.executionAndCompletionJudgmentPromptModeAligned
+            )
+        )
+    ].filter(Boolean);
+}
+
+function alignmentChip(label, aligned) {
+    if (aligned === true) {
+        return `${label}: aligned`;
+    }
+    if (aligned === false) {
+        return `${label}: diverged`;
+    }
+    return null;
 }
 
 function renderToolChainSummaryCard(facts, label, summary) {

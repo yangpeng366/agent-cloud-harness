@@ -1,6 +1,7 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -115,6 +116,7 @@ public class ConsolidationService {
         refinedPacket.put("repeated_failure_hints", repeatedFailureHints);
         refinedPacket.put("task_summary", firstNonBlank(task.summary(), task.title()));
         refinedPacket.put("assigned_worker", task.assignedWorker());
+        putPromptModeContinuityFields(refinedPacket, task);
         refinedPacket.put("consolidated_at", Instant.now().toString());
 
         Map<String, Object> worldModelDelta = new HashMap<>();
@@ -333,6 +335,16 @@ public class ConsolidationService {
         if (value != null && !value.isBlank()) {
             items.add(value);
         }
+    }
+
+    private void putPromptModeContinuityFields(Map<String, Object> target, Task task) {
+        if (target == null) {
+            return;
+        }
+        String wireName = PromptRenderingMode.resolve(task).wireName();
+        target.put("prompt_rendering_mode", wireName);
+        target.put("mounted_context_mode", wireName);
+        target.put("prompt_mode", wireName);
     }
 
     private String firstNonBlank(String... values) {

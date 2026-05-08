@@ -203,6 +203,7 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "tool_aware_executor");
         copyMetadataKey(source, selected, "tool_execution_mode");
         copyMetadataKey(source, selected, "prompt_rendering_mode");
+        copyMetadataKey(source, selected, "mounted_context_mode");
         copyMetadataKey(source, selected, "prompt_mode");
         copyMetadataKey(source, selected, "mounted_context_rendered");
         copyMetadataKey(source, selected, "mounted_render_used");
@@ -509,6 +510,8 @@ public class RuntimeFactSetAssembler {
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_chain_trace");
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_invocation_ids");
         copyMetadataIfPresent(metadata, latest.metadata(), "tool_scope");
+        copyMetadataIfPresent(metadata, latest.metadata(), "prompt_rendering_mode");
+        copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_mode");
         copyMetadataIfPresent(metadata, latest.metadata(), "prompt_mode");
         copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_rendered");
         copyMetadataIfPresent(metadata, latest.metadata(), "mounted_context_injected");
