@@ -248,6 +248,11 @@ public class ExperimentMatrixService {
                 .map(metadata -> metadataBoolean(metadata, "mounted_context_rendered"))
                 .filter(Boolean.TRUE::equals)
                 .count();
+            int runsWithMountedRenderUsed = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "mounted_render_used"))
+                .filter(Boolean.TRUE::equals)
+                .count();
             int runsWithMountedContextInjected = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataBoolean(metadata, "mounted_context_injected"))
@@ -264,6 +269,9 @@ public class ExperimentMatrixService {
             double mountedContextRenderedRate = runsWithPromptModeData == 0
                 ? 0.0
                 : roundToThree((double) runsWithMountedContextRendered / runsWithPromptModeData);
+            double mountedRenderUsedRate = runsWithPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithMountedRenderUsed / runsWithPromptModeData);
             double mountedContextInjectedRate = runsWithPromptModeData == 0
                 ? 0.0
                 : roundToThree((double) runsWithMountedContextInjected / runsWithPromptModeData);
@@ -326,6 +334,11 @@ public class ExperimentMatrixService {
                 .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_context_rendered"))
                 .filter(Boolean.TRUE::equals)
                 .count();
+            int runsWithExecutionJudgmentMountedRenderUsed = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_render_used"))
+                .filter(Boolean.TRUE::equals)
+                .count();
             int runsWithExecutionJudgmentMountedContextInjected = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataBoolean(metadata, "execution_judgment_mounted_context_injected"))
@@ -334,6 +347,10 @@ public class ExperimentMatrixService {
             double executionJudgmentMountedContextRenderedRate = runsWithExecutionJudgmentPromptModeData == 0
                 ? 0.0
                 : roundToThree((double) runsWithExecutionJudgmentMountedContextRendered
+                    / runsWithExecutionJudgmentPromptModeData);
+            double executionJudgmentMountedRenderUsedRate = runsWithExecutionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithExecutionJudgmentMountedRenderUsed
                     / runsWithExecutionJudgmentPromptModeData);
             double executionJudgmentMountedContextInjectedRate = runsWithExecutionJudgmentPromptModeData == 0
                 ? 0.0
@@ -398,6 +415,11 @@ public class ExperimentMatrixService {
                 .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_context_rendered"))
                 .filter(Boolean.TRUE::equals)
                 .count();
+            int runsWithCompletionJudgmentMountedRenderUsed = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_render_used"))
+                .filter(Boolean.TRUE::equals)
+                .count();
             int runsWithCompletionJudgmentMountedContextInjected = (int) runsByMode.stream()
                 .map(ExperimentRunRecord::metadata)
                 .map(metadata -> metadataBoolean(metadata, "completion_judgment_mounted_context_injected"))
@@ -406,6 +428,10 @@ public class ExperimentMatrixService {
             double completionJudgmentMountedContextRenderedRate = runsWithCompletionJudgmentPromptModeData == 0
                 ? 0.0
                 : roundToThree((double) runsWithCompletionJudgmentMountedContextRendered
+                    / runsWithCompletionJudgmentPromptModeData);
+            double completionJudgmentMountedRenderUsedRate = runsWithCompletionJudgmentPromptModeData == 0
+                ? 0.0
+                : roundToThree((double) runsWithCompletionJudgmentMountedRenderUsed
                     / runsWithCompletionJudgmentPromptModeData);
             double completionJudgmentMountedContextInjectedRate = runsWithCompletionJudgmentPromptModeData == 0
                 ? 0.0
@@ -531,8 +557,10 @@ public class ExperimentMatrixService {
                 runsWithPromptModeData,
                 promptModeCounts,
                 runsWithMountedContextRendered,
+                runsWithMountedRenderUsed,
                 runsWithMountedContextInjected,
                 mountedContextRenderedRate,
+                mountedRenderUsedRate,
                 mountedContextInjectedRate,
                 averageMountedContextPanelCount,
                 runsWithMountedContextBudgetData,
@@ -545,8 +573,10 @@ public class ExperimentMatrixService {
                 runsWithExecutionJudgmentPromptModeData,
                 executionJudgmentPromptModeCounts,
                 runsWithExecutionJudgmentMountedContextRendered,
+                runsWithExecutionJudgmentMountedRenderUsed,
                 runsWithExecutionJudgmentMountedContextInjected,
                 executionJudgmentMountedContextRenderedRate,
+                executionJudgmentMountedRenderUsedRate,
                 executionJudgmentMountedContextInjectedRate,
                 runsWithExecutionJudgmentMountedContextBudgetData,
                 runsWithExecutionJudgmentMountedContextBudgetTruncated,
@@ -558,8 +588,10 @@ public class ExperimentMatrixService {
                 runsWithCompletionJudgmentPromptModeData,
                 completionJudgmentPromptModeCounts,
                 runsWithCompletionJudgmentMountedContextRendered,
+                runsWithCompletionJudgmentMountedRenderUsed,
                 runsWithCompletionJudgmentMountedContextInjected,
                 completionJudgmentMountedContextRenderedRate,
+                completionJudgmentMountedRenderUsedRate,
                 completionJudgmentMountedContextInjectedRate,
                 runsWithCompletionJudgmentMountedContextBudgetData,
                 runsWithCompletionJudgmentMountedContextBudgetTruncated,

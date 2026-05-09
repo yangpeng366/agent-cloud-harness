@@ -686,6 +686,9 @@ public class ExperimentRunService {
         int humanGateCount = 0;
         double totalCost = 0.0;
         double totalStrongModelCostRatio = 0.0;
+        LinkedHashMap<String, PromptModeAggregation> promptModeAggregations = new LinkedHashMap<>();
+        LinkedHashMap<String, PromptModeAggregation> executionJudgmentPromptModeAggregations = new LinkedHashMap<>();
+        LinkedHashMap<String, PromptModeAggregation> completionJudgmentPromptModeAggregations = new LinkedHashMap<>();
 
         for (ExperimentRunRecord run : runs) {
             incrementCount(completionStatusCounts, firstNonBlank(run.completionStatus(), "unknown"));
@@ -739,6 +742,51 @@ public class ExperimentRunService {
             humanGateCount += safeInt(run.humanGateCount());
             totalCost += safeDouble(run.totalCost());
             totalStrongModelCostRatio += safeDouble(run.strongModelCostRatio());
+            accumulatePromptModeAggregation(
+                promptModeAggregations,
+                run.metadata(),
+                "prompt_mode",
+                "mounted_context_rendered",
+                "mounted_render_used",
+                "mounted_context_injected",
+                "mounted_context_panel_count",
+                "mounted_context_rendered_panel_count",
+                "mounted_context_rendered_object_count",
+                "mounted_context_hidden_object_count",
+                "mounted_context_rendered_selection_trace_count",
+                "mounted_context_hidden_selection_trace_count",
+                "mounted_context_budget_truncated"
+            );
+            accumulatePromptModeAggregation(
+                executionJudgmentPromptModeAggregations,
+                run.metadata(),
+                "execution_judgment_prompt_mode",
+                "execution_judgment_mounted_context_rendered",
+                "execution_judgment_mounted_render_used",
+                "execution_judgment_mounted_context_injected",
+                "execution_judgment_mounted_context_panel_count",
+                "execution_judgment_mounted_context_rendered_panel_count",
+                "execution_judgment_mounted_context_rendered_object_count",
+                "execution_judgment_mounted_context_hidden_object_count",
+                "execution_judgment_mounted_context_rendered_selection_trace_count",
+                "execution_judgment_mounted_context_hidden_selection_trace_count",
+                "execution_judgment_mounted_context_budget_truncated"
+            );
+            accumulatePromptModeAggregation(
+                completionJudgmentPromptModeAggregations,
+                run.metadata(),
+                "completion_judgment_prompt_mode",
+                "completion_judgment_mounted_context_rendered",
+                "completion_judgment_mounted_render_used",
+                "completion_judgment_mounted_context_injected",
+                "completion_judgment_mounted_context_panel_count",
+                "completion_judgment_mounted_context_rendered_panel_count",
+                "completion_judgment_mounted_context_rendered_object_count",
+                "completion_judgment_mounted_context_hidden_object_count",
+                "completion_judgment_mounted_context_rendered_selection_trace_count",
+                "completion_judgment_mounted_context_hidden_selection_trace_count",
+                "completion_judgment_mounted_context_budget_truncated"
+            );
         }
 
         int runCount = runs.size();
@@ -769,7 +817,10 @@ public class ExperimentRunService {
             humanGateCount,
             roundToThree(totalCost),
             runCount == 0 ? 0.0 : roundToThree(totalCost / runCount),
-            runCount == 0 ? 0.0 : roundToThree(totalStrongModelCostRatio / runCount)
+            runCount == 0 ? 0.0 : roundToThree(totalStrongModelCostRatio / runCount),
+            toPromptModeSummaries(promptModeAggregations),
+            toPromptModeSummaries(executionJudgmentPromptModeAggregations),
+            toPromptModeSummaries(completionJudgmentPromptModeAggregations)
         );
     }
 
@@ -856,6 +907,139 @@ public class ExperimentRunService {
 
     private double safeDouble(Double value) {
         return value == null ? 0.0 : value;
+    }
+
+    private void accumulatePromptModeAggregation(Map<String, PromptModeAggregation> aggregations,
+                                                 Map<String, Object> metadata,
+                                                 String promptModeKey,
+                                                 String renderedKey,
+                                                 String renderUsedKey,
+                                                 String injectedKey,
+                                                 String panelCountKey,
+                                                 String renderedPanelCountKey,
+                                                 String renderedObjectCountKey,
+                                                 String hiddenObjectCountKey,
+                                                 String renderedSelectionTraceCountKey,
+                                                 String hiddenSelectionTraceCountKey,
+                                                 String budgetTruncatedKey) {
+        String promptMode = metadataString(metadata, promptModeKey);
+        if (promptMode == null || promptMode.isBlank()) {
+            return;
+        }
+        PromptModeAggregation aggregation = aggregations.computeIfAbsent(
+            promptMode,
+            ignored -> new PromptModeAggregation()
+        );
+        aggregation.runCount++;
+        if (Boolean.TRUE.equals(metadataBoolean(metadata, renderedKey))) {
+            aggregation.mountedContextRenderedCount++;
+        }
+        if (Boolean.TRUE.equals(metadataBoolean(metadata, renderUsedKey))) {
+            aggregation.mountedRenderUsedCount++;
+        }
+        if (Boolean.TRUE.equals(metadataBoolean(metadata, injectedKey))) {
+            aggregation.mountedContextInjectedCount++;
+        }
+        if (hasAnyMetadataKey(
+            metadata,
+            panelCountKey,
+            renderedPanelCountKey,
+            renderedObjectCountKey,
+            hiddenObjectCountKey,
+            renderedSelectionTraceCountKey,
+            hiddenSelectionTraceCountKey,
+            budgetTruncatedKey
+        )) {
+            aggregation.runsWithMountedContextBudgetData++;
+        }
+        if (Boolean.TRUE.equals(metadataBoolean(metadata, budgetTruncatedKey))) {
+            aggregation.mountedContextBudgetTruncatedCount++;
+        }
+        Integer panelCount = firstNonNullInt(
+            metadataInt(metadata, panelCountKey),
+            metadataInt(metadata, renderedPanelCountKey)
+        );
+        if (panelCount != null && panelCount >= 0) {
+            aggregation.totalMountedContextPanelCount += panelCount;
+            aggregation.runsWithMountedContextPanelCount++;
+        }
+        Integer renderedObjectCount = metadataInt(metadata, renderedObjectCountKey);
+        if (renderedObjectCount != null && renderedObjectCount >= 0) {
+            aggregation.totalMountedContextRenderedObjectCount += renderedObjectCount;
+            aggregation.runsWithMountedContextRenderedObjectCount++;
+        }
+    }
+
+    private Map<String, ExperimentRunSummary.MountedContextPromptModeSummary> toPromptModeSummaries(
+        Map<String, PromptModeAggregation> aggregations
+    ) {
+        if (aggregations == null || aggregations.isEmpty()) {
+            return Map.of();
+        }
+        LinkedHashMap<String, ExperimentRunSummary.MountedContextPromptModeSummary> summaries = new LinkedHashMap<>();
+        for (Map.Entry<String, PromptModeAggregation> entry : aggregations.entrySet()) {
+            PromptModeAggregation aggregation = entry.getValue();
+            int runCount = aggregation.runCount;
+            summaries.put(
+                entry.getKey(),
+                new ExperimentRunSummary.MountedContextPromptModeSummary(
+                    runCount,
+                    aggregation.mountedContextRenderedCount,
+                    aggregation.mountedRenderUsedCount,
+                    aggregation.mountedContextInjectedCount,
+                    aggregation.runsWithMountedContextBudgetData,
+                    aggregation.mountedContextBudgetTruncatedCount,
+                    rate(aggregation.mountedContextRenderedCount, runCount),
+                    rate(aggregation.mountedRenderUsedCount, runCount),
+                    rate(aggregation.mountedContextInjectedCount, runCount),
+                    rate(aggregation.mountedContextBudgetTruncatedCount, aggregation.runsWithMountedContextBudgetData),
+                    average(aggregation.totalMountedContextPanelCount, aggregation.runsWithMountedContextPanelCount),
+                    average(
+                        aggregation.totalMountedContextRenderedObjectCount,
+                        aggregation.runsWithMountedContextRenderedObjectCount
+                    )
+                )
+            );
+        }
+        return Map.copyOf(summaries);
+    }
+
+    private boolean hasAnyMetadataKey(Map<String, Object> metadata, String... keys) {
+        if (metadata == null || metadata.isEmpty() || keys == null || keys.length == 0) {
+            return false;
+        }
+        for (String key : keys) {
+            if (key != null && !key.isBlank() && metadata.containsKey(key) && metadata.get(key) != null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Integer firstNonNullInt(Integer... values) {
+        if (values == null || values.length == 0) {
+            return null;
+        }
+        for (Integer value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private double rate(int numerator, int denominator) {
+        if (denominator <= 0) {
+            return 0.0;
+        }
+        return roundToThree((double) numerator / denominator);
+    }
+
+    private double average(int total, int count) {
+        if (count <= 0) {
+            return 0.0;
+        }
+        return roundToThree((double) total / count);
     }
 
     private Decision latestDecision(List<Decision> decisions, String decisionType) {
@@ -2030,4 +2214,17 @@ public class ExperimentRunService {
         String traceSummary,
         List<String> toolNames
     ) {}
+
+    private static final class PromptModeAggregation {
+        private int runCount;
+        private int mountedContextRenderedCount;
+        private int mountedRenderUsedCount;
+        private int mountedContextInjectedCount;
+        private int runsWithMountedContextBudgetData;
+        private int mountedContextBudgetTruncatedCount;
+        private int totalMountedContextPanelCount;
+        private int runsWithMountedContextPanelCount;
+        private int totalMountedContextRenderedObjectCount;
+        private int runsWithMountedContextRenderedObjectCount;
+    }
 }

@@ -10,9 +10,12 @@ import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.ContextObject;
 import com.agentcloud.runtime.context.ContextObjectType;
 import com.agentcloud.runtime.context.ContextRetentionState;
+import com.agentcloud.runtime.context.MountedContextPromptMetrics;
+import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.MountedContextPanel;
 import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.runtime.context.MountedContextView;
+import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.runtime.model.RuntimeFactSet;
 import org.junit.jupiter.api.Test;
 
@@ -147,6 +150,44 @@ class PromptBasedJudgmentServiceTest {
         assertFalse(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
         assertTrue(llmClient.executionPrompt.contains("Active Context:"));
         assertTrue(llmClient.completionPrompt.contains("Active Context:"));
+    }
+
+    @Test
+    void judgmentShadowModeStillUsesMountedRenderResultForMetricsButDoesNotInjectPrompt() {
+        RecordingLlmClient llmClient = new RecordingLlmClient("""
+            {"action":"continue","reason":"reviewed","next_step":"next","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            """);
+        llmClient.completionResponse = """
+            {"status":"partially_done","alignment_level":"medium","reason":"reviewed","suggested_next_action":"next"}
+            """.strip();
+        PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
+
+        TaskRuntimeContext runtimeContext = runtimeContext("mounted_context_shadow");
+        JudgmentContext context = new JudgmentContext(
+            task("mounted_context_shadow"),
+            runtimeContext,
+            "worker output",
+            "",
+            Map.of()
+        );
+
+        service.judgeExecution(context);
+        service.judgeCompletion(context);
+
+        MountedContextPromptRenderer renderer = new MountedContextPromptRenderer();
+        var renderResult = renderer.renderResult(runtimeContext);
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
+            runtimeContext,
+            PromptRenderingMode.MOUNTED_CONTEXT_SHADOW,
+            renderResult
+        );
+
+        assertTrue(renderResult.hasPrompt());
+        assertTrue(metrics.mountedRendered());
+        assertTrue(metrics.mountedRenderUsed());
+        assertFalse(metrics.mountedInjected());
+        assertFalse(llmClient.executionPrompt.contains("Mounted Context:"));
+        assertFalse(llmClient.completionPrompt.contains("Mounted Context Selection Trace:"));
     }
 
     @Test

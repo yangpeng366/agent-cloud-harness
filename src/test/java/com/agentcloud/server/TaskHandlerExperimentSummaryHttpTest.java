@@ -55,6 +55,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 Map.entry("selected_model_tier", "strong"),
                 Map.entry("prompt_mode", "active_context_only"),
                 Map.entry("mounted_context_rendered", false),
+                Map.entry("mounted_render_used", false),
                 Map.entry("mounted_context_injected", false),
                 Map.entry("mounted_context_rendered_object_count", 0),
                 Map.entry("mounted_context_hidden_object_count", 0),
@@ -70,6 +71,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 Map.entry("selected_model_tier", "small"),
                 Map.entry("prompt_mode", "mounted_context_shadow"),
                 Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_render_used", true),
                 Map.entry("mounted_context_injected", false),
                 Map.entry("mounted_context_panel_count", 5),
                 Map.entry("mounted_context_rendered_object_count", 6),
@@ -86,6 +88,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 Map.entry("selected_model_tier", "small"),
                 Map.entry("prompt_mode", "mounted_context_primary"),
                 Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_render_used", true),
                 Map.entry("mounted_context_injected", true),
                 Map.entry("mounted_context_panel_count", 7),
                 Map.entry("mounted_context_rendered_object_count", 9),
@@ -126,8 +129,10 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(1, orchestratedSummary.path("runs_with_prompt_mode_data").asInt());
             assertEquals(1, orchestratedSummary.path("prompt_mode_counts").path("mounted_context_primary").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_rendered").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_mounted_render_used").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_injected").asInt());
             assertEquals(1.0, orchestratedSummary.path("mounted_context_rendered_rate").asDouble());
+            assertEquals(1.0, orchestratedSummary.path("mounted_render_used_rate").asDouble());
             assertEquals(1.0, orchestratedSummary.path("mounted_context_injected_rate").asDouble());
             assertEquals(7.0, orchestratedSummary.path("average_mounted_context_panel_count").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_budget_data").asInt());
@@ -138,9 +143,13 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(3.0, orchestratedSummary.path("average_mounted_context_rendered_selection_trace_count").asDouble());
             assertEquals(0.0, orchestratedSummary.path("average_mounted_context_hidden_selection_trace_count").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_data").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_render_used").asInt());
+            assertEquals(1.0, orchestratedSummary.path("execution_judgment_mounted_render_used_rate").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_truncated").asInt());
             assertEquals(1.0, orchestratedSummary.path("execution_judgment_mounted_context_budget_truncated_rate").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_data").asInt());
+            assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_render_used").asInt());
+            assertEquals(1.0, orchestratedSummary.path("completion_judgment_mounted_render_used_rate").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_truncated").asInt());
             assertEquals(1.0, orchestratedSummary.path("completion_judgment_mounted_context_budget_truncated_rate").asDouble());
             assertEquals("needs_followup",
@@ -321,6 +330,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 case "strong_only" -> Map.ofEntries(
                     Map.entry("prompt_mode", "active_context_only"),
                     Map.entry("mounted_context_rendered", false),
+                    Map.entry("mounted_render_used", false),
                     Map.entry("mounted_context_injected", false),
                     Map.entry("mounted_context_rendered_object_count", 0),
                     Map.entry("mounted_context_hidden_object_count", 0),
@@ -331,6 +341,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 case "small_only" -> Map.ofEntries(
                     Map.entry("prompt_mode", "mounted_context_shadow"),
                     Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", false),
                     Map.entry("mounted_context_panel_count", 5),
                     Map.entry("mounted_context_rendered_object_count", 6),
@@ -342,6 +353,7 @@ class TaskHandlerExperimentSummaryHttpTest {
                 default -> Map.ofEntries(
                     Map.entry("prompt_mode", "mounted_context_primary"),
                     Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", true),
                     Map.entry("mounted_context_panel_count", 7),
                     Map.entry("mounted_context_rendered_object_count", 9),

@@ -541,6 +541,7 @@ class TaskServiceLiveFlowViewTest {
                 ));
             assertEquals("codex", timelineByStage.get("route").workerId());
             assertEquals("mounted_context_primary", timelineByStage.get("execution").promptMode());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution").mountedRenderUsed());
             assertEquals(3, timelineByStage.get("execution").mountedContextRenderedObjectCount());
             assertEquals(1, timelineByStage.get("execution").mountedContextHiddenObjectCount());
             assertEquals(1, timelineByStage.get("execution").mountedContextRenderedSelectionTraceCount());
@@ -551,6 +552,7 @@ class TaskServiceLiveFlowViewTest {
                 timelineByStage.get("execution").proofSummary());
             assertTrue(timelineByStage.get("execution").summary().contains("proof=tool:exec_fact_1"));
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedRenderUsed());
             assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").needsContextReopen());
@@ -566,6 +568,7 @@ class TaskServiceLiveFlowViewTest {
                 timelineByStage.get("execution_judgment").proofSummary());
             assertTrue(timelineByStage.get("execution_judgment").summary().contains("proof=tool:exec_fact_1"));
             assertTrue(timelineByStage.get("execution_judgment").summary().contains("reopen=reopen:tool_invocations"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("completion_judgment").mountedRenderUsed());
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("completion_judgment").toolInvocationIds());
             assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",

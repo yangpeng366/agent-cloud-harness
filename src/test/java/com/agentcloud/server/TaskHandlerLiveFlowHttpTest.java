@@ -245,8 +245,9 @@ class TaskHandlerLiveFlowHttpTest {
                 .collect(java.util.stream.Collectors.toMap(
                     item -> String.valueOf(item.get("stage")),
                     item -> item
-                ));
+            ));
             assertEquals("mounted_context_primary", timelineByStage.get("execution").get("prompt_mode"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution").get("mounted_render_used"));
             assertEquals(3, ((Number) timelineByStage.get("execution").get("mounted_context_rendered_object_count")).intValue());
             assertEquals(1, ((Number) timelineByStage.get("execution").get("mounted_context_hidden_object_count")).intValue());
             assertEquals(1, ((Number) timelineByStage.get("execution").get("mounted_context_rendered_selection_trace_count")).intValue());
@@ -257,6 +258,7 @@ class TaskHandlerLiveFlowHttpTest {
             assertTrue(String.valueOf(timelineByStage.get("execution").get("summary")).contains("proof=tool:exec_http_cognition_1"));
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("aligned_with_previous_prompt_mode"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("mounted_render_used"));
             assertEquals(3, ((Number) timelineByStage.get("execution_judgment").get("mounted_context_rendered_object_count")).intValue());
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("mounted_context_budget_truncated"));
@@ -272,6 +274,7 @@ class TaskHandlerLiveFlowHttpTest {
                 timelineByStage.get("execution_judgment").get("proof_summary"));
             assertTrue(String.valueOf(timelineByStage.get("execution_judgment").get("summary"))
                 .contains("reopen=reopen:tool_invocations"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("completion_judgment").get("mounted_render_used"));
             assertEquals(1, ((Number) timelineByStage.get("completion_judgment").get("mounted_context_hidden_object_count")).intValue());
             assertEquals("proof=evidence:tool:read_file:input.txt",
                 timelineByStage.get("completion_judgment").get("proof_summary"));

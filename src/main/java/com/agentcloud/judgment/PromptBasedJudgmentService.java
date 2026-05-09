@@ -4,6 +4,8 @@ import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
+import com.agentcloud.runtime.context.MountedContextPromptMetrics;
+import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
 import com.agentcloud.runtime.model.RuntimeFactSet;
@@ -52,8 +54,8 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "next_step (string), needs_checkpoint (boolean), needs_context_reopen (boolean), needs_human (boolean), "
                 + "target_worker (string). No markdown, no extra text.";
 
-            String user = buildExecutionPrompt(context);
-            String raw = llmClient.review(system, user).trim();
+            JudgmentPrompt prompt = buildExecutionPrompt(context);
+            String raw = llmClient.review(system, prompt.prompt()).trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String action = parseAction(json.path("action").asText("continue"));
@@ -64,7 +66,13 @@ public class PromptBasedJudgmentService implements JudgmentService {
             boolean needsHuman = json.path("needs_human").asBoolean("escalate".equals(action) || "wait".equals(action));
             String targetWorker = json.path("target_worker").asText(resolveTargetWorker(context));
 
-            log.info("judgeExecution task={} action={} raw={}", taskId, action, raw);
+            log.info("judgeExecution task={} action={} promptMode={} mountedRenderUsed={} mountedInjected={} raw={}",
+                taskId,
+                action,
+                prompt.metrics().promptMode(),
+                prompt.metrics().mountedRenderUsed(),
+                prompt.metrics().mountedInjected(),
+                raw);
             return new ExecutionDecision(action, reason, nextStep, needsCheckpoint, needsContextReopen, needsHuman,
                 "handoff".equals(action) ? targetWorker : null);
         } catch (Exception e) {
@@ -89,8 +97,8 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "alignment_level (high|medium|low), reason (string), suggested_next_action (string). "
                 + "No markdown, no extra text.";
 
-            String user = buildCompletionPrompt(context);
-            String raw = llmClient.review(system, user).trim();
+            JudgmentPrompt prompt = buildCompletionPrompt(context);
+            String raw = llmClient.review(system, prompt.prompt()).trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String status = parseCompletionStatus(json.path("status").asText("partially_done"));
@@ -100,7 +108,13 @@ public class PromptBasedJudgmentService implements JudgmentService {
             String reason = json.path("reason").asText("");
             String suggestedNextAction = json.path("suggested_next_action").asText("");
 
-            log.info("judgeCompletion task={} status={} alignment={}", taskId, status, alignment);
+            log.info("judgeCompletion task={} status={} alignment={} promptMode={} mountedRenderUsed={} mountedInjected={}",
+                taskId,
+                status,
+                alignment,
+                prompt.metrics().promptMode(),
+                prompt.metrics().mountedRenderUsed(),
+                prompt.metrics().mountedInjected());
             return new CompletionDecision(status, alignment, reason, suggestedNextAction);
         } catch (Exception e) {
             log.error("judgeCompletion failed for task={}, fallback to incomplete", taskId, e);
@@ -121,9 +135,10 @@ public class PromptBasedJudgmentService implements JudgmentService {
         return new CompletionDecision("partially_done", "medium", "default fallback", null);
     }
 
-    private String buildExecutionPrompt(JudgmentContext context) {
+    private JudgmentPrompt buildExecutionPrompt(JudgmentContext context) {
         var t = context.task();
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.runtimeContext());
+        MountedPromptResolution mountedPrompt = resolveMountedPrompt(context, renderingMode);
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");
@@ -134,7 +149,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- If latest worker metadata shows the current round still requires a grounded file write, do not choose done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, the runtime must not choose done.\n");
         sb.append("- If the current mounted or active evidence is insufficient and the runtime should reopen bounded archive handles before the next round, set needs_context_reopen=true.\n");
-        appendMountedContext(sb, context, renderingMode);
+        appendMountedContext(sb, mountedPrompt);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null
             && !context.runtimeContext().activeContext().synthesizedContext().isBlank()) {
@@ -146,12 +161,13 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendRuntimeFacts(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("What should the runtime do next?");
-        return sb.toString();
+        return new JudgmentPrompt(sb.toString(), mountedPrompt.metrics());
     }
 
-    private String buildCompletionPrompt(JudgmentContext context) {
+    private JudgmentPrompt buildCompletionPrompt(JudgmentContext context) {
         var t = context.task();
         PromptRenderingMode renderingMode = PromptRenderingMode.resolve(context.runtimeContext());
+        MountedPromptResolution mountedPrompt = resolveMountedPrompt(context, renderingMode);
         StringBuilder sb = new StringBuilder();
         sb.append("Task: ").append(t.title()).append("\n");
         if (t.goal() != null) sb.append("Goal: ").append(t.goal()).append("\n");
@@ -163,7 +179,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- If latest worker metadata says more_declared_rounds_remain=true, do not mark the task done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, do not mark the task done.\n");
         sb.append("- For grounded-output tasks, do not infer that the current round performed the final grounded write unless latest worker metadata explicitly shows a grounded write tool together with grounded_output_present=true, or clearly shows the expected output already exists and the current round is only a verification/closeout step.\n");
-        appendMountedContext(sb, context, renderingMode);
+        appendMountedContext(sb, mountedPrompt);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null
             && !context.runtimeContext().activeContext().synthesizedContext().isBlank()) {
@@ -175,23 +191,31 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendRuntimeFacts(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("Is the task sufficiently complete and aligned with the goal?");
-        return sb.toString();
+        return new JudgmentPrompt(sb.toString(), mountedPrompt.metrics());
     }
 
-    private void appendMountedContext(StringBuilder sb,
-                                      JudgmentContext context,
-                                      PromptRenderingMode renderingMode) {
-        if (renderingMode == null || !renderingMode.shouldInjectMountedPrompt()) {
+    private MountedPromptResolution resolveMountedPrompt(JudgmentContext context,
+                                                         PromptRenderingMode renderingMode) {
+        MountedContextPromptRenderResult renderResult = renderingMode != null && renderingMode.shouldRenderMountedPrompt()
+            ? mountedContextPromptRenderer.renderResult(context != null ? context.runtimeContext() : null)
+            : MountedContextPromptRenderResult.empty();
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
+            context != null ? context.runtimeContext() : null,
+            renderingMode,
+            renderResult
+        );
+        return new MountedPromptResolution(renderResult, metrics);
+    }
+
+    private void appendMountedContext(StringBuilder sb, MountedPromptResolution mountedPrompt) {
+        if (mountedPrompt == null || mountedPrompt.metrics() == null || !mountedPrompt.metrics().mountedInjected()) {
             return;
         }
-        if (context == null || context.runtimeContext() == null) {
+        String mountedContextPrompt = mountedPrompt.renderResult() == null ? "" : mountedPrompt.renderResult().prompt();
+        if (mountedContextPrompt.isBlank()) {
             return;
         }
-        String mountedPrompt = mountedContextPromptRenderer.render(context.runtimeContext());
-        if (mountedPrompt.isBlank()) {
-            return;
-        }
-        sb.append(mountedPrompt);
+        sb.append(mountedContextPrompt);
     }
 
     private void appendRuntimeFacts(StringBuilder sb, RuntimeFactSet factSet) {
@@ -430,4 +454,9 @@ public class PromptBasedJudgmentService implements JudgmentService {
         }
         return null;
     }
+
+    private record JudgmentPrompt(String prompt, MountedContextPromptMetrics metrics) {}
+
+    private record MountedPromptResolution(MountedContextPromptRenderResult renderResult,
+                                           MountedContextPromptMetrics metrics) {}
 }

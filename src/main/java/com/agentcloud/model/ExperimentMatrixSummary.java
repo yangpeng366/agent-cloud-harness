@@ -51,8 +51,10 @@ public record ExperimentMatrixSummary(
         Integer runsWithPromptModeData,
         Map<String, Integer> promptModeCounts,
         Integer runsWithMountedContextRendered,
+        Integer runsWithMountedRenderUsed,
         Integer runsWithMountedContextInjected,
         Double mountedContextRenderedRate,
+        Double mountedRenderUsedRate,
         Double mountedContextInjectedRate,
         Double averageMountedContextPanelCount,
         Integer runsWithMountedContextBudgetData,
@@ -65,8 +67,10 @@ public record ExperimentMatrixSummary(
         Integer runsWithExecutionJudgmentPromptModeData,
         Map<String, Integer> executionJudgmentPromptModeCounts,
         Integer runsWithExecutionJudgmentMountedContextRendered,
+        Integer runsWithExecutionJudgmentMountedRenderUsed,
         Integer runsWithExecutionJudgmentMountedContextInjected,
         Double executionJudgmentMountedContextRenderedRate,
+        Double executionJudgmentMountedRenderUsedRate,
         Double executionJudgmentMountedContextInjectedRate,
         Integer runsWithExecutionJudgmentMountedContextBudgetData,
         Integer runsWithExecutionJudgmentMountedContextBudgetTruncated,
@@ -78,8 +82,10 @@ public record ExperimentMatrixSummary(
         Integer runsWithCompletionJudgmentPromptModeData,
         Map<String, Integer> completionJudgmentPromptModeCounts,
         Integer runsWithCompletionJudgmentMountedContextRendered,
+        Integer runsWithCompletionJudgmentMountedRenderUsed,
         Integer runsWithCompletionJudgmentMountedContextInjected,
         Double completionJudgmentMountedContextRenderedRate,
+        Double completionJudgmentMountedRenderUsedRate,
         Double completionJudgmentMountedContextInjectedRate,
         Integer runsWithCompletionJudgmentMountedContextBudgetData,
         Integer runsWithCompletionJudgmentMountedContextBudgetTruncated,
@@ -137,11 +143,17 @@ public record ExperimentMatrixSummary(
             if (runsWithMountedContextRendered == null || runsWithMountedContextRendered < 0) {
                 runsWithMountedContextRendered = 0;
             }
+            if (runsWithMountedRenderUsed == null || runsWithMountedRenderUsed < 0) {
+                runsWithMountedRenderUsed = 0;
+            }
             if (runsWithMountedContextInjected == null || runsWithMountedContextInjected < 0) {
                 runsWithMountedContextInjected = 0;
             }
             if (mountedContextRenderedRate == null || mountedContextRenderedRate < 0) {
                 mountedContextRenderedRate = 0.0;
+            }
+            if (mountedRenderUsedRate == null || mountedRenderUsedRate < 0) {
+                mountedRenderUsedRate = 0.0;
             }
             if (mountedContextInjectedRate == null || mountedContextInjectedRate < 0) {
                 mountedContextInjectedRate = 0.0;
@@ -180,6 +192,10 @@ public record ExperimentMatrixSummary(
                 || runsWithExecutionJudgmentMountedContextRendered < 0) {
                 runsWithExecutionJudgmentMountedContextRendered = 0;
             }
+            if (runsWithExecutionJudgmentMountedRenderUsed == null
+                || runsWithExecutionJudgmentMountedRenderUsed < 0) {
+                runsWithExecutionJudgmentMountedRenderUsed = 0;
+            }
             if (runsWithExecutionJudgmentMountedContextInjected == null
                 || runsWithExecutionJudgmentMountedContextInjected < 0) {
                 runsWithExecutionJudgmentMountedContextInjected = 0;
@@ -187,6 +203,10 @@ public record ExperimentMatrixSummary(
             if (executionJudgmentMountedContextRenderedRate == null
                 || executionJudgmentMountedContextRenderedRate < 0) {
                 executionJudgmentMountedContextRenderedRate = 0.0;
+            }
+            if (executionJudgmentMountedRenderUsedRate == null
+                || executionJudgmentMountedRenderUsedRate < 0) {
+                executionJudgmentMountedRenderUsedRate = 0.0;
             }
             if (executionJudgmentMountedContextInjectedRate == null
                 || executionJudgmentMountedContextInjectedRate < 0) {
@@ -229,6 +249,10 @@ public record ExperimentMatrixSummary(
                 || runsWithCompletionJudgmentMountedContextRendered < 0) {
                 runsWithCompletionJudgmentMountedContextRendered = 0;
             }
+            if (runsWithCompletionJudgmentMountedRenderUsed == null
+                || runsWithCompletionJudgmentMountedRenderUsed < 0) {
+                runsWithCompletionJudgmentMountedRenderUsed = 0;
+            }
             if (runsWithCompletionJudgmentMountedContextInjected == null
                 || runsWithCompletionJudgmentMountedContextInjected < 0) {
                 runsWithCompletionJudgmentMountedContextInjected = 0;
@@ -236,6 +260,10 @@ public record ExperimentMatrixSummary(
             if (completionJudgmentMountedContextRenderedRate == null
                 || completionJudgmentMountedContextRenderedRate < 0) {
                 completionJudgmentMountedContextRenderedRate = 0.0;
+            }
+            if (completionJudgmentMountedRenderUsedRate == null
+                || completionJudgmentMountedRenderUsedRate < 0) {
+                completionJudgmentMountedRenderUsedRate = 0.0;
             }
             if (completionJudgmentMountedContextInjectedRate == null
                 || completionJudgmentMountedContextInjectedRate < 0) {

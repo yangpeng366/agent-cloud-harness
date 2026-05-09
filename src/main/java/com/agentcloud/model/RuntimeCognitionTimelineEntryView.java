@@ -26,6 +26,7 @@ public record RuntimeCognitionTimelineEntryView(
     String reopenSummary,
     String proofSummary,
     Boolean mountedContextRendered,
+    Boolean mountedRenderUsed,
     Boolean mountedContextInjected,
     Integer mountedContextPanelCount,
     Integer mountedContextRenderedObjectCount,
