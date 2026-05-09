@@ -5,6 +5,7 @@ import com.agentcloud.model.ExperimentMatrixBatch;
 import com.agentcloud.model.ExperimentMatrixCreateRequest;
 import com.agentcloud.model.ExperimentMatrixSummary;
 import com.agentcloud.model.ExperimentRunRecord;
+import com.agentcloud.model.ExperimentRunSummary;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
 
@@ -158,6 +159,26 @@ public class ExperimentMatrixService {
             throw new IllegalArgumentException("experiment_name is required");
         }
         List<ExperimentRunRecord> runs = experimentRunService.listRuns(normalizedExperimentName, null, null, null, 200);
+        ExperimentRunSummary rolloutSummary = experimentRunService.summarizeRuns(
+            normalizedExperimentName,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
 
         List<ExperimentMatrixSummary.ModeSummary> modeSummaries = new ArrayList<>();
         for (String mode : SUPPORTED_MODES) {
@@ -281,6 +302,16 @@ public class ExperimentMatrixService {
                     .mapToInt(Integer::intValue)
                     .average()
                     .orElse(0.0));
+            List<Integer> observedMountedContextActiveCounts = metadataInts(
+                runsByMode,
+                "mounted_active_count"
+            );
+            List<Integer> observedMountedContextEvidenceCounts = metadataInts(
+                runsByMode,
+                "mounted_evidence_count"
+            );
+            double averageMountedContextActiveCount = averageIntList(observedMountedContextActiveCounts);
+            double averageMountedContextEvidenceCount = averageIntList(observedMountedContextEvidenceCounts);
             List<Integer> observedMountedContextRenderedObjectCounts = metadataInts(
                 runsByMode,
                 "mounted_context_rendered_object_count"
@@ -356,6 +387,20 @@ public class ExperimentMatrixService {
                 ? 0.0
                 : roundToThree((double) runsWithExecutionJudgmentMountedContextInjected
                     / runsWithExecutionJudgmentPromptModeData);
+            List<Integer> observedExecutionJudgmentMountedContextActiveCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_active_count"
+            );
+            List<Integer> observedExecutionJudgmentMountedContextEvidenceCounts = metadataInts(
+                runsByMode,
+                "execution_judgment_mounted_evidence_count"
+            );
+            double averageExecutionJudgmentMountedContextActiveCount = averageIntList(
+                observedExecutionJudgmentMountedContextActiveCounts
+            );
+            double averageExecutionJudgmentMountedContextEvidenceCount = averageIntList(
+                observedExecutionJudgmentMountedContextEvidenceCounts
+            );
             List<Integer> observedExecutionJudgmentMountedContextRenderedObjectCounts = metadataInts(
                 runsByMode,
                 "execution_judgment_mounted_context_rendered_object_count"
@@ -437,6 +482,20 @@ public class ExperimentMatrixService {
                 ? 0.0
                 : roundToThree((double) runsWithCompletionJudgmentMountedContextInjected
                     / runsWithCompletionJudgmentPromptModeData);
+            List<Integer> observedCompletionJudgmentMountedContextActiveCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_active_count"
+            );
+            List<Integer> observedCompletionJudgmentMountedContextEvidenceCounts = metadataInts(
+                runsByMode,
+                "completion_judgment_mounted_evidence_count"
+            );
+            double averageCompletionJudgmentMountedContextActiveCount = averageIntList(
+                observedCompletionJudgmentMountedContextActiveCounts
+            );
+            double averageCompletionJudgmentMountedContextEvidenceCount = averageIntList(
+                observedCompletionJudgmentMountedContextEvidenceCounts
+            );
             List<Integer> observedCompletionJudgmentMountedContextRenderedObjectCounts = metadataInts(
                 runsByMode,
                 "completion_judgment_mounted_context_rendered_object_count"
@@ -563,6 +622,8 @@ public class ExperimentMatrixService {
                 mountedRenderUsedRate,
                 mountedContextInjectedRate,
                 averageMountedContextPanelCount,
+                averageMountedContextActiveCount,
+                averageMountedContextEvidenceCount,
                 runsWithMountedContextBudgetData,
                 runsWithMountedContextBudgetTruncated,
                 mountedContextBudgetTruncatedRate,
@@ -578,6 +639,8 @@ public class ExperimentMatrixService {
                 executionJudgmentMountedContextRenderedRate,
                 executionJudgmentMountedRenderUsedRate,
                 executionJudgmentMountedContextInjectedRate,
+                averageExecutionJudgmentMountedContextActiveCount,
+                averageExecutionJudgmentMountedContextEvidenceCount,
                 runsWithExecutionJudgmentMountedContextBudgetData,
                 runsWithExecutionJudgmentMountedContextBudgetTruncated,
                 executionJudgmentMountedContextBudgetTruncatedRate,
@@ -593,6 +656,8 @@ public class ExperimentMatrixService {
                 completionJudgmentMountedContextRenderedRate,
                 completionJudgmentMountedRenderUsedRate,
                 completionJudgmentMountedContextInjectedRate,
+                averageCompletionJudgmentMountedContextActiveCount,
+                averageCompletionJudgmentMountedContextEvidenceCount,
                 runsWithCompletionJudgmentMountedContextBudgetData,
                 runsWithCompletionJudgmentMountedContextBudgetTruncated,
                 completionJudgmentMountedContextBudgetTruncatedRate,
@@ -656,7 +721,10 @@ public class ExperimentMatrixService {
             runs.size(),
             SUPPORTED_MODES,
             modeSummaries,
-            caseComparisons
+            caseComparisons,
+            rolloutSummary.promptModeSummaries(),
+            rolloutSummary.executionJudgmentPromptModeSummaries(),
+            rolloutSummary.completionJudgmentPromptModeSummaries()
         );
     }
 

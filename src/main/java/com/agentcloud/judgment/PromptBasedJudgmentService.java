@@ -3,6 +3,8 @@ package com.agentcloud.judgment;
 import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.model.RuntimeCognitionSurfaceView;
+import com.agentcloud.runtime.RuntimeCognitionSurfaceAssembler;
 import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
@@ -26,16 +28,26 @@ public class PromptBasedJudgmentService implements JudgmentService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final LlmClient llmClient;
     private final MountedContextPromptRenderer mountedContextPromptRenderer;
+    private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
 
     public PromptBasedJudgmentService(LlmClient llmClient) {
-        this(llmClient, new MountedContextPromptRenderer());
+        this(llmClient, new MountedContextPromptRenderer(), new RuntimeCognitionSurfaceAssembler());
     }
 
     PromptBasedJudgmentService(LlmClient llmClient, MountedContextPromptRenderer mountedContextPromptRenderer) {
+        this(llmClient, mountedContextPromptRenderer, new RuntimeCognitionSurfaceAssembler());
+    }
+
+    PromptBasedJudgmentService(LlmClient llmClient,
+                               MountedContextPromptRenderer mountedContextPromptRenderer,
+                               RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler) {
         this.llmClient = llmClient;
         this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
             ? new MountedContextPromptRenderer()
             : mountedContextPromptRenderer;
+        this.runtimeCognitionSurfaceAssembler = runtimeCognitionSurfaceAssembler == null
+            ? new RuntimeCognitionSurfaceAssembler()
+            : runtimeCognitionSurfaceAssembler;
     }
 
     @Override
@@ -66,12 +78,15 @@ public class PromptBasedJudgmentService implements JudgmentService {
             boolean needsHuman = json.path("needs_human").asBoolean("escalate".equals(action) || "wait".equals(action));
             String targetWorker = json.path("target_worker").asText(resolveTargetWorker(context));
 
-            log.info("judgeExecution task={} action={} promptMode={} mountedRenderUsed={} mountedInjected={} raw={}",
+            log.info("judgeExecution task={} action={} promptMode={} mountedRenderUsed={} mountedInjected={} mountedActiveCount={} mountedEvidenceCount={} mountedArchiveCount={} raw={}",
                 taskId,
                 action,
                 prompt.metrics().promptMode(),
                 prompt.metrics().mountedRenderUsed(),
                 prompt.metrics().mountedInjected(),
+                prompt.metrics().activeCount(),
+                prompt.metrics().evidenceCount(),
+                prompt.metrics().archiveCount(),
                 raw);
             return new ExecutionDecision(action, reason, nextStep, needsCheckpoint, needsContextReopen, needsHuman,
                 "handoff".equals(action) ? targetWorker : null);
@@ -108,13 +123,16 @@ public class PromptBasedJudgmentService implements JudgmentService {
             String reason = json.path("reason").asText("");
             String suggestedNextAction = json.path("suggested_next_action").asText("");
 
-            log.info("judgeCompletion task={} status={} alignment={} promptMode={} mountedRenderUsed={} mountedInjected={}",
+            log.info("judgeCompletion task={} status={} alignment={} promptMode={} mountedRenderUsed={} mountedInjected={} mountedActiveCount={} mountedEvidenceCount={} mountedArchiveCount={}",
                 taskId,
                 status,
                 alignment,
                 prompt.metrics().promptMode(),
                 prompt.metrics().mountedRenderUsed(),
-                prompt.metrics().mountedInjected());
+                prompt.metrics().mountedInjected(),
+                prompt.metrics().activeCount(),
+                prompt.metrics().evidenceCount(),
+                prompt.metrics().archiveCount());
             return new CompletionDecision(status, alignment, reason, suggestedNextAction);
         } catch (Exception e) {
             log.error("judgeCompletion failed for task={}, fallback to incomplete", taskId, e);
@@ -159,6 +177,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
             sb.append("Latest Worker Output: ").append(context.workerOutput()).append("\n");
         }
         appendRuntimeFacts(sb, context.runtimeFactSet());
+        appendRuntimeCognitionSurface(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("What should the runtime do next?");
         return new JudgmentPrompt(sb.toString(), mountedPrompt.metrics());
@@ -189,6 +208,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
             sb.append("Latest Worker Output (current round): ").append(context.workerOutput()).append("\n");
         }
         appendRuntimeFacts(sb, context.runtimeFactSet());
+        appendRuntimeCognitionSurface(sb, context.runtimeFactSet());
         appendLatestWorkerMetadata(sb, context.latestWorkerMetadata());
         sb.append("Is the task sufficiently complete and aligned with the goal?");
         return new JudgmentPrompt(sb.toString(), mountedPrompt.metrics());
@@ -244,6 +264,80 @@ public class PromptBasedJudgmentService implements JudgmentService {
         }
     }
 
+    private void appendRuntimeCognitionSurface(StringBuilder sb, RuntimeFactSet factSet) {
+        if (factSet == null) {
+            return;
+        }
+        RuntimeCognitionSurfaceView surface = runtimeCognitionSurfaceAssembler.assemble(factSet);
+        if (surface == null) {
+            return;
+        }
+        boolean hasRoute = surface.route() != null
+            && (hasText(surface.route().selectedWorker()) || hasText(surface.route().routeSource()));
+        boolean hasExecution = surface.execution() != null
+            && (hasText(surface.execution().workerId())
+            || hasText(surface.execution().executionStatus())
+            || hasText(surface.execution().promptMode()));
+        boolean hasExecutionJudgment = surface.executionJudgment() != null
+            && (hasText(surface.executionJudgment().promptMode())
+            || Boolean.TRUE.equals(surface.executionJudgment().needsContextReopen())
+            || hasText(surface.executionJudgment().proofSummary()));
+        boolean hasCompletionJudgment = surface.completionJudgment() != null
+            && (hasText(surface.completionJudgment().promptMode())
+            || hasText(surface.completionJudgment().proofSummary()));
+        boolean hasAlignment = surface.alignment() != null
+            && (surface.alignment().routeWorkerMatchesExecutionWorker() != null
+            || surface.alignment().executionAndExecutionJudgmentPromptModeAligned() != null
+            || surface.alignment().executionAndCompletionJudgmentPromptModeAligned() != null);
+        if (!hasRoute && !hasExecution && !hasExecutionJudgment && !hasCompletionJudgment && !hasAlignment) {
+            return;
+        }
+        sb.append("Runtime Cognition Surface:\n");
+        if (hasRoute) {
+            sb.append("Route Surface:\n");
+            appendBullet(sb, "selected_worker", surface.route().selectedWorker());
+            appendBullet(sb, "route_source", surface.route().routeSource());
+            appendBullet(sb, "selected_model_tier", surface.route().selectedModelTier());
+            appendBullet(sb, "selected_execution_role", surface.route().selectedExecutionRole());
+        }
+        if (hasExecution) {
+            sb.append("Execution Surface:\n");
+            appendBullet(sb, "worker_id", surface.execution().workerId());
+            appendBullet(sb, "execution_status", surface.execution().executionStatus());
+            appendBullet(sb, "prompt_mode", surface.execution().promptMode());
+            appendBullet(sb, "proof_summary", surface.execution().proofSummary());
+            appendBullet(sb, "mounted_render_used", surface.execution().mountedRenderUsed());
+            appendBullet(sb, "mounted_context_budget", mountedBudgetSummary(
+                surface.execution().mountedContextRenderedObjectCount(),
+                surface.execution().mountedContextHiddenObjectCount(),
+                surface.execution().mountedContextRenderedSelectionTraceCount(),
+                surface.execution().mountedContextHiddenSelectionTraceCount(),
+                surface.execution().mountedContextBudgetTruncated()
+            ));
+        }
+        if (hasExecutionJudgment) {
+            sb.append("Execution Judgment Surface:\n");
+            appendBullet(sb, "prompt_mode", surface.executionJudgment().promptMode());
+            appendBullet(sb, "needs_context_reopen", surface.executionJudgment().needsContextReopen());
+            appendBullet(sb, "reopen_summary", surface.executionJudgment().reopenSummary());
+            appendBullet(sb, "proof_summary", surface.executionJudgment().proofSummary());
+        }
+        if (hasCompletionJudgment) {
+            sb.append("Completion Judgment Surface:\n");
+            appendBullet(sb, "prompt_mode", surface.completionJudgment().promptMode());
+            appendBullet(sb, "proof_summary", surface.completionJudgment().proofSummary());
+        }
+        if (hasAlignment) {
+            sb.append("Alignment Surface:\n");
+            appendBullet(sb, "route_worker_matches_execution_worker",
+                surface.alignment().routeWorkerMatchesExecutionWorker());
+            appendBullet(sb, "execution_and_execution_judgment_prompt_mode_aligned",
+                surface.alignment().executionAndExecutionJudgmentPromptModeAligned());
+            appendBullet(sb, "execution_and_completion_judgment_prompt_mode_aligned",
+                surface.alignment().executionAndCompletionJudgmentPromptModeAligned());
+        }
+    }
+
     private void appendRoutePreview(StringBuilder sb, com.agentcloud.engine.router.WorkerRouter.RouteResult routePreview) {
         sb.append("Route Preview:\n");
         appendBullet(sb, "selected_worker", routePreview.selectedWorker());
@@ -277,6 +371,16 @@ public class PromptBasedJudgmentService implements JudgmentService {
             appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_rendered");
             appendMetadataLine(sb, executionBoundary.metadata(), "mounted_render_used");
             appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_injected");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_panel_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_non_empty_panel_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_context_selection_trace_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_pinned_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_active_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_ancestor_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_sibling_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_evidence_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_index_count");
+            appendMetadataLine(sb, executionBoundary.metadata(), "mounted_archive_count");
             appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
             appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
             appendMetadataLine(sb, executionBoundary.metadata(), MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
@@ -345,6 +449,20 @@ public class PromptBasedJudgmentService implements JudgmentService {
         appendMetadataLine(sb, metadata, "route_source");
         appendMetadataLine(sb, metadata, "model_mode");
         appendMetadataLine(sb, metadata, "orchestration_stage");
+        appendMetadataLine(sb, metadata, "prompt_mode");
+        appendMetadataLine(sb, metadata, "mounted_context_rendered");
+        appendMetadataLine(sb, metadata, "mounted_render_used");
+        appendMetadataLine(sb, metadata, "mounted_context_injected");
+        appendMetadataLine(sb, metadata, "mounted_context_panel_count");
+        appendMetadataLine(sb, metadata, "mounted_context_non_empty_panel_count");
+        appendMetadataLine(sb, metadata, "mounted_context_selection_trace_count");
+        appendMetadataLine(sb, metadata, "mounted_pinned_count");
+        appendMetadataLine(sb, metadata, "mounted_active_count");
+        appendMetadataLine(sb, metadata, "mounted_ancestor_count");
+        appendMetadataLine(sb, metadata, "mounted_sibling_count");
+        appendMetadataLine(sb, metadata, "mounted_evidence_count");
+        appendMetadataLine(sb, metadata, "mounted_index_count");
+        appendMetadataLine(sb, metadata, "mounted_archive_count");
         appendMetadataLine(sb, metadata, "planner_worker");
         appendMetadataLine(sb, metadata, "executor_worker");
         appendMetadataLine(sb, metadata, "target_worker");
@@ -405,6 +523,53 @@ public class PromptBasedJudgmentService implements JudgmentService {
             return;
         }
         sb.append("- ").append(key).append(": ").append(text).append("\n");
+    }
+
+    private String mountedBudgetSummary(Integer renderedObjectCount,
+                                        Integer hiddenObjectCount,
+                                        Integer renderedSelectionTraceCount,
+                                        Integer hiddenSelectionTraceCount,
+                                        Boolean budgetTruncated) {
+        String objects = renderedObjectCount == null && hiddenObjectCount == null
+            ? null
+            : firstNonNullInt(renderedObjectCount, 0) + "/" + firstNonNullInt(hiddenObjectCount, 0) + " objects";
+        String traces = renderedSelectionTraceCount == null && hiddenSelectionTraceCount == null
+            ? null
+            : firstNonNullInt(renderedSelectionTraceCount, 0) + "/" + firstNonNullInt(hiddenSelectionTraceCount, 0)
+                + " traces";
+        String truncated = Boolean.TRUE.equals(budgetTruncated) ? "budget truncated" : null;
+        return firstNonBlank(
+            joinSummary(objects, traces, truncated),
+            joinSummary(objects, traces),
+            truncated
+        );
+    }
+
+    private Integer firstNonNullInt(Integer... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Integer value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String joinSummary(String... parts) {
+        if (parts == null || parts.length == 0) {
+            return null;
+        }
+        return java.util.Arrays.stream(parts)
+            .filter(this::hasText)
+            .distinct()
+            .reduce((left, right) -> left + " · " + right)
+            .orElse(null);
+    }
+
+    private boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 
     private String resolveTargetWorker(JudgmentContext context) {

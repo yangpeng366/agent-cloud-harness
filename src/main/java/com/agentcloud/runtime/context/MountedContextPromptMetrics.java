@@ -122,7 +122,7 @@ public record MountedContextPromptMetrics(
         }
         int count = 0;
         for (MountedContextPanel panel : view.panels()) {
-            if (panel != null && panel.objects() != null && !panel.objects().isEmpty()) {
+            if (countObjects(panel) > 0) {
                 count++;
             }
         }
@@ -147,6 +147,19 @@ public record MountedContextPromptMetrics(
             return 0;
         }
         MountedContextPanel panel = view.panel(panelName);
-        return panel == null || panel.objects() == null ? 0 : panel.objects().size();
+        return countObjects(panel);
+    }
+
+    private static int countObjects(MountedContextPanel panel) {
+        if (panel == null || panel.objects() == null || panel.objects().isEmpty()) {
+            return 0;
+        }
+        int count = 0;
+        for (ContextObject object : panel.objects()) {
+            if (object != null) {
+                count++;
+            }
+        }
+        return count;
     }
 }

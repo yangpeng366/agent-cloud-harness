@@ -750,6 +750,8 @@ public class ExperimentRunService {
                 "mounted_render_used",
                 "mounted_context_injected",
                 "mounted_context_panel_count",
+                "mounted_active_count",
+                "mounted_evidence_count",
                 "mounted_context_rendered_panel_count",
                 "mounted_context_rendered_object_count",
                 "mounted_context_hidden_object_count",
@@ -765,6 +767,8 @@ public class ExperimentRunService {
                 "execution_judgment_mounted_render_used",
                 "execution_judgment_mounted_context_injected",
                 "execution_judgment_mounted_context_panel_count",
+                "execution_judgment_mounted_active_count",
+                "execution_judgment_mounted_evidence_count",
                 "execution_judgment_mounted_context_rendered_panel_count",
                 "execution_judgment_mounted_context_rendered_object_count",
                 "execution_judgment_mounted_context_hidden_object_count",
@@ -780,6 +784,8 @@ public class ExperimentRunService {
                 "completion_judgment_mounted_render_used",
                 "completion_judgment_mounted_context_injected",
                 "completion_judgment_mounted_context_panel_count",
+                "completion_judgment_mounted_active_count",
+                "completion_judgment_mounted_evidence_count",
                 "completion_judgment_mounted_context_rendered_panel_count",
                 "completion_judgment_mounted_context_rendered_object_count",
                 "completion_judgment_mounted_context_hidden_object_count",
@@ -916,6 +922,8 @@ public class ExperimentRunService {
                                                  String renderUsedKey,
                                                  String injectedKey,
                                                  String panelCountKey,
+                                                 String activeCountKey,
+                                                 String evidenceCountKey,
                                                  String renderedPanelCountKey,
                                                  String renderedObjectCountKey,
                                                  String hiddenObjectCountKey,
@@ -963,6 +971,16 @@ public class ExperimentRunService {
             aggregation.totalMountedContextPanelCount += panelCount;
             aggregation.runsWithMountedContextPanelCount++;
         }
+        Integer activeCount = metadataInt(metadata, activeCountKey);
+        if (activeCount != null && activeCount >= 0) {
+            aggregation.totalMountedContextActiveCount += activeCount;
+            aggregation.runsWithMountedContextActiveCount++;
+        }
+        Integer evidenceCount = metadataInt(metadata, evidenceCountKey);
+        if (evidenceCount != null && evidenceCount >= 0) {
+            aggregation.totalMountedContextEvidenceCount += evidenceCount;
+            aggregation.runsWithMountedContextEvidenceCount++;
+        }
         Integer renderedObjectCount = metadataInt(metadata, renderedObjectCountKey);
         if (renderedObjectCount != null && renderedObjectCount >= 0) {
             aggregation.totalMountedContextRenderedObjectCount += renderedObjectCount;
@@ -997,7 +1015,9 @@ public class ExperimentRunService {
                     average(
                         aggregation.totalMountedContextRenderedObjectCount,
                         aggregation.runsWithMountedContextRenderedObjectCount
-                    )
+                    ),
+                    average(aggregation.totalMountedContextActiveCount, aggregation.runsWithMountedContextActiveCount),
+                    average(aggregation.totalMountedContextEvidenceCount, aggregation.runsWithMountedContextEvidenceCount)
                 )
             );
         }
@@ -2226,5 +2246,9 @@ public class ExperimentRunService {
         private int runsWithMountedContextPanelCount;
         private int totalMountedContextRenderedObjectCount;
         private int runsWithMountedContextRenderedObjectCount;
+        private int totalMountedContextActiveCount;
+        private int runsWithMountedContextActiveCount;
+        private int totalMountedContextEvidenceCount;
+        private int runsWithMountedContextEvidenceCount;
     }
 }

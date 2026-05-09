@@ -1053,6 +1053,17 @@ button {
     margin-top: 0;
 }
 
+.experiment-prompt-section,
+.experiment-prompt-list {
+    display: grid;
+    gap: 10px;
+}
+
+.experiment-prompt-row.is-current {
+    border-color: rgba(31, 122, 105, 0.26);
+    background: linear-gradient(180deg, rgba(31, 122, 105, 0.08), rgba(255, 252, 246, 0.94));
+}
+
 .chain-context {
     display: grid;
     gap: 12px;

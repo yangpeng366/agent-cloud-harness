@@ -106,7 +106,10 @@ class ExperimentMatrixServiceTest {
                     Map.entry("has_closed_loop_evidence_chain", true),
                     Map.entry("prompt_mode", "active_context_only"),
                     Map.entry("mounted_context_rendered", false),
+                    Map.entry("mounted_render_used", false),
                     Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_active_count", 0),
+                    Map.entry("mounted_evidence_count", 0),
                     Map.entry("mounted_context_rendered_object_count", 0),
                     Map.entry("mounted_context_hidden_object_count", 0),
                     Map.entry("mounted_context_rendered_selection_trace_count", 0),
@@ -143,8 +146,11 @@ class ExperimentMatrixServiceTest {
                     Map.entry("has_closed_loop_evidence_chain", true),
                     Map.entry("prompt_mode", "mounted_context_shadow"),
                     Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", false),
                     Map.entry("mounted_context_panel_count", 5),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_evidence_count", 1),
                     Map.entry("mounted_context_rendered_object_count", 6),
                     Map.entry("mounted_context_hidden_object_count", 2),
                     Map.entry("mounted_context_rendered_selection_trace_count", 1),
@@ -181,8 +187,11 @@ class ExperimentMatrixServiceTest {
                     Map.entry("has_closed_loop_evidence_chain", true),
                     Map.entry("prompt_mode", "mounted_context_primary"),
                     Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", true),
                     Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_evidence_count", 2),
                     Map.entry("mounted_context_rendered_object_count", 9),
                     Map.entry("mounted_context_hidden_object_count", 1),
                     Map.entry("mounted_context_rendered_selection_trace_count", 3),
@@ -218,6 +227,19 @@ class ExperimentMatrixServiceTest {
 
             assertEquals(6, summary.totalRuns());
             assertEquals(2, summary.caseComparisons().size());
+            assertEquals(3, summary.promptModeSummaries().size());
+            assertEquals(1, summary.promptModeSummaries().get("mounted_context_primary").runCount());
+            assertEquals(1, summary.promptModeSummaries().get("mounted_context_primary").mountedContextInjectedCount());
+            assertEquals(1, summary.promptModeSummaries().get("mounted_context_shadow").mountedRenderUsedCount());
+            assertEquals(3, summary.executionJudgmentPromptModeSummaries().size());
+            assertEquals(1, summary.executionJudgmentPromptModeSummaries().get("active_context_only").runCount());
+            assertEquals(1.0, summary.executionJudgmentPromptModeSummaries()
+                .get("mounted_context_shadow").mountedRenderUsedRate());
+            assertEquals(3, summary.completionJudgmentPromptModeSummaries().size());
+            assertEquals(0, summary.completionJudgmentPromptModeSummaries()
+                .get("mounted_context_shadow").mountedContextInjectedCount());
+            assertEquals(9.0, summary.completionJudgmentPromptModeSummaries()
+                .get("mounted_context_primary").averageMountedContextRenderedObjectCount());
 
             Map<String, ExperimentMatrixSummary.ModeSummary> modeSummaries = summary.modeSummaries().stream()
                 .collect(Collectors.toMap(ExperimentMatrixSummary.ModeSummary::modelMode, Function.identity()));
@@ -241,10 +263,14 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("strong_only").runsWithPromptModeData());
             assertEquals(1, modeSummaries.get("strong_only").promptModeCounts().get("active_context_only"));
             assertEquals(0, modeSummaries.get("strong_only").runsWithMountedContextRendered());
+            assertEquals(0, modeSummaries.get("strong_only").runsWithMountedRenderUsed());
             assertEquals(0, modeSummaries.get("strong_only").runsWithMountedContextInjected());
             assertEquals(0.0, modeSummaries.get("strong_only").mountedContextRenderedRate());
+            assertEquals(0.0, modeSummaries.get("strong_only").mountedRenderUsedRate());
             assertEquals(0.0, modeSummaries.get("strong_only").mountedContextInjectedRate());
             assertEquals(0.0, modeSummaries.get("strong_only").averageMountedContextPanelCount());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageMountedContextActiveCount());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("strong_only").runsWithMountedContextBudgetData());
             assertEquals(0, modeSummaries.get("strong_only").runsWithMountedContextBudgetTruncated());
             assertEquals(0.0, modeSummaries.get("strong_only").mountedContextBudgetTruncatedRate());
@@ -253,13 +279,21 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("strong_only").runsWithExecutionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("strong_only").executionJudgmentPromptModeCounts().get("active_context_only"));
             assertEquals(0, modeSummaries.get("strong_only").runsWithExecutionJudgmentMountedContextRendered());
+            assertEquals(0, modeSummaries.get("strong_only").runsWithExecutionJudgmentMountedRenderUsed());
             assertEquals(0, modeSummaries.get("strong_only").runsWithExecutionJudgmentMountedContextInjected());
+            assertEquals(0.0, modeSummaries.get("strong_only").executionJudgmentMountedRenderUsedRate());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageExecutionJudgmentMountedContextActiveCount());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageExecutionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("strong_only").runsWithExecutionJudgmentMountedContextBudgetData());
             assertEquals(0, modeSummaries.get("strong_only").runsWithExecutionJudgmentMountedContextBudgetTruncated());
             assertEquals(1, modeSummaries.get("strong_only").runsWithCompletionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("strong_only").completionJudgmentPromptModeCounts().get("active_context_only"));
             assertEquals(0, modeSummaries.get("strong_only").runsWithCompletionJudgmentMountedContextRendered());
+            assertEquals(0, modeSummaries.get("strong_only").runsWithCompletionJudgmentMountedRenderUsed());
             assertEquals(0, modeSummaries.get("strong_only").runsWithCompletionJudgmentMountedContextInjected());
+            assertEquals(0.0, modeSummaries.get("strong_only").completionJudgmentMountedRenderUsedRate());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageCompletionJudgmentMountedContextActiveCount());
+            assertEquals(0.0, modeSummaries.get("strong_only").averageCompletionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("strong_only").runsWithCompletionJudgmentMountedContextBudgetData());
             assertEquals(0, modeSummaries.get("strong_only").runsWithCompletionJudgmentMountedContextBudgetTruncated());
             assertEquals(1, modeSummaries.get("strong_only").runsWithToolChainData());
@@ -285,10 +319,14 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("small_only").runsWithPromptModeData());
             assertEquals(1, modeSummaries.get("small_only").promptModeCounts().get("mounted_context_shadow"));
             assertEquals(1, modeSummaries.get("small_only").runsWithMountedContextRendered());
+            assertEquals(1, modeSummaries.get("small_only").runsWithMountedRenderUsed());
             assertEquals(0, modeSummaries.get("small_only").runsWithMountedContextInjected());
             assertEquals(1.0, modeSummaries.get("small_only").mountedContextRenderedRate());
+            assertEquals(1.0, modeSummaries.get("small_only").mountedRenderUsedRate());
             assertEquals(0.0, modeSummaries.get("small_only").mountedContextInjectedRate());
             assertEquals(5.0, modeSummaries.get("small_only").averageMountedContextPanelCount());
+            assertEquals(2.0, modeSummaries.get("small_only").averageMountedContextActiveCount());
+            assertEquals(1.0, modeSummaries.get("small_only").averageMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("small_only").runsWithMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("small_only").runsWithMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("small_only").mountedContextBudgetTruncatedRate());
@@ -299,14 +337,22 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("small_only").executionJudgmentPromptModeCounts().get("mounted_context_shadow"));
             assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgmentMountedContextRendered());
+            assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgmentMountedRenderUsed());
             assertEquals(0, modeSummaries.get("small_only").runsWithExecutionJudgmentMountedContextInjected());
+            assertEquals(1.0, modeSummaries.get("small_only").executionJudgmentMountedRenderUsedRate());
+            assertEquals(2.0, modeSummaries.get("small_only").averageExecutionJudgmentMountedContextActiveCount());
+            assertEquals(1.0, modeSummaries.get("small_only").averageExecutionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgmentMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("small_only").runsWithExecutionJudgmentMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("small_only").executionJudgmentMountedContextBudgetTruncatedRate());
             assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("small_only").completionJudgmentPromptModeCounts().get("mounted_context_shadow"));
             assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgmentMountedContextRendered());
+            assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgmentMountedRenderUsed());
             assertEquals(0, modeSummaries.get("small_only").runsWithCompletionJudgmentMountedContextInjected());
+            assertEquals(1.0, modeSummaries.get("small_only").completionJudgmentMountedRenderUsedRate());
+            assertEquals(2.0, modeSummaries.get("small_only").averageCompletionJudgmentMountedContextActiveCount());
+            assertEquals(1.0, modeSummaries.get("small_only").averageCompletionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgmentMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("small_only").runsWithCompletionJudgmentMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("small_only").completionJudgmentMountedContextBudgetTruncatedRate());
@@ -335,10 +381,14 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("orchestrated").runsWithPromptModeData());
             assertEquals(1, modeSummaries.get("orchestrated").promptModeCounts().get("mounted_context_primary"));
             assertEquals(1, modeSummaries.get("orchestrated").runsWithMountedContextRendered());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithMountedRenderUsed());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithMountedContextInjected());
             assertEquals(1.0, modeSummaries.get("orchestrated").mountedContextRenderedRate());
+            assertEquals(1.0, modeSummaries.get("orchestrated").mountedRenderUsedRate());
             assertEquals(1.0, modeSummaries.get("orchestrated").mountedContextInjectedRate());
             assertEquals(7.0, modeSummaries.get("orchestrated").averageMountedContextPanelCount());
+            assertEquals(4.0, modeSummaries.get("orchestrated").averageMountedContextActiveCount());
+            assertEquals(2.0, modeSummaries.get("orchestrated").averageMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("orchestrated").mountedContextBudgetTruncatedRate());
@@ -349,14 +399,22 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("orchestrated").executionJudgmentPromptModeCounts().get("mounted_context_primary"));
             assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentMountedContextRendered());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentMountedRenderUsed());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentMountedContextInjected());
+            assertEquals(1.0, modeSummaries.get("orchestrated").executionJudgmentMountedRenderUsedRate());
+            assertEquals(4.0, modeSummaries.get("orchestrated").averageExecutionJudgmentMountedContextActiveCount());
+            assertEquals(2.0, modeSummaries.get("orchestrated").averageExecutionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithExecutionJudgmentMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("orchestrated").executionJudgmentMountedContextBudgetTruncatedRate());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentPromptModeData());
             assertEquals(1, modeSummaries.get("orchestrated").completionJudgmentPromptModeCounts().get("mounted_context_primary"));
             assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentMountedContextRendered());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentMountedRenderUsed());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentMountedContextInjected());
+            assertEquals(1.0, modeSummaries.get("orchestrated").completionJudgmentMountedRenderUsedRate());
+            assertEquals(4.0, modeSummaries.get("orchestrated").averageCompletionJudgmentMountedContextActiveCount());
+            assertEquals(2.0, modeSummaries.get("orchestrated").averageCompletionJudgmentMountedContextEvidenceCount());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentMountedContextBudgetData());
             assertEquals(1, modeSummaries.get("orchestrated").runsWithCompletionJudgmentMountedContextBudgetTruncated());
             assertEquals(1.0, modeSummaries.get("orchestrated").completionJudgmentMountedContextBudgetTruncatedRate());
@@ -478,37 +536,46 @@ class ExperimentMatrixServiceTest {
                 ? String.valueOf(task.metadata().getOrDefault("model_mode", "orchestrated"))
                 : "orchestrated";
             return switch (mode) {
-                case "strong_only" -> Map.of(
-                    "prompt_mode", "active_context_only",
-                    "mounted_context_rendered", false,
-                    "mounted_context_injected", false,
-                    "mounted_context_rendered_object_count", 0,
-                    "mounted_context_hidden_object_count", 0,
-                    "mounted_context_rendered_selection_trace_count", 0,
-                    "mounted_context_hidden_selection_trace_count", 0,
-                    "mounted_context_budget_truncated", false
+                case "strong_only" -> Map.ofEntries(
+                    Map.entry("prompt_mode", "active_context_only"),
+                    Map.entry("mounted_context_rendered", false),
+                    Map.entry("mounted_render_used", false),
+                    Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_active_count", 0),
+                    Map.entry("mounted_evidence_count", 0),
+                    Map.entry("mounted_context_rendered_object_count", 0),
+                    Map.entry("mounted_context_hidden_object_count", 0),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 0),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", false)
                 );
-                case "small_only" -> Map.of(
-                    "prompt_mode", "mounted_context_shadow",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", false,
-                    "mounted_context_panel_count", 5,
-                    "mounted_context_rendered_object_count", 6,
-                    "mounted_context_hidden_object_count", 2,
-                    "mounted_context_rendered_selection_trace_count", 1,
-                    "mounted_context_hidden_selection_trace_count", 1,
-                    "mounted_context_budget_truncated", true
+                case "small_only" -> Map.ofEntries(
+                    Map.entry("prompt_mode", "mounted_context_shadow"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_context_panel_count", 5),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_evidence_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 6),
+                    Map.entry("mounted_context_hidden_object_count", 2),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true)
                 );
-                default -> Map.of(
-                    "prompt_mode", "mounted_context_primary",
-                    "mounted_context_rendered", true,
-                    "mounted_context_injected", true,
-                    "mounted_context_panel_count", 7,
-                    "mounted_context_rendered_object_count", 9,
-                    "mounted_context_hidden_object_count", 1,
-                    "mounted_context_rendered_selection_trace_count", 3,
-                    "mounted_context_hidden_selection_trace_count", 0,
-                    "mounted_context_budget_truncated", true
+                default -> Map.ofEntries(
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_evidence_count", 2),
+                    Map.entry("mounted_context_rendered_object_count", 9),
+                    Map.entry("mounted_context_hidden_object_count", 1),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 3),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                    Map.entry("mounted_context_budget_truncated", true)
                 );
             };
         }

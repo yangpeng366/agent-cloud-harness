@@ -11,7 +11,10 @@ public record ExperimentMatrixSummary(
     Integer totalRuns,
     List<String> supportedModes,
     List<ModeSummary> modeSummaries,
-    List<CaseComparison> caseComparisons
+    List<CaseComparison> caseComparisons,
+    Map<String, ExperimentRunSummary.MountedContextPromptModeSummary> promptModeSummaries,
+    Map<String, ExperimentRunSummary.MountedContextPromptModeSummary> executionJudgmentPromptModeSummaries,
+    Map<String, ExperimentRunSummary.MountedContextPromptModeSummary> completionJudgmentPromptModeSummaries
 ) {
     public ExperimentMatrixSummary {
         if (experimentName == null) experimentName = "";
@@ -19,6 +22,9 @@ public record ExperimentMatrixSummary(
         if (supportedModes == null) supportedModes = List.of();
         if (modeSummaries == null) modeSummaries = List.of();
         if (caseComparisons == null) caseComparisons = List.of();
+        if (promptModeSummaries == null) promptModeSummaries = Map.of();
+        if (executionJudgmentPromptModeSummaries == null) executionJudgmentPromptModeSummaries = Map.of();
+        if (completionJudgmentPromptModeSummaries == null) completionJudgmentPromptModeSummaries = Map.of();
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -57,6 +63,8 @@ public record ExperimentMatrixSummary(
         Double mountedRenderUsedRate,
         Double mountedContextInjectedRate,
         Double averageMountedContextPanelCount,
+        Double averageMountedContextActiveCount,
+        Double averageMountedContextEvidenceCount,
         Integer runsWithMountedContextBudgetData,
         Integer runsWithMountedContextBudgetTruncated,
         Double mountedContextBudgetTruncatedRate,
@@ -72,6 +80,8 @@ public record ExperimentMatrixSummary(
         Double executionJudgmentMountedContextRenderedRate,
         Double executionJudgmentMountedRenderUsedRate,
         Double executionJudgmentMountedContextInjectedRate,
+        Double averageExecutionJudgmentMountedContextActiveCount,
+        Double averageExecutionJudgmentMountedContextEvidenceCount,
         Integer runsWithExecutionJudgmentMountedContextBudgetData,
         Integer runsWithExecutionJudgmentMountedContextBudgetTruncated,
         Double executionJudgmentMountedContextBudgetTruncatedRate,
@@ -87,6 +97,8 @@ public record ExperimentMatrixSummary(
         Double completionJudgmentMountedContextRenderedRate,
         Double completionJudgmentMountedRenderUsedRate,
         Double completionJudgmentMountedContextInjectedRate,
+        Double averageCompletionJudgmentMountedContextActiveCount,
+        Double averageCompletionJudgmentMountedContextEvidenceCount,
         Integer runsWithCompletionJudgmentMountedContextBudgetData,
         Integer runsWithCompletionJudgmentMountedContextBudgetTruncated,
         Double completionJudgmentMountedContextBudgetTruncatedRate,
@@ -161,6 +173,12 @@ public record ExperimentMatrixSummary(
             if (averageMountedContextPanelCount == null || averageMountedContextPanelCount < 0) {
                 averageMountedContextPanelCount = 0.0;
             }
+            if (averageMountedContextActiveCount == null || averageMountedContextActiveCount < 0) {
+                averageMountedContextActiveCount = 0.0;
+            }
+            if (averageMountedContextEvidenceCount == null || averageMountedContextEvidenceCount < 0) {
+                averageMountedContextEvidenceCount = 0.0;
+            }
             if (runsWithMountedContextBudgetData == null || runsWithMountedContextBudgetData < 0) {
                 runsWithMountedContextBudgetData = 0;
             }
@@ -211,6 +229,14 @@ public record ExperimentMatrixSummary(
             if (executionJudgmentMountedContextInjectedRate == null
                 || executionJudgmentMountedContextInjectedRate < 0) {
                 executionJudgmentMountedContextInjectedRate = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextActiveCount == null
+                || averageExecutionJudgmentMountedContextActiveCount < 0) {
+                averageExecutionJudgmentMountedContextActiveCount = 0.0;
+            }
+            if (averageExecutionJudgmentMountedContextEvidenceCount == null
+                || averageExecutionJudgmentMountedContextEvidenceCount < 0) {
+                averageExecutionJudgmentMountedContextEvidenceCount = 0.0;
             }
             if (runsWithExecutionJudgmentMountedContextBudgetData == null
                 || runsWithExecutionJudgmentMountedContextBudgetData < 0) {
@@ -268,6 +294,14 @@ public record ExperimentMatrixSummary(
             if (completionJudgmentMountedContextInjectedRate == null
                 || completionJudgmentMountedContextInjectedRate < 0) {
                 completionJudgmentMountedContextInjectedRate = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextActiveCount == null
+                || averageCompletionJudgmentMountedContextActiveCount < 0) {
+                averageCompletionJudgmentMountedContextActiveCount = 0.0;
+            }
+            if (averageCompletionJudgmentMountedContextEvidenceCount == null
+                || averageCompletionJudgmentMountedContextEvidenceCount < 0) {
+                averageCompletionJudgmentMountedContextEvidenceCount = 0.0;
             }
             if (runsWithCompletionJudgmentMountedContextBudgetData == null
                 || runsWithCompletionJudgmentMountedContextBudgetData < 0) {

@@ -46,65 +46,7 @@ class TaskHandlerExperimentSummaryHttpTest {
     @Test
     void taskExperimentSummaryEndpointReturnsModeComparisonForSelectedTask() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("task-experiment-summary.db"))) {
-            Task strongTask = fixture.createExperimentTask("strong_only");
-            Task smallTask = fixture.createExperimentTask("small_only");
-            Task orchestratedTask = fixture.createExperimentTask("orchestrated");
-
-            fixture.insertRouteArtifact(strongTask, Map.ofEntries(
-                Map.entry("route_source", "capability_match"),
-                Map.entry("selected_model_tier", "strong"),
-                Map.entry("prompt_mode", "active_context_only"),
-                Map.entry("mounted_context_rendered", false),
-                Map.entry("mounted_render_used", false),
-                Map.entry("mounted_context_injected", false),
-                Map.entry("mounted_context_rendered_object_count", 0),
-                Map.entry("mounted_context_hidden_object_count", 0),
-                Map.entry("mounted_context_rendered_selection_trace_count", 0),
-                Map.entry("mounted_context_hidden_selection_trace_count", 0),
-                Map.entry("mounted_context_budget_truncated", false)
-            ));
-            fixture.insertRouteArtifact(smallTask, Map.ofEntries(
-                Map.entry("route_source", "capability_match"),
-                Map.entry("preferred_worker_hint", "codex"),
-                Map.entry("learning_hint_applied", false),
-                Map.entry("fallback_reason", "hint filtered by model tier"),
-                Map.entry("selected_model_tier", "small"),
-                Map.entry("prompt_mode", "mounted_context_shadow"),
-                Map.entry("mounted_context_rendered", true),
-                Map.entry("mounted_render_used", true),
-                Map.entry("mounted_context_injected", false),
-                Map.entry("mounted_context_panel_count", 5),
-                Map.entry("mounted_context_rendered_object_count", 6),
-                Map.entry("mounted_context_hidden_object_count", 2),
-                Map.entry("mounted_context_rendered_selection_trace_count", 1),
-                Map.entry("mounted_context_hidden_selection_trace_count", 1),
-                Map.entry("mounted_context_budget_truncated", true)
-            ));
-            fixture.insertRouteArtifact(orchestratedTask, Map.ofEntries(
-                Map.entry("route_source", "learning_memory"),
-                Map.entry("preferred_worker_hint", "kimi"),
-                Map.entry("learning_hint_applied", true),
-                Map.entry("fallback_reason", "hint survived tier filter"),
-                Map.entry("selected_model_tier", "small"),
-                Map.entry("prompt_mode", "mounted_context_primary"),
-                Map.entry("mounted_context_rendered", true),
-                Map.entry("mounted_render_used", true),
-                Map.entry("mounted_context_injected", true),
-                Map.entry("mounted_context_panel_count", 7),
-                Map.entry("mounted_context_rendered_object_count", 9),
-                Map.entry("mounted_context_hidden_object_count", 1),
-                Map.entry("mounted_context_rendered_selection_trace_count", 3),
-                Map.entry("mounted_context_hidden_selection_trace_count", 0),
-                Map.entry("mounted_context_budget_truncated", true)
-            ));
-
-            fixture.insertJudgments(strongTask, "done", "done", "high");
-            fixture.insertJudgments(smallTask, "escalate", "misaligned", "low");
-            fixture.insertJudgments(orchestratedTask, "checkpoint", "partially_done", "medium");
-
-            fixture.service.updateTaskState(strongTask.id(), "done", "baseline strong completed");
-            fixture.service.updateTaskState(smallTask.id(), "failed", "baseline small stalled");
-            fixture.service.updateTaskState(orchestratedTask.id(), "waiting_human", "baseline orchestration needs review");
+            Task orchestratedTask = fixture.seedBaselineConsoleExperimentData().orchestratedTask();
 
             HttpResponse<String> response = fixture.client.send(
                 HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + orchestratedTask.id() + "/experiment_summary"))
@@ -118,6 +60,25 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertTrue(body.path("success").asBoolean());
             assertEquals("baseline-console", body.path("data").path("experiment_name").asText());
             assertEquals(3, body.path("data").path("mode_summaries").size());
+            JsonNode promptModeSummaries = body.path("data").path("prompt_mode_summaries");
+            JsonNode executionPromptModeSummaries =
+                body.path("data").path("execution_judgment_prompt_mode_summaries");
+            JsonNode completionPromptModeSummaries =
+                body.path("data").path("completion_judgment_prompt_mode_summaries");
+            assertEquals(3, promptModeSummaries.size());
+            assertEquals(1, promptModeSummaries.path("mounted_context_primary").path("run_count").asInt());
+            assertEquals(1.0, promptModeSummaries.path("mounted_context_shadow")
+                .path("mounted_render_used_rate").asDouble());
+            assertEquals(0, promptModeSummaries.path("active_context_only")
+                .path("mounted_context_injected_count").asInt());
+            assertEquals(3, executionPromptModeSummaries.size());
+            assertEquals(1, executionPromptModeSummaries.path("mounted_context_shadow").path("run_count").asInt());
+            assertEquals(1.0, executionPromptModeSummaries.path("mounted_context_primary")
+                .path("mounted_context_injected_rate").asDouble());
+            assertEquals(3, completionPromptModeSummaries.size());
+            assertEquals(1, completionPromptModeSummaries.path("active_context_only").path("run_count").asInt());
+            assertEquals(9.0, completionPromptModeSummaries.path("mounted_context_primary")
+                .path("average_mounted_context_rendered_object_count").asDouble());
             JsonNode orchestratedSummary = body.path("data").path("mode_summaries").get(2);
             assertEquals("orchestrated", orchestratedSummary.path("model_mode").asText());
             assertEquals(1, orchestratedSummary.path("learning_hint_applied_count").asInt());
@@ -135,6 +96,8 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(1.0, orchestratedSummary.path("mounted_render_used_rate").asDouble());
             assertEquals(1.0, orchestratedSummary.path("mounted_context_injected_rate").asDouble());
             assertEquals(7.0, orchestratedSummary.path("average_mounted_context_panel_count").asDouble());
+            assertEquals(4.0, orchestratedSummary.path("average_mounted_context_active_count").asDouble());
+            assertEquals(2.0, orchestratedSummary.path("average_mounted_context_evidence_count").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_budget_data").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_mounted_context_budget_truncated").asInt());
             assertEquals(1.0, orchestratedSummary.path("mounted_context_budget_truncated_rate").asDouble());
@@ -145,15 +108,55 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_data").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_render_used").asInt());
             assertEquals(1.0, orchestratedSummary.path("execution_judgment_mounted_render_used_rate").asDouble());
+            assertEquals(4.0, orchestratedSummary.path("average_execution_judgment_mounted_context_active_count").asDouble());
+            assertEquals(2.0, orchestratedSummary.path("average_execution_judgment_mounted_context_evidence_count").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_execution_judgment_mounted_context_budget_truncated").asInt());
             assertEquals(1.0, orchestratedSummary.path("execution_judgment_mounted_context_budget_truncated_rate").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_data").asInt());
             assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_render_used").asInt());
             assertEquals(1.0, orchestratedSummary.path("completion_judgment_mounted_render_used_rate").asDouble());
+            assertEquals(4.0, orchestratedSummary.path("average_completion_judgment_mounted_context_active_count").asDouble());
+            assertEquals(2.0, orchestratedSummary.path("average_completion_judgment_mounted_context_evidence_count").asDouble());
             assertEquals(1, orchestratedSummary.path("runs_with_completion_judgment_mounted_context_budget_truncated").asInt());
             assertEquals(1.0, orchestratedSummary.path("completion_judgment_mounted_context_budget_truncated_rate").asDouble());
             assertEquals("needs_followup",
                 body.path("data").path("case_comparisons").get(0).path("runs_by_mode").path("orchestrated").path("acceptance_result").asText());
+        }
+    }
+
+    @Test
+    void experimentMatrixSummaryEndpointReturnsMountedPromptModeComparison() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("experiment-matrix-summary-http.db"))) {
+            fixture.seedBaselineConsoleExperimentData();
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/experiment_matrix/summary?experiment_name=baseline-console"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode body = NioHttpServer.SHARED_MAPPER.readTree(response.body());
+            JsonNode data = body.path("data");
+            JsonNode strongOnly = findModeSummary(data, "strong_only");
+            JsonNode smallOnly = findModeSummary(data, "small_only");
+            JsonNode orchestrated = findModeSummary(data, "orchestrated");
+            assertEquals(200, response.statusCode());
+            assertTrue(body.path("success").asBoolean());
+            assertEquals("baseline-console", data.path("experiment_name").asText());
+            assertEquals(3, data.path("mode_summaries").size());
+            assertEquals(0, strongOnly.path("runs_with_mounted_render_used").asInt());
+            assertEquals(0.0, strongOnly.path("mounted_render_used_rate").asDouble());
+            assertEquals(1, smallOnly.path("runs_with_mounted_render_used").asInt());
+            assertEquals(1.0, smallOnly.path("mounted_render_used_rate").asDouble());
+            assertEquals(2.0, smallOnly.path("average_mounted_context_active_count").asDouble());
+            assertEquals(1.0, smallOnly.path("average_mounted_context_evidence_count").asDouble());
+            assertEquals(1, orchestrated.path("runs_with_mounted_render_used").asInt());
+            assertEquals(1.0, orchestrated.path("mounted_render_used_rate").asDouble());
+            assertEquals(4.0, orchestrated.path("average_execution_judgment_mounted_context_active_count").asDouble());
+            assertEquals(2.0, orchestrated.path("average_execution_judgment_mounted_context_evidence_count").asDouble());
+            assertEquals(4.0, orchestrated.path("average_completion_judgment_mounted_context_active_count").asDouble());
+            assertEquals(2.0, orchestrated.path("average_completion_judgment_mounted_context_evidence_count").asDouble());
         }
     }
 
@@ -177,6 +180,15 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertFalse(body.path("success").asBoolean(true));
             assertEquals("not found", body.path("message").asText());
         }
+    }
+
+    private JsonNode findModeSummary(JsonNode data, String modelMode) {
+        for (JsonNode summary : data.path("mode_summaries")) {
+            if (modelMode.equals(summary.path("model_mode").asText())) {
+                return summary;
+            }
+        }
+        throw new IllegalArgumentException("mode summary not found: " + modelMode);
     }
 
     private static final class HttpFixture implements AutoCloseable {
@@ -231,9 +243,80 @@ class TaskHandlerExperimentSummaryHttpTest {
             this.server.setExecutor(executor);
             this.server.createContext("/api/v1/tasks",
                 new TaskHandler(service, experimentMatrixService, NioHttpServer.SHARED_MAPPER));
+            this.server.createContext("/api/v1/experiment_matrix",
+                new ExperimentMatrixHandler(experimentMatrixService, NioHttpServer.SHARED_MAPPER));
             this.server.start();
             this.client = HttpClient.newHttpClient();
             this.port = server.getAddress().getPort();
+        }
+
+        private SeededExperimentTasks seedBaselineConsoleExperimentData() {
+            Task strongTask = createExperimentTask("strong_only");
+            Task smallTask = createExperimentTask("small_only");
+            Task orchestratedTask = createExperimentTask("orchestrated");
+
+            insertRouteArtifact(strongTask, Map.ofEntries(
+                Map.entry("route_source", "capability_match"),
+                Map.entry("selected_model_tier", "strong"),
+                Map.entry("prompt_mode", "active_context_only"),
+                Map.entry("mounted_context_rendered", false),
+                Map.entry("mounted_render_used", false),
+                Map.entry("mounted_context_injected", false),
+                Map.entry("mounted_active_count", 0),
+                Map.entry("mounted_evidence_count", 0),
+                Map.entry("mounted_context_rendered_object_count", 0),
+                Map.entry("mounted_context_hidden_object_count", 0),
+                Map.entry("mounted_context_rendered_selection_trace_count", 0),
+                Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                Map.entry("mounted_context_budget_truncated", false)
+            ));
+            insertRouteArtifact(smallTask, Map.ofEntries(
+                Map.entry("route_source", "capability_match"),
+                Map.entry("preferred_worker_hint", "codex"),
+                Map.entry("learning_hint_applied", false),
+                Map.entry("fallback_reason", "hint filtered by model tier"),
+                Map.entry("selected_model_tier", "small"),
+                Map.entry("prompt_mode", "mounted_context_shadow"),
+                Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_render_used", true),
+                Map.entry("mounted_context_injected", false),
+                Map.entry("mounted_context_panel_count", 5),
+                Map.entry("mounted_active_count", 2),
+                Map.entry("mounted_evidence_count", 1),
+                Map.entry("mounted_context_rendered_object_count", 6),
+                Map.entry("mounted_context_hidden_object_count", 2),
+                Map.entry("mounted_context_rendered_selection_trace_count", 1),
+                Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                Map.entry("mounted_context_budget_truncated", true)
+            ));
+            insertRouteArtifact(orchestratedTask, Map.ofEntries(
+                Map.entry("route_source", "learning_memory"),
+                Map.entry("preferred_worker_hint", "kimi"),
+                Map.entry("learning_hint_applied", true),
+                Map.entry("fallback_reason", "hint survived tier filter"),
+                Map.entry("selected_model_tier", "small"),
+                Map.entry("prompt_mode", "mounted_context_primary"),
+                Map.entry("mounted_context_rendered", true),
+                Map.entry("mounted_render_used", true),
+                Map.entry("mounted_context_injected", true),
+                Map.entry("mounted_context_panel_count", 7),
+                Map.entry("mounted_active_count", 4),
+                Map.entry("mounted_evidence_count", 2),
+                Map.entry("mounted_context_rendered_object_count", 9),
+                Map.entry("mounted_context_hidden_object_count", 1),
+                Map.entry("mounted_context_rendered_selection_trace_count", 3),
+                Map.entry("mounted_context_hidden_selection_trace_count", 0),
+                Map.entry("mounted_context_budget_truncated", true)
+            ));
+
+            insertJudgments(strongTask, "done", "done", "high");
+            insertJudgments(smallTask, "escalate", "misaligned", "low");
+            insertJudgments(orchestratedTask, "checkpoint", "partially_done", "medium");
+
+            service.updateTaskState(strongTask.id(), "done", "baseline strong completed");
+            service.updateTaskState(smallTask.id(), "failed", "baseline small stalled");
+            service.updateTaskState(orchestratedTask.id(), "waiting_human", "baseline orchestration needs review");
+            return new SeededExperimentTasks(strongTask, smallTask, orchestratedTask);
         }
 
         private Task createExperimentTask(String modelMode) {
@@ -332,6 +415,8 @@ class TaskHandlerExperimentSummaryHttpTest {
                     Map.entry("mounted_context_rendered", false),
                     Map.entry("mounted_render_used", false),
                     Map.entry("mounted_context_injected", false),
+                    Map.entry("mounted_active_count", 0),
+                    Map.entry("mounted_evidence_count", 0),
                     Map.entry("mounted_context_rendered_object_count", 0),
                     Map.entry("mounted_context_hidden_object_count", 0),
                     Map.entry("mounted_context_rendered_selection_trace_count", 0),
@@ -344,6 +429,8 @@ class TaskHandlerExperimentSummaryHttpTest {
                     Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", false),
                     Map.entry("mounted_context_panel_count", 5),
+                    Map.entry("mounted_active_count", 2),
+                    Map.entry("mounted_evidence_count", 1),
                     Map.entry("mounted_context_rendered_object_count", 6),
                     Map.entry("mounted_context_hidden_object_count", 2),
                     Map.entry("mounted_context_rendered_selection_trace_count", 1),
@@ -356,6 +443,8 @@ class TaskHandlerExperimentSummaryHttpTest {
                     Map.entry("mounted_render_used", true),
                     Map.entry("mounted_context_injected", true),
                     Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_evidence_count", 2),
                     Map.entry("mounted_context_rendered_object_count", 9),
                     Map.entry("mounted_context_hidden_object_count", 1),
                     Map.entry("mounted_context_rendered_selection_trace_count", 3),
@@ -375,5 +464,8 @@ class TaskHandlerExperimentSummaryHttpTest {
             executor.close();
             db.close();
         }
+    }
+
+    private record SeededExperimentTasks(Task strongTask, Task smallTask, Task orchestratedTask) {
     }
 }

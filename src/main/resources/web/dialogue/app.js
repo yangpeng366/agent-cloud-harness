@@ -1677,6 +1677,26 @@ function renderExperimentSummary(flow, summary) {
         metadata.modelMode,
         "orchestrated"
     );
+    const currentWorkerPromptMode = firstNonBlank(
+        experimentRun.prompt_mode,
+        experimentRun.promptMode,
+        metadata.prompt_mode,
+        metadata.promptMode
+    );
+    const currentExecutionJudgmentPromptMode = firstNonBlank(
+        experimentRun.execution_judgment_prompt_mode,
+        experimentRun.executionJudgmentPromptMode,
+        metadata.execution_judgment_prompt_mode,
+        metadata.executionJudgmentPromptMode,
+        currentWorkerPromptMode
+    );
+    const currentCompletionJudgmentPromptMode = firstNonBlank(
+        experimentRun.completion_judgment_prompt_mode,
+        experimentRun.completionJudgmentPromptMode,
+        metadata.completion_judgment_prompt_mode,
+        metadata.completionJudgmentPromptMode,
+        currentWorkerPromptMode
+    );
     const taskCaseKey = firstNonBlank(
         experimentRun.task_case_key,
         experimentRun.taskCaseKey,
@@ -1696,6 +1716,15 @@ function renderExperimentSummary(flow, summary) {
         "unspecified"
     );
     const modeSummaries = summary?.mode_summaries || summary?.modeSummaries || [];
+    const promptModeSummaries = summary?.prompt_mode_summaries || summary?.promptModeSummaries || {};
+    const executionJudgmentPromptModeSummaries =
+        summary?.execution_judgment_prompt_mode_summaries
+        || summary?.executionJudgmentPromptModeSummaries
+        || {};
+    const completionJudgmentPromptModeSummaries =
+        summary?.completion_judgment_prompt_mode_summaries
+        || summary?.completionJudgmentPromptModeSummaries
+        || {};
     const supportedModes = summary?.supported_modes || summary?.supportedModes || [];
     const caseComparisons = summary?.case_comparisons || summary?.caseComparisons || [];
     const currentCase = taskCaseKey
@@ -1721,6 +1750,14 @@ function renderExperimentSummary(flow, summary) {
                 <div class="experiment-summary__grid">
                     ${modeSummaries.map((mode) => renderExperimentModeCard(mode, currentMode)).join("")}
                 </div>
+                ${renderExperimentPromptModeComparisonSection(
+                    promptModeSummaries,
+                    executionJudgmentPromptModeSummaries,
+                    completionJudgmentPromptModeSummaries,
+                    currentWorkerPromptMode,
+                    currentExecutionJudgmentPromptMode,
+                    currentCompletionJudgmentPromptMode
+                )}
                 ${currentCase ? `
                     <div class="experiment-summary__case-grid">
                         ${(supportedModes.length > 0 ? supportedModes : Object.keys(currentCase.runs_by_mode || currentCase.runsByMode || {}))
@@ -1828,6 +1865,141 @@ function renderExperimentRolloutBlock(label, promptModeCounts, sampleCount, rend
             <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "no mounted-context telemetry")}</p>
         </div>
     `;
+}
+
+function renderExperimentPromptModeComparisonSection(
+    promptModeSummaries,
+    executionJudgmentPromptModeSummaries,
+    completionJudgmentPromptModeSummaries,
+    currentWorkerPromptMode,
+    currentExecutionJudgmentPromptMode,
+    currentCompletionJudgmentPromptMode
+) {
+    const hasWorkerPromptModes = orderedPromptModeKeys(promptModeSummaries).length > 0;
+    const hasExecutionPromptModes = orderedPromptModeKeys(executionJudgmentPromptModeSummaries).length > 0;
+    const hasCompletionPromptModes = orderedPromptModeKeys(completionJudgmentPromptModeSummaries).length > 0;
+    if (!hasWorkerPromptModes && !hasExecutionPromptModes && !hasCompletionPromptModes) {
+        return "";
+    }
+    return `
+        <div class="experiment-prompt-section">
+            <div class="stack-item__meta">
+                <span class="task-badge">prompt rollout</span>
+                <span>mounted-context prompt-mode comparison</span>
+            </div>
+            <div class="experiment-summary__grid">
+                ${renderExperimentPromptModeComparisonCard("worker", promptModeSummaries, currentWorkerPromptMode)}
+                ${renderExperimentPromptModeComparisonCard(
+                    "exec judge",
+                    executionJudgmentPromptModeSummaries,
+                    currentExecutionJudgmentPromptMode
+                )}
+                ${renderExperimentPromptModeComparisonCard(
+                    "done judge",
+                    completionJudgmentPromptModeSummaries,
+                    currentCompletionJudgmentPromptMode
+                )}
+            </div>
+        </div>
+    `;
+}
+
+function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, currentPromptMode) {
+    const promptModes = orderedPromptModeKeys(promptModeSummaries);
+    const sampledCount = promptModes.reduce(
+        (total, promptMode) => total + (numberOrNull(
+            promptModeSummaries[promptMode]?.run_count,
+            promptModeSummaries[promptMode]?.runCount
+        ) ?? 0),
+        0
+    );
+    return `
+        <div class="experiment-mode-card experiment-prompt-card">
+            <div class="stack-item__meta">
+                <span class="task-badge">${escapeHtml(label)}</span>
+                <span>${escapeHtml(String(sampledCount))} sampled</span>
+                ${currentPromptMode
+                    ? `<span>${escapeHtml(`current ${humanizeToken(currentPromptMode) || currentPromptMode}`)}</span>`
+                    : ""}
+            </div>
+            <div class="experiment-prompt-list">
+                ${promptModes.length > 0
+                    ? promptModes
+                        .map((promptMode) => renderExperimentPromptModeRow(
+                            promptMode,
+                            promptModeSummaries[promptMode],
+                            currentPromptMode
+                        ))
+                        .join("")
+                    : `<div class="experiment-rollout-block"><p>no prompt sample</p></div>`}
+            </div>
+        </div>
+    `;
+}
+
+function renderExperimentPromptModeRow(promptMode, promptModeSummary, currentPromptMode) {
+    const runCount = numberOrNull(promptModeSummary?.run_count, promptModeSummary?.runCount) ?? 0;
+    const renderedRate = numberOrNull(
+        promptModeSummary?.mounted_context_rendered_rate,
+        promptModeSummary?.mountedContextRenderedRate
+    );
+    const renderUsedRate = numberOrNull(
+        promptModeSummary?.mounted_render_used_rate,
+        promptModeSummary?.mountedRenderUsedRate
+    );
+    const injectedRate = numberOrNull(
+        promptModeSummary?.mounted_context_injected_rate,
+        promptModeSummary?.mountedContextInjectedRate
+    );
+    const budgetTruncatedRate = numberOrNull(
+        promptModeSummary?.mounted_context_budget_truncated_rate,
+        promptModeSummary?.mountedContextBudgetTruncatedRate
+    );
+    const averagePanelCount = numberOrNull(
+        promptModeSummary?.average_mounted_context_panel_count,
+        promptModeSummary?.averageMountedContextPanelCount
+    );
+    const averageRenderedObjectCount = numberOrNull(
+        promptModeSummary?.average_mounted_context_rendered_object_count,
+        promptModeSummary?.averageMountedContextRenderedObjectCount
+    );
+    const headline = [
+        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
+        renderUsedRate === null ? null : `used ${formatRate(renderUsedRate)}`,
+        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`
+    ].filter(Boolean);
+    const detail = [
+        budgetTruncatedRate === null ? null : `budget ${formatRate(budgetTruncatedRate)}`,
+        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`,
+        averageRenderedObjectCount === null ? null : `avg objs ${formatDecimal(averageRenderedObjectCount)}`
+    ].filter(Boolean);
+    const isCurrent = promptMode === currentPromptMode ? " is-current" : "";
+    return `
+        <div class="experiment-rollout-block experiment-prompt-row${isCurrent}">
+            <div class="experiment-rollout-block__meta">
+                <span class="task-badge" data-tone="${promptMode === currentPromptMode ? "active" : "default"}">${escapeHtml(humanizeToken(promptMode) || promptMode)}</span>
+                <span>${escapeHtml(String(runCount))} runs</span>
+            </div>
+            <strong>${escapeHtml(headline.length > 0 ? headline.join(" · ") : "no mounted-context telemetry")}</strong>
+            <p>${escapeHtml(detail.length > 0 ? detail.join(" · ") : "no budget or object telemetry")}</p>
+        </div>
+    `;
+}
+
+function orderedPromptModeKeys(promptModeSummaries) {
+    const preferredOrder = ["active_context_only", "mounted_context_shadow", "mounted_context_primary"];
+    return Object.keys(promptModeSummaries || {})
+        .filter((promptMode) => promptModeSummaries[promptMode] != null)
+        .sort((left, right) => {
+            const leftIndex = preferredOrder.indexOf(left);
+            const rightIndex = preferredOrder.indexOf(right);
+            const normalizedLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+            const normalizedRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+            if (normalizedLeft !== normalizedRight) {
+                return normalizedLeft - normalizedRight;
+            }
+            return left.localeCompare(right);
+        });
 }
 
 function renderExperimentCaseCard(mode, caseComparison, currentMode) {

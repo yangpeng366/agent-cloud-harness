@@ -108,12 +108,15 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             renderingMode,
             mountedRenderResult
         );
-        log.info("Tool-aware prompt mode selected. task={}, worker={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
+        log.info("Tool-aware prompt mode selected. task={}, worker={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}, mountedActiveCount={}, mountedEvidenceCount={}, mountedArchiveCount={}",
             context.task().id(),
             worker.workerId(),
             metrics.promptMode(),
             metrics.mountedRenderUsed(),
-            metrics.panelCount());
+            metrics.panelCount(),
+            metrics.activeCount(),
+            metrics.evidenceCount(),
+            metrics.archiveCount());
 
         TaskToolState toolStateBefore = inspectTaskToolState(context);
         if (shouldUseLegacySingleToolPath(toolStateBefore)) {

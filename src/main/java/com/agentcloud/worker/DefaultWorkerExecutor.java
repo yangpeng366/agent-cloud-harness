@@ -65,14 +65,17 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             mountedRenderResult
         );
 
-        log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}",
+        log.info("Worker round completed. task={}, worker={}, outputLength={}, durationMs={}, promptMode={}, mountedRenderUsed={}, mountedPanelCount={}, mountedActiveCount={}, mountedEvidenceCount={}, mountedArchiveCount={}",
             context.task().id(),
             workerId,
             enriched.outputText().length(),
             durationMs,
             metrics.promptMode(),
             metrics.mountedRenderUsed(),
-            metrics.panelCount());
+            metrics.panelCount(),
+            metrics.activeCount(),
+            metrics.evidenceCount(),
+            metrics.archiveCount());
 
         return enriched;
     }

@@ -111,6 +111,50 @@ class MountedContextPromptRendererTest {
     }
 
     @Test
+    void renderUsesStablePanelOrderAndOmitsEmptyPanelsBetweenVisibleSections() {
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_ordered_sparse",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.EVIDENCE,
+                    "Evidence",
+                    List.of(object("evidence_1", "Evidence 1", "第五条证据", ContextRetentionState.WARM_SUMMARY))
+                ),
+                new MountedContextPanel(
+                    MountedContextPanelName.SIBLING,
+                    "Sibling",
+                    List.of(object("sibling_1", "Sibling 1", "第四条线索", ContextRetentionState.WARM_SUMMARY))
+                ),
+                new MountedContextPanel(
+                    MountedContextPanelName.PINNED,
+                    "Pinned",
+                    List.of(object("goal_1", "Goal 1", "第一条约束", ContextRetentionState.PINNED))
+                )
+            ),
+            List.of("selection_trace=present")
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+        int pinnedIndex = prompt.indexOf("Pinned (1)");
+        int siblingIndex = prompt.indexOf("Sibling (1)");
+        int evidenceIndex = prompt.indexOf("Evidence (1)");
+        int traceIndex = prompt.indexOf("Mounted Context Selection Trace:");
+
+        assertTrue(pinnedIndex >= 0);
+        assertTrue(siblingIndex >= 0);
+        assertTrue(evidenceIndex >= 0);
+        assertTrue(traceIndex >= 0);
+        assertTrue(pinnedIndex < siblingIndex);
+        assertTrue(siblingIndex < evidenceIndex);
+        assertTrue(evidenceIndex < traceIndex);
+        assertFalse(prompt.contains("Active (0)"));
+        assertFalse(prompt.contains("Ancestor (0)"));
+        assertFalse(prompt.contains("Index (0)"));
+        assertFalse(prompt.contains("Archive Handles (0)"));
+    }
+
+    @Test
     void renderBoundsDensePanelsAndTruncatesLongPreview() {
         String longSummary = "这是一个很长的 mounted context 摘要，用来验证 renderer 会做 preview 截断，并且不会把整段长文本原样灌进 prompt。"
             .repeat(6);
@@ -181,6 +225,50 @@ class MountedContextPromptRendererTest {
         assertTrue(prompt.contains("[proof=tool:tool_42, tool:tool_99]"));
         assertFalse(prompt.contains("evidence:tool:read_file:input.txt"));
         assertFalse(prompt.contains("ref:tool_42"));
+    }
+
+    @Test
+    void renderTruncatesLongProofLabelsAndDoesNotLeakRawMetadataMaps() {
+        String longToolId = "tool_invocation_" + "x".repeat(90) + "_tail_should_be_truncated";
+        String rawMetadataLeak = "raw_metadata_should_not_leak_into_prompt";
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_proof_budget",
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.EVIDENCE,
+                    "Evidence",
+                    List.of(new ContextObject(
+                        "artifact_1",
+                        "/sessions/s1/tasks/task_proof_budget/artifacts/artifact_1",
+                        ContextObjectType.ARTIFACT,
+                        "",
+                        "Artifact 1",
+                        "关注 proof edge 截断，不要把原始 metadata map 打进 prompt。",
+                        "",
+                        Instant.parse("2026-05-06T06:18:00Z"),
+                        ContextRetentionState.WARM_SUMMARY,
+                        List.of(new ContextReference("artifact_ref", "/tmp/" + "y".repeat(96) + "_tail_ref", "")),
+                        List.of(),
+                        Map.of(
+                            "tool_invocation_ids", List.of(longToolId),
+                            "opaque_debug_map", Map.of("secret", rawMetadataLeak)
+                        )
+                    ))
+                )
+            ),
+            List.of()
+        );
+
+        String prompt = new MountedContextPromptRenderer().render(view);
+
+        assertTrue(prompt.contains("[proof="));
+        assertTrue(prompt.contains("tool:tool_invocation_"));
+        assertTrue(prompt.contains("..."));
+        assertFalse(prompt.contains(longToolId));
+        assertFalse(prompt.contains("tail_should_be_truncated"));
+        assertFalse(prompt.contains(rawMetadataLeak));
+        assertFalse(prompt.contains("opaque_debug_map"));
     }
 
     @Test
@@ -319,6 +407,42 @@ class MountedContextPromptRendererTest {
         assertTrue(prompt.contains("artifact/pinned/Goal 1"));
         assertTrue(prompt.contains("artifact/pinned/Goal 2"));
         assertFalse(prompt.contains("... +"));
+    }
+
+    @Test
+    void renderResultBoundsVisiblePanelsAndTracksHiddenPanels() {
+        MountedContextView view = new MountedContextView(
+            null,
+            "task_panel_budget",
+            List.of(
+                new MountedContextPanel(MountedContextPanelName.PINNED, "Pinned",
+                    List.of(object("goal_1", "Goal 1", "第一条", ContextRetentionState.PINNED))),
+                new MountedContextPanel(MountedContextPanelName.ACTIVE, "Active",
+                    List.of(object("active_1", "Active 1", "第二条", ContextRetentionState.HOT_RAW))),
+                new MountedContextPanel(MountedContextPanelName.ANCESTOR, "Ancestor",
+                    List.of(object("ancestor_1", "Ancestor 1", "第三条", ContextRetentionState.WARM_SUMMARY))),
+                new MountedContextPanel(MountedContextPanelName.SIBLING, "Sibling",
+                    List.of(object("sibling_1", "Sibling 1", "第四条", ContextRetentionState.WARM_SUMMARY))),
+                new MountedContextPanel(MountedContextPanelName.EVIDENCE, "Evidence",
+                    List.of(object("evidence_1", "Evidence 1", "第五条", ContextRetentionState.WARM_SUMMARY))),
+                new MountedContextPanel(MountedContextPanelName.INDEX, "Index",
+                    List.of(object("index_1", "Index 1", "第六条", ContextRetentionState.ARCHIVED_HANDLE)))
+            ),
+            List.of("pinned=1", "active=1")
+        );
+
+        MountedContextPromptRenderResult result = new MountedContextPromptRenderer().renderResult(view);
+
+        assertTrue(result.prompt().contains("Pinned (1)"));
+        assertTrue(result.prompt().contains("Sibling (1)"));
+        assertFalse(result.prompt().contains("Evidence (1)"));
+        assertFalse(result.prompt().contains("Index (1)"));
+        assertTrue(result.prompt().contains("... +2 more panels"));
+        assertEquals(4, result.renderedPanelCount());
+        assertEquals(2, result.hiddenPanelCount());
+        assertEquals(4, result.renderedObjectCount());
+        assertEquals(2, result.hiddenObjectCount());
+        assertTrue(result.budgetTruncated());
     }
 
     private ContextObject object(String id,

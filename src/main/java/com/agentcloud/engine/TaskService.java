@@ -3,6 +3,7 @@ package com.agentcloud.engine;
 import com.agentcloud.engine.memory.PacketBuilder;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.RuntimeCognitionSurfaceAssembler;
 import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
@@ -38,6 +39,7 @@ public class TaskService {
     private final ExperimentRunService experimentRunService;
     private final AgentRunService agentRunService;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
+    private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
 
     public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
                        WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
@@ -102,6 +104,7 @@ public class TaskService {
         this.experimentRunService = experimentRunService;
         this.agentRunService = agentRunService;
         this.runtimeFactSetAssembler = new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, router);
+        this.runtimeCognitionSurfaceAssembler = new RuntimeCognitionSurfaceAssembler();
     }
 
     public Task createTask(TaskCreateRequest req) {
@@ -330,149 +333,7 @@ public class TaskService {
     }
 
     private RuntimeCognitionSurfaceView buildRuntimeCognitionSurface(RuntimeFactSet facts) {
-        RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
-        WorkerRouter.RouteResult routePreview = runtimeFacts.routePreview();
-        RuntimeFactSet.ExecutionBoundary executionBoundary = runtimeFacts.executionBoundary();
-        Decision executionJudgment = runtimeFacts.executionJudgment();
-        Decision completionJudgment = runtimeFacts.completionJudgment();
-        Map<String, Object> runtimeMetadata = runtimeFacts.metadata();
-        Map<String, Object> executionMetadata = executionBoundary != null ? executionBoundary.metadata() : Map.of();
-
-        RuntimeCognitionSurfaceView.RouteSurface routeSurface = routePreview == null ? null
-            : new RuntimeCognitionSurfaceView.RouteSurface(
-                blankToNull(routePreview.selectedWorker()),
-                blankToNull(routePreview.routeSource()),
-                blankToNull(routePreview.selectedModelTier()),
-                blankToNull(routePreview.selectedExecutionRole()),
-                blankToNull(routePreview.selectionScope()),
-                routePreview.candidateWorkers() == null ? List.of() : routePreview.candidateWorkers(),
-                blankToNull(routePreview.preferredWorkerHint()),
-                routePreview.learningHintApplied(),
-                blankToNull(routePreview.fallbackReason())
-            );
-
-        RuntimeCognitionSurfaceView.ExecutionSurface executionSurface = executionBoundary == null ? null
-            : new RuntimeCognitionSurfaceView.ExecutionSurface(
-                firstNonBlank(
-                    blankToNull(executionBoundary.workerId()),
-                    metadataString(executionMetadata, "selected_worker")
-                ),
-                blankToNull(executionBoundary.executionId()),
-                blankToNull(executionBoundary.executionStatus()),
-                executionBoundary.durationMs(),
-                executionBoundary.toolInvocationCount(),
-                executionBoundary.toolInvocationIds() == null ? List.of() : executionBoundary.toolInvocationIds(),
-                proofSummary(
-                    executionBoundary.toolInvocationIds(),
-                    metadataStringList(executionMetadata, "evidence_refs").isEmpty()
-                        ? metadataStringList(runtimeMetadata, "evidence_refs")
-                        : metadataStringList(executionMetadata, "evidence_refs")
-                ),
-                blankToNull(executionBoundary.traceSummary()),
-                firstNonBlank(
-                    metadataString(executionMetadata, "prompt_mode"),
-                    metadataString(runtimeMetadata, "prompt_mode")
-                ),
-                metadataBoolean(executionMetadata, "mounted_context_rendered", runtimeMetadata),
-                metadataBoolean(executionMetadata, "mounted_render_used", runtimeMetadata),
-                metadataBoolean(executionMetadata, "mounted_context_injected", runtimeMetadata),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_context_panel_count"),
-                    metadataInteger(runtimeMetadata, "mounted_context_panel_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_context_non_empty_panel_count"),
-                    metadataInteger(runtimeMetadata, "mounted_context_non_empty_panel_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_context_selection_trace_count"),
-                    metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT)
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT)
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
-                    metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
-                ),
-                metadataBoolean(executionMetadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, runtimeMetadata),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_pinned_count"),
-                    metadataInteger(runtimeMetadata, "mounted_pinned_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_active_count"),
-                    metadataInteger(runtimeMetadata, "mounted_active_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_ancestor_count"),
-                    metadataInteger(runtimeMetadata, "mounted_ancestor_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_sibling_count"),
-                    metadataInteger(runtimeMetadata, "mounted_sibling_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_evidence_count"),
-                    metadataInteger(runtimeMetadata, "mounted_evidence_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_index_count"),
-                    metadataInteger(runtimeMetadata, "mounted_index_count")
-                ),
-                firstNonNullInt(
-                    metadataInteger(executionMetadata, "mounted_archive_count"),
-                    metadataInteger(runtimeMetadata, "mounted_archive_count")
-                ),
-                metadataStringList(executionMetadata, "evidence_refs").isEmpty()
-                    ? metadataStringList(runtimeMetadata, "evidence_refs")
-                    : metadataStringList(executionMetadata, "evidence_refs"),
-                metadataStringList(executionMetadata, "unfinished_items").isEmpty()
-                    ? metadataStringList(runtimeMetadata, "unfinished_items")
-                    : metadataStringList(executionMetadata, "unfinished_items")
-            );
-
-        RuntimeCognitionSurfaceView.JudgmentSurface executionJudgmentSurface =
-            buildJudgmentSurface(executionJudgment, runtimeMetadata);
-        RuntimeCognitionSurfaceView.JudgmentSurface completionJudgmentSurface =
-            buildJudgmentSurface(completionJudgment, runtimeMetadata);
-
-        String routedWorker = routeSurface != null ? routeSurface.selectedWorker() : null;
-        String executedWorker = executionSurface != null ? executionSurface.workerId() : null;
-        String executionPromptMode = executionSurface != null ? executionSurface.promptMode() : null;
-        String executionJudgmentPromptMode = executionJudgmentSurface != null ? executionJudgmentSurface.promptMode() : null;
-        String completionJudgmentPromptMode = completionJudgmentSurface != null ? completionJudgmentSurface.promptMode() : null;
-
-        RuntimeCognitionSurfaceView.AlignmentSurface alignment = new RuntimeCognitionSurfaceView.AlignmentSurface(
-            alignmentFlag(routedWorker, executedWorker),
-            alignmentFlag(executionPromptMode, executionJudgmentPromptMode),
-            alignmentFlag(executionPromptMode, completionJudgmentPromptMode)
-        );
-
-        return new RuntimeCognitionSurfaceView(
-            routeSurface,
-            executionSurface,
-            executionJudgmentSurface,
-            completionJudgmentSurface,
-            alignment
-        );
+        return runtimeCognitionSurfaceAssembler.assemble(facts);
     }
 
     private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(Task task,
@@ -1141,118 +1002,6 @@ public class TaskService {
             return null;
         }
         return "reopen=" + String.join(", ", parts);
-    }
-
-    private RuntimeCognitionSurfaceView.JudgmentSurface buildJudgmentSurface(Decision decision,
-                                                                             Map<String, Object> runtimeMetadata) {
-        if (decision == null) {
-            return null;
-        }
-        Map<String, Object> decisionMetadata = decision.metadata() == null ? Map.of() : decision.metadata();
-        List<String> reopenCandidatePaths = metadataStringList(decisionMetadata, "reopen_candidate_paths");
-        if (reopenCandidatePaths.isEmpty()) {
-            reopenCandidatePaths = metadataStringList(runtimeMetadata, "reopen_candidate_paths");
-        }
-        return new RuntimeCognitionSurfaceView.JudgmentSurface(
-            firstNonBlank(
-                metadataString(decisionMetadata, "prompt_mode"),
-                metadataString(runtimeMetadata, "prompt_mode")
-            ),
-            metadataBoolean(decisionMetadata, "needs_context_reopen", runtimeMetadata),
-            reopenCandidatePaths,
-            firstNonBlank(
-                metadataString(decisionMetadata, "reopen_summary"),
-                reopenSummary(reopenCandidatePaths)
-            ),
-            metadataBoolean(decisionMetadata, "mounted_context_rendered", runtimeMetadata),
-            metadataBoolean(decisionMetadata, "mounted_render_used", runtimeMetadata),
-            metadataBoolean(decisionMetadata, "mounted_context_injected", runtimeMetadata),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_context_panel_count"),
-                metadataInteger(runtimeMetadata, "mounted_context_panel_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_context_non_empty_panel_count"),
-                metadataInteger(runtimeMetadata, "mounted_context_non_empty_panel_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_context_selection_trace_count"),
-                metadataInteger(runtimeMetadata, "mounted_context_selection_trace_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT)
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT)
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
-                metadataInteger(runtimeMetadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
-            ),
-            metadataBoolean(decisionMetadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, runtimeMetadata),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_pinned_count"),
-                metadataInteger(runtimeMetadata, "mounted_pinned_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_active_count"),
-                metadataInteger(runtimeMetadata, "mounted_active_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_ancestor_count"),
-                metadataInteger(runtimeMetadata, "mounted_ancestor_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_sibling_count"),
-                metadataInteger(runtimeMetadata, "mounted_sibling_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_evidence_count"),
-                metadataInteger(runtimeMetadata, "mounted_evidence_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_index_count"),
-                metadataInteger(runtimeMetadata, "mounted_index_count")
-            ),
-            firstNonNullInt(
-                metadataInteger(decisionMetadata, "mounted_archive_count"),
-                metadataInteger(runtimeMetadata, "mounted_archive_count")
-            ),
-            metadataStringList(decisionMetadata, "candidate_workers").isEmpty()
-                ? metadataStringList(runtimeMetadata, "candidate_workers")
-                : metadataStringList(decisionMetadata, "candidate_workers"),
-            metadataStringList(decisionMetadata, "tool_invocation_ids").isEmpty()
-                ? metadataStringList(runtimeMetadata, "tool_invocation_ids")
-                : metadataStringList(decisionMetadata, "tool_invocation_ids"),
-            proofSummary(
-                metadataStringList(decisionMetadata, "tool_invocation_ids").isEmpty()
-                    ? metadataStringList(runtimeMetadata, "tool_invocation_ids")
-                    : metadataStringList(decisionMetadata, "tool_invocation_ids"),
-                metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
-                    ? metadataStringList(runtimeMetadata, "evidence_refs")
-                    : metadataStringList(decisionMetadata, "evidence_refs")
-            ),
-            metadataStringList(decisionMetadata, "evidence_refs").isEmpty()
-                ? metadataStringList(runtimeMetadata, "evidence_refs")
-                : metadataStringList(decisionMetadata, "evidence_refs"),
-            metadataStringList(decisionMetadata, "unfinished_items").isEmpty()
-                ? metadataStringList(runtimeMetadata, "unfinished_items")
-                : metadataStringList(decisionMetadata, "unfinished_items")
-        );
     }
 
     public HarnessTraceView getHarnessTrace(String taskId, int limit) {

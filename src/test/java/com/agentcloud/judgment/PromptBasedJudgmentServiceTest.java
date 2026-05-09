@@ -305,15 +305,33 @@ class PromptBasedJudgmentServiceTest {
         service.judgeCompletion(context);
 
         assertTrue(llmClient.executionPrompt.contains("Runtime Facts:"));
+        assertTrue(llmClient.executionPrompt.contains("Runtime Cognition Surface:"));
+        assertTrue(llmClient.executionPrompt.contains("Route Surface:"));
+        assertTrue(llmClient.executionPrompt.contains("Execution Surface:"));
+        assertTrue(llmClient.executionPrompt.contains("Execution Judgment Surface:"));
+        assertTrue(llmClient.executionPrompt.contains("Completion Judgment Surface:"));
+        assertTrue(llmClient.executionPrompt.contains("Alignment Surface:"));
         assertTrue(llmClient.executionPrompt.contains("Route Preview:"));
         assertTrue(llmClient.executionPrompt.contains("- selected_worker: kimi"));
         assertTrue(llmClient.executionPrompt.contains("Execution Boundary:"));
         assertTrue(llmClient.executionPrompt.contains("- execution_status: blocked"));
         assertTrue(llmClient.executionPrompt.contains("- trace_summary: 2 steps"));
+        assertTrue(llmClient.executionPrompt.contains("- proof_summary: proof=tool:tool-1, evidence:tool:read_file:input.txt"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_context_budget: 3/2 objects"));
+        assertTrue(llmClient.executionPrompt.contains("- route_worker_matches_execution_worker: true"));
+        assertTrue(llmClient.executionPrompt.contains("- execution_and_execution_judgment_prompt_mode_aligned: true"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_context_panel_count: 7"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_context_non_empty_panel_count: 3"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_active_count: 4"));
+        assertTrue(llmClient.executionPrompt.contains("- mounted_evidence_count: 2"));
         assertTrue(llmClient.executionPrompt.contains("- mounted_context_hidden_object_count: 2"));
         assertTrue(llmClient.executionPrompt.contains("- mounted_context_budget_truncated: true"));
         assertTrue(llmClient.executionPrompt.contains("- evidence_refs: [tool:read_file:input.txt, tool:write_file:draft.txt]"));
+        assertTrue(llmClient.completionPrompt.contains("Runtime Cognition Surface:"));
+        assertTrue(llmClient.completionPrompt.contains("Alignment Surface:"));
         assertTrue(llmClient.completionPrompt.contains("- has_route_preview: true"));
+        assertTrue(llmClient.completionPrompt.contains("- mounted_context_selection_trace_count: 4"));
+        assertTrue(llmClient.completionPrompt.contains("- mounted_archive_count: 1"));
         assertTrue(llmClient.completionPrompt.contains("- mounted_context_hidden_selection_trace_count: 1"));
     }
 
@@ -567,16 +585,30 @@ class PromptBasedJudgmentServiceTest {
                 List.of("tool-1", "tool-2"),
                 2,
                 "2 steps · planner_no_additional_tool · read_file -> write_file",
-                Map.of(
-                    "tool_execution_mode", "multi_tool_round",
-                    "tool_chain_step_count", 2,
-                    "tool_chain_termination_reason", "planner_no_additional_tool",
-                    "mounted_context_rendered_object_count", 3,
-                    "mounted_context_hidden_object_count", 2,
-                    "mounted_context_rendered_selection_trace_count", 4,
-                    "mounted_context_hidden_selection_trace_count", 1,
-                    "mounted_context_budget_truncated", true,
-                    "evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")
+                Map.ofEntries(
+                    Map.entry("tool_execution_mode", "multi_tool_round"),
+                    Map.entry("tool_chain_step_count", 2),
+                    Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_non_empty_panel_count", 3),
+                    Map.entry("mounted_context_selection_trace_count", 4),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 0),
+                    Map.entry("mounted_evidence_count", 2),
+                    Map.entry("mounted_index_count", 0),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 2),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 4),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"))
                 )
             ),
             new com.agentcloud.engine.router.WorkerRouter.RouteResult(

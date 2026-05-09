@@ -10,11 +10,13 @@ import java.util.Map;
  * 将 mounted context 视图压缩成 prompt 可消费的文本摘要。
  */
 public class MountedContextPromptRenderer {
+    private static final int DEFAULT_PANEL_LIMIT = 4;
     private static final int DEFAULT_OBJECT_LIMIT = 3;
     private static final int DEFAULT_PREVIEW_LIMIT = 180;
     private static final int DEFAULT_SELECTION_TRACE_LIMIT = 4;
     private static final int DEFAULT_LABEL_LIMIT = 72;
     private static final int DEFAULT_PROOF_EDGE_LIMIT = 2;
+    private final MountedContextPromptRenderProfile profile;
     private static final Map<MountedContextPanelName, Integer> PANEL_OBJECT_LIMITS = Map.of(
         MountedContextPanelName.PINNED, 3,
         MountedContextPanelName.ACTIVE, 5,
@@ -24,6 +26,14 @@ public class MountedContextPromptRenderer {
         MountedContextPanelName.INDEX, 2,
         MountedContextPanelName.ARCHIVE_HANDLES, 2
     );
+
+    public MountedContextPromptRenderer() {
+        this(MountedContextPromptRenderProfile.defaultProfile());
+    }
+
+    public MountedContextPromptRenderer(MountedContextPromptRenderProfile profile) {
+        this.profile = profile == null ? MountedContextPromptRenderProfile.defaultProfile() : profile;
+    }
 
     public String render(TaskRuntimeContext context) {
         return renderResult(context).prompt();
@@ -46,13 +56,21 @@ public class MountedContextPromptRenderer {
         }
 
         List<String> panelLines = new ArrayList<>();
+        int visiblePanelCount = 0;
         int renderedPanelCount = 0;
+        int hiddenPanelCount = 0;
         int renderedObjectCount = 0;
         int hiddenObjectCount = 0;
         for (MountedContextPanelName name : MountedContextPanelName.values()) {
             MountedContextPanel panel = view.panel(name);
             List<ContextObject> objects = nonNullObjects(panel.objects());
             if (objects.isEmpty()) {
+                continue;
+            }
+            visiblePanelCount++;
+            if (visiblePanelCount > profile.panelLimit()) {
+                hiddenPanelCount++;
+                hiddenObjectCount += objects.size();
                 continue;
             }
             renderedPanelCount++;
@@ -75,9 +93,9 @@ public class MountedContextPromptRenderer {
         }
 
         List<String> traceLines = new ArrayList<>();
-        int traceLimit = Math.min(DEFAULT_SELECTION_TRACE_LIMIT, traceItems.size());
+        int traceLimit = Math.min(profile.selectionTraceLimit(), traceItems.size());
         for (int index = 0; index < traceLimit; index++) {
-            traceLines.add("- " + truncate(traceItems.get(index), DEFAULT_PREVIEW_LIMIT));
+            traceLines.add("- " + truncate(traceItems.get(index), profile.objectPreviewLimit()));
         }
         int hiddenSelectionTraceCount = Math.max(0, traceItems.size() - traceLimit);
         if (hiddenSelectionTraceCount > 0) {
@@ -93,6 +111,9 @@ public class MountedContextPromptRenderer {
         for (String line : panelLines) {
             sb.append(line).append("\n");
         }
+        if (hiddenPanelCount > 0) {
+            sb.append("- ... +").append(hiddenPanelCount).append(" more panels\n");
+        }
         if (!traceLines.isEmpty()) {
             sb.append("Mounted Context Selection Trace:\n");
             for (String line : traceLines) {
@@ -102,7 +123,7 @@ public class MountedContextPromptRenderer {
         return new MountedContextPromptRenderResult(
             sb.toString(),
             renderedPanelCount,
-            0,
+            hiddenPanelCount,
             renderedObjectCount,
             hiddenObjectCount,
             traceLimit,
@@ -121,11 +142,11 @@ public class MountedContextPromptRenderer {
             StringBuilder line = new StringBuilder();
             line.append(object.type()).append("/");
             line.append(object.retentionState()).append("/");
-            line.append(truncate(firstNonBlank(object.title(), object.id(), object.path(), "(untitled)"), DEFAULT_LABEL_LIMIT));
+            line.append(truncate(firstNonBlank(object.title(), object.id(), object.path(), "(untitled)"), profile.labelLimit()));
             String detail = firstNonBlank(object.summary(), object.contentPreview());
             String proofEdge = formatProofEdge(object);
             if (!detail.isBlank() && !isHandleOnlyPanel(panelName)) {
-                line.append(" -> ").append(truncate(detail, DEFAULT_PREVIEW_LIMIT));
+                line.append(" -> ").append(truncate(detail, profile.objectPreviewLimit()));
             }
             if (!proofEdge.isBlank() && !isHandleOnlyPanel(panelName)) {
                 line.append(" [").append(proofEdge).append("]");
@@ -205,15 +226,15 @@ public class MountedContextPromptRenderer {
     }
 
     private void appendProofEdges(List<String> target, List<String> values) {
-        if (values == null || values.isEmpty() || target.size() >= DEFAULT_PROOF_EDGE_LIMIT) {
+        if (values == null || values.isEmpty() || target.size() >= profile.proofEdgeLimit()) {
             return;
         }
         for (String value : values) {
             if (value == null || value.isBlank()) {
                 continue;
             }
-            target.add(truncate(value, DEFAULT_LABEL_LIMIT));
-            if (target.size() >= DEFAULT_PROOF_EDGE_LIMIT) {
+            target.add(truncate(value, profile.labelLimit()));
+            if (target.size() >= profile.proofEdgeLimit()) {
                 return;
             }
         }
@@ -284,4 +305,30 @@ public class MountedContextPromptRenderer {
     }
 
     private record RenderedObjectSection(String text, int renderedObjectCount, int hiddenObjectCount) {}
+
+    public record MountedContextPromptRenderProfile(
+        int panelLimit,
+        int selectionTraceLimit,
+        int objectPreviewLimit,
+        int labelLimit,
+        int proofEdgeLimit
+    ) {
+        public MountedContextPromptRenderProfile {
+            if (panelLimit <= 0) panelLimit = DEFAULT_PANEL_LIMIT;
+            if (selectionTraceLimit <= 0) selectionTraceLimit = DEFAULT_SELECTION_TRACE_LIMIT;
+            if (objectPreviewLimit <= 0) objectPreviewLimit = DEFAULT_PREVIEW_LIMIT;
+            if (labelLimit <= 0) labelLimit = DEFAULT_LABEL_LIMIT;
+            if (proofEdgeLimit <= 0) proofEdgeLimit = DEFAULT_PROOF_EDGE_LIMIT;
+        }
+
+        public static MountedContextPromptRenderProfile defaultProfile() {
+            return new MountedContextPromptRenderProfile(
+                DEFAULT_PANEL_LIMIT,
+                DEFAULT_SELECTION_TRACE_LIMIT,
+                DEFAULT_PREVIEW_LIMIT,
+                DEFAULT_LABEL_LIMIT,
+                DEFAULT_PROOF_EDGE_LIMIT
+            );
+        }
+    }
 }

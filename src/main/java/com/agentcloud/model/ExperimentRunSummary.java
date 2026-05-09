@@ -63,7 +63,9 @@ public record ExperimentRunSummary(
         double mountedContextInjectedRate,
         double mountedContextBudgetTruncatedRate,
         double averageMountedContextPanelCount,
-        double averageMountedContextRenderedObjectCount
+        double averageMountedContextRenderedObjectCount,
+        double averageMountedContextActiveCount,
+        double averageMountedContextEvidenceCount
     ) {
     }
 }

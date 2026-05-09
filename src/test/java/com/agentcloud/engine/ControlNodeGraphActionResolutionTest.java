@@ -93,6 +93,60 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void buildExecutionBoundaryKeepsMountedContextAndPromptFields() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("buildExecutionBoundary", Map.class);
+        method.setAccessible(true);
+
+        Object raw = method.invoke(graph, Map.ofEntries(
+            Map.entry("execution_id", "exec-1"),
+            Map.entry("execution_status", "succeeded"),
+            Map.entry("selected_worker", "codex"),
+            Map.entry("tool_chain_step_count", 2),
+            Map.entry("prompt_mode", "mounted_context_primary"),
+            Map.entry("mounted_context_rendered", true),
+            Map.entry("mounted_render_used", true),
+            Map.entry("mounted_context_injected", true),
+            Map.entry("mounted_context_panel_count", 7),
+            Map.entry("mounted_context_non_empty_panel_count", 3),
+            Map.entry("mounted_context_selection_trace_count", 4),
+            Map.entry("mounted_context_rendered_object_count", 5),
+            Map.entry("mounted_context_hidden_object_count", 2),
+            Map.entry("mounted_context_rendered_selection_trace_count", 3),
+            Map.entry("mounted_context_hidden_selection_trace_count", 1),
+            Map.entry("mounted_context_budget_truncated", true),
+            Map.entry("mounted_pinned_count", 1),
+            Map.entry("mounted_active_count", 4),
+            Map.entry("mounted_evidence_count", 2),
+            Map.entry("mounted_archive_count", 1)
+        ));
+
+        assertNotNull(raw);
+        com.agentcloud.runtime.model.RuntimeFactSet.ExecutionBoundary boundary =
+            (com.agentcloud.runtime.model.RuntimeFactSet.ExecutionBoundary) raw;
+        assertEquals("mounted_context_primary", boundary.metadata().get("prompt_mode"));
+        assertEquals(Boolean.TRUE, boundary.metadata().get("mounted_context_rendered"));
+        assertEquals(Boolean.TRUE, boundary.metadata().get("mounted_render_used"));
+        assertEquals(Boolean.TRUE, boundary.metadata().get("mounted_context_injected"));
+        assertEquals(7, boundary.metadata().get("mounted_context_panel_count"));
+        assertEquals(3, boundary.metadata().get("mounted_context_non_empty_panel_count"));
+        assertEquals(4, boundary.metadata().get("mounted_context_selection_trace_count"));
+        assertEquals(5, boundary.metadata().get("mounted_context_rendered_object_count"));
+        assertEquals(2, boundary.metadata().get("mounted_context_hidden_object_count"));
+        assertEquals(3, boundary.metadata().get("mounted_context_rendered_selection_trace_count"));
+        assertEquals(1, boundary.metadata().get("mounted_context_hidden_selection_trace_count"));
+        assertEquals(Boolean.TRUE, boundary.metadata().get("mounted_context_budget_truncated"));
+        assertEquals(1, boundary.metadata().get("mounted_pinned_count"));
+        assertEquals(4, boundary.metadata().get("mounted_active_count"));
+        assertEquals(2, boundary.metadata().get("mounted_evidence_count"));
+        assertEquals(1, boundary.metadata().get("mounted_archive_count"));
+    }
+
+    @Test
     void sameStateTreatsMetadataMutationAsStateChange() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
