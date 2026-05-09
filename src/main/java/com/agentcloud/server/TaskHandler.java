@@ -235,7 +235,7 @@ class TaskHandler implements HttpHandler {
         String selectedProvider = providerIdForWorker(route.selectedWorker(), route.selectedWorkerType());
         AgentProvider provider = provider(selectedProvider);
         AgentProviderDescriptor descriptor = provider != null ? provider.descriptor() : null;
-        AgentProviderStatus status = provider != null ? provider.detect() : null;
+        AgentProviderStatus status = agentProviderRegistry != null ? agentProviderRegistry.status(selectedProvider) : null;
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "route_source", route.routeSource());

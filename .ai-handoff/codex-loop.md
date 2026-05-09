@@ -406,3 +406,173 @@ Result:
 ### Next likely slice
 
 - turn reopen pressure from passive diagnostics into an explicit runtime policy surface, for example by distinguishing `reopen recommended` vs `reopen required` and by classifying candidate handles by evidence type / expected cost
+
+## 2026-05-09 - Codex Windows wrapper launch and provider-readiness drift
+
+### Incident
+
+- real task: `task_2cd0bb782c5a4a9b`
+- console URL: `/console/#session=session_ce11dfa0260f46f8&task=task_2cd0bb782c5a4a9b`
+- observed symptom on the old 8080 instance:
+  - planner round selected `codex`
+  - task summary and worker artifact failed with `Cannot run program "codex" ... CreateProcess error=2`
+  - task metadata drifted after orchestrated fallback/handoff: `assigned_worker=kimi`, but execution-side metadata still exposed stale `codex` executor identity
+
+### Root causes
+
+- Windows CLI wrapper mismatch:
+  - host `Get-Command codex -All` resolved wrapper scripts such as `codex.cmd` / `codex.ps1`
+  - Java `ProcessBuilder("codex")` still failed because raw `codex` was not directly launchable in this environment
+  - provider detect/readiness and provider execution were not using a shared launch contract
+- sparse current-round metadata drift:
+  - when a later orchestration round returned only sparse worker metadata, downstream judgment/live-flow projection could fall back to stale planner-round `codex` route fields
+  - this produced contradictory surfaces after `codex -> handoff -> kimi`
+- broader horizontal drift:
+  - built-in provider-backed workers could still look `ready` from worker readiness/tool checks even when provider detect already knew the backing CLI was unavailable
+  - this made route preview and actual execution diverge
+
+### What changed
+
+- added Windows wrapper-aware `LocalCliProviderConfig.LaunchSpec`
+  - direct executable remains `direct`
+  - `.cmd` / `.bat` launch via `cmd.exe /c`
+  - `.ps1` launch via PowerShell `-File`
+- made provider detect and provider execution share the same `LaunchSpec`
+  - `LocalCliAgentProvider`
+  - `CodexAppServerWorkerExecutor`
+  - `ProviderCliWorkerExecutor`
+- execution metadata now records:
+  - `cli_binary`
+  - `cli_resolved_binary`
+  - `cli_launch_mode`
+  - `cli_command_preview`
+- `ControlNodeGraph` now injects current-round route metadata into sparse `WorkerExecutionResult.metadata()` before persistence/projection, so later rounds do not fall back to stale planner metadata
+- `AgentProviderRegistry` now exposes short-TTL cached `status(providerId)` and all provider-facing surfaces use it instead of recomputing detect independently
+- `WorkerRegistry.checkReadiness()` now includes provider-backed readiness:
+  - adds `checks["provider:<id>"]`
+  - marks built-in provider workers not ready when provider detect says unavailable
+  - surfaces `provider not registered: <id>` when a provider-backed worker has no registered provider
+- `Main` now wires `AgentProviderRegistry` before `WorkerRegistry` so built-in workers are readiness-aware at boot
+
+### Files changed
+
+- `src/main/java/com/agentcloud/agent/AgentProviderRegistry.java`
+- `src/main/java/com/agentcloud/agent/SimpleAgentDiscoveryService.java`
+- `src/main/java/com/agentcloud/agent/providers/LocalCliAgentProvider.java`
+- `src/main/java/com/agentcloud/agent/providers/LocalCliProviderConfig.java`
+- `src/main/java/com/agentcloud/cli/Main.java`
+- `src/main/java/com/agentcloud/engine/AgentRunService.java`
+- `src/main/java/com/agentcloud/engine/ControlNodeGraph.java`
+- `src/main/java/com/agentcloud/engine/router/WorkerRegistry.java`
+- `src/main/java/com/agentcloud/server/AgentHandler.java`
+- `src/main/java/com/agentcloud/server/TaskHandler.java`
+- `src/main/java/com/agentcloud/store/DatabaseManager.java`
+- `src/main/java/com/agentcloud/worker/CodexAppServerWorkerExecutor.java`
+- `src/main/java/com/agentcloud/worker/ProviderCliWorkerExecutor.java`
+- `src/test/java/com/agentcloud/agent/AgentProviderSupportTest.java`
+- `src/test/java/com/agentcloud/engine/ControlNodeGraphOrchestrationFlowTest.java`
+- `src/test/java/com/agentcloud/engine/router/WorkerRouterRouteTraceTest.java`
+- `src/test/java/com/agentcloud/server/ApiErrorContractHttpTest.java`
+- `src/test/java/com/agentcloud/worker/CodexAppServerWorkerExecutorTest.java`
+- `src/test/java/com/agentcloud/worker/ProviderCliWorkerExecutorTest.java`
+
+### Validation
+
+Focused validation after the fix:
+
+```powershell
+. .\scripts\Use-Java21.ps1
+$env:MAVEN_OPTS='-Xms128m -Xmx768m -XX:CICompilerCount=2 -XX:ActiveProcessorCount=4'
+mvn '-DskipTests' test-compile
+mvn '-Dtest=com.agentcloud.engine.router.WorkerRouterRouteTraceTest,com.agentcloud.agent.AgentProviderSupportTest,com.agentcloud.server.ApiErrorContractHttpTest' '-Dsurefire.failIfNoSpecifiedTests=false' test
+```
+
+Result:
+
+- `35 tests, 0 failures`
+
+### Similar-risk class to watch
+
+- any path where `detect`, `readiness`, `route`, and `execute` derive availability from different sources can reproduce the same class of bug
+- provider-backed workers were the first concrete case, but the same drift pattern is relevant to:
+  - command-tool gated workers
+  - future remote provider auth status vs cached route eligibility
+  - any orchestration stage that persists sparse metadata and later projects from historical fallbacks
+
+### Operator notes
+
+- on Windows, do not assume `Get-Command codex` proving discoverability means `ProcessBuilder("codex")` is safe
+- first inspect:
+  - `/api/v1/agents/codex`
+  - `/api/v1/workers/codex/readiness`
+  - task `/live_flow` or `/agent_runs` metadata for `cli_launch_mode` and `cli_resolved_binary`
+
+## 2026-05-09 Real-task follow-up: provider-backed suggest-only workers silently degrading to default LLM
+
+### Incident
+
+- real stuck task: `task_2cd0bb782c5a4a9b`
+- operator symptom: console looked like "执行时找不到 codex"，但任务实际 pinned/selected worker 已经不是 `codex`
+- actual route:
+  - `/api/v1/tasks/{id}/provider_selection` showed `selected_worker=kimi`
+  - prior stale run `arun_aca56126dbb04aa1` had `provider_id=kimi` but `worker_execution_status=empty`
+
+### Root cause
+
+- built-in `kimi` worker was `suggestOnly=true` but did not declare `execution_backend`
+- `WorkerExecutorRouter` therefore hit `suggestOnly -> DefaultWorkerExecutor` fallback before provider-native routing
+- this host had no generic OpenAI LLM configured, so the fallback path completed almost immediately as `empty`
+- same structural risk existed for other provider-shaped small workers:
+  - `hermes`
+  - `pi`
+  - `kiro`
+- those workers were also missing explicit provider backend metadata, and readiness could still look acceptable even though current harness has no executor for them
+
+### Changes in this slice
+
+- `WorkerRegistry`
+  - built-in `kimi/hermes/pi/kiro` now declare `execution_backend=provider_native_cli`
+  - provider-backed readiness now adds `checks["executor_backend:<backend>"]`
+  - workers whose provider backend is not implemented by the current harness are marked `not ready`
+- `WorkerExecutorRouter`
+  - provider-native / provider-app-server routing now wins before `suggestOnly` default fallback
+  - explicit provider backend without executor support now fails fast instead of silently degrading
+- `ProviderCliWorkerExecutor`
+  - added real `kimi` CLI support using `--print --output-format stream-json`
+  - parser extracts assistant text and session resume id
+- new shared support matrix:
+  - `src/main/java/com/agentcloud/worker/ProviderExecutionSupport.java`
+  - keeps readiness / executor support lists aligned
+
+### Real validation
+
+- host validation:
+  - `GET /api/v1/agents/kimi` => launch target `C:\\Users\\47037\\.local\\bin\\kimi.exe`, `launch_mode=direct`, `launch_available=true`
+  - manual CLI probe returned `OK`
+- real rerun:
+  - restart command used correct DB path:
+    - `java --enable-preview -Dserver.port=8080 -Ddb.path=D:\\gitAll\\agent-cloud-harness\\.tmp\\agent_cloud_new.db -jar target\\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar`
+  - `POST /api/v1/tasks/task_2cd0bb782c5a4a9b/continue`
+  - server log:
+    - `Routing worker to provider-native cli executor. worker=kimi type=kimi`
+    - `Provider-native CLI round completed. provider=kimi worker=kimi status=completed exitCode=0 durationMs=72616`
+  - new real run:
+    - `arun_ca954de6c2aa43a9`
+    - `provider_id=kimi`
+    - `execution_backend=provider_native_cli`
+    - `provider_output_parser=kimi_stream_json`
+    - `cli_resolved_binary=C:\\Users\\47037\\.local\\bin\\kimi.exe`
+    - `provider_session_id=session_ce11dfa0260f46f8`
+- task content advanced successfully; remaining non-terminal status was due to separate judgment-side LLM-not-configured condition, not provider execution failure
+
+### Similar-risk conclusion
+
+- any worker that:
+  - looks provider-backed to operators,
+  - lacks explicit `execution_backend`,
+  - or declares a backend the harness does not actually implement
+  can silently drift between `route preview`, `readiness`, and `actual execution`
+- current concrete watch list after this fix:
+  - adding any new built-in CLI provider without also updating `ProviderExecutionSupport`
+  - future remote provider backends where detect/readiness says ready but executor path is not wired
+  - long-running synchronous `/continue` calls where the client times out first and operator misreads it as a stuck task

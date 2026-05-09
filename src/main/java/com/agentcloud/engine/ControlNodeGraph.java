@@ -144,6 +144,17 @@ public class ControlNodeGraph {
             AgentRunRecord agentRun = null;
             try {
                 executionResult = workerExecutor.executeOneRound(ctx, task.assignedWorker());
+                executionResult = enrichCurrentRoundWorkerMetadata(
+                    task,
+                    route,
+                    selectedWorker,
+                    selectedWorkerType,
+                    selectedModelTier,
+                    executionRole,
+                    whySelected,
+                    fallbackReason,
+                    executionResult
+                );
                 Task updatedTask = mergeProviderContinuationMetadata(task, executionResult);
                 if (!sameState(task, updatedTask)) {
                     taskDao.updateState(updatedTask);
@@ -1526,6 +1537,58 @@ public class ControlNodeGraph {
             metadata.put("latest_worker_metadata", latestWorkerMetadata);
         }
         return metadata;
+    }
+
+    private WorkerExecutionResult enrichCurrentRoundWorkerMetadata(Task task,
+                                                                   WorkerRouter.RouteResult route,
+                                                                   Worker selectedWorker,
+                                                                   String selectedWorkerType,
+                                                                   String selectedModelTier,
+                                                                   String executionRole,
+                                                                   String whySelected,
+                                                                   String fallbackReason,
+                                                                   WorkerExecutionResult executionResult) {
+        if (executionResult == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (executionResult.metadata() != null && !executionResult.metadata().isEmpty()) {
+            metadata.putAll(executionResult.metadata());
+        }
+        putIfNonBlank(metadata, "selected_worker", task != null ? task.assignedWorker() : null);
+        putIfNonBlank(metadata, "selected_worker_type", selectedWorkerType);
+        putIfNonBlank(metadata, "selected_model_tier", selectedModelTier);
+        putIfNonBlank(metadata, "execution_role", executionRole);
+        putIfNonBlank(metadata, "why_selected", whySelected);
+        putIfNonBlank(metadata, "preferred_worker_hint", route != null ? route.preferredWorkerHint() : null);
+        if (route != null) {
+            metadata.put("learning_hint_applied", route.learningHintApplied());
+        }
+        putIfNonBlank(metadata, "fallback_reason", fallbackReason);
+        putIfNonBlank(metadata, "route_source", route != null ? route.routeSource() : "preassigned");
+        putIfNonBlank(metadata, "model_mode", metadataString(task != null ? task.metadata() : null, "model_mode"));
+        putIfNonBlank(metadata, "orchestration_stage", metadataString(task != null ? task.metadata() : null, "orchestration_stage"));
+        putIfNonBlank(metadata, "planner_worker", metadataString(task != null ? task.metadata() : null, "planner_worker"));
+        putIfNonBlank(metadata, "executor_worker", metadataString(task != null ? task.metadata() : null, "executor_worker"));
+        putIfNonBlank(metadata, "target_worker", metadataString(task != null ? task.metadata() : null, "target_worker"));
+        if (route != null && route.candidateWorkers() != null && !route.candidateWorkers().isEmpty()) {
+            metadata.putIfAbsent("candidate_workers", route.candidateWorkers());
+        }
+        return new WorkerExecutionResult(
+            executionResult.summary(),
+            executionResult.outputText(),
+            executionResult.producedArtifact(),
+            executionResult.artifactTitle(),
+            executionResult.artifactContent(),
+            executionResult.suggestedNextStep(),
+            executionResult.confidence(),
+            executionResult.executionStatus(),
+            executionResult.evidenceRefs(),
+            executionResult.unfinishedItems(),
+            executionResult.tokenUsage(),
+            executionResult.durationMs(),
+            Map.copyOf(metadata)
+        );
     }
 
     private Map<String, Object> mergeLatestWorkerMetadata(Map<String, Object> primarySource,

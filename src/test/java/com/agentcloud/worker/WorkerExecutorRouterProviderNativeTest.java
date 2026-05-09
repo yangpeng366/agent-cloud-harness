@@ -82,6 +82,27 @@ class WorkerExecutorRouterProviderNativeTest {
     }
 
     @Test
+    void routesSuggestOnlyKimiToProviderNativeExecutorBeforeDefaultFallback() {
+        WorkerRegistry registry = new WorkerRegistry();
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("kimi"), "kimi");
+
+        assertEquals("provider-native", result.summary());
+        assertEquals(0, defaultExecutor.calls);
+        assertEquals(0, toolAwareExecutor.calls);
+    }
+
+    @Test
     void routesCodexToProviderAppServerExecutor() {
         WorkerRegistry registry = new WorkerRegistry();
         RecordingExecutor defaultExecutor = new RecordingExecutor("default");
@@ -103,20 +124,10 @@ class WorkerExecutorRouterProviderNativeTest {
         assertEquals(0, toolAwareExecutor.calls);
     }
 
+
     @Test
-    void providerCliIsPreferredOverToolAwareWhenWorkerHasToolsButNoExplicitHarnessPreference() {
+    void routesOpenClawNativeToToolAwareExecutor() {
         WorkerRegistry registry = new WorkerRegistry();
-        registry.register(new com.agentcloud.model.Worker(
-            "cursor-open",
-            "cursor",
-            List.of("coding"),
-            List.of("read_file", "patch_file"),
-            List.of("D:\\gitAll\\agent-cloud-harness"),
-            Map.of("installed", true),
-            Map.of(),
-            false,
-            true
-        ));
         RecordingExecutor defaultExecutor = new RecordingExecutor("default");
         RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
         ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
@@ -128,11 +139,13 @@ class WorkerExecutorRouterProviderNativeTest {
             new StubCodexAppServerWorkerExecutor("codex-app-server")
         );
 
-        WorkerExecutionResult result = router.executeOneRound(runtimeContext("cursor-open"), "cursor-open");
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("openclaw-native"), "openclaw-native");
 
-        assertEquals("provider-native", result.summary());
-        assertEquals(0, toolAwareExecutor.calls);
+        assertEquals("tool-aware", result.summary());
+        assertEquals(0, defaultExecutor.calls);
+        assertEquals(1, toolAwareExecutor.calls);
     }
+
 
     @Test
     void toolAwareBackendStillRoutesToHarnessToolExecutorWhenExplicitlyRequested() {
@@ -163,6 +176,41 @@ class WorkerExecutorRouterProviderNativeTest {
 
         assertEquals("tool-aware", result.summary());
         assertEquals(1, toolAwareExecutor.calls);
+    }
+
+    @Test
+    void explicitProviderBackendWithoutExecutorSupportFailsFastInsteadOfFallingBackToDefault() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new com.agentcloud.model.Worker(
+            "hermes-native",
+            "hermes",
+            List.of("coding"),
+            List.of(),
+            List.of(),
+            Map.of("installed", true),
+            Map.of("execution_backend", "provider_native_cli"),
+            true,
+            true
+        ));
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        try {
+            router.executeOneRound(runtimeContext("hermes-native"), "hermes-native");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage().contains("provider backend"));
+            assertEquals(0, defaultExecutor.calls);
+            return;
+        }
+        throw new AssertionError("expected IllegalStateException");
     }
 
     private TaskRuntimeContext runtimeContext(String workerId) {

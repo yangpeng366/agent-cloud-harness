@@ -172,7 +172,7 @@ public class AgentRunService {
         );
         AgentProvider provider = providerRegistry != null ? providerRegistry.get(selectedProvider) : null;
         AgentProviderDescriptor descriptor = provider != null ? provider.descriptor() : null;
-        AgentProviderStatus status = provider != null ? provider.detect() : null;
+        AgentProviderStatus status = providerRegistry != null ? providerRegistry.status(selectedProvider) : null;
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "route_source", route.routeSource());
@@ -309,7 +309,7 @@ public class AgentRunService {
         String providerId = firstNonBlank(AgentProviderResolver.providerIdForWorker(workerId, workerType), "unknown");
         AgentProvider provider = providerRegistry != null ? providerRegistry.get(providerId) : null;
         AgentProviderDescriptor descriptor = provider != null ? provider.descriptor() : null;
-        AgentProviderStatus providerStatus = provider != null ? provider.detect() : null;
+        AgentProviderStatus providerStatus = providerRegistry != null ? providerRegistry.status(providerId) : null;
         String rawExecutionStatus = result != null ? result.executionStatus() : null;
         String status = normalizeRunStatus(firstNonBlank(forcedStatus, rawExecutionStatus));
         long durationMs = result != null && result.durationMs() != null && result.durationMs() > 0

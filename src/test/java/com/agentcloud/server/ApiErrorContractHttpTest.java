@@ -1,5 +1,10 @@
 package com.agentcloud.server;
 
+import com.agentcloud.agent.AgentProvider;
+import com.agentcloud.agent.AgentProviderDescriptor;
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.AgentProviderStatus;
+import com.agentcloud.agent.providers.CodexProvider;
 import com.agentcloud.engine.ControlNodeGraph;
 import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
@@ -175,6 +180,38 @@ class ApiErrorContractHttpTest {
             assertTrue(readiness.body().path("data").path("ready").asBoolean());
             assertTrue(readiness.body().path("data").path("checks").path("tool:" + toolCapability).asBoolean());
             assertEquals("ready", readiness.body().path("data").path("reason").asText());
+        }
+    }
+
+    @Test
+    void workerReadinessIncludesProviderFailureForBuiltInCodexWorker() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-provider-readiness.db"),
+            new AgentProviderRegistry().register(new CodexProvider("definitely-missing-codex-binary-for-test"))
+        )) {
+            ApiCall readiness = fixture.get("/api/v1/workers/codex/readiness");
+
+            assertEquals(200, readiness.statusCode());
+            assertFalse(readiness.body().path("data").path("ready").asBoolean(true));
+            assertFalse(readiness.body().path("data").path("checks").path("provider:codex").asBoolean(true));
+            assertTrue(readiness.body().path("data").path("reason").asText().contains("binary not found"));
+        }
+    }
+
+    @Test
+    void workerReadinessIncludesExecutorBackendFailureForUnsupportedBuiltinProviderWorker() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-provider-backend-gap.db"),
+            new AgentProviderRegistry().register(new StaticProvider("hermes", true, true, "ready"))
+        )) {
+            ApiCall readiness = fixture.get("/api/v1/workers/hermes/readiness");
+
+            assertEquals(200, readiness.statusCode());
+            assertFalse(readiness.body().path("data").path("ready").asBoolean(true));
+            assertTrue(readiness.body().path("data").path("checks").path("provider:hermes").asBoolean(false));
+            assertFalse(readiness.body().path("data").path("checks")
+                .path("executor_backend:provider_native_cli").asBoolean(true));
+            assertTrue(readiness.body().path("data").path("reason").asText().contains("executor backend not supported"));
         }
     }
 
@@ -378,5 +415,69 @@ class ApiErrorContractHttpTest {
 
     private List<String> supportedCommandToolCapabilities() {
         return HostToolAvailability.supportedCommandToolCapabilities();
+    }
+
+    private final class ProviderAwareWorkerHttpFixture implements AutoCloseable {
+        private final DatabaseManager db;
+        private final HttpServer server;
+        private final ExecutorService executor;
+        private final HttpClient client;
+        private final String baseUrl;
+
+        private ProviderAwareWorkerHttpFixture(Path dbPath, AgentProviderRegistry providerRegistry) throws IOException {
+            this.db = new DatabaseManager(dbPath);
+            WorkerRegistry workerRegistry = new WorkerRegistry(providerRegistry);
+            this.server = HttpServer.create(new InetSocketAddress(0), 0);
+            this.executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            this.server.setExecutor(executor);
+            this.server.createContext("/api/v1/workers", new WorkerHandler(workerRegistry, NioHttpServer.SHARED_MAPPER));
+            this.server.start();
+            this.client = HttpClient.newHttpClient();
+            this.baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        private ApiCall get(String path) throws IOException, InterruptedException {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path)).GET().build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return new ApiCall(response.statusCode(), NioHttpServer.SHARED_MAPPER.readTree(response.body()));
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+            executor.shutdownNow();
+            db.close();
+        }
+    }
+
+    private record StaticProvider(String providerId,
+                                  boolean installed,
+                                  boolean ready,
+                                  String reason) implements AgentProvider {
+        @Override
+        public AgentProviderDescriptor descriptor() {
+            return new AgentProviderDescriptor(
+                providerId,
+                providerId,
+                "local_cli",
+                "process",
+                java.util.List.of("chat"),
+                java.util.Map.of()
+            );
+        }
+
+        @Override
+        public AgentProviderStatus detect() {
+            return new AgentProviderStatus(
+                providerId,
+                installed,
+                "0.0.0-test",
+                "ready",
+                ready,
+                reason,
+                null,
+                java.util.Map.of("source", "test")
+            );
+        }
     }
 }

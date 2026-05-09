@@ -1,7 +1,11 @@
 package com.agentcloud.engine.router;
 
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.AgentProviderResolver;
+import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.model.Worker;
 import com.agentcloud.tool.HostToolAvailability;
+import com.agentcloud.worker.ProviderExecutionSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,8 +20,14 @@ import java.util.stream.Collectors;
 public class WorkerRegistry {
     private static final Logger log = LoggerFactory.getLogger(WorkerRegistry.class);
     private final Map<String, Worker> workers = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final AgentProviderRegistry agentProviderRegistry;
 
     public WorkerRegistry() {
+        this(null);
+    }
+
+    public WorkerRegistry(AgentProviderRegistry agentProviderRegistry) {
+        this.agentProviderRegistry = agentProviderRegistry;
         String defaultToolScope = Path.of(System.getProperty("user.dir", "."))
             .toAbsolutePath()
             .normalize()
@@ -33,7 +43,9 @@ public class WorkerRegistry {
                 "model_tier", "tool",
                 "primary_role", "tool_executor",
                 "selection_priority", 120,
-                "execution_backend", "provider_native_cli"
+                "execution_backend", "tool_aware",
+                "prefer_harness_tools", true,
+                "tool_provider", "openclaw_embedded"
             ), false, true));
         register(new Worker("codex", "codex",
             List.of("coding", "reading", "ops"),
@@ -125,27 +137,47 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 80), true, true));
+            Map.of(
+                "model_tier", "small",
+                "primary_role", "executor",
+                "selection_priority", 80,
+                "execution_backend", "provider_native_cli"
+            ), true, true));
         register(new Worker("hermes", "hermes",
             List.of("coding", "research", "writing"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 72),
+            Map.of(
+                "model_tier", "small",
+                "primary_role", "executor",
+                "selection_priority", 72,
+                "execution_backend", "provider_native_cli"
+            ),
             true, true));
         register(new Worker("pi", "pi",
             List.of("research", "writing", "message"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "small", "primary_role", "assistant", "selection_priority", 70),
+            Map.of(
+                "model_tier", "small",
+                "primary_role", "assistant",
+                "selection_priority", 70,
+                "execution_backend", "provider_native_cli"
+            ),
             true, true));
         register(new Worker("kiro", "kiro",
             List.of("coding", "reading"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of("model_tier", "small", "primary_role", "executor", "selection_priority", 69),
+            Map.of(
+                "model_tier", "small",
+                "primary_role", "executor",
+                "selection_priority", 69,
+                "execution_backend", "provider_native_cli"
+            ),
             true, true));
     }
 
@@ -197,8 +229,26 @@ public class WorkerRegistry {
             w.dependencies().forEach((k, v) -> checks.put(k, v));
         }
         checks.putAll(HostToolAvailability.readinessChecks(w.toolCapabilities()));
+        String providerId = providerId(w);
+        String executionBackend = metadataString(w.metadata(), "execution_backend");
+        if (providerBacked(w)) {
+            checks.put(
+                "executor_backend:" + executionBackend,
+                ProviderExecutionSupport.supportsBackend(providerId, executionBackend)
+            );
+        }
+        AgentProviderStatus providerStatus = null;
+        if (providerId != null && agentProviderRegistry != null) {
+            providerStatus = agentProviderRegistry.status(providerId);
+            checks.put("provider:" + providerId, providerStatus != null && providerStatus.ready());
+        }
         boolean allOk = checks.values().stream().allMatch(Boolean::booleanValue);
-        return new ReadinessCheck(workerId, allOk && w.ready(), Map.copyOf(checks), readinessReason(w, checks));
+        return new ReadinessCheck(
+            workerId,
+            allOk && w.ready(),
+            Map.copyOf(checks),
+            readinessReason(w, checks, providerId, providerStatus)
+        );
     }
 
     private static List<String> defaultCodexToolCapabilities() {
@@ -212,6 +262,10 @@ public class WorkerRegistry {
     private Worker enrich(Worker worker) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(worker.metadata());
         metadata.put("host_platform", HostToolAvailability.isWindowsHost() ? "windows" : "posix");
+        String providerId = providerId(worker);
+        if (providerId != null) {
+            metadata.put("provider_id", providerId);
+        }
 
         Map<String, Boolean> toolAvailability = HostToolAvailability.declaredToolAvailability(worker.toolCapabilities());
         if (!toolAvailability.isEmpty()) {
@@ -231,7 +285,21 @@ public class WorkerRegistry {
         );
     }
 
-    private String readinessReason(Worker worker, Map<String, Boolean> checks) {
+    private String readinessReason(Worker worker,
+                                   Map<String, Boolean> checks,
+                                   String providerId,
+                                   AgentProviderStatus providerStatus) {
+        String executionBackend = metadataString(worker != null ? worker.metadata() : null, "execution_backend");
+        if (providerStatus != null && !providerStatus.ready()) {
+            String providerReason = blankToNull(providerStatus.readinessReason());
+            return providerReason != null ? providerReason : "provider not ready: " + providerId;
+        }
+        if (providerId != null && agentProviderRegistry != null && providerStatus == null) {
+            return "provider not registered: " + providerId;
+        }
+        if (providerBacked(worker) && !ProviderExecutionSupport.supportsBackend(providerId, executionBackend)) {
+            return ProviderExecutionSupport.unsupportedReason(providerId, executionBackend);
+        }
         for (Map.Entry<String, Boolean> entry : checks.entrySet()) {
             if (Boolean.TRUE.equals(entry.getValue())) {
                 continue;
@@ -240,9 +308,39 @@ public class WorkerRegistry {
                 String toolCapability = entry.getKey().substring("tool:".length());
                 return HostToolAvailability.unavailableReason(toolCapability);
             }
+            if (entry.getKey().startsWith("executor_backend:")) {
+                return ProviderExecutionSupport.unsupportedReason(providerId, executionBackend);
+            }
             return "dependency not satisfied: " + entry.getKey();
         }
         return worker.ready() ? "ready" : "worker marked not ready";
+    }
+
+    private String providerId(Worker worker) {
+        if (!providerBacked(worker)) {
+            return null;
+        }
+        return AgentProviderResolver.providerIdForWorker(
+            worker != null ? worker.workerId() : null,
+            worker != null ? worker.workerType() : null
+        );
+    }
+
+    private boolean providerBacked(Worker worker) {
+        String backend = metadataString(worker != null ? worker.metadata() : null, "execution_backend");
+        return backend != null && backend.startsWith("provider_");
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     public record ReadinessCheck(String workerId, boolean ready, Map<String, Boolean> checks, String reason) {}

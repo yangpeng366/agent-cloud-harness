@@ -582,6 +582,82 @@ class ControlNodeGraphOrchestrationFlowTest {
         }
     }
 
+    @Test
+    void currentRoundSparseMetadataDoesNotFallbackToPreviousWorkerIdentity() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("stale-worker-metadata-flow.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_stale_worker_metadata", "stale worker metadata", "active"));
+
+            WorkerRouter router = new WorkerRouter(new WorkerRegistry());
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                new SparseSecondRoundWorkerExecutor(), runtimeContextBuilder, new FakeJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_stale_worker_metadata",
+                "session_stale_worker_metadata",
+                null,
+                "avoid stale worker metadata fallback",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "ensure current round worker identity survives sparse metadata",
+                null,
+                null,
+                "intake",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "reproduce codex failure then kimi fallback without stale planner metadata",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "plan_pending"
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            assertEquals("done", finalTask.status());
+            assertTrue(decisions.stream().anyMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && "kimi".equals(metadataString(d.metadata(), "selected_worker"))
+                    && "small".equals(metadataString(d.metadata(), "selected_model_tier"))
+                    && "executor".equals(metadataString(d.metadata(), "execution_role"))
+                    && metadataString(d.metadata(), "why_selected") != null
+                    && metadataString(d.metadata(), "why_selected").contains("task already assigned to worker=kimi")
+            ));
+            assertTrue(decisions.stream().noneMatch(d ->
+                "completion_judgment".equals(d.decisionType())
+                    && "kimi".equals(metadataString(d.metadata(), "selected_worker"))
+                    && "strong".equals(metadataString(d.metadata(), "selected_model_tier"))
+            ));
+        }
+    }
+
     private static String metadataString(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
             return null;
@@ -687,6 +763,55 @@ class ControlNodeGraphOrchestrationFlowTest {
 
         private int callCount() {
             return callCount;
+        }
+    }
+
+    private static final class SparseSecondRoundWorkerExecutor implements WorkerExecutor {
+        private int round;
+
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            round++;
+            if (round == 1) {
+                return new WorkerExecutionResult(
+                    "Planner brief ready",
+                    "Break the task into a compact execution brief for the delegated worker.",
+                    true,
+                    "Planner Brief",
+                    "1. Update the runtime path. 2. Run the test entrypoint. 3. Report final state.",
+                    "Implement the delegated runtime change and run verification.",
+                    "high",
+                    "completed",
+                    List.of("tool:orchestrator_plan_1"),
+                    List.of(),
+                    0,
+                    12L,
+                    Map.ofEntries(
+                        Map.entry("parser", "json"),
+                        Map.entry("selected_worker", workerId),
+                        Map.entry("selected_model_tier", "strong"),
+                        Map.entry("execution_role", "planner"),
+                        Map.entry("tool_invocation_ids", List.of("orchestrator_plan_1"))
+                    )
+                );
+            }
+            return new WorkerExecutionResult(
+                "Executor finished the delegated work",
+                "",
+                false,
+                "",
+                "",
+                "Mark the task complete.",
+                "high",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                8L,
+                Map.of(
+                    "parser", "json"
+                )
+            );
         }
     }
 

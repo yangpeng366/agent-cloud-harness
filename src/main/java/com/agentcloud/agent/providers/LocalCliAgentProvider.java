@@ -73,9 +73,10 @@ public class LocalCliAgentProvider implements AgentProvider {
     @Override
     public AgentProviderStatus detect() {
         LocalCliProviderConfig.ResolvedConfig resolved = cliConfig.resolve();
+        LocalCliProviderConfig.LaunchSpec launchSpec = resolved.launchSpec();
         LocalCliProviderConfig.ConfigValue binary = resolved.binary();
-        boolean installed = HostToolAvailability.isToolAvailable(binary.value());
-        String version = installed ? probeVersion(binary.value()) : null;
+        boolean installed = launchSpec.available();
+        String version = installed ? probeVersion(launchSpec) : null;
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(resolved.metadata());
         if (version != null) {
@@ -108,13 +109,13 @@ public class LocalCliAgentProvider implements AgentProvider {
         return cliConfig;
     }
 
-    private String probeVersion(String binary) {
+    private String probeVersion(LocalCliProviderConfig.LaunchSpec launchSpec) {
         for (List<String> args : List.of(
-            List.of(binary, "--version"),
-            List.of(binary, "version"),
-            List.of(binary, "-v")
+            List.of("--version"),
+            List.of("version"),
+            List.of("-v")
         )) {
-            String version = runVersionProbe(args);
+            String version = runVersionProbe(launchSpec.command(args));
             if (version != null) {
                 return version;
             }

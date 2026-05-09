@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 面向本地 agent CLI 的单轮执行器。
- * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw/claude/gemini/deepseek。
+ * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw/claude/gemini/deepseek/kimi。
  */
 public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ProviderCliWorkerExecutor.class);
@@ -174,16 +174,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
     }
 
     private boolean supportsProvider(String providerId) {
-        if (providerId == null || providerId.isBlank()) {
-            return false;
-        }
-        return "cursor".equalsIgnoreCase(providerId)
-            || "openclaw".equalsIgnoreCase(providerId)
-            || "claude".equalsIgnoreCase(providerId)
-            || "gemini".equalsIgnoreCase(providerId)
-            || "deepseek".equalsIgnoreCase(providerId)
-            || "copilot".equalsIgnoreCase(providerId)
-            || "opencode".equalsIgnoreCase(providerId);
+        return ProviderExecutionSupport.supportsProviderNativeCli(providerId);
     }
 
     private ProviderCliPlan buildPlan(String providerId,
@@ -197,6 +188,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             case "claude" -> buildClaudePlan(config, prompt, context);
             case "gemini" -> buildGeminiPlan(config, prompt, context);
             case "deepseek" -> buildDeepSeekPlan(config, prompt, context);
+            case "kimi" -> buildKimiPlan(config, prompt, context, cwd);
             case "copilot" -> buildCopilotPlan(config, prompt, context);
             case "opencode" -> buildOpenCodePlan(config, prompt, context);
             default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
@@ -207,174 +199,234 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                             String prompt,
                                             TaskRuntimeContext context,
                                             String cwd) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("chat");
-        command.add("-p");
-        command.add(prompt);
-        command.add("--output-format");
-        command.add("stream-json");
-        command.add("--yolo");
+        ArrayList<String> args = new ArrayList<>();
+        args.add("chat");
+        args.add("-p");
+        args.add(prompt);
+        args.add("--output-format");
+        args.add("stream-json");
+        args.add("--yolo");
         if (cwd != null && !cwd.isBlank()) {
-            command.add("--workspace");
-            command.add(cwd);
+            args.add("--workspace");
+            args.add(cwd);
         }
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("--model");
-            command.add(model);
+            args.add("--model");
+            args.add(model);
         }
         String resumeId = resumeId(context);
         if (resumeId != null && !resumeId.isBlank()) {
-            command.add("--resume");
-            command.add(resumeId);
+            args.add("--resume");
+            args.add(resumeId);
         }
-        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
     }
 
     private ProviderCliPlan buildOpenClawPlan(LocalCliProviderConfig.ResolvedConfig config,
                                               String prompt,
                                               TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("agent");
-        command.add("--local");
-        command.add("--json");
-        command.add("--session-id");
-        command.add(resumeId(context));
+        ArrayList<String> args = new ArrayList<>();
+        args.add("agent");
+        args.add("--local");
+        args.add("--json");
+        args.add("--session-id");
+        args.add(resumeId(context));
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("--agent");
-            command.add(model);
+            args.add("--agent");
+            args.add(model);
         }
-        command.add("--message");
-        command.add(prompt);
-        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+        args.add("--message");
+        args.add(prompt);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
     }
 
     private ProviderCliPlan buildClaudePlan(LocalCliProviderConfig.ResolvedConfig config,
                                             String prompt,
                                             TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("-p");
-        command.add("--output-format");
-        command.add("stream-json");
-        command.add("--input-format");
-        command.add("stream-json");
-        command.add("--verbose");
-        command.add("--strict-mcp-config");
-        command.add("--permission-mode");
-        command.add("bypassPermissions");
+        ArrayList<String> args = new ArrayList<>();
+        args.add("-p");
+        args.add("--output-format");
+        args.add("stream-json");
+        args.add("--input-format");
+        args.add("stream-json");
+        args.add("--verbose");
+        args.add("--strict-mcp-config");
+        args.add("--permission-mode");
+        args.add("bypassPermissions");
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("--model");
-            command.add(model);
+            args.add("--model");
+            args.add(model);
         }
         String resumeId = resumeId(context);
         if (resumeId != null && !resumeId.isBlank()) {
-            command.add("--resume");
-            command.add(resumeId);
+            args.add("--resume");
+            args.add(resumeId);
         }
-        return new ProviderCliPlan(command, truncate(prompt, 240), model, buildClaudeInput(prompt));
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, buildClaudeInput(prompt));
     }
 
     private ProviderCliPlan buildGeminiPlan(LocalCliProviderConfig.ResolvedConfig config,
                                             String prompt,
                                             TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("-p");
-        command.add(prompt);
-        command.add("--yolo");
-        command.add("-o");
-        command.add("stream-json");
+        ArrayList<String> args = new ArrayList<>();
+        args.add("-p");
+        args.add(prompt);
+        args.add("--yolo");
+        args.add("-o");
+        args.add("stream-json");
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("-m");
-            command.add(model);
+            args.add("-m");
+            args.add(model);
         }
         String resumeId = resumeId(context);
         if (resumeId != null && !resumeId.isBlank()) {
-            command.add("-r");
-            command.add(resumeId);
+            args.add("-r");
+            args.add(resumeId);
         }
-        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
     }
 
     private ProviderCliPlan buildDeepSeekPlan(LocalCliProviderConfig.ResolvedConfig config,
                                               String prompt,
                                               TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
+        ArrayList<String> args = new ArrayList<>();
         String binary = config.binary().value();
-        command.add(binary);
 
         String effectiveModel = null;
         if (isDeepSeekFacadeBinary(binary)) {
-            command.add("--provider");
-            command.add("deepseek");
+            args.add("--provider");
+            args.add("deepseek");
             effectiveModel = configuredModel(config, context);
             if (effectiveModel != null && !effectiveModel.isBlank()) {
-                command.add("--model");
-                command.add(effectiveModel);
+                args.add("--model");
+                args.add(effectiveModel);
             }
         }
-        command.add("exec");
-        command.add(prompt);
-        return new ProviderCliPlan(command, truncate(prompt, 240), effectiveModel);
+        args.add("exec");
+        args.add(prompt);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), effectiveModel);
+    }
+
+    private ProviderCliPlan buildKimiPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                          String prompt,
+                                          TaskRuntimeContext context,
+                                          String cwd) {
+        ArrayList<String> args = new ArrayList<>();
+        args.add("--print");
+        args.add("--output-format");
+        args.add("stream-json");
+        if (cwd != null && !cwd.isBlank()) {
+            args.add("--work-dir");
+            args.add(cwd);
+        }
+        String model = configuredModel(config, context);
+        if (model != null && !model.isBlank()) {
+            args.add("--model");
+            args.add(model);
+        }
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            args.add("--session");
+            args.add(resumeId);
+        }
+        args.add("--prompt");
+        args.add(prompt);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
     }
 
     private ProviderCliPlan buildCopilotPlan(LocalCliProviderConfig.ResolvedConfig config,
                                              String prompt,
                                              TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("-p");
-        command.add(prompt);
-        command.add("--output-format");
-        command.add("json");
-        command.add("--allow-all");
-        command.add("--no-ask-user");
+        ArrayList<String> args = new ArrayList<>();
+        args.add("-p");
+        args.add(prompt);
+        args.add("--output-format");
+        args.add("json");
+        args.add("--allow-all");
+        args.add("--no-ask-user");
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("--model");
-            command.add(model);
+            args.add("--model");
+            args.add(model);
         }
         String resumeId = resumeId(context);
         if (resumeId != null && !resumeId.isBlank()) {
-            command.add("--resume");
-            command.add(resumeId);
+            args.add("--resume");
+            args.add(resumeId);
         }
-        return new ProviderCliPlan(command, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
     }
 
     private ProviderCliPlan buildOpenCodePlan(LocalCliProviderConfig.ResolvedConfig config,
                                               String prompt,
                                               TaskRuntimeContext context) {
-        ArrayList<String> command = new ArrayList<>();
-        command.add(resolveOpenCodeExecutable(config.binary().value()));
-        command.add("run");
-        command.add("--format");
-        command.add("json");
+        LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
+        String resolvedExecutable = resolveOpenCodeExecutable(launchSpec.executableTarget());
+        ArrayList<String> args = new ArrayList<>();
+        args.add("run");
+        args.add("--format");
+        args.add("json");
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
-            command.add("--model");
-            command.add(model);
+            args.add("--model");
+            args.add(model);
         }
         String systemPrompt = systemPrompt(context, "OpenCode");
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            command.add("--prompt");
-            command.add(systemPrompt);
+            args.add("--prompt");
+            args.add(systemPrompt);
         }
         String resumeId = resumeId(context);
         if (resumeId != null && !resumeId.isBlank()) {
-            command.add("--session");
-            command.add(resumeId);
+            args.add("--session");
+            args.add(resumeId);
         }
-        command.add(prompt);
-        return new ProviderCliPlan(command, truncate(prompt, 240), model, null, Map.of(
-            "OPENCODE_PERMISSION", "{\"*\":\"allow\"}"
-        ));
+        args.add(prompt);
+        return providerCliPlan(
+            launchSpec.withExecutableTarget(resolvedExecutable),
+            args,
+            truncate(prompt, 240),
+            model,
+            null,
+            Map.of("OPENCODE_PERMISSION", "{\"*\":\"allow\"}")
+        );
+    }
+
+    private ProviderCliPlan providerCliPlan(LocalCliProviderConfig.LaunchSpec launchSpec,
+                                            List<String> args,
+                                            String promptPreview,
+                                            String model) {
+        return providerCliPlan(launchSpec, args, promptPreview, model, null, Map.of());
+    }
+
+    private ProviderCliPlan providerCliPlan(LocalCliProviderConfig.LaunchSpec launchSpec,
+                                            List<String> args,
+                                            String promptPreview,
+                                            String model,
+                                            String stdinPrompt) {
+        return providerCliPlan(launchSpec, args, promptPreview, model, stdinPrompt, Map.of());
+    }
+
+    private ProviderCliPlan providerCliPlan(LocalCliProviderConfig.LaunchSpec launchSpec,
+                                            List<String> args,
+                                            String promptPreview,
+                                            String model,
+                                            String stdinPrompt,
+                                            Map<String, String> environment) {
+        return new ProviderCliPlan(
+            launchSpec.command(args),
+            promptPreview,
+            model,
+            stdinPrompt,
+            environment,
+            launchSpec.configuredBinary(),
+            launchSpec.executableTarget(),
+            launchSpec.launchMode()
+        );
     }
 
     private ProviderCliOutput consume(Process process, String providerId) throws IOException {
@@ -385,6 +437,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 case "claude" -> consumeClaude(reader);
                 case "gemini" -> consumeGemini(reader);
                 case "deepseek" -> consumeDeepSeek(reader);
+                case "kimi" -> consumeKimi(reader);
                 case "copilot" -> consumeCopilot(reader);
                 case "opencode" -> consumeOpenCode(reader);
                 default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
@@ -619,6 +672,61 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private ProviderCliOutput consumeKimi(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String sessionId = null;
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.isBlank()) {
+                continue;
+            }
+            if (trimmed.regionMatches(true, 0, "To resume this session:", 0, "To resume this session:".length())) {
+                String hintedSession = extractKimiResumeSession(trimmed);
+                sessionId = firstNonBlank(sessionId, hintedSession);
+                continue;
+            }
+            if (trimmed.charAt(0) != '{') {
+                appendLine(output, trimmed);
+                continue;
+            }
+            try {
+                JsonNode event = MAPPER.readTree(trimmed);
+                String role = text(event, "role");
+                if ("assistant".equalsIgnoreCase(role) && event.path("content").isArray()) {
+                    for (JsonNode block : event.path("content")) {
+                        String blockType = text(block, "type");
+                        if ("text".equals(blockType)) {
+                            appendLine(output, text(block, "text"));
+                        } else if ("error".equals(blockType)) {
+                            status = "failed";
+                            errorText = firstNonBlank(errorText, text(block, "text"), trimmed);
+                        }
+                    }
+                } else if ("error".equalsIgnoreCase(text(event, "type"))) {
+                    status = "failed";
+                    errorText = firstNonBlank(errorText,
+                        text(event, "message"),
+                        nestedText(event, "error", "message"),
+                        trimmed);
+                }
+            } catch (Exception ignored) {
+                appendLine(output, trimmed);
+            }
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            sessionId,
+            null,
+            null,
+            "kimi_stream_json"
+        );
+    }
+
     private ProviderCliOutput consumeCopilot(BufferedReader reader) throws IOException {
         StringBuilder output = new StringBuilder();
         String sessionId = null;
@@ -779,8 +887,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
     }
 
     private AgentProviderStatus providerStatus(String providerId) {
-        AgentProvider provider = providerRegistry != null ? providerRegistry.get(providerId) : null;
-        return provider != null ? provider.detect() : null;
+        return providerRegistry != null ? providerRegistry.status(providerId) : null;
     }
 
     private String configuredModel(LocalCliProviderConfig.ResolvedConfig config, TaskRuntimeContext context) {
@@ -841,6 +948,19 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return trimmed;
     }
 
+    private String extractKimiResumeSession(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        int marker = trimmed.lastIndexOf("-r ");
+        if (marker < 0) {
+            marker = trimmed.lastIndexOf("--resume ");
+            if (marker < 0) {
+                return null;
+            }
+            return blankToNull(trimmed.substring(marker + "--resume ".length()).trim());
+        }
+        return blankToNull(trimmed.substring(marker + 3).trim());
+    }
+
     private LinkedHashMap<String, Object> baseMetadata(String providerId,
                                                        String workerId,
                                                        String cwd,
@@ -851,9 +971,11 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         metadata.put("provider_id", providerId);
         metadata.put("selected_worker", workerId);
         metadata.put("execution_backend", "provider_native_cli");
-        metadata.put("cli_binary", plan.command().isEmpty() ? null : plan.command().get(0));
+        metadata.put("cli_binary", plan.configuredBinary());
         metadata.put("cli_cwd", cwd);
         metadata.put("cli_command_preview", plan.commandPreview());
+        putIfNonBlank(metadata, "cli_resolved_binary", plan.executableTarget());
+        putIfNonBlank(metadata, "cli_launch_mode", plan.launchMode());
         metadata.put("prompt_preview", plan.promptPreview());
         metadata.put("duration_ms", durationMs);
         if (plan.model() != null && !plan.model().isBlank()) {
@@ -1128,23 +1250,35 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return value;
     }
 
+    private void putIfNonBlank(Map<String, Object> target, String key, String value) {
+        if (target == null || key == null || key.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        target.put(key, value);
+    }
+
     private record ProviderCliPlan(List<String> command,
                                    String promptPreview,
                                    String model,
                                    String stdinPrompt,
-                                   Map<String, String> environment) {
+                                   Map<String, String> environment,
+                                   String configuredBinary,
+                                   String executableTarget,
+                                   String launchMode) {
         private ProviderCliPlan {
             if (command == null) command = List.of();
             if (promptPreview == null) promptPreview = "";
             if (environment == null) environment = Map.of();
+            if (configuredBinary == null) configuredBinary = "";
+            if (launchMode == null || launchMode.isBlank()) launchMode = "direct";
         }
 
         private ProviderCliPlan(List<String> command, String promptPreview, String model) {
-            this(command, promptPreview, model, null, Map.of());
+            this(command, promptPreview, model, null, Map.of(), "", "", "direct");
         }
 
         private ProviderCliPlan(List<String> command, String promptPreview, String model, String stdinPrompt) {
-            this(command, promptPreview, model, stdinPrompt, Map.of());
+            this(command, promptPreview, model, stdinPrompt, Map.of(), "", "", "direct");
         }
 
         private String commandPreview() {

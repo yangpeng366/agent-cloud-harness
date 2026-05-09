@@ -346,6 +346,106 @@ class RuntimeFactSetAssemblerTest {
         assertEquals(List.of("manual_review"), facts.metadata().get("unfinished_items"));
     }
 
+    @Test
+    void assembleRoutePreviewPrefersCurrentPinnedWorkerWhenHistoricalWorkerMetadataDrifts() {
+        Instant now = Instant.parse("2026-05-05T06:00:00Z");
+        Task task = new Task(
+            "task_3",
+            "session_3",
+            null,
+            "runtime facts pinned route",
+            "active",
+            "high",
+            now,
+            now,
+            now,
+            null,
+            null,
+            null,
+            "keep current worker projection aligned",
+            "continue on kimi",
+            "kimi",
+            "scheduler",
+            null,
+            Map.of(
+                "task_type", "continuation",
+                "model_mode", "orchestrated",
+                "orchestration_stage", "execution_active",
+                "target_worker", "kimi"
+            )
+        );
+
+        Artifact latestArtifact = new Artifact(
+            "art_drift",
+            task.sessionId(),
+            task.id(),
+            now.plusSeconds(2),
+            "worker_artifact",
+            "historical planner artifact",
+            null,
+            null,
+            "planner artifact should not override current route preview",
+            Map.of(
+                "latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "selected_worker_type", "codex",
+                    "selected_model_tier", "strong",
+                    "execution_role", "planner_executor",
+                    "selection_scope", "planner",
+                    "route_source", "ready_fallback",
+                    "why_selected", "selected by model tier preference (strong) on ready-worker fallback: taskType=continuation, worker=codex",
+                    "candidate_workers", List.of("codex", "claude")
+                )
+            )
+        );
+        TaskRuntimeContext runtimeContext = new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(latestArtifact),
+            List.of(),
+            new ActiveContext(
+                "continue on kimi",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                "continuity says stay with current executor",
+                "ctx",
+                8
+            )
+        );
+
+        TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(null, null, null, null, null, null, null) {
+            @Override
+            public TaskRuntimeContext build(Task ignored) {
+                return runtimeContext;
+            }
+        };
+
+        RuntimeFactSetAssembler assembler = new RuntimeFactSetAssembler(
+            runtimeContextBuilder,
+            new InMemoryToolInvocationDao(),
+            routerWithCodexAndKimi()
+        );
+
+        RuntimeFactSet facts = assembler.assemble(task, 10);
+
+        assertNotNull(facts.routePreview());
+        assertEquals("kimi", facts.routePreview().selectedWorker());
+        assertEquals("task_pinned", facts.routePreview().routeSource());
+        assertEquals("small", facts.routePreview().selectedModelTier());
+        assertEquals("executor", facts.routePreview().selectionScope());
+        assertTrue(facts.routePreview().whySelected().contains("task-pinned worker"));
+    }
+
     private WorkerRouter routerWithCodex() {
         WorkerRegistry registry = new WorkerRegistry();
         registry.register(new Worker(

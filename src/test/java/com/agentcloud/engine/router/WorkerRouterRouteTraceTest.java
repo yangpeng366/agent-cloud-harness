@@ -1,5 +1,7 @@
 package com.agentcloud.engine.router;
 
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.providers.CodexProvider;
 import com.agentcloud.engine.LearningMemoryService;
 import com.agentcloud.model.LearningMemory;
 import com.agentcloud.model.Session;
@@ -125,6 +127,27 @@ class WorkerRouterRouteTraceTest {
         assertEquals("codex", route.selectedWorker());
         assertEquals("strong", route.selectedModelTier());
         assertTrue(route.routeReason().contains("model tier preference (strong)"));
+    }
+
+    @Test
+    void orchestratedPlannerStageSkipsStrongProviderWhenCodexProviderIsNotReady() {
+        AgentProviderRegistry providers = new AgentProviderRegistry()
+            .register(new CodexProvider("definitely-missing-codex-binary-for-test"));
+        WorkerRegistry registry = new WorkerRegistry(providers);
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "model_mode", "orchestrated",
+            "orchestration_stage", "plan_pending"
+        )));
+
+        assertEquals("kimi", route.selectedWorker());
+        assertEquals("small", route.selectedModelTier());
+        assertEquals("capability_match", route.routeSource());
+        assertTrue(route.fallbackReason().contains("no ready worker matched preferred model tier=strong"));
+        assertFalse(route.candidateWorkers().contains("codex"));
+        assertFalse(route.candidateWorkers().contains("claude"));
     }
 
     @Test

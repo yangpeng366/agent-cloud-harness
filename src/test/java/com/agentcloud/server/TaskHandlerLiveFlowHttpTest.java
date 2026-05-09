@@ -413,6 +413,68 @@ class TaskHandlerLiveFlowHttpTest {
         }
     }
 
+    @Test
+    void liveFlowRoutePreviewPrefersCurrentPinnedWorkerOverHistoricalPlannerMetadata() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-route-drift.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http pinned route task", "continuation", "user", "high",
+                "handoff 后 live flow route preview 不应继续显示旧 planner worker",
+                "当前 pinned worker 应覆盖历史 planner route metadata",
+                null,
+                null,
+                Map.of(
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "execution_active",
+                    "target_worker", "kimi"
+                ),
+                false
+            ));
+            Task pinnedTask = task.withAssignedWorker("kimi");
+            harness.db.jdbi().onDemand(TaskDao.class).updateState(pinnedTask);
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new com.agentcloud.model.Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-08T09:01:00Z"),
+                "worker_artifact",
+                "historical planner artifact",
+                null,
+                null,
+                "old planner route should stay historical",
+                Map.of(
+                    "latest_worker_metadata", Map.of(
+                        "selected_worker", "codex",
+                        "selected_worker_type", "codex",
+                        "selected_model_tier", "strong",
+                        "execution_role", "planner_executor",
+                        "selection_scope", "planner",
+                        "route_source", "ready_fallback",
+                        "why_selected", "selected by model tier preference (strong) on ready-worker fallback: taskType=continuation, worker=codex",
+                        "candidate_workers", List.of("codex", "claude")
+                    )
+                )
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("kimi", routePreview.get("selected_worker"));
+            assertEquals("task_pinned", routePreview.get("route_source"));
+            assertEquals("small", routePreview.get("selected_model_tier"));
+            assertEquals("executor", routePreview.get("selection_scope"));
+            assertTrue(String.valueOf(routePreview.get("why_selected")).contains("task-pinned worker"));
+        }
+    }
+
     private static final class HttpHarness implements AutoCloseable {
         private final DatabaseManager db;
         private final TaskService service;

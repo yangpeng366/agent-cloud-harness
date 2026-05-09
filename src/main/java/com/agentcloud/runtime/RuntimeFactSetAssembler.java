@@ -317,53 +317,107 @@ public class RuntimeFactSetAssembler {
         WorkerRouter.RouteResult routerPreview = workerRouter != null && task != null
             ? workerRouter.selectWorker(task)
             : null;
-        String selectedWorker = firstNonBlank(
+        String metadataWorker = firstNonBlank(
             metadataString(latestWorkerMetadata, "selected_worker"),
-            metadataString(latestWorkerMetadata, "executor_worker"),
+            metadataString(latestWorkerMetadata, "executor_worker")
+        );
+        String currentWorker = firstNonBlank(
             task != null ? task.assignedWorker() : null,
             routerPreview != null ? routerPreview.selectedWorker() : null
         );
-        String routeSource = firstNonBlank(
-            metadataString(latestWorkerMetadata, "route_source"),
-            routerPreview != null ? routerPreview.routeSource() : null
-        );
-        String routeReason = firstNonBlank(
-            metadataString(latestWorkerMetadata, "why_selected"),
-            metadataString(latestWorkerMetadata, "preassigned_selection_reason"),
-            routerPreview != null ? routerPreview.whySelected() : null,
-            routerPreview != null ? routerPreview.routeReason() : null
-        );
-        String selectedWorkerType = firstNonBlank(
-            metadataString(latestWorkerMetadata, "selected_worker_type"),
-            routerPreview != null ? routerPreview.selectedWorkerType() : null
-        );
-        String selectedModelTier = firstNonBlank(
-            metadataString(latestWorkerMetadata, "selected_model_tier"),
-            routerPreview != null ? routerPreview.selectedModelTier() : null
-        );
-        String selectedExecutionRole = firstNonBlank(
-            metadataString(latestWorkerMetadata, "execution_role"),
-            routerPreview != null ? routerPreview.selectedExecutionRole() : null
-        );
-        String selectionScope = firstNonBlank(
-            metadataString(latestWorkerMetadata, "selection_scope"),
-            routerPreview != null ? routerPreview.selectionScope() : null,
-            resolveSelectionScope(task, selectedExecutionRole)
-        );
-        String preferredWorkerHint = firstNonBlank(
-            metadataString(latestWorkerMetadata, "preferred_worker_hint"),
-            routerPreview != null ? routerPreview.preferredWorkerHint() : null
-        );
+        boolean currentRouteWins = currentWorker != null
+            && metadataWorker != null
+            && !currentWorker.equalsIgnoreCase(metadataWorker);
+        String selectedWorker = currentRouteWins ? currentWorker : firstNonBlank(metadataWorker, currentWorker);
+        String routeSource = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.routeSource() : null,
+                metadataString(latestWorkerMetadata, "route_source")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "route_source"),
+                routerPreview != null ? routerPreview.routeSource() : null
+            );
+        String routeReason = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.whySelected() : null,
+                routerPreview != null ? routerPreview.routeReason() : null,
+                metadataString(latestWorkerMetadata, "preassigned_selection_reason"),
+                metadataString(latestWorkerMetadata, "why_selected")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "why_selected"),
+                metadataString(latestWorkerMetadata, "preassigned_selection_reason"),
+                routerPreview != null ? routerPreview.whySelected() : null,
+                routerPreview != null ? routerPreview.routeReason() : null
+            );
+        String selectedWorkerType = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.selectedWorkerType() : null,
+                metadataString(latestWorkerMetadata, "selected_worker_type")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "selected_worker_type"),
+                routerPreview != null ? routerPreview.selectedWorkerType() : null
+            );
+        String selectedModelTier = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.selectedModelTier() : null,
+                metadataString(latestWorkerMetadata, "selected_model_tier")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "selected_model_tier"),
+                routerPreview != null ? routerPreview.selectedModelTier() : null
+            );
+        String selectedExecutionRole = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.selectedExecutionRole() : null,
+                metadataString(latestWorkerMetadata, "execution_role")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "execution_role"),
+                routerPreview != null ? routerPreview.selectedExecutionRole() : null
+            );
+        String selectionScope = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.selectionScope() : null,
+                resolveSelectionScope(task, selectedExecutionRole),
+                metadataString(latestWorkerMetadata, "selection_scope")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "selection_scope"),
+                routerPreview != null ? routerPreview.selectionScope() : null,
+                resolveSelectionScope(task, selectedExecutionRole)
+            );
+        String preferredWorkerHint = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.preferredWorkerHint() : null,
+                metadataString(latestWorkerMetadata, "preferred_worker_hint")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "preferred_worker_hint"),
+                routerPreview != null ? routerPreview.preferredWorkerHint() : null
+            );
         boolean learningHintApplied = metadataBoolean(
             latestWorkerMetadata,
             "learning_hint_applied",
             routerPreview != null && routerPreview.learningHintApplied()
         );
-        String fallbackReason = firstNonBlank(
-            metadataString(latestWorkerMetadata, "fallback_reason"),
-            routerPreview != null ? routerPreview.fallbackReason() : null
-        );
-        List<String> candidateWorkers = metadataStringList(latestWorkerMetadata, "candidate_workers");
+        String fallbackReason = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.fallbackReason() : null,
+                metadataString(latestWorkerMetadata, "fallback_reason")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "fallback_reason"),
+                routerPreview != null ? routerPreview.fallbackReason() : null
+            );
+        List<String> candidateWorkers = currentRouteWins
+            ? (routerPreview != null && routerPreview.candidateWorkers() != null ? routerPreview.candidateWorkers() : List.of())
+            : metadataStringList(latestWorkerMetadata, "candidate_workers");
+        if (candidateWorkers.isEmpty()) {
+            candidateWorkers = metadataStringList(latestWorkerMetadata, "candidate_workers");
+        }
         if (candidateWorkers.isEmpty() && routerPreview != null && routerPreview.candidateWorkers() != null) {
             candidateWorkers = routerPreview.candidateWorkers();
         }

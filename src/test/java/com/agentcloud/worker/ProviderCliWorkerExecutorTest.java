@@ -2,12 +2,14 @@ package com.agentcloud.worker;
 
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
-import com.agentcloud.agent.providers.OpenClawProvider;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.lang.reflect.Method;
 import java.util.LinkedHashMap;
@@ -19,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProviderCliWorkerExecutorTest {
 
+    @TempDir
+    Path tempDir;
+
     @Test
     void supportsProviderNativeCliCatalogIncludingDeepSeekButNotCodex() {
         AgentProviderRegistry registry = new AgentProviderRegistry();
@@ -26,38 +31,13 @@ class ProviderCliWorkerExecutorTest {
         ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
 
         assertTrue(executor.supports("cursor", null));
-        assertTrue(executor.supports("openclaw-native", null));
         assertTrue(executor.supports("claude", null));
         assertTrue(executor.supports("gemini", null));
         assertTrue(executor.supports("deepseek", null));
+        assertTrue(executor.supports("kimi", null));
         assertTrue(executor.supports("copilot", null));
         assertTrue(executor.supports("opencode", null));
         assertEquals(false, executor.supports("codex", null));
-    }
-
-    @Test
-    void openclawMissingBinaryReturnsFailedMetadataWithoutThrowing() {
-        String propertyKey = "agentcloud.providers.openclaw.path";
-        String original = System.getProperty(propertyKey);
-        System.setProperty(propertyKey, "definitely-missing-openclaw-binary-for-test");
-        try {
-            AgentProviderRegistry registry = new AgentProviderRegistry()
-                .register(new OpenClawProvider());
-            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
-
-            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("openclaw-native"), "openclaw-native");
-
-            assertEquals("failed", result.executionStatus());
-            assertEquals("provider_native_cli", result.metadata().get("execution_backend"));
-            assertEquals("openclaw", result.metadata().get("provider_id"));
-            assertEquals("definitely-missing-openclaw-binary-for-test", result.metadata().get("cli_binary"));
-        } finally {
-            if (original == null) {
-                System.clearProperty(propertyKey);
-            } else {
-                System.setProperty(propertyKey, original);
-            }
-        }
     }
 
     @Test
@@ -217,18 +197,137 @@ class ProviderCliWorkerExecutorTest {
             "D:\\gitAll\\agent-cloud-harness"
         );
         Method commandMethod = plan.getClass().getDeclaredMethod("command");
+        Method configuredBinaryMethod = plan.getClass().getDeclaredMethod("configuredBinary");
+        Method launchModeMethod = plan.getClass().getDeclaredMethod("launchMode");
         commandMethod.setAccessible(true);
+        configuredBinaryMethod.setAccessible(true);
+        launchModeMethod.setAccessible(true);
         @SuppressWarnings("unchecked")
         List<String> command = (List<String>) commandMethod.invoke(plan);
 
-        assertEquals("deepseek", command.get(0));
-        assertEquals("--provider", command.get(1));
-        assertEquals("deepseek", command.get(2));
-        assertEquals("--model", command.get(3));
-        assertEquals("deepseek-v4-flash", command.get(4));
-        assertEquals("exec", command.get(5));
-        assertTrue(command.get(6).contains("Workspaces:"));
-        assertTrue(command.get(6).contains("D:\\gitAll\\agent-cloud-harness"));
+        assertEquals("deepseek", configuredBinaryMethod.invoke(plan));
+        assertTrue(List.of("direct", "cmd_file").contains(String.valueOf(launchModeMethod.invoke(plan))));
+        assertTrue(command.contains("--provider"));
+        assertTrue(command.contains("exec"));
+        int promptIndex = command.indexOf("exec") + 1;
+        assertTrue(promptIndex > 0);
+        assertTrue(command.get(promptIndex).contains("Workspaces:"));
+        assertTrue(command.get(promptIndex).contains("D:\\gitAll\\agent-cloud-harness"));
+    }
+
+    @Test
+    void kimiPlanUsesPrintModeWorkdirAndSessionMetadata() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+        TaskRuntimeContext context = runtimeContext("kimi", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "用 kimi 非交互执行单轮任务。",
+            "provider_model", "kimi-k2-turbo-preview",
+            "workspace", "D:\\gitAll\\agent-cloud-harness"
+        )));
+
+        Method method = ProviderCliWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            String.class,
+            com.agentcloud.agent.providers.LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+        Object plan = method.invoke(
+            executor,
+            "kimi",
+            new com.agentcloud.agent.providers.LocalCliProviderConfig("kimi", "kimi", "X", "Y").resolve(),
+            context,
+            "D:\\gitAll\\agent-cloud-harness"
+        );
+        Method commandMethod = plan.getClass().getDeclaredMethod("command");
+        Method launchModeMethod = plan.getClass().getDeclaredMethod("launchMode");
+        commandMethod.setAccessible(true);
+        launchModeMethod.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) commandMethod.invoke(plan);
+
+        assertTrue(List.of("direct", "cmd_file", "powershell_file").contains(String.valueOf(launchModeMethod.invoke(plan))));
+        assertTrue(command.contains("--print"));
+        assertTrue(command.contains("--output-format"));
+        assertTrue(command.contains("stream-json"));
+        assertTrue(command.contains("--work-dir"));
+        assertTrue(command.contains("D:\\gitAll\\agent-cloud-harness"));
+        assertTrue(command.contains("--session"));
+        assertTrue(command.contains("session_provider_cli"));
+        assertTrue(command.contains("--model"));
+        assertTrue(command.contains("kimi-k2-turbo-preview"));
+        assertTrue(command.contains("--prompt"));
+    }
+
+    @Test
+    void kimiMissingBinaryReturnsFailedMetadataWithoutThrowing() {
+        String propertyKey = "agentcloud.providers.kimi.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, "definitely-missing-kimi-binary-for-test");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("kimi"), "kimi");
+
+            assertEquals("failed", result.executionStatus());
+            assertEquals("provider_native_cli", result.metadata().get("execution_backend"));
+            assertEquals("kimi", result.metadata().get("provider_id"));
+            assertEquals("definitely-missing-kimi-binary-for-test", result.metadata().get("cli_binary"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void claudePlanUsesWindowsCmdWrapperLaunchMetadata() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+        Path cmdShim = Files.writeString(tempDir.resolve("claude.cmd"), "@echo off\r\necho claude\r\n");
+
+        Method method = ProviderCliWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            String.class,
+            com.agentcloud.agent.providers.LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+        Object plan = method.invoke(
+            executor,
+            "claude",
+            new com.agentcloud.agent.providers.LocalCliProviderConfig("claude", cmdShim.toString(), "X", "Y").resolve(),
+            runtimeContext("claude"),
+            "D:\\gitAll\\agent-cloud-harness"
+        );
+
+        Method commandMethod = plan.getClass().getDeclaredMethod("command");
+        Method configuredBinaryMethod = plan.getClass().getDeclaredMethod("configuredBinary");
+        Method executableTargetMethod = plan.getClass().getDeclaredMethod("executableTarget");
+        Method launchModeMethod = plan.getClass().getDeclaredMethod("launchMode");
+        commandMethod.setAccessible(true);
+        configuredBinaryMethod.setAccessible(true);
+        executableTargetMethod.setAccessible(true);
+        launchModeMethod.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) commandMethod.invoke(plan);
+        assertEquals("cmd.exe", command.get(0));
+        assertEquals("/c", command.get(1));
+        assertEquals(cmdShim.toString(), command.get(2));
+        assertEquals("-p", command.get(3));
+        assertEquals(cmdShim.toString(), configuredBinaryMethod.invoke(plan));
+        assertEquals(cmdShim.toString(), executableTargetMethod.invoke(plan));
+        assertEquals("cmd_file", launchModeMethod.invoke(plan));
     }
 
     private TaskRuntimeContext runtimeContext(String workerId) {

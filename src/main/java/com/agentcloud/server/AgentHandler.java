@@ -87,7 +87,7 @@ class AgentHandler implements HttpHandler {
     }
 
     private Map<String, Object> toView(AgentProvider provider) {
-        return toView(provider, provider.detect());
+        return toView(provider, registry.status(provider.descriptor().providerId()));
     }
 
     private Map<String, Object> toView(AgentProvider provider, AgentProviderStatus status) {

@@ -79,7 +79,9 @@ public class Main {
         ExperimentRunService experimentRunService = new ExperimentRunService(
             experimentRunDao, decisionDao, artifactDao, eventDao, toolInvocationDao
         );
-        WorkerRegistry workerRegistry = new WorkerRegistry();
+        AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
+        WorkerRegistry workerRegistry = new WorkerRegistry(agentProviderRegistry);
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
         PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao, packetDao);
         ContextReconstructor reconstructor = new ContextReconstructor(taskDao, decisionDao, artifactDao, eventDao, relationDao);
@@ -138,8 +140,6 @@ public class Main {
         );
 
         // Agent Provider Layer (Phase 1 skeleton)
-        AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
-        BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
         AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
         ProviderCliWorkerExecutor providerCliWorkerExecutor = new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry);

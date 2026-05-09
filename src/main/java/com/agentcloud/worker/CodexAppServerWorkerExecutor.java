@@ -154,7 +154,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     }
 
     private boolean supportsProvider(String providerId) {
-        return providerId != null && "codex".equalsIgnoreCase(providerId);
+        return ProviderExecutionSupport.supportsProviderAppServer(providerId);
     }
 
     private CodexExecutionPlan buildPlan(LocalCliProviderConfig.ResolvedConfig config,
@@ -163,12 +163,24 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         String prompt = ProviderTaskPromptBuilder.build(context);
         String model = configuredModel(config, context);
         String resumeThreadId = resumeThreadId(context);
-        ArrayList<String> command = new ArrayList<>();
-        command.add(config.binary().value());
-        command.add("app-server");
-        command.add("--listen");
-        command.add("stdio://");
-        return new CodexExecutionPlan(command, prompt, truncate(prompt, 240), model, cwd, resumeThreadId, systemPrompt(context));
+        LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
+        List<String> command = launchSpec.command(List.of(
+            "app-server",
+            "--listen",
+            "stdio://"
+        ));
+        return new CodexExecutionPlan(
+            command,
+            prompt,
+            truncate(prompt, 240),
+            model,
+            cwd,
+            resumeThreadId,
+            systemPrompt(context),
+            launchSpec.configuredBinary(),
+            launchSpec.executableTarget(),
+            launchSpec.launchMode()
+        );
     }
 
     private CodexSessionOutput runSession(Process process, CodexExecutionPlan plan)
@@ -293,8 +305,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     }
 
     private AgentProviderStatus providerStatus(String providerId) {
-        AgentProvider provider = providerRegistry != null ? providerRegistry.get(providerId) : null;
-        return provider != null ? provider.detect() : null;
+        return providerRegistry != null ? providerRegistry.status(providerId) : null;
     }
 
     private LocalCliProviderConfig resolveProviderConfig(AgentProviderRegistry providerRegistry) {
@@ -367,9 +378,11 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         metadata.put("provider_id", providerId);
         metadata.put("selected_worker", workerId);
         metadata.put("execution_backend", "provider_app_server");
-        metadata.put("cli_binary", plan.command().isEmpty() ? null : plan.command().get(0));
+        metadata.put("cli_binary", plan.configuredBinary());
         metadata.put("cli_cwd", cwd);
         metadata.put("cli_command_preview", plan.commandPreview());
+        putIfNonBlank(metadata, "cli_resolved_binary", plan.executableTarget());
+        putIfNonBlank(metadata, "cli_launch_mode", plan.launchMode());
         metadata.put("prompt_preview", plan.promptPreview());
         metadata.put("duration_ms", durationMs);
         if (plan.model() != null && !plan.model().isBlank()) {
@@ -493,6 +506,13 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private static void putIfNonBlank(Map<String, Object> target, String key, String value) {
+        if (target == null || key == null || key.isBlank() || value == null || value.isBlank()) {
+            return;
+        }
+        target.put(key, value);
     }
 
     private static final class JsonRpcSession {
@@ -832,11 +852,16 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       String model,
                                       String cwd,
                                       String resumeThreadId,
-                                      String systemPrompt) {
+                                      String systemPrompt,
+                                      String configuredBinary,
+                                      String executableTarget,
+                                      String launchMode) {
         private CodexExecutionPlan {
             if (command == null) command = List.of();
             if (prompt == null) prompt = "";
             if (promptPreview == null) promptPreview = "";
+            if (configuredBinary == null) configuredBinary = "";
+            if (launchMode == null || launchMode.isBlank()) launchMode = "direct";
         }
 
         private String commandPreview() {

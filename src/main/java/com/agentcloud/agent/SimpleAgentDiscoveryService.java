@@ -16,8 +16,6 @@ public class SimpleAgentDiscoveryService implements AgentDiscoveryService {
 
     @Override
     public List<AgentProviderStatus> detectAll() {
-        return registry.list().stream()
-            .map(AgentProvider::detect)
-            .toList();
+        return registry.listStatuses();
     }
 }

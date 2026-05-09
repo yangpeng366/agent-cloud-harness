@@ -34,7 +34,7 @@ public class DatabaseManager implements AutoCloseable {
         config.addDataSourceProperty("journal_mode", "delete");
         config.addDataSourceProperty("busy_timeout", "5000");
 
-        this.dataSource = new HikariDataSource(conxqgfig);
+        this.dataSource = new HikariDataSource(config);
         this.jdbi = Jdbi.create(dataSource).installPlugin(new SqlObjectPlugin());
         this.jdbi.registerColumnMapper(new JsonMapper());
         this.jdbi.registerArgument(new InstantArgumentFactory());

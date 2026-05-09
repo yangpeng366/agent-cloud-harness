@@ -147,6 +147,129 @@
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
 ```
 
+### 2.9 Windows 上 `codex` / provider CLI 明明能在 PowerShell 里找到，但任务执行时报 `CreateProcess error=2`
+
+- **典型表现**:
+  1. `/api/v1/agents/codex` 或 PowerShell `Get-Command codex -All` 看起来都能解析到 `codex`
+  2. 真实任务在 `scheduler` 或首轮 planner/executor 执行时报错
+  3. task summary / worker artifact 中出现 `Cannot run program "codex" ... CreateProcess error=2`
+- **已确认根因**:
+  1. Windows 环境里 `codex` 实际是 wrapper 脚本，如 `codex.cmd` / `codex.ps1`
+  2. 旧链路里 provider detect 和真正执行没有共用同一套 launch contract
+  3. PowerShell 能解析 wrapper，不代表 Java `ProcessBuilder("codex")` 也能直接启动
+- **当前修复后的可观测字段**:
+  1. worker execution metadata / live flow / agent run metadata 中会带：
+     - `cli_binary`
+     - `cli_resolved_binary`
+     - `cli_launch_mode`
+     - `cli_command_preview`
+  2. provider detail 中会带 launch metadata：
+     - `binary`
+     - `configured_binary`
+     - `launch_target`
+     - `launch_mode`
+     - `launch_available`
+- **排查步骤**:
+  1. 先在宿主机执行：
+
+```powershell
+Get-Command codex -All
+```
+
+  2. 再查 provider 状态：
+
+```powershell
+curl http://localhost:8080/api/v1/agents/codex
+curl -X POST http://localhost:8080/api/v1/agents/codex/refresh
+```
+
+  3. 再查 worker readiness：
+
+```powershell
+curl http://localhost:8080/api/v1/workers/codex/readiness
+```
+
+  4. 如果已经执行过任务，再查：
+     - `/api/v1/tasks/{id}/live_flow`
+     - `/api/v1/agent_runs?task_id={id}&provider_id=codex`
+  5. 确认 `cli_launch_mode` 是否为：
+     - `direct`
+     - `cmd_file`
+     - `powershell_file`
+
+### 2.10 `/workers/{id}/readiness` 显示 ready，但 provider 实际不可执行或未注册
+
+- **典型表现**:
+  1. worker 是内置 provider-backed worker，如 `codex` / `claude`
+  2. 旧版本 `/readiness` 只看 host tool / API key / backend 标志，看起来是 `ready=true`
+  3. 实际执行时 provider detect 或 CLI 启动失败
+- **当前机制**:
+  1. provider-backed worker 的 readiness 现在会增加 `checks["provider:<id>"]`
+  2. 如果 provider detect 失败，worker readiness 会被同步拉低
+  3. 如果 worker 指向 provider backend，但当前 harness 没接入该 backend，还会增加 `checks["executor_backend:<backend>"]`
+  4. 如果 worker 指向 provider backend，但 provider 没注册，会返回 `provider not registered: <id>`
+- **排查步骤**:
+  1. 查看 `/api/v1/workers/{id}/readiness`
+  2. 重点看：
+     - `checks.provider:<id>`
+     - `checks.executor_backend:<backend>`
+     - `reason`
+  3. 再对照 `/api/v1/agents/{id}` 看 provider 侧 `ready/reason/metadata`
+- **说明**:
+  1. 这是刻意收紧的契约
+  2. 目标是避免“路由层判 ready，但执行层必失败”的 detect/readiness drift
+
+### 2.11 任务已经 handoff 到别的 worker，但 live flow / judgment 仍显示旧 worker 身份
+
+- **典型表现**:
+  1. `task.assigned_worker` 已经是 `kimi` 或其他 fallback worker
+  2. 但 `live_flow`、judgment metadata、worker artifact 里仍然看到上一轮 `codex` / planner 的 `selected_worker`、`selected_model_tier`
+  3. 常见于 orchestrated planner round 之后的 sparse executor round
+- **已确认根因**:
+  1. 某些后续 round 返回的 `WorkerExecutionResult.metadata()` 很稀疏
+  2. 下游 projection 在缺字段时会退回历史 metadata，造成 current-round worker identity 漂移
+- **当前修复**:
+  1. `ControlNodeGraph` 会在持久化前把当前 round 的 route metadata 注入到执行结果 metadata
+  2. 即使执行器只返回 sparse metadata，当前 round 的 `selected_worker`、`selected_model_tier`、`execution_role`、`why_selected` 等也不会被上一轮覆盖
+- **排查步骤**:
+  1. 同时看：
+     - `task.assigned_worker`
+     - `/api/v1/tasks/{id}/live_flow`
+     - `/api/v1/tasks/{id}/judgment_trace`
+     - `/api/v1/agent_runs?task_id={id}`
+  2. 如果仍看到旧 worker 身份，重点检查当前 round 的 `worker_metadata` 是否缺失 route fields
+
+### 2.12 任务明明已经路由到 provider worker，但执行结果是 `empty` 或看起来卡住
+
+- **典型表现**:
+  1. `/api/v1/tasks/{id}/provider_selection` 或 task metadata 显示已经选中了 `kimi` / `hermes` / `pi` / `kiro` 这类 provider worker
+  2. `agent_runs` 很快结束，`duration_ms` 很短，metadata 里却是 `worker_execution_status=empty`
+  3. operator 体感上像“任务卡住了”或“找不到 codex / provider”
+- **已确认根因**:
+  1. 某些 suggest-only provider worker 早期没有显式 `execution_backend`
+  2. `WorkerExecutorRouter` 因此把它们静默降级到 `DefaultWorkerExecutor`
+  3. 如果当前宿主又没有配置通用 LLM，执行会以 `empty` 收尾，看起来像 worker 卡死
+  4. 同一类问题还会出现在 provider 自己 ready，但当前 harness 根本没接入对应 executor 的场景
+- **当前修复**:
+  1. 内置 provider worker 现在显式声明 `execution_backend`
+  2. `suggest_only=true` 不再优先于 provider-native / provider-app-server 路由
+  3. 显式 provider backend 但无执行器支持时，router 会 fail fast，而不是静默退回 default LLM
+  4. `readiness` 现在会额外暴露 `checks.executor_backend:<backend>`，把 `hermes` / `pi` / `kiro` 这类当前未接入执行器的 worker 直接标成 `not ready`
+- **真实案例**:
+  1. `task_2cd0bb782c5a4a9b` 实际 pinned 到的是 `kimi`，不是 `codex`
+  2. 修复后新 run `arun_ca954de6c2aa43a9` 通过 `kimi` provider-native CLI 成功执行，耗时约 72 秒
+  3. 如果 `POST /continue` 客户端超时，不代表任务没跑；先回看服务端日志和 `/api/v1/agent_runs?task_id={id}`
+- **排查步骤**:
+  1. 查 `/api/v1/tasks/{id}/provider_selection`
+  2. 查 `/api/v1/workers/{workerId}/readiness`
+  3. 查 `/api/v1/agent_runs?task_id={id}`
+  4. 重点看 run metadata：
+     - `execution_backend`
+     - `cli_resolved_binary`
+     - `cli_launch_mode`
+     - `provider_output_parser`
+     - `worker_execution_status`
+
 ## 3. 调试技巧
 
 ### 3.1 本地调试入口

@@ -477,7 +477,7 @@
 - `shell`、`powershell`、`cmd` 会同时受工作目录约束、超时、输出长度上限与危险命令片段拦截
 - `powershell/cmd` 仍然只在 Windows 宿主可注册；即使是 Windows，也还要求对应可执行文件真实存在
 - 这批命令工具属于“受控本地命令”，不是强沙箱；当前定位仍然是本地或受控环境 harness
-- `GET /api/v1/workers/{id}/readiness` 的 `checks` 现在同时包含依赖项和 `tool:<name>` 形式的宿主工具检查；若某项命令工具不可用，`reason` 会直接返回稳定原因文案
+- `GET /api/v1/workers/{id}/readiness` 的 `checks` 现在同时包含依赖项、`tool:<name>` 形式的宿主工具检查，以及 provider-backed worker 的 `provider:<id>` / `executor_backend:<backend>` 检查；若某项命令工具不可用或当前 harness 没接入对应 provider executor，`reason` 会直接返回稳定原因文案
 - `GET /api/v1/workers` 与 `POST /api/v1/workers` 返回的 `Worker.metadata.host_tool_availability` 会回填该 worker 已声明命令工具的宿主探测结果
 
 ### 1.4 SkillHandler

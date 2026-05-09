@@ -1,12 +1,16 @@
 package com.agentcloud.worker;
 
 import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.providers.LocalCliProviderConfig;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -17,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CodexAppServerWorkerExecutorTest {
+
+    @TempDir
+    Path tempDir;
 
     @Test
     void supportsCodexOnly() {
@@ -139,6 +146,45 @@ class CodexAppServerWorkerExecutorTest {
         assertTrue(prompt.contains("docs/SPEC.md"));
         assertTrue(prompt.contains("Required Checks:"));
         assertTrue(prompt.contains("确认发布上架步骤"));
+    }
+
+    @Test
+    void codexPlanUsesResolvedWindowsLaunchWrapperMetadata() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+        Path cmdShim = Files.writeString(tempDir.resolve("codex.cmd"), "@echo off\r\necho codex\r\n");
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+
+        Object plan = method.invoke(
+            executor,
+            new LocalCliProviderConfig("codex", cmdShim.toString(), "X", "Y").resolve(),
+            runtimeContext("codex"),
+            "D:\\gitAll\\agent-cloud-harness"
+        );
+
+        Method commandGetter = plan.getClass().getDeclaredMethod("command");
+        Method configuredBinaryGetter = plan.getClass().getDeclaredMethod("configuredBinary");
+        Method executableTargetGetter = plan.getClass().getDeclaredMethod("executableTarget");
+        Method launchModeGetter = plan.getClass().getDeclaredMethod("launchMode");
+        commandGetter.setAccessible(true);
+        configuredBinaryGetter.setAccessible(true);
+        executableTargetGetter.setAccessible(true);
+        launchModeGetter.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) commandGetter.invoke(plan);
+        assertEquals(List.of("cmd.exe", "/c", cmdShim.toString(), "app-server", "--listen", "stdio://"), command);
+        assertEquals(cmdShim.toString(), configuredBinaryGetter.invoke(plan));
+        assertEquals(cmdShim.toString(), executableTargetGetter.invoke(plan));
+        assertEquals("cmd_file", launchModeGetter.invoke(plan));
     }
 
     private TaskRuntimeContext runtimeContext(String workerId) {

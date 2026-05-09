@@ -75,9 +75,6 @@ public class WorkerExecutorRouter implements WorkerExecutor {
             log.warn("Worker not found, fallback to default executor. worker={}", workerId);
             return defaultExecutor;
         }
-        if (worker.suggestOnly()) {
-            return defaultExecutor;
-        }
         if (codexAppServerExecutor != null && codexAppServerExecutor.supports(workerId, worker)
             && shouldUseProviderAppServer(worker)) {
             log.info("Routing worker to provider app-server executor. worker={} type={}",
@@ -90,12 +87,38 @@ public class WorkerExecutorRouter implements WorkerExecutor {
                 worker.workerId(), worker.workerType());
             return providerCliExecutor;
         }
+        if (shouldPreferToolAware(worker)) {
+            log.info("Routing worker to explicit tool-aware executor. worker={} type={}",
+                worker.workerId(), worker.workerType());
+            return toolAwareExecutor;
+        }
+        if (isExplicitProviderBackend(worker)) {
+            throw new IllegalStateException("worker declares provider backend but no supported executor is available: "
+                + worker.workerId() + " backend=" + metadataString(worker, "execution_backend"));
+        }
+        if (worker.suggestOnly()) {
+            return defaultExecutor;
+        }
         if (worker.toolCapabilities() == null || worker.toolCapabilities().isEmpty()) {
             return defaultExecutor;
         }
         log.info("Routing worker to tool-aware executor. worker={} tools={}",
             worker.workerId(), worker.toolCapabilities());
         return toolAwareExecutor;
+    }
+
+    private boolean isExplicitProviderBackend(Worker worker) {
+        String backend = metadataString(worker, "execution_backend");
+        return "provider_native_cli".equalsIgnoreCase(backend)
+            || "provider_app_server".equalsIgnoreCase(backend);
+    }
+
+    private String metadataString(Worker worker, String key) {
+        if (worker == null || worker.metadata() == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = worker.metadata().get(key);
+        return value == null ? null : value.toString();
     }
 
     private boolean shouldPreferToolAware(Worker worker) {
