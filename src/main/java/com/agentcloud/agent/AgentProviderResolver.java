@@ -20,6 +20,9 @@ public final class AgentProviderResolver {
         if (contains(normalizedWorker, "codex") || contains(normalizedType, "codex")) {
             return "codex";
         }
+        if (contains(normalizedWorker, "deepseek") || contains(normalizedType, "deepseek")) {
+            return "deepseek";
+        }
         if (contains(normalizedWorker, "cursor") || contains(normalizedType, "cursor")) {
             return "cursor";
         }

@@ -47,7 +47,10 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         String home = System.getProperty("user.home");
-        Path dbPath = Paths.get(home, ".agentcloud", "agent_cloud.db");
+        String dbPathOverride = System.getProperty("db.path");
+        Path dbPath = dbPathOverride != null 
+            ? Paths.get(dbPathOverride) 
+            : Paths.get(home, ".agentcloud", "agent_cloud.db");
 
         log.info("=== Agent Cloud Harness v0.2.0 ===");
         log.info("DB path: {}", dbPath);

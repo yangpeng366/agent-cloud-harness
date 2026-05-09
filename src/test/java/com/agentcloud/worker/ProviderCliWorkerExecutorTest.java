@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ProviderCliWorkerExecutorTest {
 
     @Test
-    void supportsCursorAndOpenclawButNotCodex() {
+    void supportsProviderNativeCliCatalogIncludingDeepSeekButNotCodex() {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);
         ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
@@ -29,6 +29,7 @@ class ProviderCliWorkerExecutorTest {
         assertTrue(executor.supports("openclaw-native", null));
         assertTrue(executor.supports("claude", null));
         assertTrue(executor.supports("gemini", null));
+        assertTrue(executor.supports("deepseek", null));
         assertTrue(executor.supports("copilot", null));
         assertTrue(executor.supports("opencode", null));
         assertEquals(false, executor.supports("codex", null));
@@ -110,6 +111,31 @@ class ProviderCliWorkerExecutorTest {
     }
 
     @Test
+    void deepSeekMissingBinaryReturnsFailedMetadataWithoutThrowing() {
+        String propertyKey = "agentcloud.providers.deepseek.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, "definitely-missing-deepseek-binary-for-test");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("deepseek"), "deepseek");
+
+            assertEquals("failed", result.executionStatus());
+            assertEquals("provider_native_cli", result.metadata().get("execution_backend"));
+            assertEquals("deepseek", result.metadata().get("provider_id"));
+            assertEquals("definitely-missing-deepseek-binary-for-test", result.metadata().get("cli_binary"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
     void promptBuilderIncludesWorkspaceReferenceAndDeliverables() throws Exception {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);
@@ -161,6 +187,48 @@ class ProviderCliWorkerExecutorTest {
         assertTrue(promptText.contains("docs/ARCHITECTURE.md"));
         assertTrue(promptText.contains("Required Checks:"));
         assertTrue(promptText.contains("梳理编译环境"));
+    }
+
+    @Test
+    void deepSeekPlanUsesFacadeProviderFlagsAndModelOverride() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+        TaskRuntimeContext context = runtimeContext("deepseek", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "用 deepseek 非交互执行单轮任务。",
+            "provider_model", "deepseek-v4-flash",
+            "workspace", "D:\\gitAll\\agent-cloud-harness"
+        )));
+
+        Method method = ProviderCliWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            String.class,
+            com.agentcloud.agent.providers.LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+        Object plan = method.invoke(
+            executor,
+            "deepseek",
+            new com.agentcloud.agent.providers.LocalCliProviderConfig("deepseek", "deepseek", "X", "Y").resolve(),
+            context,
+            "D:\\gitAll\\agent-cloud-harness"
+        );
+        Method commandMethod = plan.getClass().getDeclaredMethod("command");
+        commandMethod.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) commandMethod.invoke(plan);
+
+        assertEquals("deepseek", command.get(0));
+        assertEquals("--provider", command.get(1));
+        assertEquals("deepseek", command.get(2));
+        assertEquals("--model", command.get(3));
+        assertEquals("deepseek-v4-flash", command.get(4));
+        assertEquals("exec", command.get(5));
+        assertTrue(command.get(6).contains("Workspaces:"));
+        assertTrue(command.get(6).contains("D:\\gitAll\\agent-cloud-harness"));
     }
 
     private TaskRuntimeContext runtimeContext(String workerId) {

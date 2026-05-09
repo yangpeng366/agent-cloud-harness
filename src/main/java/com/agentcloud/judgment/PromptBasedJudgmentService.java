@@ -49,7 +49,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "Based on the task context, decide the next action. "
                 + "Respond with a JSON object containing exactly these fields: "
                 + "action (continue|wait|checkpoint|handoff|escalate|done), reason (string), "
-                + "next_step (string), needs_checkpoint (boolean), needs_human (boolean), "
+                + "next_step (string), needs_checkpoint (boolean), needs_context_reopen (boolean), needs_human (boolean), "
                 + "target_worker (string). No markdown, no extra text.";
 
             String user = buildExecutionPrompt(context);
@@ -60,11 +60,12 @@ public class PromptBasedJudgmentService implements JudgmentService {
             String reason = json.path("reason").asText("");
             String nextStep = json.path("next_step").asText("");
             boolean needsCheckpoint = json.path("needs_checkpoint").asBoolean("checkpoint".equals(action));
+            boolean needsContextReopen = json.path("needs_context_reopen").asBoolean(false);
             boolean needsHuman = json.path("needs_human").asBoolean("escalate".equals(action) || "wait".equals(action));
             String targetWorker = json.path("target_worker").asText(resolveTargetWorker(context));
 
             log.info("judgeExecution task={} action={} raw={}", taskId, action, raw);
-            return new ExecutionDecision(action, reason, nextStep, needsCheckpoint, needsHuman,
+            return new ExecutionDecision(action, reason, nextStep, needsCheckpoint, needsContextReopen, needsHuman,
                 "handoff".equals(action) ? targetWorker : null);
         } catch (Exception e) {
             log.error("judgeExecution failed for task={}, fallback to continue", taskId, e);
@@ -132,6 +133,7 @@ public class PromptBasedJudgmentService implements JudgmentService {
         sb.append("- Treat the latest worker metadata below as higher-priority structured evidence than free-form text when they disagree.\n");
         sb.append("- If latest worker metadata shows the current round still requires a grounded file write, do not choose done.\n");
         sb.append("- If latest worker metadata says missing_required_current_round_write=true, the runtime must not choose done.\n");
+        sb.append("- If the current mounted or active evidence is insufficient and the runtime should reopen bounded archive handles before the next round, set needs_context_reopen=true.\n");
         appendMountedContext(sb, context, renderingMode);
         if (context.runtimeContext() != null
             && context.runtimeContext().activeContext() != null

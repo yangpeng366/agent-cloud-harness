@@ -60,7 +60,15 @@ class RuntimeFactSetAssemblerTest {
             "Execution suggests pausing for human review",
             "medium",
             null,
-            Map.of("action", "pause", "next_step", "review generated draft")
+            Map.of(
+                "action", "pause",
+                "next_step", "review generated draft",
+                "needs_context_reopen", true,
+                "reopen_candidate_paths", List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_fact_1"
+                )
+            )
         );
         Decision completionDecision = new Decision(
             "dec_done",
@@ -165,6 +173,12 @@ class RuntimeFactSetAssemblerTest {
         assertEquals(21L, facts.metadata().get("execution_duration_ms"));
         assertEquals(1, facts.metadata().get("execution_tool_invocation_count"));
         assertEquals("1 tool call · succeeded · write_file", facts.metadata().get("execution_trace_summary"));
+        assertEquals(Boolean.TRUE, facts.metadata().get("needs_context_reopen"));
+        assertEquals(List.of(
+                "/sessions/session_1/tasks/task_1/tool_invocations",
+                "/sessions/session_1/tasks/task_1/packets/packet_fact_1"
+            ),
+            facts.metadata().get("reopen_candidate_paths"));
         assertFalse((Boolean) facts.metadata().get("has_latest_packet"));
     }
 

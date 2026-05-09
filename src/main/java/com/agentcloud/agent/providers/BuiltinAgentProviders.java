@@ -35,6 +35,15 @@ public final class BuiltinAgentProviders {
                 "MULTICA_COPILOT_MODEL"
             ),
             new LocalCliAgentProvider(
+                "deepseek",
+                "DeepSeek TUI",
+                List.of("chat", "code", "patch", "session"),
+                Map.of("model_tier", "strong"),
+                "deepseek",
+                "MULTICA_DEEPSEEK_PATH",
+                "MULTICA_DEEPSEEK_MODEL"
+            ),
+            new LocalCliAgentProvider(
                 "opencode",
                 "OpenCode",
                 List.of("chat", "code", "patch", "session"),

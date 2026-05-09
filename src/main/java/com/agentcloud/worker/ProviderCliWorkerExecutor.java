@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 面向本地 agent CLI 的单轮执行器。
- * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw/claude/gemini。
+ * 当前优先覆盖 multica 风格的一次性 CLI：cursor/openclaw/claude/gemini/deepseek。
  */
 public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ProviderCliWorkerExecutor.class);
@@ -68,6 +68,12 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             "openclaw",
             "MULTICA_OPENCLAW_PATH",
             "MULTICA_OPENCLAW_MODEL"
+        ));
+        providerConfigs.putIfAbsent("deepseek", new LocalCliProviderConfig(
+            "deepseek",
+            "deepseek",
+            "MULTICA_DEEPSEEK_PATH",
+            "MULTICA_DEEPSEEK_MODEL"
         ));
     }
 
@@ -175,6 +181,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             || "openclaw".equalsIgnoreCase(providerId)
             || "claude".equalsIgnoreCase(providerId)
             || "gemini".equalsIgnoreCase(providerId)
+            || "deepseek".equalsIgnoreCase(providerId)
             || "copilot".equalsIgnoreCase(providerId)
             || "opencode".equalsIgnoreCase(providerId);
     }
@@ -189,6 +196,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             case "openclaw" -> buildOpenClawPlan(config, prompt, context);
             case "claude" -> buildClaudePlan(config, prompt, context);
             case "gemini" -> buildGeminiPlan(config, prompt, context);
+            case "deepseek" -> buildDeepSeekPlan(config, prompt, context);
             case "copilot" -> buildCopilotPlan(config, prompt, context);
             case "opencode" -> buildOpenCodePlan(config, prompt, context);
             default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
@@ -294,6 +302,28 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         return new ProviderCliPlan(command, truncate(prompt, 240), model);
     }
 
+    private ProviderCliPlan buildDeepSeekPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                              String prompt,
+                                              TaskRuntimeContext context) {
+        ArrayList<String> command = new ArrayList<>();
+        String binary = config.binary().value();
+        command.add(binary);
+
+        String effectiveModel = null;
+        if (isDeepSeekFacadeBinary(binary)) {
+            command.add("--provider");
+            command.add("deepseek");
+            effectiveModel = configuredModel(config, context);
+            if (effectiveModel != null && !effectiveModel.isBlank()) {
+                command.add("--model");
+                command.add(effectiveModel);
+            }
+        }
+        command.add("exec");
+        command.add(prompt);
+        return new ProviderCliPlan(command, truncate(prompt, 240), effectiveModel);
+    }
+
     private ProviderCliPlan buildCopilotPlan(LocalCliProviderConfig.ResolvedConfig config,
                                              String prompt,
                                              TaskRuntimeContext context) {
@@ -354,6 +384,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 case "openclaw" -> consumeOpenClaw(reader);
                 case "claude" -> consumeClaude(reader);
                 case "gemini" -> consumeGemini(reader);
+                case "deepseek" -> consumeDeepSeek(reader);
                 case "copilot" -> consumeCopilot(reader);
                 case "opencode" -> consumeOpenCode(reader);
                 default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
@@ -568,6 +599,23 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             null,
             null,
             "gemini_stream_json"
+        );
+    }
+
+    private ProviderCliOutput consumeDeepSeek(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String line;
+        while ((line = reader.readLine()) != null) {
+            appendLine(output, line);
+        }
+        return new ProviderCliOutput(
+            "completed",
+            output.toString().trim(),
+            null,
+            null,
+            null,
+            null,
+            "deepseek_exec_text"
         );
     }
 
@@ -933,6 +981,23 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private boolean isDeepSeekFacadeBinary(String binary) {
+        return "deepseek".equals(normalizeBinaryName(binary));
+    }
+
+    private String normalizeBinaryName(String binary) {
+        if (binary == null || binary.isBlank()) {
+            return "";
+        }
+        String name = new File(binary).getName().toLowerCase(Locale.ROOT);
+        for (String extension : List.of(".exe", ".cmd", ".bat", ".ps1", ".sh")) {
+            if (name.endsWith(extension)) {
+                return name.substring(0, name.length() - extension.length());
+            }
+        }
+        return name;
     }
 
     private String resolveOpenCodeExecutable(String configuredBinary) {

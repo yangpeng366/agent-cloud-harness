@@ -28,6 +28,7 @@ class AgentProviderSupportTest {
         assertTrue(providerIds.contains("cursor"));
         assertTrue(providerIds.contains("claude"));
         assertTrue(providerIds.contains("copilot"));
+        assertTrue(providerIds.contains("deepseek"));
         assertTrue(providerIds.contains("opencode"));
         assertTrue(providerIds.contains("gemini"));
         assertTrue(providerIds.contains("kimi"));
@@ -55,6 +56,7 @@ class AgentProviderSupportTest {
         assertEquals("kiro", AgentProviderResolver.providerIdForWorker("kiro-cli", "kiro-cli"));
         assertEquals("claude", AgentProviderResolver.providerIdForWorker("claude-code", "cli"));
         assertEquals("copilot", AgentProviderResolver.providerIdForWorker("github-copilot", "copilot"));
+        assertEquals("deepseek", AgentProviderResolver.providerIdForWorker("deepseek-tui", "deepseek-cli"));
         assertEquals("openclaw", AgentProviderResolver.providerIdForWorker("openclaw-native", "native-tool"));
     }
 
@@ -66,6 +68,7 @@ class AgentProviderSupportTest {
         assertNotNull(registry.get("cursor"));
         assertNotNull(registry.get("claude"));
         assertNotNull(registry.get("copilot"));
+        assertNotNull(registry.get("deepseek"));
         assertNotNull(registry.get("opencode"));
         assertNotNull(registry.get("gemini"));
         assertNotNull(registry.get("hermes"));

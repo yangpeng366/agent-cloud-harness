@@ -341,6 +341,11 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("needs_context_reopen", true),
+                    Map.entry("reopen_candidate_paths", List.of(
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                    )),
                     Map.entry("tool_invocation_ids", List.of("exec_fact_1")),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
@@ -380,6 +385,11 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("needs_context_reopen", true),
+                    Map.entry("reopen_candidate_paths", List.of(
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                    )),
                     Map.entry("tool_invocation_ids", List.of("exec_fact_1")),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
@@ -434,6 +444,12 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("codex", "kimi"), trace.runtimeFacts().metadata().get("candidate_workers"));
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeFacts().metadata().get("evidence_refs"));
             assertEquals(List.of("manual_review"), trace.runtimeFacts().metadata().get("unfinished_items"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("needs_context_reopen"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                ),
+                trace.runtimeFacts().metadata().get("reopen_candidate_paths"));
             assertNotNull(trace.runtimeCognitionSurface());
             assertEquals("codex", trace.runtimeCognitionSurface().route().selectedWorker());
             assertEquals("codex", trace.runtimeCognitionSurface().execution().workerId());
@@ -455,6 +471,14 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(2, trace.runtimeCognitionSurface().executionJudgment().mountedContextNonEmptyPanelCount());
             assertEquals(3, trace.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedContextBudgetTruncated());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().needsContextReopen());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                ),
+                trace.runtimeCognitionSurface().executionJudgment().reopenCandidatePaths());
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet_fact_1",
+                trace.runtimeCognitionSurface().executionJudgment().reopenSummary());
             assertEquals(List.of("exec_fact_1"), trace.runtimeCognitionSurface().executionJudgment().toolInvocationIds());
             assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
                 trace.runtimeCognitionSurface().executionJudgment().proofSummary());
@@ -473,6 +497,7 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("codex", "kimi"), flow.runtimeFacts().metadata().get("candidate_workers"));
             assertEquals(List.of("tool:read_file:input.txt"), flow.runtimeFacts().metadata().get("evidence_refs"));
             assertEquals(List.of("manual_review"), flow.runtimeFacts().metadata().get("unfinished_items"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("needs_context_reopen"));
             assertNotNull(flow.runtimeCognitionSurface());
             assertEquals("codex", flow.runtimeCognitionSurface().route().selectedWorker());
             assertEquals("single_tool_round", flow.executionBoundary().metadata().get("tool_execution_mode"));
@@ -490,6 +515,14 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("codex", "kimi"), flow.runtimeCognitionSurface().executionJudgment().candidateWorkers());
             assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
             assertEquals(3, flow.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().executionJudgment().needsContextReopen());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                ),
+                flow.runtimeCognitionSurface().executionJudgment().reopenCandidatePaths());
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet_fact_1",
+                flow.runtimeCognitionSurface().executionJudgment().reopenSummary());
             assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
                 flow.runtimeCognitionSurface().executionJudgment().proofSummary());
             assertEquals(List.of("exec_fact_1"), flow.runtimeCognitionSurface().completionJudgment().toolInvocationIds());
@@ -520,10 +553,19 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").alignedWithPreviousPromptMode());
             assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").needsContextReopen());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
+                ),
+                timelineByStage.get("execution_judgment").reopenCandidatePaths());
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet_fact_1",
+                timelineByStage.get("execution_judgment").reopenSummary());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("execution_judgment").toolInvocationIds());
             assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",
                 timelineByStage.get("execution_judgment").proofSummary());
             assertTrue(timelineByStage.get("execution_judgment").summary().contains("proof=tool:exec_fact_1"));
+            assertTrue(timelineByStage.get("execution_judgment").summary().contains("reopen=reopen:tool_invocations"));
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("completion_judgment").toolInvocationIds());
             assertEquals("proof=tool:exec_fact_1, evidence:tool:read_file:input.txt",

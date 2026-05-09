@@ -61,6 +61,27 @@ class WorkerExecutorRouterProviderNativeTest {
     }
 
     @Test
+    void routesDeepSeekToProviderNativeExecutor() {
+        WorkerRegistry registry = new WorkerRegistry();
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        RecordingExecutor toolAwareExecutor = new RecordingExecutor("tool-aware");
+        ProviderCliWorkerExecutor providerCliExecutor = new StubProviderCliWorkerExecutor("provider-native");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            toolAwareExecutor,
+            providerCliExecutor,
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        WorkerExecutionResult result = router.executeOneRound(runtimeContext("deepseek"), "deepseek");
+
+        assertEquals("provider-native", result.summary());
+        assertEquals(0, defaultExecutor.calls);
+        assertEquals(0, toolAwareExecutor.calls);
+    }
+
+    @Test
     void routesCodexToProviderAppServerExecutor() {
         WorkerRegistry registry = new WorkerRegistry();
         RecordingExecutor defaultExecutor = new RecordingExecutor("default");

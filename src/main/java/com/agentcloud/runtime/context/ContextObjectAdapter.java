@@ -143,12 +143,21 @@ public class ContextObjectAdapter {
         Map<String, Object> decisionMetadata = decision.metadata() == null ? Map.of() : decision.metadata();
         List<String> toolInvocationIds = stringList(decisionMetadata, "tool_invocation_ids");
         List<String> evidenceRefs = stringList(decisionMetadata, "evidence_refs");
+        List<String> reopenCandidatePaths = stringList(decisionMetadata, "reopen_candidate_paths");
+        boolean needsContextReopen = metadataBoolean(decisionMetadata, "needs_context_reopen");
         List<ContextReference> refs = new ArrayList<>();
         for (String toolInvocationId : toolInvocationIds) {
             refs.add(new ContextReference(
                 "tool_invocation",
                 taskPath + "/tool_invocations/" + toolInvocationId,
                 toolInvocationId
+            ));
+        }
+        for (String reopenCandidatePath : reopenCandidatePaths) {
+            refs.add(new ContextReference(
+                "reopen_candidate",
+                reopenCandidatePath,
+                reopenCandidateLabel(reopenCandidatePath)
             ));
         }
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
@@ -163,6 +172,13 @@ public class ContextObjectAdapter {
         putIfNotBlank(metadata, "alignment_level", metadataString(decisionMetadata, "alignment_level"));
         putIfNotBlank(metadata, "next_step", metadataString(decisionMetadata, "next_step"));
         putIfNotBlank(metadata, "suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"));
+        if (needsContextReopen) {
+            metadata.put("needs_context_reopen", true);
+        }
+        if (!reopenCandidatePaths.isEmpty()) {
+            metadata.put("reopen_candidate_paths", reopenCandidatePaths);
+            metadata.put("reopen_candidate_count", reopenCandidatePaths.size());
+        }
         if (!toolInvocationIds.isEmpty()) {
             metadata.put("tool_invocation_ids", toolInvocationIds);
             metadata.put("tool_invocation_count", toolInvocationIds.size());
@@ -184,7 +200,9 @@ public class ContextObjectAdapter {
                     labeledValue("action", metadataString(decisionMetadata, "action")),
                     labeledValue("status", metadataString(decisionMetadata, "status")),
                     labeledValue("next_step", metadataString(decisionMetadata, "next_step")),
-                    labeledValue("suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"))
+                    labeledValue("suggested_next_action", metadataString(decisionMetadata, "suggested_next_action")),
+                    labeledValue("needs_context_reopen", needsContextReopen ? "true" : null),
+                    labeledValue("reopen_candidate_paths", joinList(reopenCandidatePaths))
                 ),
                 decision.summary(),
                 decision.rationale()
@@ -199,6 +217,8 @@ public class ContextObjectAdapter {
                 "alignment_level", metadataString(decisionMetadata, "alignment_level"),
                 "next_step", metadataString(decisionMetadata, "next_step"),
                 "suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"),
+                "needs_context_reopen", needsContextReopen ? "true" : null,
+                "reopen_candidate_paths", joinList(reopenCandidatePaths),
                 "tool_invocation_ids", joinList(toolInvocationIds),
                 "evidence_refs", joinList(evidenceRefs)
             )),
@@ -558,6 +578,44 @@ public class ContextObjectAdapter {
         }
         String value = raw.toString().trim();
         return value.isEmpty() ? null : value;
+    }
+
+    private boolean metadataBoolean(Map<String, Object> payload, String key) {
+        if (payload == null || key == null || key.isBlank()) {
+            return false;
+        }
+        Object raw = payload.get(key);
+        if (raw instanceof Boolean bool) {
+            return bool;
+        }
+        if (raw instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        return raw != null && Boolean.parseBoolean(raw.toString());
+    }
+
+    private String reopenCandidateLabel(String targetPath) {
+        if (targetPath == null || targetPath.isBlank()) {
+            return null;
+        }
+        String[] tokens = targetPath.split("/");
+        if (tokens.length == 0) {
+            return targetPath;
+        }
+        String tail = tokens[tokens.length - 1];
+        if (tail == null || tail.isBlank()) {
+            return targetPath;
+        }
+        if ("messages".equals(tail) || "artifacts".equals(tail) || "tool_invocations".equals(tail) || "decisions".equals(tail)) {
+            return tail;
+        }
+        if (tokens.length >= 2) {
+            String parent = tokens[tokens.length - 2];
+            if ("checkpoints".equals(parent) || "packets".equals(parent)) {
+                return parent + ":" + tail;
+            }
+        }
+        return tail;
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {

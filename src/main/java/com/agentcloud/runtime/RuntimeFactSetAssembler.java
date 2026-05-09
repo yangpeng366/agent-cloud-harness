@@ -76,6 +76,9 @@ public class RuntimeFactSetAssembler {
         metadata.put("has_execution_judgment", executionJudgment != null);
         metadata.put("has_completion_judgment", completionJudgment != null);
         metadata.put("has_route_preview", routePreview != null);
+        copyDecisionMetadataKey(executionJudgment, metadata, "needs_context_reopen");
+        copyDecisionMetadataKey(executionJudgment, metadata, "reopen_candidate_paths");
+        copyDecisionMetadataKey(executionJudgment, metadata, "reopen_summary");
         if (!latestWorkerMetadata.isEmpty()) {
             metadata.put("has_latest_worker_metadata", true);
             metadata.putAll(latestWorkerMetadata);
@@ -108,6 +111,20 @@ public class RuntimeFactSetAssembler {
             routePreview,
             metadata
         );
+    }
+
+    private void copyDecisionMetadataKey(Decision decision, Map<String, Object> target, String key) {
+        if (decision == null || target == null || key == null || key.isBlank()) {
+            return;
+        }
+        Map<String, Object> decisionMetadata = decision.metadata();
+        if (decisionMetadata == null || decisionMetadata.isEmpty()) {
+            return;
+        }
+        Object value = decisionMetadata.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private Map<String, Object> resolveLatestWorkerMetadata(TaskRuntimeContext runtimeContext) {
@@ -277,6 +294,9 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "directory_backed_artifact");
         copyMetadataKey(source, selected, "evidence_refs");
         copyMetadataKey(source, selected, "unfinished_items");
+        copyMetadataKey(source, selected, "needs_context_reopen");
+        copyMetadataKey(source, selected, "reopen_candidate_paths");
+        copyMetadataKey(source, selected, "reopen_summary");
         copyMetadataKey(source, selected, "grounded_output_present");
         copyMetadataKey(source, selected, "grounding_mode");
         copyMetadataKey(source, selected, "more_declared_rounds_remain");

@@ -98,6 +98,11 @@ class ContextViewBuilderTest {
                 "selected_worker", "codex",
                 "action", "continue",
                 "next_step", "补 builder seam 测试",
+                "needs_context_reopen", true,
+                "reopen_candidate_paths", List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                ),
                 "tool_invocation_ids", List.of("tool_1"),
                 "evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java")
             )
@@ -252,6 +257,8 @@ class ContextViewBuilderTest {
             .anyMatch(object -> object.type() == ContextObjectType.DECISION
                 && "execution".equals(object.metadata().get("judgment_stage"))
                 && "codex".equals(object.metadata().get("selected_worker"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_context_reopen"))
+                && object.contentPreview().contains("reopen_candidate_paths")
                 && object.summary().contains("action=continue")));
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .noneMatch(object -> object.type() == ContextObjectType.DECISION

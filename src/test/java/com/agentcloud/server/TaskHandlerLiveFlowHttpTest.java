@@ -100,6 +100,11 @@ class TaskHandlerLiveFlowHttpTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("needs_context_reopen", true),
+                    Map.entry("reopen_candidate_paths", List.of(
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
+                    )),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
                 )
@@ -138,6 +143,11 @@ class TaskHandlerLiveFlowHttpTest {
                     Map.entry("mounted_index_count", 1),
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
+                    Map.entry("needs_context_reopen", true),
+                    Map.entry("reopen_candidate_paths", List.of(
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                        "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
+                    )),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
                 )
@@ -199,6 +209,7 @@ class TaskHandlerLiveFlowHttpTest {
             Map<String, Object> flowSurface = harness.map(flowData.get("runtime_cognition_surface"));
             Map<String, Object> flowRoute = harness.map(flowSurface.get("route"));
             Map<String, Object> flowExecution = harness.map(flowSurface.get("execution"));
+            Map<String, Object> flowExecutionJudgment = harness.map(flowSurface.get("execution_judgment"));
             Map<String, Object> flowAlignment = harness.map(flowSurface.get("alignment"));
             List<Map<String, Object>> flowTimeline = harness.list(flowData.get("runtime_cognition_timeline"));
 
@@ -219,6 +230,14 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(Boolean.TRUE, flowExecution.get("mounted_context_budget_truncated"));
             assertEquals(2, ((Number) flowExecution.get("mounted_active_count")).intValue());
             assertEquals(1, ((Number) flowExecution.get("mounted_archive_count")).intValue());
+            assertEquals(Boolean.TRUE, flowExecutionJudgment.get("needs_context_reopen"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
+                ),
+                flowExecutionJudgment.get("reopen_candidate_paths"));
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet_http_1",
+                flowExecutionJudgment.get("reopen_summary"));
             assertEquals(Boolean.TRUE, flowAlignment.get("route_worker_matches_execution_worker"));
             assertEquals(Boolean.TRUE, flowAlignment.get("execution_and_execution_judgment_prompt_mode_aligned"));
             assertEquals(4, flowTimeline.size());
@@ -241,8 +260,18 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(3, ((Number) timelineByStage.get("execution_judgment").get("mounted_context_rendered_object_count")).intValue());
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("mounted_context_budget_truncated"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("needs_context_reopen"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
+                ),
+                timelineByStage.get("execution_judgment").get("reopen_candidate_paths"));
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet_http_1",
+                timelineByStage.get("execution_judgment").get("reopen_summary"));
             assertEquals("proof=evidence:tool:read_file:input.txt",
                 timelineByStage.get("execution_judgment").get("proof_summary"));
+            assertTrue(String.valueOf(timelineByStage.get("execution_judgment").get("summary"))
+                .contains("reopen=reopen:tool_invocations"));
             assertEquals(1, ((Number) timelineByStage.get("completion_judgment").get("mounted_context_hidden_object_count")).intValue());
             assertEquals("proof=evidence:tool:read_file:input.txt",
                 timelineByStage.get("completion_judgment").get("proof_summary"));

@@ -163,6 +163,12 @@ class ControlNodeGraphOrchestrationFlowTest {
                     && d.summary().contains("proof=tool:orchestrator_plan_1")
             ));
             assertTrue(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && "true".equalsIgnoreCase(metadataString(d.metadata(), "needs_context_reopen"))
+                    && metadataString(d.metadata(), "reopen_summary") != null
+                    && !metadataStringList(d.metadata(), "reopen_candidate_paths").isEmpty()
+            ));
+            assertTrue(decisions.stream().anyMatch(d ->
                 "completion_judgment".equals(d.decisionType())
                     && d.summary() != null
                     && d.summary().contains("proof=tool:orchestrator_exec_1")
@@ -584,6 +590,22 @@ class ControlNodeGraphOrchestrationFlowTest {
         return value == null ? null : value.toString();
     }
 
+    @SuppressWarnings("unchecked")
+    private static List<String> metadataStringList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object value = metadata.get(key);
+        if (!(value instanceof List<?> rawList) || rawList.isEmpty()) {
+            return List.of();
+        }
+        return rawList.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(Object::toString)
+            .filter(item -> !item.isBlank())
+            .toList();
+    }
+
     private static final class FakeWorkerExecutor implements WorkerExecutor {
         @Override
         public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
@@ -678,6 +700,7 @@ class ControlNodeGraphOrchestrationFlowTest {
                     "planner produced a delegation brief",
                     "Implement the delegated runtime change and run verification.",
                     false,
+                    true,
                     false,
                     null
                 );
@@ -827,6 +850,7 @@ class ControlNodeGraphOrchestrationFlowTest {
                     "planner produced a delegation brief",
                     "delegate to executor",
                     false,
+                    true,
                     false,
                     null
                 );

@@ -9,6 +9,7 @@ import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
+import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
@@ -292,33 +293,42 @@ public class ControlNodeGraph {
         log.info("[Continue] task={} completionDecision status={} alignment={} reason={}",
             task.id(), completionDecision.status(), completionDecision.alignmentLevel(), completionDecision.reason());
 
+        List<String> reopenCandidatePaths = execDecision.needsContextReopen()
+            ? reopenCandidatePaths(ctx)
+            : List.of();
+
         // 记录 judgment 决策
+        Map<String, Object> executionJudgmentMetadata = withJudgmentPromptMetadata(metadataOf(
+            "action", execDecision.action(),
+            "judgment_actor", "judgment_service",
+            "judgment_stage", "execution",
+            "selected_worker", selectedWorkerId,
+            "selected_model_tier", selectedModelTier,
+            "execution_role", executionRole,
+            "selection_scope", selectionScope,
+            "why_selected", whySelected,
+            "fallback_reason", fallbackReason,
+            "evaluator_role", evaluatorRole,
+            "evaluator_model_tier", evaluatorModelTier,
+            "evaluator_reason", resolveEvaluatorReason(task, execDecision.reason()),
+            "next_step", firstNonBlank(execDecision.nextStep(), executionResult != null ? executionResult.suggestedNextStep() : null),
+            "needs_checkpoint", execDecision.needsCheckpoint(),
+            "needs_context_reopen", execDecision.needsContextReopen(),
+            "reopen_candidate_paths", reopenCandidatePaths,
+            "reopen_candidate_count", reopenCandidatePaths.size(),
+            "reopen_summary", buildReopenSummary(reopenCandidatePaths),
+            "needs_human", execDecision.needsHuman(),
+            "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker()),
+            "retry_decision", execDecision.retryDecision(),
+            "escalation_decision", execDecision.escalationDecision()
+        ), judgmentPromptMetrics);
         Decision judgmentRecord = new Decision(
             IdGenerator.newId("dec"), task.sessionId(), task.id(), Instant.now(),
             "execution_judgment",
-            appendProofSummary("Execution judgment: " + execDecision.action(), latestWorkerMetadata),
+            appendEvidenceSummary("Execution judgment: " + execDecision.action(), latestWorkerMetadata, executionJudgmentMetadata),
             execDecision.reason(),
             "medium", null,
-            withJudgmentPromptMetadata(metadataOf(
-                "action", execDecision.action(),
-                "judgment_actor", "judgment_service",
-                "judgment_stage", "execution",
-                "selected_worker", selectedWorkerId,
-                "selected_model_tier", selectedModelTier,
-                "execution_role", executionRole,
-                "selection_scope", selectionScope,
-                "why_selected", whySelected,
-                "fallback_reason", fallbackReason,
-                "evaluator_role", evaluatorRole,
-                "evaluator_model_tier", evaluatorModelTier,
-                "evaluator_reason", resolveEvaluatorReason(task, execDecision.reason()),
-                "next_step", firstNonBlank(execDecision.nextStep(), executionResult != null ? executionResult.suggestedNextStep() : null),
-                "needs_checkpoint", execDecision.needsCheckpoint(),
-                "needs_human", execDecision.needsHuman(),
-                "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker()),
-                "retry_decision", execDecision.retryDecision(),
-                "escalation_decision", execDecision.escalationDecision()
-            ), judgmentPromptMetrics)
+            executionJudgmentMetadata
         );
         decisionDao.insert(judgmentRecord);
 
@@ -538,6 +548,7 @@ public class ControlNodeGraph {
                     mergeReasons(delegationReason, executionDecision.reason()),
                     nextStep,
                     executionDecision.needsCheckpoint(),
+                    executionDecision.needsContextReopen(),
                     false,
                     targetWorker
                 ),
@@ -1339,6 +1350,14 @@ public class ControlNodeGraph {
         return joinSummary(summary, proof);
     }
 
+    private String appendEvidenceSummary(String baseSummary, Map<String, Object> proofMetadata, Map<String, Object> reopenMetadata) {
+        return joinSummary(
+            baseSummary,
+            buildProofSummary(proofMetadata),
+            buildReopenSummary(reopenMetadata)
+        );
+    }
+
     private String buildProofSummary(Map<String, Object> metadata) {
         if (metadata == null || metadata.isEmpty()) {
             return null;
@@ -1350,6 +1369,25 @@ public class ControlNodeGraph {
             return null;
         }
         return "proof=" + String.join(", ", parts);
+    }
+
+    private String buildReopenSummary(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        return buildReopenSummary(metadataStringList(metadata, "reopen_candidate_paths"));
+    }
+
+    private String buildReopenSummary(List<String> reopenCandidatePaths) {
+        if (reopenCandidatePaths == null || reopenCandidatePaths.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        appendProofSummaryParts(parts, prefixedValues("reopen", reopenCandidateLabels(reopenCandidatePaths)));
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return "reopen=" + String.join(", ", parts);
     }
 
     private void appendProofSummaryParts(List<String> target, List<String> values) {
@@ -1383,6 +1421,20 @@ public class ControlNodeGraph {
         return result;
     }
 
+    private List<String> reopenCandidateLabels(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            String label = reopenCandidateLabel(value);
+            if (label != null) {
+                result.add(label);
+            }
+        }
+        return result;
+    }
+
     private String truncateProofLabel(String value) {
         String normalized = blankToNull(value);
         if (normalized == null) {
@@ -1393,6 +1445,55 @@ public class ControlNodeGraph {
             return compact;
         }
         return compact.substring(0, 69) + "...";
+    }
+
+    private List<String> reopenCandidatePaths(TaskRuntimeContext context) {
+        if (context == null || context.mountedContextView() == null) {
+            return List.of();
+        }
+        List<String> paths = new ArrayList<>();
+        for (var object : context.mountedContextView().objects(MountedContextPanelName.ARCHIVE_HANDLES)) {
+            if (object == null) {
+                continue;
+            }
+            String targetPath = stringValue(object.metadata().get("target_path"));
+            if ((targetPath == null || targetPath.isBlank()) && object.refs() != null && !object.refs().isEmpty()) {
+                targetPath = object.refs().get(0).targetPath();
+            }
+            if (targetPath == null || targetPath.isBlank() || paths.contains(targetPath)) {
+                continue;
+            }
+            paths.add(targetPath);
+            if (paths.size() >= 3) {
+                break;
+            }
+        }
+        return List.copyOf(paths);
+    }
+
+    private String reopenCandidateLabel(String targetPath) {
+        String normalized = blankToNull(targetPath);
+        if (normalized == null) {
+            return null;
+        }
+        String[] tokens = normalized.split("/");
+        if (tokens.length == 0) {
+            return normalized;
+        }
+        String tail = tokens[tokens.length - 1];
+        if (tail == null || tail.isBlank()) {
+            return normalized;
+        }
+        if ("messages".equals(tail) || "artifacts".equals(tail) || "tool_invocations".equals(tail) || "decisions".equals(tail)) {
+            return tail;
+        }
+        if (tokens.length >= 2) {
+            String parent = tokens[tokens.length - 2];
+            if ("checkpoints".equals(parent) || "packets".equals(parent)) {
+                return parent + ":" + tail;
+            }
+        }
+        return tail;
     }
 
     private String joinSummary(String... parts) {

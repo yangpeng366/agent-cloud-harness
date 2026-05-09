@@ -66,6 +66,9 @@ public record RuntimeCognitionSurfaceView(
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record JudgmentSurface(
         String promptMode,
+        Boolean needsContextReopen,
+        List<String> reopenCandidatePaths,
+        String reopenSummary,
         Boolean mountedContextRendered,
         Boolean mountedRenderUsed,
         Boolean mountedContextInjected,

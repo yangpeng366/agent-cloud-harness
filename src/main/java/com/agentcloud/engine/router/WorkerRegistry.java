@@ -108,6 +108,18 @@ public class WorkerRegistry {
                 "execution_backend", "provider_native_cli"
             ),
             false, true));
+        register(new Worker("deepseek", "deepseek",
+            List.of("coding", "reading", "writing"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 87,
+                "execution_backend", "provider_native_cli"
+            ),
+            false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),
             List.of(),

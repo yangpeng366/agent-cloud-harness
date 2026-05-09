@@ -374,3 +374,35 @@ Result:
 
 - if staying on the same Phase 2B line, push proof visibility one step further into any remaining human/operator textual diagnostics that still summarize judgments without mounted evidence reopen semantics
 - otherwise, once the exact reopen-policy draft path is clarified, start the next seam around continuity-aware evidence reopen / remount policy instead of only bounded proof display
+
+## 2026-05-09 - Context reopen pressure surfaced end-to-end
+
+### What changed
+
+- added `needsContextReopen` to `ExecutionDecision` and updated `PromptBasedJudgmentService` so execution judgment can explicitly ask for bounded archive reopen when mounted/active evidence is insufficient
+- `ControlNodeGraph` now persists `needs_context_reopen`, `reopen_candidate_paths`, `reopen_candidate_count`, and `reopen_summary` into `execution_judgment` metadata, deriving candidates from mounted `ARCHIVE_HANDLES`
+- orchestration adaptation now preserves `needsContextReopen` when planner output is rewritten into a `handoff` execution decision, so planner-side reopen pressure survives the planner-to-executor boundary
+- `RuntimeFactSetAssembler`, `TaskService`, and `ContextObjectAdapter` now surface reopen pressure into runtime facts, runtime cognition surfaces, timeline entries, and mounted evidence decision objects
+
+### Contract/result
+
+- `RuntimeCognitionSurfaceView.JudgmentSurface` now exposes nullable `needsContextReopen`, `reopenCandidatePaths`, and `reopenSummary`
+- `RuntimeCognitionTimelineEntryView` now exposes nullable `needsContextReopen`, `reopenCandidatePaths`, and `reopenSummary`
+- mounted durable decision evidence now includes reopen metadata and `reopen_candidate` refs
+- reopen candidates are bounded and currently sourced from mounted `ARCHIVE_HANDLES`, capped to 3 target paths
+
+### Validation
+
+Ran:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -MavenArgs '-Dtest=ControlNodeGraphOrchestrationFlowTest,TaskServiceLiveFlowViewTest,TaskHandlerLiveFlowHttpTest,RuntimeFactSetAssemblerTest'
+```
+
+Result:
+
+- `20 tests, 0 failures`
+
+### Next likely slice
+
+- turn reopen pressure from passive diagnostics into an explicit runtime policy surface, for example by distinguishing `reopen recommended` vs `reopen required` and by classifying candidate handles by evidence type / expected cost

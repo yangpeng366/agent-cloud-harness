@@ -11,6 +11,7 @@ public record ExecutionDecision(
     String reason,
     String nextStep,
     boolean needsCheckpoint,
+    boolean needsContextReopen,
     boolean needsHuman,
     String targetWorker,
     String retryDecision,
@@ -24,6 +25,16 @@ public record ExecutionDecision(
     }
 
     public ExecutionDecision(String action, String reason, String nextStep, boolean needsCheckpoint, boolean needsHuman, String targetWorker) {
-        this(action, reason, nextStep, needsCheckpoint, needsHuman, targetWorker, "", "");
+        this(action, reason, nextStep, needsCheckpoint, false, needsHuman, targetWorker, "", "");
+    }
+
+    public ExecutionDecision(String action,
+                             String reason,
+                             String nextStep,
+                             boolean needsCheckpoint,
+                             boolean needsContextReopen,
+                             boolean needsHuman,
+                             String targetWorker) {
+        this(action, reason, nextStep, needsCheckpoint, needsContextReopen, needsHuman, targetWorker, "", "");
     }
 }

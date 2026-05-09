@@ -552,6 +552,9 @@ public class TaskService {
             null,
             null,
             null,
+            List.of(),
+            null,
+            null,
             null,
             null,
             null,
@@ -597,6 +600,9 @@ public class TaskService {
             null,
             blankToNull(execution.executionStatus()),
             execution.toolInvocationCount(),
+            null,
+            List.of(),
+            null,
             blankToNull(execution.proofSummary()),
             execution.mountedContextRendered(),
             execution.mountedContextInjected(),
@@ -643,6 +649,9 @@ public class TaskService {
             null,
             null,
             null,
+            surface.needsContextReopen(),
+            surface.reopenCandidatePaths() == null ? List.of() : surface.reopenCandidatePaths(),
+            blankToNull(surface.reopenSummary()),
             blankToNull(surface.proofSummary()),
             surface.mountedContextRendered(),
             surface.mountedContextInjected(),
@@ -730,6 +739,9 @@ public class TaskService {
             null,
             null,
             null,
+            null,
+            List.of(),
+            null,
             proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
             metadataBoolean(payload, "mounted_context_rendered", Map.of()),
             metadataBoolean(payload, "mounted_context_injected", Map.of()),
@@ -784,6 +796,9 @@ public class TaskService {
             null,
             null,
             null,
+            null,
+            List.of(),
+            null,
             proofSummary(metadataStringList(refinedPacket, "tool_invocation_ids"), metadataStringList(refinedPacket, "evidence_refs")),
             null,
             null,
@@ -837,6 +852,9 @@ public class TaskService {
             promptMode,
             null,
             blankToNull(resumePacket.currentStatus()),
+            null,
+            null,
+            List.of(),
             null,
             proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
             null,
@@ -922,6 +940,7 @@ public class TaskService {
         String promptMode = surface != null ? blankToNull(surface.promptMode()) : null;
         String action = decision != null ? metadataString(decision.metadata(), "action") : null;
         String status = decision != null ? metadataString(decision.metadata(), "status") : null;
+        String reopen = surface != null ? blankToNull(surface.reopenSummary()) : null;
         String proof = surface != null ? blankToNull(surface.proofSummary()) : null;
         String budget = surface == null ? null : mountedBudgetSummary(
             surface.mountedContextRenderedObjectCount(),
@@ -931,8 +950,8 @@ public class TaskService {
             surface.mountedContextBudgetTruncated()
         );
         return firstNonBlank(
-            joinSummary(promptMode, action, status, budget, proof),
-            joinSummary(promptMode, status, budget, proof),
+            joinSummary(promptMode, action, status, budget, reopen, proof),
+            joinSummary(promptMode, status, budget, reopen, proof),
             promptMode
         );
     }
@@ -1106,16 +1125,38 @@ public class TaskService {
         return compact.substring(0, 69) + "...";
     }
 
+    private String reopenSummary(List<String> reopenCandidatePaths) {
+        if (reopenCandidatePaths == null || reopenCandidatePaths.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        appendProofSummaryParts(parts, prefixedValues("reopen", reopenCandidateLabels(reopenCandidatePaths)));
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return "reopen=" + String.join(", ", parts);
+    }
+
     private RuntimeCognitionSurfaceView.JudgmentSurface buildJudgmentSurface(Decision decision,
                                                                              Map<String, Object> runtimeMetadata) {
         if (decision == null) {
             return null;
         }
         Map<String, Object> decisionMetadata = decision.metadata() == null ? Map.of() : decision.metadata();
+        List<String> reopenCandidatePaths = metadataStringList(decisionMetadata, "reopen_candidate_paths");
+        if (reopenCandidatePaths.isEmpty()) {
+            reopenCandidatePaths = metadataStringList(runtimeMetadata, "reopen_candidate_paths");
+        }
         return new RuntimeCognitionSurfaceView.JudgmentSurface(
             firstNonBlank(
                 metadataString(decisionMetadata, "prompt_mode"),
                 metadataString(runtimeMetadata, "prompt_mode")
+            ),
+            metadataBoolean(decisionMetadata, "needs_context_reopen", runtimeMetadata),
+            reopenCandidatePaths,
+            firstNonBlank(
+                metadataString(decisionMetadata, "reopen_summary"),
+                reopenSummary(reopenCandidatePaths)
             ),
             metadataBoolean(decisionMetadata, "mounted_context_rendered", runtimeMetadata),
             metadataBoolean(decisionMetadata, "mounted_render_used", runtimeMetadata),
@@ -1512,6 +1553,45 @@ public class TaskService {
             return List.of(text);
         }
         return List.of();
+    }
+
+    private List<String> reopenCandidateLabels(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>();
+        for (String value : values) {
+            String label = reopenCandidateLabel(value);
+            if (label != null) {
+                result.add(label);
+            }
+        }
+        return result;
+    }
+
+    private String reopenCandidateLabel(String targetPath) {
+        String normalized = blankToNull(targetPath);
+        if (normalized == null) {
+            return null;
+        }
+        String[] tokens = normalized.split("/");
+        if (tokens.length == 0) {
+            return normalized;
+        }
+        String tail = tokens[tokens.length - 1];
+        if (tail == null || tail.isBlank()) {
+            return normalized;
+        }
+        if ("messages".equals(tail) || "artifacts".equals(tail) || "tool_invocations".equals(tail) || "decisions".equals(tail)) {
+            return tail;
+        }
+        if (tokens.length >= 2) {
+            String parent = tokens[tokens.length - 2];
+            if ("checkpoints".equals(parent) || "packets".equals(parent)) {
+                return parent + ":" + tail;
+            }
+        }
+        return tail;
     }
 
     private String firstNonBlank(String... values) {

@@ -31,7 +31,7 @@ class PromptBasedJudgmentServiceTest {
     @Test
     void judgeExecutionUsesReviewChannel() {
         RecordingLlmClient llmClient = new RecordingLlmClient("""
-            {"action":"done","reason":"reviewed","next_step":"close","needs_checkpoint":false,"needs_human":false,"target_worker":""}
+            {"action":"done","reason":"reviewed","next_step":"close","needs_checkpoint":false,"needs_context_reopen":true,"needs_human":false,"target_worker":""}
             """);
         PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
 
@@ -44,6 +44,7 @@ class PromptBasedJudgmentServiceTest {
         ));
 
         assertEquals("done", decision.action());
+        assertTrue(decision.needsContextReopen());
         assertEquals(0, llmClient.chatCalls);
         assertEquals(1, llmClient.reviewCalls);
     }
