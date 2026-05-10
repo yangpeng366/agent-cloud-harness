@@ -8,12 +8,17 @@
 </head>
 <body>
 <div class="dialogue-shell">
-    <aside class="sidebar">
+    <button class="sidebar-toggle" id="sidebarToggle" type="button" aria-expanded="true" aria-controls="sessionSidebar">
+        <span class="sidebar-toggle__icon">☰</span>
+        <span>Threads</span>
+    </button>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+    <aside class="sidebar sidebar--rail" id="sessionSidebar">
         <div class="sidebar__top">
             <div>
                 <p class="eyebrow">Task Dialogue</p>
                 <h1>Agent Cloud Harness</h1>
-                <p class="sidebar__copy">用更接近 chat 的方式发布任务，同时保留 continuity 观察面。</p>
+                <p class="sidebar__copy">左侧只保留 thread rail，中间像 chat 一样继续聊和发任务。</p>
             </div>
             <span class="health-pill" id="healthBadge">booting</span>
         </div>
@@ -26,9 +31,9 @@
         <form class="sidebar__form" id="sessionForm">
             <label class="field">
                 <span>新会话</span>
-                <input id="sessionTitle" type="text" placeholder="例如：Continuity 选题实验">
+                <input id="sessionTitle" type="text" placeholder="新 thread 标题">
             </label>
-            <button class="button button--ghost" type="submit">创建会话</button>
+            <button class="button button--ghost" type="submit">新建</button>
         </form>
 
         <div class="sidebar__section">
@@ -49,22 +54,27 @@
                     左边切 session，中间做连续对话，右边看 route、judgment、artifact 和 tool trace。
                 </p>
             </div>
-            <div class="workspace__metrics">
-                <div class="metric">
-                    <span>会话</span>
-                    <strong id="sessionCount">0</strong>
+            <div class="workspace__toolbar">
+                <div class="workspace__statusbar">
+                    <span class="status-pill">
+                        <strong id="sessionCount">0</strong>
+                        <span>会话</span>
+                    </span>
+                    <span class="status-pill">
+                        <strong id="taskCount">0</strong>
+                        <span>任务</span>
+                    </span>
+                    <span class="status-pill">
+                        <strong id="chainCount">0</strong>
+                        <span>链路</span>
+                    </span>
+                    <span class="status-pill status-pill--wide">
+                        <strong id="selectedStatus">idle</strong>
+                        <span>当前焦点</span>
+                    </span>
                 </div>
-                <div class="metric">
-                    <span>任务</span>
-                    <strong id="taskCount">0</strong>
-                </div>
-                <div class="metric">
-                    <span>迭代链</span>
-                    <strong id="chainCount">0</strong>
-                </div>
-                <div class="metric">
-                    <span>当前状态</span>
-                    <strong id="selectedStatus">idle</strong>
+                <div class="workspace__actions">
+                    <button class="button button--ghost details-toggle" id="detailsToggleButton" type="button">查看任务面板</button>
                 </div>
             </div>
         </header>
@@ -72,8 +82,8 @@
         <section class="message-panel">
             <div class="message-panel__header">
                 <div>
-                    <h3>Session Messages</h3>
-                    <p id="messagePanelHint">在当前 session 下记录上下文消息，再把需要执行的内容发布成 task。</p>
+                    <h3 id="workspaceSurfaceTitle">Session Transcript</h3>
+                    <p id="messagePanelHint">同一个 session 里可以继续聊天；任务链收在下面，需要时再展开。</p>
                 </div>
             </div>
             <div class="message-panel__controls">
@@ -89,132 +99,196 @@
                     <button class="filter-chip" type="button" data-filter-group="scope" data-filter-value="session-only">session-only</button>
                 </div>
             </div>
-            <div class="message-panel__body">
+            <div class="message-panel__body message-panel__body--stream-only">
                 <div class="message-stream">
                     <div class="message-summary" id="messageSummary"></div>
                     <div class="message-list" id="messageList"></div>
                 </div>
-                <form class="message-composer" id="messageForm">
-                    <label class="field field--textarea">
-                        <span>消息内容</span>
-                        <textarea id="messageContent" rows="3" placeholder="先记一条补充说明、约束、选题判断，或把下一轮草稿沉淀为 session message。"></textarea>
-                    </label>
-                    <div class="message-composer__footer">
-                        <div class="message-composer__context">
-                            <span>消息会话</span>
-                            <strong id="messageSessionLabel">自动创建</strong>
-                            <p id="messageHint">未选中 session 时，会按第一条消息自动创建会话；可选把消息关联到当前 task。</p>
+                <details class="thread-drawer" id="threadDrawer" hidden>
+                    <summary class="thread-drawer__summary">
+                        <div>
+                            <strong>任务链</strong>
+                            <span id="threadDrawerMeta">当前 session 还没有任务。</span>
                         </div>
-                        <div class="message-composer__actions">
-                            <label class="toggle-pill toggle-pill--compact">
-                                <input id="messageAttachTask" type="checkbox" checked>
-                                <span>关联当前任务</span>
-                            </label>
-                            <button class="button button--ghost" id="clearMessageButton" type="button">清空消息</button>
-                            <button class="button" type="submit">记录消息</button>
+                        <span class="thread-drawer__hint">展开</span>
+                    </summary>
+                    <div class="thread-panel thread-panel--embedded" id="embeddedThreadPanel">
+                        <div class="thread-panel__header thread-panel__header--embedded">
+                            <div>
+                                <h3>任务对话</h3>
+                                <p id="threadHint">这里按 chat thread 展示当前 session 的任务链和 follow-up。</p>
+                            </div>
+                            <div class="thread-panel__controls">
+                                <div class="filter-group" id="taskStatusFilters" aria-label="task status filters">
+                                    <button class="filter-chip is-active" type="button" data-filter-group="status" data-filter-value="all">all</button>
+                                    <button class="filter-chip" type="button" data-filter-group="status" data-filter-value="active">active</button>
+                                    <button class="filter-chip" type="button" data-filter-group="status" data-filter-value="paused">paused</button>
+                                    <button class="filter-chip" type="button" data-filter-group="status" data-filter-value="done">done</button>
+                                    <button class="filter-chip" type="button" data-filter-group="status" data-filter-value="failed">failed</button>
+                                </div>
+                                <button class="button button--ghost" id="refreshThreadButton" type="button">刷新</button>
+                            </div>
                         </div>
+                        <div class="thread-list" id="taskThread"></div>
                     </div>
-                </form>
+                </details>
             </div>
-        </section>
-
-        <section class="thread-panel">
-            <div class="thread-panel__header">
-                <div>
-                    <h3>任务对话</h3>
-                    <p id="threadHint">选择一个会话后，这里会展示它的任务对话与 follow-up 迭代链。</p>
-                </div>
-                <button class="button button--ghost" id="refreshThreadButton" type="button">刷新当前任务</button>
-            </div>
-            <div class="thread-list" id="taskThread"></div>
         </section>
 
         <section class="composer-panel">
-            <form class="composer" id="taskForm">
-                <div class="composer__meta">
-                    <label class="meta-field">
-                        <span>任务类型</span>
-                        <select id="taskType">
-                            <option value="continuation">continuation</option>
-                            <option value="doc">doc</option>
-                            <option value="research">research</option>
-                            <option value="coding">coding</option>
-                            <option value="browser">browser</option>
-                            <option value="ops">ops</option>
-                        </select>
-                    </label>
-
-                    <label class="meta-field">
-                        <span>优先级</span>
-                        <select id="taskPriority">
-                            <option value="high">high</option>
-                            <option value="medium">medium</option>
-                            <option value="low">low</option>
-                        </select>
-                    </label>
-
-                    <label class="meta-field meta-field--wide">
-                        <span>目标</span>
-                        <input id="taskGoal" type="text" placeholder="可选，用一句话定义最终交付">
-                    </label>
-
-                    <label class="toggle-pill">
-                        <input id="taskAutoStart" type="checkbox" checked>
-                        <span>创建后立即推进</span>
-                    </label>
+            <form class="composer composer--chat" id="taskForm">
+                <div class="composer__head">
+                    <div>
+                        <p class="eyebrow">Thread Composer</p>
+                        <h3>继续聊天，或把这一轮变成任务</h3>
+                        <p class="composer__lede">默认把这里当成 chat composer；需要更精细控制时，再展开高级参数。</p>
+                    </div>
                 </div>
 
-                <label class="field">
-                    <span>标题</span>
-                    <input id="taskTitle" type="text" placeholder="留空则按任务说明自动生成">
+                <label class="field field--textarea field--chat">
+                    <span>这一轮想让 Harness 做什么</span>
+                    <textarea id="taskIntent" rows="5" placeholder="例如：继续刚才那篇文章。先基于现有提纲补成 3 段摘要，再判断是否要新开 follow-up task。"></textarea>
                 </label>
 
-                <label class="field field--textarea">
-                    <span>任务说明</span>
-                    <textarea id="taskIntent" rows="5" placeholder="例如：写一篇《AI Agent 的下一波壁垒，可能是 continuity，而不是 autonomy》公众号文章，先出提纲，再多轮迭代成终稿。"></textarea>
-                </label>
+                <div class="composer-inline-state" id="composerInlineState">
+                    <span class="signal">未选中 session 时，会自动创建一个新 session。</span>
+                </div>
+                <div class="composer-recovery" id="composerRecovery"></div>
+
+                <details class="composer-routing" id="composerRouting">
+                    <summary>
+                        <span>更多发送方式</span>
+                        <span id="composerRoutingMeta">默认聊天发送</span>
+                    </summary>
+                    <div class="composer-routing__body">
+                        <div class="composer-mode-switch" id="composerModeSwitch" aria-label="composer mode">
+                            <button class="filter-chip is-active" type="button" data-composer-mode="auto">自动</button>
+                            <button class="filter-chip" type="button" data-composer-mode="message">聊天</button>
+                            <button class="filter-chip" type="button" data-composer-mode="task">新任务</button>
+                        </div>
+                        <div class="composer-routing__actions">
+                            <label class="toggle-pill toggle-pill--compact composer-attach-toggle" id="messageAttachTaskWrap">
+                                <input id="messageAttachTask" type="checkbox" checked>
+                                <span>附着到当前任务</span>
+                            </label>
+                        </div>
+                    </div>
+                </details>
+                <p class="composer-mode-hint" id="composerModeHint">当前输入框会先按聊天消息处理；需要时再切到任务模式。</p>
+
+                <details class="composer-advanced" id="composerAdvanced">
+                    <summary>高级参数</summary>
+                    <div class="composer-advanced__grid">
+                        <label class="field">
+                            <span>标题</span>
+                            <input id="taskTitle" type="text" placeholder="留空则按任务说明自动生成">
+                        </label>
+
+                        <label class="field">
+                            <span>目标</span>
+                            <input id="taskGoal" type="text" placeholder="可选；留空则沿用任务说明">
+                        </label>
+
+                        <div class="composer__meta">
+                            <label class="meta-field">
+                                <span>任务类型</span>
+                                <select id="taskType">
+                                    <option value="continuation">continuation</option>
+                                    <option value="doc">doc</option>
+                                    <option value="research">research</option>
+                                    <option value="coding">coding</option>
+                                    <option value="browser">browser</option>
+                                    <option value="ops">ops</option>
+                                </select>
+                            </label>
+
+                            <label class="meta-field">
+                                <span>优先级</span>
+                                <select id="taskPriority">
+                                    <option value="high">high</option>
+                                    <option value="medium">medium</option>
+                                    <option value="low">low</option>
+                                </select>
+                            </label>
+
+                            <label class="meta-field">
+                                <span>目标 Worker</span>
+                                <select id="taskAssignedWorker">
+                                    <option value="">自动选择</option>
+                                </select>
+                            </label>
+
+                            <label class="meta-field">
+                                <span>模型模式</span>
+                                <select id="taskModelMode">
+                                    <option value="">auto</option>
+                                    <option value="strong_only">强模型</option>
+                                    <option value="small_only">轻量模型</option>
+                                    <option value="orchestrated">编排模式</option>
+                                </select>
+                            </label>
+
+                            <label class="toggle-pill">
+                                <input id="taskAutoStart" type="checkbox" checked>
+                                <span>创建后立即推进</span>
+                            </label>
+                        </div>
+                    </div>
+                </details>
 
                 <div class="composer__footer">
                     <div class="composer__context">
                         <span>当前会话</span>
                         <strong id="composerSessionLabel">自动创建</strong>
                         <p id="composerTaskHint">选择一个任务后，可以基于它的 next step 生成 follow-up 草稿。</p>
+                        <p id="messageHint">当前输入框也可当作 session message composer 使用。</p>
                     </div>
                     <div class="composer__actions">
                         <button class="button button--ghost" id="followupButton" type="button">生成 follow-up</button>
+                        <button class="button button--ghost" id="clearMessageButton" type="button">清空输入</button>
                         <button class="button button--ghost" id="clearFollowupButton" type="button">清除关联</button>
-                        <button class="button" id="submitTaskButton" type="submit">发布任务</button>
+                        <button class="button" id="submitTaskButton" type="submit">发送</button>
                     </div>
                 </div>
             </form>
         </section>
     </main>
 
-    <aside class="details">
+    <aside class="details" id="taskDetailsPanel">
         <div class="details__header">
             <div>
                 <p class="eyebrow">Task Details</p>
                 <h2 id="detailTitle">选择一个任务</h2>
             </div>
-            <a class="details__console-link" href="/console/">打开诊断台</a>
+            <div class="details__header-actions">
+                <a class="details__console-link" href="/console/">打开诊断台</a>
+                <button class="button button--ghost details-close" id="detailsCloseButton" type="button">收起</button>
+            </div>
         </div>
 
         <div class="overview-grid" id="taskOverview"></div>
 
-        <div class="action-grid" id="taskActions">
-            <button class="button button--ghost" data-task-action="continue" type="button">继续</button>
-            <button class="button button--ghost" data-task-action="pause" type="button">暂停</button>
-            <button class="button button--ghost" data-task-action="resume" type="button">恢复</button>
-            <button class="button button--ghost" data-task-action="escalate" type="button">升级</button>
-        </div>
+        <div class="action-grid action-grid--primary" id="taskActions"></div>
 
-        <div class="handoff-box">
-            <label class="field">
-                <span>移交到</span>
-                <select id="handoffWorker"></select>
-            </label>
-            <button class="button button--ghost" id="handoffButton" type="button">执行 handoff</button>
-        </div>
+        <details class="details-card details-card--collapsible details-actions" id="taskActionDrawer">
+            <summary class="details-card__summary">
+                <div>
+                    <strong>更多操作</strong>
+                    <span>暂停、升级和 Worker 移交等次级控制操作。</span>
+                </div>
+                <span class="details-card__hint">按需展开</span>
+            </summary>
+            <div class="details-card__body">
+                <div class="action-grid" id="taskSecondaryActions"></div>
+                <div class="handoff-box">
+                    <label class="field">
+                        <span>移交到</span>
+                        <select id="handoffWorker"></select>
+                    </label>
+                    <button class="button button--ghost" id="handoffButton" type="button">执行 handoff</button>
+                </div>
+            </div>
+        </details>
 
         <div class="details__scroll">
             <section class="details-card">
@@ -239,39 +313,110 @@
                 <div class="chip-list" id="continuityChips"></div>
             </section>
 
-            <section class="details-card">
-                <div class="section-title">
-                    <span>路由与判断</span>
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
+                        <strong>Mounted Context</strong>
+                        <span>默认收起，按需看 mounted panels 与 selection trace。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div id="mountedContext"></div>
                 </div>
-                <div class="route-box" id="routeBox"></div>
-                <div class="stack-list" id="decisionList"></div>
-            </section>
+            </details>
 
-            <section class="details-card">
-                <div class="section-title">
-                    <span>实验对比</span>
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
+                        <strong>路由与判断</strong>
+                        <span>选中任务后可展开看 route preview 与 judgment trace。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div class="route-box" id="routeBox"></div>
+                    <div class="stack-list" id="decisionList"></div>
                 </div>
-                <div id="experimentSummary"></div>
-            </section>
+            </details>
 
-            <section class="details-card">
-                <div class="section-title">
-                    <span>最近产物</span>
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
+                        <strong>实验对比</strong>
+                        <span>只在属于 experiment batch 时有内容。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div id="experimentSummary"></div>
                 </div>
-                <div class="stack-list" id="artifactList"></div>
-            </section>
+            </details>
 
-            <section class="details-card">
-                <div class="section-title">
-                    <span>工具轨迹</span>
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
+                        <strong>最近产物</strong>
+                        <span>最近 artifact 默认下沉到 drawer，避免主面板过吵。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div class="stack-list" id="artifactList"></div>
                 </div>
-                <div class="stack-list" id="toolList"></div>
-            </section>
+            </details>
+
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
+                        <strong>工具轨迹</strong>
+                        <span>tool chain 与逐步调用留在按需展开的 inspector 里。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div class="stack-list" id="toolList"></div>
+                </div>
+            </details>
         </div>
     </aside>
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="taskDetailModal" style="display: none;">
+    <div class="modal-container">
+        <div class="modal-header">
+            <h2 id="modalTitle">任务详情</h2>
+            <button class="modal-close" id="modalCloseButton" type="button">&times;</button>
+        </div>
+        <div class="modal-body" id="modalBody">
+            <div class="modal-section">
+                <h3>任务信息</h3>
+                <div class="info-grid" id="modalTaskInfo"></div>
+            </div>
+            <div class="modal-section">
+                <h3>完整内容</h3>
+                <div class="full-content" id="modalFullContent"></div>
+            </div>
+            <div class="modal-section">
+                <h3>路由信息</h3>
+                <div id="modalRouteInfo"></div>
+            </div>
+            <div class="modal-section">
+                <h3>决策记录</h3>
+                <div id="modalDecisions"></div>
+            </div>
+            <div class="modal-section">
+                <h3>工具调用</h3>
+                <div id="modalTools"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="button button--ghost" id="modalCloseBtn">关闭</button>
+        </div>
+    </div>
+</div>
 
 <script type="module" src="./app.js"></script>
 </body>

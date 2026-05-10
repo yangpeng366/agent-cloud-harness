@@ -65,6 +65,129 @@
 | GET | `/api/v1/tasks/{id}/escalate` | 兼容旧客户端的升级入口 | 路径参数 `id` | `TaskControlResult` | 否 |
 | POST | `/api/v1/tasks/{id}/handoff` | 指定目标 worker 并移交 | JSON: `target_worker` | `HandoffResult` | 否 |
 
+### 1.2A Chat Facade
+
+| 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |
+|------|------|------|---------|---------|------|
+| POST | `/v1/chat/completions` | OpenAI-compatible chat façade；把 chat turn 映射到 session message + 可选 task materialization | JSON: `model`, `messages`, `stream?`, `metadata?` | `chat.completion` JSON + `agentcloud` continuity 扩展块 | 否 |
+| POST | `/v1/responses` | 最小 OpenAI-compatible Responses façade；复用同一套 session/task continuity contract | JSON: `model`, `input`, `instructions?`, `stream?`, `metadata?` | `response` JSON + `agentcloud` continuity 扩展块 | 否 |
+| GET | `/v1/models` | 返回 façade 级模型列表 | 无 | `list` + `model[]` | 否 |
+
+`POST /v1/chat/completions` 当前是 **最小兼容实现**，只保证：
+
+- 非 streaming JSON completion
+- 最小 `stream=true` SSE completion
+- 文本 `messages`
+- 单个最终 `assistant` reply
+- continuity 扩展块里显式返回 `session_id / task_id / task_status / control_node / reply_type / reply_source / live_flow_path / packet_path`
+
+当前稳定支持的 façade model：
+
+- `agentcloud-default`
+- `agentcloud-strong`
+- `agentcloud-fast`
+
+当前 `metadata.task_mode` 支持：
+
+- `message_only`
+- `task_auto`
+- `task_required`
+
+`POST /v1/responses` 当前也是 **最小兼容实现**，只保证：
+
+- 文本 `input`
+- 可选 `instructions`
+- 复用与 `/v1/chat/completions` 相同的 `metadata.task_mode / task_id / session_id / auto_start` continuity 语义
+- 非 streaming `response` JSON
+- 最小 `stream=true` SSE event 流
+
+当前 `input` 支持的最小形态：
+
+- 直接传字符串
+- 传数组，其中 user item 的 `content` 为：
+  - 字符串
+  - 或 `[{ "type": "input_text", "text": "..." }]`
+
+当前 `response` 输出形态：
+
+- `object=response`
+- `status=completed`
+- `output[0].type=message`
+- `output[0].content[0].type=output_text`
+- 顶层 `output_text`
+- 同样附带 `agentcloud.session_id / task_id / task_status / control_node / reply_type / reply_source / live_flow_path / packet_path`
+
+当前 `/v1/responses?stream=true` 最小 SSE 事件面：
+
+- `response.created`
+- `response.output_item.added`
+- `response.output_text.delta`
+- `response.output_text.done`
+- `response.completed`
+- `data: [DONE]`
+
+它仍然不是 token 级增量流；`response.output_text.delta` 当前承载的是最终完整文本，而不是逐 token 追加。
+
+当前执行语义：
+
+- `message_only`
+  - 未提供 `task_id` 时，只向 session 追加一条 user turn，不物化新 task
+  - 显式提供 `task_id` 时，把本轮输入记录为该 task 的 `task_note` continuity turn，并返回 `chat_reply / session_ack`；这条路径不会自动推进控制图
+- `task_auto`
+  - 若显式提供 `task_id`，则把本轮输入作为该 task 的 continuity turn；当 `auto_start=true` 时复用现有 `TaskService.continueTask(...)`，当 `auto_start=false` 时仅记录一条 `task_note` 并返回等待手动继续的 assistant ack
+  - 否则优先复用 session 当前未终态 task；若找到 active task，语义同上，同样受 `auto_start` 控制；若没有 active task，则自动新建一个 task 并进入 harness
+- `task_required`
+  - 一定物化为 task（或显式 `task_id` continuation），再复用现有 `TaskService` / `ControlNodeGraph`
+  - 当显式提供 `task_id` 时，这条路径同样遵守 `auto_start`：`false` 只记录 continuity turn，不自动推进控制图
+  - 当新建 task 且 `auto_start=false` 时，assistant reply 会优先复用 `task_receipt` 的 manual-start 文案，而不是伪装成已经执行过一轮的 `task_progress`
+  - 对已有 task 的 manual continuity（显式 `task_id` 或 `task_auto` 复用 active task）当前仍返回 `chat_reply / session_ack`；只有“新建但未启动”的 task materialization 才返回 `task_receipt / task_receipt`
+
+当前 materialization/backfill 语义：
+
+- façade 在真正 `createTask(...)` 之前，会先写一条 user turn：
+  - 普通新任务写 `task_brief`
+  - follow-up 新任务写 `task_followup`
+- 当 task / child task 成功 materialize 后，这条 staging user turn 会被回填 `task_id`
+- 因此 `task_brief / task_followup` 最终是 task-bound continuity message，而不是永久停留在 task-free session note
+- 当前这条合同已有 HTTP 回归覆盖：
+  - `ChatFacadeHandlerHttpTest.chatFacadeAcceptanceFlowCoversMessageTaskNoteAndManualFollowupInOneSession()`
+
+当前 `agentcloud.reply_type / reply_source` 约定：
+
+- `chat_reply / session_ack`
+  - façade 只记录 session message 或 task note，没有推进执行链时返回
+- `task_receipt / task_receipt`
+  - 新建 manual-start task 后返回
+- `task_progress / task_progress`
+  - 自动推进执行链后，优先基于 `task_progress` 返回
+- `task_result / task_result`
+  - 任务已进入终态且已生成 `task_result` 时返回
+- `task_action / task_action`
+  - 若 façade 最终命中的是 task control action 回执，则按该类型返回
+- `task_state / task_state`
+  - 若 façade 最终命中的是状态迁移回执，则按该类型返回
+
+当前 `/dialogue/` 对这组字段的消费约定：
+
+- `chat_reply / session_ack`
+  - 只显示“已记录”类 toast / composer inline，不额外打 transcript latest reply badge
+- `task_receipt / task_receipt`
+  - 显示“任务已记录”类 toast / composer inline，并给当前作用域下最新一条 assistant/system task reply 打 `latest receipt`
+- `task_progress / task_progress`
+  - 显示“任务已推进”类 toast / composer inline，并给当前作用域下最新一条 assistant/system task reply 打 `latest progress`
+- `task_result / task_result`
+  - 显示“任务已完成”类 toast / composer inline，并给当前作用域下最新一条 assistant/system task reply 打 `latest result`
+
+当前已知限制：
+
+- `stream=true` 当前仅支持最小 SSE 包装：
+  - 先输出一条 `chat.completion.chunk`，其中 `delta.role=assistant`，`delta.content` 直接承载最终完整文本
+  - 再输出一条 `finish_reason=stop` 的终止 chunk，并携带完整 `agentcloud` continuity 扩展块
+  - 最后输出 `data: [DONE]`
+- 当前不是 token 级增量流，也不保证中途 progress event / tool-call delta
+- `/v1/responses` 当前也只是最小 façade，不支持完整 Responses item/type surface、tool-call streaming、multimodal
+- façade 只做外层 chat 包装，不替代 `/api/v1/tasks/*` 诊断面
+
 ### 1.3 WorkerHandler
 
 | 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |
@@ -221,13 +344,19 @@
 
 如果任务不属于任何 experiment batch，该接口当前返回 `404 not found`。
 
-其中 `related_messages` 的语义是“所有绑定到该 `task_id` 的 session message”，包括：
+其中 `related_messages` 的语义现在更接近“当前 task 的 related message surface”，默认按时间窗口聚合两类消息：
 
 - `/dialogue/` 镜像出来的 `task_brief / task_followup`
 - 后端补写的 `task_receipt / task_action / task_state`
 - 任务推进后追加的 `task_progress / task_result`
+- 同一 session 下未绑定 `task_id` 的普通连续聊天消息（例如 `user_note`），用于保留 follow-up 前后的 continuity hint
 
-它不包含未绑定 `task_id` 的 session 级普通消息。
+其中：
+
+- 绑定当前 `task_id` 的消息会补 `metadata.continuity_scope=task`
+- 未绑定 `task_id` 但被并入当前 task 读面的 session 级消息会补 `metadata.continuity_scope=session`
+
+这个字段的目的，是让 `/dialogue/`、`live_flow` 和后续 continuity 读面能区分“task-bound receipt”与“session-level continuity hint”，而不需要再猜测来源。
 
 `POST /api/v1/tasks` 当前还支持任务链字段：
 
@@ -361,7 +490,24 @@
 - `role`：`/dialogue/` 手工写入时主要使用 `user`；后端任务回执会补 `assistant`、`system`
 - `message_type`：页面会写入 `user_note`、`task_note`、`task_brief`、`task_followup`；后端任务回执会补 `task_receipt`、`task_action`、`task_state`、`task_progress`、`task_result`
 - `task_id`：可选，把消息附着到某个 task，供 `/dialogue/` 的 Related Messages 与消息转任务草稿能力消费
-- `metadata`：记录 `source_surface`、`created_via`、`mirrored_from` 等页面来源信息；后端补写的 assistant 回执还会带 `trigger`、`summary_preview`、`next_step`、`completion_status`、`judgment_action` 等执行信号
+- `metadata`：记录 `source_surface`、`created_via`、`mirrored_from` 等页面来源信息；后端补写的 assistant/system 回执还会带 `trigger`、`summary_preview`、`next_step`、`completion_status`、`judgment_action`、`action_label`、`route_source`、`tool_chain_*` 等执行信号
+
+当前与 `/dialogue/` 直接相关的 message metadata 约定已经进一步收口为：
+
+- `task_progress / task_result`
+  - `summary_preview`：前端优先展示的可读摘要
+  - `next_step`：下一步提示
+  - `model_mode / task_type / assigned_worker / route_source / preferred_worker_hint / learning_hint_applied`
+  - `tool_execution_mode / tool_chain_step_count / tool_chain_termination_reason / tool_chain_trace_summary / tool_chain_tools`
+- `task_action`
+  - `action`：机器可判定的控制动作键
+  - `action_label`：面向消息层的稳定可读标签，例如 `已暂停 / 已恢复执行 / 已继续推进`
+- `task_state`
+  - `previous_state / current_state`
+  - `task_status / control_node`
+  - `reason?`
+
+也就是说，`GET /api/v1/sessions/{id}/messages` 现在已经足够支持 `/dialogue/` 直接把消息渲染成 thread-style lifecycle reply，而不需要额外回查一轮 `live_flow` 才知道当前状态或下一步。
 
 `GET /api/v1/tasks/{id}/tool_trace` 当前返回的是已经真实落库的 `ToolInvocationRecord[]`，字段至少包括：
 

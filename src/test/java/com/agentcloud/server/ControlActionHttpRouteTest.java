@@ -57,12 +57,16 @@ class ControlActionHttpRouteTest {
 
             SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "pause");
             assertHttpMetadata(actionMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/pause", "waiting for review");
-            assertTrue(actionMessage.content().contains("pause"));
+            assertEquals("已暂停", actionMessage.metadata().get("action_label"));
+            assertTrue(actionMessage.content().contains("已暂停"));
+            assertTrue(actionMessage.content().contains("当前：paused / packet"));
 
             SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "paused");
             assertHttpMetadata(stateMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/pause", "waiting for review");
             assertEquals("active", stateMessage.metadata().get("previous_state"));
             assertEquals("paused", stateMessage.metadata().get("current_state"));
+            assertTrue(stateMessage.content().contains("状态已更新"));
+            assertTrue(stateMessage.content().contains("active -> paused"));
 
             Event controlEvent = fixture.findControlActionEvent(task.sessionId(), task.id(), "pause");
             assertHttpMetadata(controlEvent.payload(), "POST", "/api/v1/tasks/" + task.id() + "/pause", "waiting for review");
@@ -89,6 +93,8 @@ class ControlActionHttpRouteTest {
 
             SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "resume");
             assertHttpMetadata(actionMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/resume", null);
+            assertEquals("已恢复执行", actionMessage.metadata().get("action_label"));
+            assertTrue(actionMessage.content().contains("已恢复执行"));
 
             SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "active");
             assertHttpMetadata(stateMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/resume", null);
@@ -122,6 +128,8 @@ class ControlActionHttpRouteTest {
 
             SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "continue");
             assertHttpMetadata(actionMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/continue", null);
+            assertEquals("已继续推进", actionMessage.metadata().get("action_label"));
+            assertTrue(actionMessage.content().contains("已继续推进"));
 
             assertFalse(fixture.hasTaskStateMessage(task.sessionId(), task.id()));
 
@@ -151,6 +159,8 @@ class ControlActionHttpRouteTest {
 
             SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "escalate");
             assertHttpMetadata(actionMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/escalate", "need human approval");
+            assertEquals("已升级到人工确认", actionMessage.metadata().get("action_label"));
+            assertTrue(actionMessage.content().contains("已升级到人工确认"));
 
             SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "waiting_human");
             assertHttpMetadata(stateMessage.metadata(), "POST", "/api/v1/tasks/" + task.id() + "/escalate", "need human approval");

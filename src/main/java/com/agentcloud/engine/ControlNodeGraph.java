@@ -325,6 +325,9 @@ public class ControlNodeGraph {
             "next_step", firstNonBlank(execDecision.nextStep(), executionResult != null ? executionResult.suggestedNextStep() : null),
             "needs_checkpoint", execDecision.needsCheckpoint(),
             "needs_context_reopen", execDecision.needsContextReopen(),
+            "evidence_gap_detected", execDecision.evidenceGapDetected(),
+            "needs_archive_retrieval", execDecision.needsArchiveRetrieval(),
+            "needs_external_fact_refresh", execDecision.needsExternalFactRefresh(),
             "reopen_candidate_paths", reopenCandidatePaths,
             "reopen_candidate_count", reopenCandidatePaths.size(),
             "reopen_summary", buildReopenSummary(reopenCandidatePaths),
@@ -391,7 +394,12 @@ public class ControlNodeGraph {
 
         // 根据 decision 选择下一状态迁移
         String resolvedAction = resolveAction(
-            execDecision.action(), completionDecision.status(), completionDecision.alignmentLevel()
+            execDecision.action(),
+            completionDecision.status(),
+            completionDecision.alignmentLevel(),
+            execDecision.needsContextReopen(),
+            execDecision.needsArchiveRetrieval(),
+            execDecision.needsExternalFactRefresh()
         );
         if (List.of("done", "checkpoint_then_done").contains(resolvedAction)) {
             Task completedStage = markOrchestrationCompleted(task);
@@ -407,6 +415,9 @@ public class ControlNodeGraph {
                 yield moved;
             }
             case "checkpoint" -> packetNode(task, "periodic");
+            case "reopen" -> packetNode(task, "reopen_before");
+            case "archive_retrieval" -> packetNode(task, "archive_retrieval_before");
+            case "external_fact_refresh" -> packetNode(task, "external_fact_refresh_before");
             case "checkpoint_then_done" -> checkpointThenDone(task, "periodic");
             case "handoff" -> {
                 String target = firstNonBlank(
@@ -447,7 +458,12 @@ public class ControlNodeGraph {
         };
     }
 
-    private String resolveAction(String executionAction, String completionStatus, String alignmentLevel) {
+    private String resolveAction(String executionAction,
+                                 String completionStatus,
+                                 String alignmentLevel,
+                                 boolean needsContextReopen,
+                                 boolean needsArchiveRetrieval,
+                                 boolean needsExternalFactRefresh) {
         if ("checkpoint".equals(executionAction)
             && isDoneStatus(completionStatus)
             && !"low".equalsIgnoreCase(alignmentLevel)) {
@@ -462,6 +478,15 @@ public class ControlNodeGraph {
         if ("continue".equals(executionAction) && isDoneStatus(completionStatus)
             && !"low".equalsIgnoreCase(alignmentLevel)) {
             return "done";
+        }
+        if ("continue".equals(executionAction) && needsArchiveRetrieval) {
+            return "archive_retrieval";
+        }
+        if ("continue".equals(executionAction) && needsContextReopen) {
+            return "reopen";
+        }
+        if ("continue".equals(executionAction) && needsExternalFactRefresh) {
+            return "external_fact_refresh";
         }
         if ("continue".equals(executionAction) && isMisaligned(completionStatus)) {
             return "checkpoint";
@@ -947,15 +972,16 @@ public class ControlNodeGraph {
     private Task packetNode(Task task, String checkpointType) {
         log.info("[Packet] task={}", task.id());
         emitEvent(task, "node_packet", "Generating packet before transition");
+        Task packetBoundaryTask = "packet".equals(task.controlNode()) ? task : task.withControlNode("packet");
 
         Session session = sessionDao.findById(task.sessionId()).orElse(null);
         if (session != null) {
-            ResumePacket packet = packetBuilder.buildResumePacket(task, session);
+            ResumePacket packet = packetBuilder.buildResumePacket(packetBoundaryTask, session);
             packetDao.insert(packet);
         }
 
         // 在关键转移前触发 consolidation
-        consolidation.consolidate(task, checkpointType);
+        consolidation.consolidate(packetBoundaryTask, checkpointType);
 
         Task moved = task.withControlNode("scheduler");
         taskDao.updateState(moved);
@@ -1491,19 +1517,42 @@ public class ControlNodeGraph {
             if (object == null) {
                 continue;
             }
-            String targetPath = stringValue(object.metadata().get("target_path"));
-            if ((targetPath == null || targetPath.isBlank()) && object.refs() != null && !object.refs().isEmpty()) {
-                targetPath = object.refs().get(0).targetPath();
-            }
-            if (targetPath == null || targetPath.isBlank() || paths.contains(targetPath)) {
-                continue;
-            }
-            paths.add(targetPath);
-            if (paths.size() >= 3) {
-                break;
+            for (String targetPath : reopenCandidatePaths(object)) {
+                if (targetPath == null || targetPath.isBlank() || paths.contains(targetPath)) {
+                    continue;
+                }
+                paths.add(targetPath);
+                if (paths.size() >= 3) {
+                    return List.copyOf(paths);
+                }
             }
         }
         return List.copyOf(paths);
+    }
+
+    private List<String> reopenCandidatePaths(com.agentcloud.runtime.context.ContextObject object) {
+        if (object == null) {
+            return List.of();
+        }
+        List<String> paths = metadataStringList(object.metadata(), "reopen_candidate_paths");
+        if (!paths.isEmpty()) {
+            return paths;
+        }
+        String targetPath = stringValue(object.metadata().get("target_path"));
+        if (targetPath != null && !targetPath.isBlank()) {
+            return List.of(targetPath);
+        }
+        if (object.refs() == null || object.refs().isEmpty()) {
+            return List.of();
+        }
+        List<String> refPaths = new ArrayList<>();
+        for (var ref : object.refs()) {
+            if (ref == null || ref.targetPath() == null || ref.targetPath().isBlank()) {
+                continue;
+            }
+            refPaths.add(ref.targetPath());
+        }
+        return List.copyOf(refPaths);
     }
 
     private String reopenCandidateLabel(String targetPath) {

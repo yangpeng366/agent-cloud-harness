@@ -7,11 +7,14 @@ import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.SessionMessage;
+import com.agentcloud.runtime.RuntimeFactPromptFormatter;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -31,16 +34,31 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final LlmClient llmClient;
     private final MountedContextPromptRenderer mountedContextPromptRenderer;
+    private final RuntimeFactSetAssembler runtimeFactSetAssembler;
+    private final RuntimeFactPromptFormatter runtimeFactPromptFormatter;
 
     public DefaultWorkerExecutor(LlmClient llmClient) {
-        this(llmClient, new MountedContextPromptRenderer());
+        this(llmClient, new MountedContextPromptRenderer(), new RuntimeFactSetAssembler(), new RuntimeFactPromptFormatter());
     }
 
     DefaultWorkerExecutor(LlmClient llmClient, MountedContextPromptRenderer mountedContextPromptRenderer) {
+        this(llmClient, mountedContextPromptRenderer, new RuntimeFactSetAssembler(), new RuntimeFactPromptFormatter());
+    }
+
+    public DefaultWorkerExecutor(LlmClient llmClient,
+                                 MountedContextPromptRenderer mountedContextPromptRenderer,
+                                 RuntimeFactSetAssembler runtimeFactSetAssembler,
+                                 RuntimeFactPromptFormatter runtimeFactPromptFormatter) {
         this.llmClient = llmClient;
         this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
             ? new MountedContextPromptRenderer()
             : mountedContextPromptRenderer;
+        this.runtimeFactSetAssembler = runtimeFactSetAssembler == null
+            ? new RuntimeFactSetAssembler()
+            : runtimeFactSetAssembler;
+        this.runtimeFactPromptFormatter = runtimeFactPromptFormatter == null
+            ? new RuntimeFactPromptFormatter()
+            : runtimeFactPromptFormatter;
     }
 
     @Override
@@ -52,7 +70,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             : MountedContextPromptRenderResult.empty();
 
         String systemPrompt = buildSystemPrompt(context, workerId);
-        String userPrompt = buildUserPrompt(context, renderingMode, mountedRenderResult);
+        String userPrompt = buildUserPrompt(context, workerId, renderingMode, mountedRenderResult);
         List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
 
         String raw = llmClient.chat(systemPrompt, userPrompt, imageInputs);
@@ -115,8 +133,10 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildUserPrompt(TaskRuntimeContext context,
+                                   String workerId,
                                    PromptRenderingMode renderingMode,
                                    MountedContextPromptRenderResult mountedRenderResult) {
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult);
         var t = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(t.title()).append("\n");
@@ -146,7 +166,14 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         if (context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
             sb.append("\nActive Context:\n");
             sb.append(context.activeContext().synthesizedContext()).append("\n");
-        } else {
+        }
+        if (context.recentMessages() != null && !context.recentMessages().isEmpty()) {
+            sb.append("\nRecent Messages:\n");
+            for (String line : formatRecentMessages(context.recentMessages(), 6)) {
+                sb.append("- ").append(line).append("\n");
+            }
+        }
+        if (context.activeContext() == null || context.activeContext().synthesizedContext().isBlank()) {
             if (context.latestPacket() != null && context.latestPacket().activeTaskSummary() != null) {
                 sb.append("Context Summary: ").append(context.latestPacket().activeTaskSummary()).append("\n");
             }
@@ -174,13 +201,8 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 }
             }
 
-            if (context.recentMessages() != null && !context.recentMessages().isEmpty()) {
-                sb.append("\nRecent Messages:\n");
-                for (String line : formatRecentMessages(context.recentMessages(), 6)) {
-                    sb.append("- ").append(line).append("\n");
-                }
-            }
         }
+        appendRuntimeFactSurface(sb, context, workerId, metrics);
 
         sb.append("\nPlease execute the task and provide your output.");
         return sb.toString();
@@ -197,6 +219,41 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             return;
         }
         sb.append("\n").append(mountedPrompt);
+    }
+
+    private void appendRuntimeFactSurface(StringBuilder sb,
+                                          TaskRuntimeContext context,
+                                          String workerId,
+                                          MountedContextPromptMetrics metrics) {
+        RuntimeFactSet factSet = resolveRuntimeFactSet(context, workerId, metrics);
+        if (factSet == null) {
+            return;
+        }
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+            sb.append("\n");
+        }
+        runtimeFactPromptFormatter.append(sb, factSet);
+    }
+
+    private RuntimeFactSet resolveRuntimeFactSet(TaskRuntimeContext context,
+                                                 String workerId,
+                                                 MountedContextPromptMetrics metrics) {
+        if (context == null || context.task() == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (metrics != null) {
+            metadata.putAll(metrics.toMetadata());
+        }
+        if (workerId != null && !workerId.isBlank()) {
+            metadata.put("selected_worker", workerId);
+        }
+        return runtimeFactSetAssembler.assemble(
+            context.task(),
+            context,
+            12,
+            metadata
+        );
     }
 
     private WorkerExecutionResult attachRenderingMetadata(WorkerExecutionResult result,
@@ -276,11 +333,15 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             }
             String role = message.role() == null || message.role().isBlank() ? "message" : message.role();
             String type = message.messageType() == null || message.messageType().isBlank() ? "" : " [" + message.messageType() + "]";
+            String scope = "";
+            if (message.metadata() != null && message.metadata().get("continuity_scope") != null) {
+                scope = " {" + message.metadata().get("continuity_scope") + "}";
+            }
             String content = message.content().replaceAll("\\s+", " ").trim();
             if (content.length() > 240) {
                 content = content.substring(0, 240) + "...";
             }
-            lines.add(role + type + ": " + content);
+            lines.add(role + type + scope + ": " + content);
         }
         return lines;
     }

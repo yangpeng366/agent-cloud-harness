@@ -4,15 +4,19 @@ import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.providers.CodexProvider;
 import com.agentcloud.engine.AgentRunService;
 import com.agentcloud.engine.ConsolidationService;
+import com.agentcloud.engine.ControlNodeGraph;
 import com.agentcloud.engine.ExperimentRunService;
 import com.agentcloud.engine.IdGenerator;
 import com.agentcloud.engine.LearningMemoryService;
+import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
 import com.agentcloud.model.ToolInvocationRecord;
@@ -101,6 +105,9 @@ class TaskHandlerLiveFlowHttpTest {
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
                     Map.entry("needs_context_reopen", true),
+                    Map.entry("evidence_gap_detected", true),
+                    Map.entry("needs_archive_retrieval", true),
+                    Map.entry("needs_external_fact_refresh", true),
                     Map.entry("reopen_candidate_paths", List.of(
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
@@ -144,6 +151,9 @@ class TaskHandlerLiveFlowHttpTest {
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
                     Map.entry("needs_context_reopen", true),
+                    Map.entry("evidence_gap_detected", true),
+                    Map.entry("needs_archive_retrieval", true),
+                    Map.entry("needs_external_fact_refresh", true),
                     Map.entry("reopen_candidate_paths", List.of(
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
@@ -231,6 +241,9 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(2, ((Number) flowExecution.get("mounted_active_count")).intValue());
             assertEquals(1, ((Number) flowExecution.get("mounted_archive_count")).intValue());
             assertEquals(Boolean.TRUE, flowExecutionJudgment.get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, flowExecutionJudgment.get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, flowExecutionJudgment.get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, flowExecutionJudgment.get("needs_external_fact_refresh"));
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
@@ -263,6 +276,9 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(Boolean.TRUE,
                 timelineByStage.get("execution_judgment").get("mounted_context_budget_truncated"));
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").get("needs_external_fact_refresh"));
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_http_1"
@@ -326,8 +342,32 @@ class TaskHandlerLiveFlowHttpTest {
                 "handoff checkpoint captured",
                 Map.of(
                     "assigned_worker", "codex",
-                    "prompt_mode", "mounted_context_primary",
-                    "open_questions", List.of("confirm executor after handoff")
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "codex",
+                            "route_source", "http_checkpoint_surface",
+                            "candidate_workers", List.of("codex", "kimi")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "codex",
+                            "prompt_mode", "mounted_context_primary",
+                            "tool_invocation_ids", List.of("tool-http-alpha"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/http/checkpoints/cp-1"),
+                            "unfinished_items", List.of("confirm executor after handoff"),
+                            "proof_summary", "tool=tool-http-alpha | evidence=/tasks/http/checkpoints/cp-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-http-checkpoint-1"
+                            )
+                        )
+                    )
                 ),
                 Map.of(),
                 Map.of("artifact_count", 0)
@@ -347,7 +387,34 @@ class TaskHandlerLiveFlowHttpTest {
                     "previous_worker", "codex",
                     "assigned_worker", "kimi",
                     "target_worker", "kimi",
-                    "prompt_mode", "mounted_context_primary"
+                    "prompt_mode", "mounted_context_primary",
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "kimi",
+                            "route_source", "http_handoff_surface",
+                            "candidate_workers", List.of("kimi", "codex")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "kimi",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-http-handoff"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/http/handoffs/handoff-1"),
+                            "unfinished_items", List.of("executor should continue"),
+                            "proof_summary", "tool=tool-http-handoff | evidence=/tasks/http/handoffs/handoff-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/checkpoints",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-http-handoff-1"
+                            )
+                        )
+                    )
                 )
             ));
             harness.db.jdbi().onDemand(ResumePacketDao.class).insert(new ResumePacket(
@@ -365,9 +432,34 @@ class TaskHandlerLiveFlowHttpTest {
                     "assigned_worker", "kimi",
                     "current_status", "waiting",
                     "current_node", "packet",
-                    "prompt_mode", "mounted_context_primary",
                     "resume_hint", "continue from saved packet",
-                    "open_questions", List.of("confirm packet replay")
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "kimi",
+                            "route_source", "http_resume_surface",
+                            "candidate_workers", List.of("kimi", "codex")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "kimi",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-http-beta"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/http/packets/packet-1"),
+                            "unfinished_items", List.of("confirm packet replay"),
+                            "proof_summary", "tool=tool-http-beta | evidence=/tasks/http/packets/packet-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-1"
+                            )
+                        )
+                    )
                 )
             ));
 
@@ -405,14 +497,130 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals("mounted_context_primary", pauseEntry.get("prompt_mode"));
             assertEquals("kimi", handoffEntry.get("worker_id"));
             assertEquals("kimi", handoffEntry.get("target_worker"));
+            assertEquals("http_handoff_surface", handoffEntry.get("route_source"));
+            assertEquals("waiting", handoffEntry.get("execution_status"));
+            assertEquals(Boolean.TRUE, handoffEntry.get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, handoffEntry.get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, handoffEntry.get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, handoffEntry.get("needs_external_fact_refresh"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/checkpoints",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-http-handoff-1"
+                ),
+                handoffEntry.get("reopen_candidate_paths"));
+            assertEquals("reopen=reopen:checkpoints, reopen:packets:packet-http-handoff-1",
+                handoffEntry.get("reopen_summary"));
+            assertEquals(List.of("tool-http-handoff"), handoffEntry.get("tool_invocation_ids"));
+            assertEquals(List.of("/tasks/http/handoffs/handoff-1"), handoffEntry.get("evidence_refs"));
+            assertEquals(List.of("executor should continue"), handoffEntry.get("unfinished_items"));
             assertEquals("handoff_before", checkpointEntry.get("checkpoint_type"));
             assertEquals("mounted_context_primary", checkpointEntry.get("prompt_mode"));
+            assertEquals("http_checkpoint_surface", checkpointEntry.get("route_source"));
+            assertEquals(Boolean.TRUE, checkpointEntry.get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, checkpointEntry.get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, checkpointEntry.get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, checkpointEntry.get("needs_external_fact_refresh"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-http-checkpoint-1"
+                ),
+                checkpointEntry.get("reopen_candidate_paths"));
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet-http-checkpoint-1",
+                checkpointEntry.get("reopen_summary"));
+            assertEquals(List.of("tool-http-alpha"), checkpointEntry.get("tool_invocation_ids"));
+            assertEquals(List.of("/tasks/http/checkpoints/cp-1"), checkpointEntry.get("evidence_refs"));
             assertEquals(List.of("confirm executor after handoff"), checkpointEntry.get("unfinished_items"));
             assertEquals("resume_packet", packetEntry.get("continuity_action"));
             assertEquals("mounted_context_primary", packetEntry.get("prompt_mode"));
+            assertEquals("http_resume_surface", packetEntry.get("route_source"));
             assertEquals("waiting", packetEntry.get("execution_status"));
             assertEquals("continue from saved packet", packetEntry.get("reason"));
+            assertEquals(Boolean.TRUE, packetEntry.get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, packetEntry.get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, packetEntry.get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, packetEntry.get("needs_external_fact_refresh"));
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-1"
+                ),
+                packetEntry.get("reopen_candidate_paths"));
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet-1",
+                packetEntry.get("reopen_summary"));
+            assertEquals(List.of("tool-http-beta"), packetEntry.get("tool_invocation_ids"));
+            assertEquals(List.of("/tasks/http/packets/packet-1"), packetEntry.get("evidence_refs"));
             assertEquals(List.of("confirm packet replay"), packetEntry.get("unfinished_items"));
+        }
+    }
+
+    @Test
+    void liveFlowHttpLabelsExternalFactRefreshCheckpoint() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-external-fact-refresh.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http external fact refresh task", "research", "user", "high",
+                "把 external fact refresh checkpoint 暴露到 HTTP live flow",
+                "验证 label 和 signal 经由 HTTP 可见", null, null,
+                Map.of("prompt_mode", "mounted_context_primary"), false
+            ));
+
+            harness.db.jdbi().onDemand(CheckpointDao.class).insert(new com.agentcloud.model.Checkpoint(
+                IdGenerator.newId("cp"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-09T11:01:00Z"),
+                "external_fact_refresh_before",
+                "external fact refresh checkpoint captured",
+                Map.of(
+                    "assigned_worker", "codex",
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "codex",
+                            "route_source", "http_external_fact_refresh_surface",
+                            "candidate_workers", List.of("codex", "kimi")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "codex",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-http-refresh"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/http/external-refresh/cache-1"),
+                            "unfinished_items", List.of("refresh external facts"),
+                            "proof_summary", "tool=tool-http-refresh | evidence=/tasks/http/external-refresh/cache-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "evidence_gap_detected", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-http-refresh-1"
+                            )
+                        )
+                    )
+                ),
+                Map.of(),
+                Map.of("artifact_count", 0)
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            List<Map<String, Object>> timeline = harness.list(flowData.get("runtime_cognition_timeline"));
+            Map<String, Object> checkpointEntry = timeline.stream()
+                .filter(item -> "checkpoint".equals(String.valueOf(item.get("stage"))))
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("external_fact_refresh_before", checkpointEntry.get("checkpoint_type"));
+            assertEquals("External Fact Refresh Checkpoint", checkpointEntry.get("label"));
+            assertEquals("http_external_fact_refresh_surface", checkpointEntry.get("route_source"));
+            assertEquals(Boolean.TRUE, checkpointEntry.get("needs_external_fact_refresh"));
+            assertTrue(String.valueOf(checkpointEntry.get("summary")).contains("needs_external_fact_refresh=true"));
         }
     }
 
@@ -478,6 +686,392 @@ class TaskHandlerLiveFlowHttpTest {
         }
     }
 
+    @Test
+    void liveFlowHttpIncludesSessionContinuityMessagesInRelatedMessages() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-related-messages.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http related message task", "continuation", "user", "high",
+                "确认 live_flow related_messages 会带 session continuity message",
+                "HTTP contract 里应出现 continuity_scope=session",
+                null, null, Map.of(), false
+            ));
+            SessionMessageDao messageDao = harness.db.jdbi().onDemand(SessionMessageDao.class);
+            messageDao.insert(new SessionMessage(
+                IdGenerator.newId("msg"),
+                task.sessionId(),
+                task.id(),
+                "user",
+                "task_note",
+                "这条 task note 应继续出现在 related_messages 中",
+                Instant.now(),
+                Map.of("source_surface", "http_test")
+            ));
+            messageDao.insert(new SessionMessage(
+                IdGenerator.newId("msg"),
+                task.sessionId(),
+                null,
+                "user",
+                "user_note",
+                "这条 session continuity message 也应进入 live_flow related_messages",
+                Instant.now(),
+                Map.of("source_surface", "http_test")
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=8"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            List<Map<String, Object>> relatedMessages = harness.list(flowData.get("related_messages"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertTrue(relatedMessages.stream().anyMatch(item ->
+                "task_note".equals(String.valueOf(item.get("message_type")))
+                    && task.id().equals(String.valueOf(item.get("task_id")))));
+            assertTrue(relatedMessages.stream().anyMatch(item -> {
+                Map<String, Object> metadata = harness.map(item.get("metadata"));
+                Object taskId = item.get("task_id");
+                return (taskId == null || String.valueOf(taskId).isBlank())
+                    && "user_note".equals(String.valueOf(item.get("message_type")))
+                    && "session".equals(String.valueOf(metadata.get("continuity_scope")));
+            }));
+        }
+    }
+
+    @Test
+    void dialogueSmokeFlowPersistsNoteTaskBriefAndLiveFlowRelatedMessages() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-dialogue-smoke.db"))) {
+            HttpResponse<String> sessionResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"dialogue smoke session"
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> sessionPayload = harness.readJson(sessionResponse.body());
+            Map<String, Object> sessionData = harness.map(sessionPayload.get("data"));
+            String sessionId = String.valueOf(sessionData.get("id"));
+
+            HttpResponse<String> noteResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "role":"user",
+                          "message_type":"user_note",
+                          "content":"先整理结构，再发布一个 manual-start 任务。",
+                          "metadata":{
+                            "source_surface":"web_dialogue",
+                            "created_via":"dialogue_workspace"
+                          }
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> taskResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"dialogue smoke task",
+                          "task_type":"continuation",
+                          "source":"user",
+                          "priority":"high",
+                          "intent":"先整理结构，再发布一个 manual-start 任务。",
+                          "goal":"等待 follow-up",
+                          "session_id":"%s",
+                          "auto_start":false,
+                          "metadata":{
+                            "source_surface":"web_dialogue",
+                            "created_via":"dialogue_workspace"
+                          }
+                        }
+                        """.formatted(sessionId)))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> taskPayload = harness.readJson(taskResponse.body());
+            Map<String, Object> taskData = harness.map(taskPayload.get("data"));
+            String taskId = String.valueOf(taskData.get("id"));
+
+            HttpResponse<String> briefResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "role":"user",
+                          "message_type":"task_brief",
+                          "content":"先整理结构，再发布一个 manual-start 任务。",
+                          "task_id":"%s",
+                          "metadata":{
+                            "source_surface":"web_dialogue",
+                            "created_via":"dialogue_workspace",
+                            "mirrored_from":"task_form"
+                          }
+                        }
+                        """.formatted(taskId)))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> messagesResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages?limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            HttpResponse<String> sessionTasksResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/tasks"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            HttpResponse<String> liveFlowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + taskId + "/live_flow?limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> messagesPayload = harness.readJson(messagesResponse.body());
+            List<Map<String, Object>> messages = harness.list(messagesPayload.get("data"));
+            Map<String, Object> messagesByTypeNote = messages.stream()
+                .filter(item -> "user_note".equals(String.valueOf(item.get("message_type"))))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> messagesByTypeBrief = messages.stream()
+                .filter(item -> "task_brief".equals(String.valueOf(item.get("message_type"))))
+                .findFirst()
+                .orElseThrow();
+
+            Map<String, Object> sessionTasksPayload = harness.readJson(sessionTasksResponse.body());
+            List<Map<String, Object>> sessionTasks = harness.list(sessionTasksPayload.get("data"));
+
+            Map<String, Object> liveFlowPayload = harness.readJson(liveFlowResponse.body());
+            Map<String, Object> liveFlowData = harness.map(liveFlowPayload.get("data"));
+            List<Map<String, Object>> relatedMessages = harness.list(liveFlowData.get("related_messages"));
+
+            assertEquals(200, sessionResponse.statusCode());
+            assertEquals(200, noteResponse.statusCode());
+            assertEquals(200, taskResponse.statusCode());
+            assertEquals(200, briefResponse.statusCode());
+            assertEquals(200, messagesResponse.statusCode());
+            assertEquals(200, sessionTasksResponse.statusCode());
+            assertEquals(200, liveFlowResponse.statusCode());
+            assertEquals("先整理结构，再发布一个 manual-start 任务。", messagesByTypeNote.get("content"));
+            assertEquals(taskId, String.valueOf(messagesByTypeBrief.get("task_id")));
+            assertTrue(sessionTasks.stream().anyMatch(item -> taskId.equals(String.valueOf(item.get("id")))));
+            assertTrue(relatedMessages.stream().anyMatch(item -> {
+                Map<String, Object> metadata = harness.map(item.get("metadata"));
+                return "task_brief".equals(String.valueOf(item.get("message_type")))
+                    && taskId.equals(String.valueOf(item.get("task_id")))
+                    && "task".equals(String.valueOf(metadata.get("continuity_scope")));
+            }));
+            assertTrue(relatedMessages.stream().anyMatch(item -> {
+                Map<String, Object> metadata = harness.map(item.get("metadata"));
+                Object relatedTaskId = item.get("task_id");
+                return (relatedTaskId == null || String.valueOf(relatedTaskId).isBlank())
+                    && "user_note".equals(String.valueOf(item.get("message_type")))
+                    && "session".equals(String.valueOf(metadata.get("continuity_scope")));
+            }));
+        }
+    }
+
+    @Test
+    void activeSessionStillAcceptsMessagesAndNewTasksAfterPreviousTaskDone() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-dialogue-followup-after-done.db"))) {
+            HttpResponse<String> sessionResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"dialogue followup session"
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            String sessionId = String.valueOf(harness.map(harness.readJson(sessionResponse.body()).get("data")).get("id"));
+
+            HttpResponse<String> firstTaskResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"first task done",
+                          "task_type":"continuation",
+                          "source":"user",
+                          "priority":"high",
+                          "intent":"先完成第一轮任务。",
+                          "goal":"验证任务完成后 session 仍可继续。",
+                          "session_id":"%s",
+                          "auto_start":false
+                        }
+                        """.formatted(sessionId)))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            String firstTaskId = String.valueOf(harness.map(harness.readJson(firstTaskResponse.body()).get("data")).get("id"));
+
+            HttpResponse<String> doneResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + firstTaskId + "/state"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "state":"done",
+                          "reason":"first round completed"
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> noteResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "role":"user",
+                          "message_type":"user_note",
+                          "content":"第一轮完成后，继续补一个 follow-up 说明。",
+                          "metadata":{
+                            "source_surface":"web_dialogue",
+                            "created_via":"dialogue_workspace"
+                          }
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> nextTaskResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"second task after done",
+                          "task_type":"continuation",
+                          "source":"user",
+                          "priority":"high",
+                          "intent":"基于第一轮结果继续推进第二轮。",
+                          "goal":"验证同 session 可继续发新任务。",
+                          "session_id":"%s",
+                          "parent_task_id":"%s",
+                          "auto_start":false
+                        }
+                        """.formatted(sessionId, firstTaskId)))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> messagesResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages?limit=12"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            HttpResponse<String> sessionTasksResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/tasks"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> nextTaskPayload = harness.readJson(nextTaskResponse.body());
+            String nextTaskId = String.valueOf(harness.map(nextTaskPayload.get("data")).get("id"));
+            List<Map<String, Object>> messages = harness.list(harness.readJson(messagesResponse.body()).get("data"));
+            List<Map<String, Object>> sessionTasks = harness.list(harness.readJson(sessionTasksResponse.body()).get("data"));
+
+            assertEquals(200, sessionResponse.statusCode());
+            assertEquals(200, firstTaskResponse.statusCode());
+            assertEquals(200, doneResponse.statusCode());
+            assertEquals(200, noteResponse.statusCode());
+            assertEquals(200, nextTaskResponse.statusCode());
+            assertEquals(200, messagesResponse.statusCode());
+            assertEquals(200, sessionTasksResponse.statusCode());
+            assertTrue(messages.stream().anyMatch(item ->
+                "user_note".equals(String.valueOf(item.get("message_type")))
+                    && "第一轮完成后，继续补一个 follow-up 说明。".equals(String.valueOf(item.get("content")))));
+            assertTrue(sessionTasks.stream().anyMatch(item ->
+                firstTaskId.equals(String.valueOf(item.get("id")))
+                    && "done".equals(String.valueOf(item.get("status")))));
+            assertTrue(sessionTasks.stream().anyMatch(item ->
+                nextTaskId.equals(String.valueOf(item.get("id")))
+                    && firstTaskId.equals(String.valueOf(item.get("parent_task_id")))));
+        }
+    }
+
+    @Test
+    void sessionMessagesExposeStructuredAssistantProgressMetadata() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-dialogue-progress-metadata.db"))) {
+            HttpResponse<String> taskResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"dialogue progress metadata",
+                          "task_type":"continuation",
+                          "source":"user",
+                          "priority":"high",
+                          "intent":"先生成一轮结构化 progress message。",
+                          "goal":"验证 session messages 里的 assistant metadata 合同。",
+                          "auto_start":false
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> taskPayload = harness.readJson(taskResponse.body());
+            Map<String, Object> taskData = harness.map(taskPayload.get("data"));
+            String sessionId = String.valueOf(taskData.get("session_id"));
+            String taskId = String.valueOf(taskData.get("id"));
+
+            HttpResponse<String> continueResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + taskId + "/continue"))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            HttpResponse<String> messagesResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/sessions/" + sessionId + "/messages?task_id=" + taskId + "&limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            List<Map<String, Object>> messages = harness.list(harness.readJson(messagesResponse.body()).get("data"));
+            Map<String, Object> progressMessage = messages.stream()
+                .filter(item -> "task_progress".equals(String.valueOf(item.get("message_type"))))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> metadata = harness.map(progressMessage.get("metadata"));
+
+            assertEquals(200, taskResponse.statusCode());
+            assertEquals(200, continueResponse.statusCode());
+            assertEquals(200, messagesResponse.statusCode());
+            assertEquals("continue", String.valueOf(metadata.get("trigger")));
+            assertEquals("continuation", String.valueOf(metadata.get("task_type")));
+            assertEquals("orchestrated", String.valueOf(metadata.get("model_mode")));
+            assertEquals("codex", String.valueOf(metadata.get("assigned_worker")));
+            assertEquals("ready_fallback", String.valueOf(metadata.get("route_source")));
+            assertEquals("继续扩写第二段。", String.valueOf(metadata.get("next_step")));
+            assertTrue(String.valueOf(metadata.get("summary_preview")).contains("继续推进草稿"));
+            assertTrue(String.valueOf(progressMessage.get("content")).contains("已完成一轮推进"));
+        }
+    }
+
     private static final class HttpHarness implements AutoCloseable {
         private final DatabaseManager db;
         private final TaskService service;
@@ -496,6 +1090,12 @@ class TaskHandlerLiveFlowHttpTest {
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = Executors.newCachedThreadPool();
             this.server.setExecutor(executor);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            SessionService sessionService = new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao);
+            this.server.createContext("/api/v1/sessions", new SessionHandler(sessionService, NioHttpServer.SHARED_MAPPER));
             this.server.createContext("/api/v1/tasks", new TaskHandler(service, NioHttpServer.SHARED_MAPPER));
             this.server.start();
             this.port = server.getAddress().getPort();
@@ -536,6 +1136,7 @@ class TaskHandlerLiveFlowHttpTest {
             AgentRunDao agentRunDao = db.jdbi().onDemand(AgentRunDao.class);
             AgentProviderRegistry providerRegistry = new AgentProviderRegistry()
                 .register(new CodexProvider());
+            WorkerRouter workerRouter = new WorkerRouter(new WorkerRegistry());
 
             TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
                 null, null, null, null, null, null, null
@@ -593,15 +1194,68 @@ class TaskHandlerLiveFlowHttpTest {
                     );
                 }
             };
+            ControlNodeGraph controlGraph = new ControlNodeGraph(
+                taskDao, null, null, null, null, null, null,
+                null, null, null, null, null, null
+            ) {
+                @Override
+                public Task enter(Task task) {
+                    Artifact latestArtifact = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 5).stream()
+                        .findFirst()
+                        .orElse(null);
+                    if (latestArtifact == null) {
+                        artifactDao.insert(new Artifact(
+                            IdGenerator.newId("art"),
+                            task.sessionId(),
+                            task.id(),
+                            Instant.now(),
+                            "worker_artifact",
+                            "Harness progress artifact",
+                            null,
+                            null,
+                            "已继续推进草稿，并补出下一轮扩写线索。",
+                            Map.of(
+                                "selected_worker", "codex",
+                                "selected_worker_type", "codex",
+                                "selected_model_tier", "strong",
+                                "route_source", "ready_fallback",
+                                "why_selected", "selected by harness stub after manual continue"
+                            )
+                        ));
+                    }
+                    Task updated = new Task(
+                        task.id(),
+                        task.sessionId(),
+                        task.parentTaskId(),
+                        task.title(),
+                        "active",
+                        task.priority(),
+                        task.createdAt(),
+                        Instant.now(),
+                        task.startedAt(),
+                        task.completedAt(),
+                        task.ownerRole(),
+                        "已继续推进草稿，形成可扩写的首段结构。",
+                        task.goal(),
+                        "继续扩写第二段。",
+                        "codex",
+                        "scheduler",
+                        task.waitingReason(),
+                        task.metadata()
+                    );
+                    taskDao.updateState(updated);
+                    return updated;
+                }
+            };
 
             return new TaskService(
                 taskDao,
                 sessionDao,
                 eventDao,
                 packetDao,
-                new WorkerRouter(new WorkerRegistry()),
+                workerRouter,
                 null,
-                null,
+                controlGraph,
                 null,
                 runtimeContextBuilder,
                 new ConsolidationService(decisionDao, artifactDao, eventDao, checkpointDao, taskDao),

@@ -72,6 +72,7 @@ const dom = {
     chainContext: document.getElementById("chainContext"),
     continuitySummary: document.getElementById("continuitySummary"),
     continuityChips: document.getElementById("continuityChips"),
+    mountedContext: document.getElementById("mountedContext"),
     routeBox: document.getElementById("routeBox"),
     experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
@@ -791,6 +792,7 @@ function renderInspector() {
         dom.chainContext.innerHTML = emptyState("当前任务没有上下文信息。");
         dom.continuitySummary.innerHTML = emptyState("当前任务没有连续性信息。");
         dom.continuityChips.innerHTML = "";
+        dom.mountedContext.innerHTML = emptyState("当前任务没有 mounted context。");
         dom.routeBox.innerHTML = emptyState("当前任务没有路由信息");
         dom.experimentSummary.innerHTML = emptyState("当前任务没有实验信息");
         dom.decisionList.innerHTML = emptyState("当前任务没有判断 judgment");
@@ -863,6 +865,7 @@ function renderInspector() {
         ...toChipLines("learned", activeContext.learned_hints || activeContext.learnedHints)
     ];
     dom.continuityChips.innerHTML = chips.length > 0 ? chips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("") : emptyState("当前 active context 没有额外 hint。");
+    dom.mountedContext.innerHTML = renderMountedContext(runtimeContext.mounted_context_view || runtimeContext.mountedContextView);
 
     dom.routeBox.innerHTML = renderRouteBox(flow, task);
     dom.experimentSummary.innerHTML = renderExperimentSummary(flow, state.experimentSummary);
@@ -2717,6 +2720,12 @@ function cognitionTimelineChips(entry) {
         entry?.mountedContextBudgetTruncated
     );
     const aligned = booleanValue(entry?.aligned_with_previous_prompt_mode, entry?.alignedWithPreviousPromptMode);
+    const needsContextReopen = booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen);
+    const evidenceGapDetected = booleanValue(entry?.evidence_gap_detected, entry?.evidenceGapDetected);
+    const needsArchiveRetrieval = booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval);
+    const needsExternalFactRefresh = booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh);
+    const reopenSummary = firstNonBlank(entry?.reopen_summary, entry?.reopenSummary);
+    const reopenCandidatePaths = normalizeTextList(entry?.reopen_candidate_paths, entry?.reopenCandidatePaths);
     const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
     const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
     return [
@@ -2727,6 +2736,12 @@ function cognitionTimelineChips(entry) {
         routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
         promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
         executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
+        needsArchiveRetrieval === true ? "archive retrieval requested" : null,
+        needsExternalFactRefresh === true ? "external fact refresh requested" : null,
+        needsContextReopen === true ? "context reopen requested" : null,
+        evidenceGapDetected === true ? "evidence gap detected" : null,
+        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} reopen targets` : null,
+        reopenSummary ? `reopen: ${preview(reopenSummary, 72)}` : null,
         toolCount === null ? null : `${toolCount} tools`,
         mountedRendered === true ? "mounted rendered" : null,
         mountedInjected === true ? "mounted injected" : null,
@@ -2755,6 +2770,16 @@ function summarizeCognitionTimelineEntry(entry) {
         firstNonBlank(entry?.prompt_mode, entry?.promptMode),
         firstNonBlank(entry?.execution_status, entry?.executionStatus),
         firstNonBlank(entry?.route_source, entry?.routeSource),
+        booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval) === true
+            ? "archive retrieval requested"
+            : null,
+        booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh) === true
+            ? "external fact refresh requested"
+            : null,
+        booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen) === true
+            ? "context reopen requested"
+            : null,
+        firstNonBlank(entry?.reopen_summary, entry?.reopenSummary),
         firstNonBlank(entry?.reason)
     ].filter(Boolean).join(" · ");
 }
@@ -3078,6 +3103,90 @@ function renderChainContext(task) {
                     `;
                 }).join("")}
             </div>
+        </div>
+    `;
+}
+
+function renderMountedContext(view) {
+    if (!view || typeof view !== "object") {
+        return emptyState("当前任务没有 mounted context。");
+    }
+    const panels = Array.isArray(view.panels) ? view.panels.filter(Boolean) : [];
+    const selectionTrace = normalizeTextList(view.selection_trace, view.selectionTrace);
+    const nonEmptyPanels = panels.filter((panel) => Array.isArray(panel?.objects) && panel.objects.filter(Boolean).length > 0);
+    if (nonEmptyPanels.length === 0 && selectionTrace.length === 0) {
+        return emptyState("当前 mounted context 为空。");
+    }
+    const traceHtml = selectionTrace.length > 0
+        ? `<div class="mounted-context__trace">${selectionTrace.slice(0, 8).map((item) => `<span class="chip">${escapeHtml(preview(item, 120))}</span>`).join("")}</div>`
+        : "";
+    return `
+        <div class="mounted-context">
+            <div class="mounted-context__meta">
+                <span class="task-badge">${escapeHtml(`${nonEmptyPanels.length} panels`)}</span>
+                ${view.task_id || view.taskId ? `<span class="task-badge mono">${escapeHtml(view.task_id || view.taskId)}</span>` : ""}
+            </div>
+            ${traceHtml}
+            <div class="mounted-context__panels">
+                ${nonEmptyPanels.map(renderMountedPanel).join("")}
+            </div>
+        </div>
+    `;
+}
+
+function renderMountedPanel(panel) {
+    const name = firstNonBlank(panel?.title, humanizeToken(panel?.name), panel?.name, "panel");
+    const objects = Array.isArray(panel?.objects) ? panel.objects.filter(Boolean) : [];
+    return `
+        <div class="mounted-context__panel">
+            <div class="mounted-context__panel-head">
+                <strong>${escapeHtml(name)}</strong>
+                <span class="task-badge">${escapeHtml(String(objects.length))}</span>
+            </div>
+            <div class="mounted-context__objects">
+                ${objects.slice(0, 6).map(renderMountedObjectCard).join("")}
+                ${objects.length > 6 ? `<div class="empty-state">还有 ${escapeHtml(String(objects.length - 6))} 个对象未展开。</div>` : ""}
+            </div>
+        </div>
+    `;
+}
+
+function renderMountedObjectCard(object) {
+    const title = firstNonBlank(object?.title, object?.path, object?.id, "object");
+    const summary = firstNonBlank(object?.summary, object?.content_preview, object?.contentPreview, "");
+    const type = firstNonBlank(object?.type, "object");
+    const retention = firstNonBlank(object?.retention_state, object?.retentionState);
+    const metadata = object?.metadata && typeof object.metadata === "object" ? object.metadata : {};
+    const refs = Array.isArray(object?.refs) ? object.refs.filter(Boolean) : [];
+    const candidatePaths = normalizeTextList(
+        metadata.retrieval_candidate_paths,
+        metadata.reopen_candidate_paths,
+        metadata.retrievalCandidatePaths,
+        metadata.reopenCandidatePaths
+    );
+    const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
+    const chips = [
+        retention ? `retention: ${retention}` : null,
+        Boolean.TRUE.equals(metadata.rehydrated_from_archive) ? "rehydrated" : null,
+        Boolean.TRUE.equals(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
+        Boolean.TRUE.equals(metadata.needs_external_fact_refresh) ? "external refresh" : null,
+        Boolean.TRUE.equals(metadata.needs_context_reopen) ? "context reopen" : null,
+        refs.length > 0 ? `refs: ${refs.length}` : null
+    ].filter(Boolean);
+    const detailLines = [
+        summary,
+        candidatePaths.length > 0 ? `targets: ${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
+        nextFollowups.length > 0 ? `next: ${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
+    ].filter(Boolean);
+    return `
+        <div class="mounted-context__object">
+            <div class="artifact-item__meta">
+                <span class="task-badge">${escapeHtml(humanizeToken(type) || type)}</span>
+                ${retention ? `<span class="task-badge">${escapeHtml(humanizeToken(retention) || retention)}</span>` : ""}
+            </div>
+            <strong>${escapeHtml(preview(title, 96))}</strong>
+            ${detailLines.length > 0 ? `<p>${escapeHtml(detailLines.join("\n"))}</p>` : ""}
+            ${chips.length > 0 ? `<div class="chip-group mounted-context__chips">${chips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}</div>` : ""}
         </div>
     `;
 }

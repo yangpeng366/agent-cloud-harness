@@ -2,6 +2,7 @@ package com.agentcloud.server;
 
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.engine.AgentRunService;
+import com.agentcloud.engine.ChatFacadeService;
 import com.agentcloud.engine.ConsolidationService;
 import com.agentcloud.engine.ExperimentMatrixService;
 import com.agentcloud.engine.ExperimentRunService;
@@ -74,6 +75,8 @@ public class NioHttpServer {
     public void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress(port), 0);
         server.setExecutor(command -> Thread.ofVirtual().name("agentcloud-http-", 0).start(() -> runWithAppClassLoader(command)));
+        ChatFacadeService chatFacadeService = new ChatFacadeService(sessionService, taskService);
+        ChatFacadeHandler chatFacadeHandler = new ChatFacadeHandler(chatFacadeService, mapper);
 
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
@@ -85,6 +88,9 @@ public class NioHttpServer {
         });
         server.createContext("/dialogue", new WebConsoleHandler("/dialogue", "web/dialogue"));
         server.createContext("/console", new WebConsoleHandler("/console", "web/console"));
+        server.createContext("/v1/chat/completions", chatFacadeHandler);
+        server.createContext("/v1/models", chatFacadeHandler);
+        server.createContext("/v1/responses", chatFacadeHandler);
         server.createContext("/api/v1/tasks", new TaskHandler(taskService, experimentMatrixService, agentProviderRegistry, mapper));
         server.createContext("/api/v1/sessions", new SessionHandler(sessionService, mapper));
         server.createContext("/api/v1/workers", new WorkerHandler(workerRegistry, mapper));

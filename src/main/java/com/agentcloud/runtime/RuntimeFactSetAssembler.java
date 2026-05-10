@@ -22,6 +22,10 @@ public class RuntimeFactSetAssembler {
     private final ToolInvocationDao toolInvocationDao;
     private final WorkerRouter workerRouter;
 
+    public RuntimeFactSetAssembler() {
+        this(null, null, null);
+    }
+
     public RuntimeFactSetAssembler(TaskRuntimeContextBuilder runtimeContextBuilder,
                                    ToolInvocationDao toolInvocationDao,
                                    WorkerRouter workerRouter) {
@@ -31,20 +35,40 @@ public class RuntimeFactSetAssembler {
     }
 
     public RuntimeFactSet assemble(Task task, int limit) {
+        return assemble(task, limit, Map.of());
+    }
+
+    public RuntimeFactSet assemble(Task task, int limit, Map<String, Object> currentWorkerMetadata) {
         if (task == null) {
             return RuntimeFactSet.empty(null);
         }
 
         TaskRuntimeContext runtimeContext = runtimeContextBuilder != null ? runtimeContextBuilder.build(task) : null;
+        return assemble(task, runtimeContext, limit, currentWorkerMetadata);
+    }
+
+    public RuntimeFactSet assemble(Task task, TaskRuntimeContext runtimeContext, int limit) {
+        return assemble(task, runtimeContext, limit, Map.of());
+    }
+
+    public RuntimeFactSet assemble(Task task,
+                                   TaskRuntimeContext runtimeContext,
+                                   int limit,
+                                   Map<String, Object> currentWorkerMetadata) {
+        if (task == null) {
+            return RuntimeFactSet.empty(null);
+        }
+
         ResumePacket latestPacket = runtimeContext != null ? runtimeContext.latestPacket() : null;
         Decision executionJudgment = latestDecision(runtimeContext, "execution_judgment");
         Decision completionJudgment = latestDecision(runtimeContext, "completion_judgment");
-        List<ToolInvocationRecord> toolInvocations = toolInvocationDao != null
-            ? toolInvocationDao.listByTask(task.id(), boundedLimit(limit))
-            : List.of();
+        List<ToolInvocationRecord> toolInvocations = resolveToolInvocations(task, runtimeContext, limit);
         Map<String, Object> latestWorkerMetadata = mergeLatestWorkerMetadata(
-            latestToolInvocationMetadata(toolInvocations),
-            resolveLatestWorkerMetadata(runtimeContext)
+            mergeLatestWorkerMetadata(
+                latestToolInvocationMetadata(toolInvocations),
+                resolveLatestWorkerMetadata(runtimeContext)
+            ),
+            currentWorkerMetadata
         );
         WorkerRouter.RouteResult routePreview = buildRoutePreview(task, latestWorkerMetadata);
 
@@ -77,6 +101,9 @@ public class RuntimeFactSetAssembler {
         metadata.put("has_completion_judgment", completionJudgment != null);
         metadata.put("has_route_preview", routePreview != null);
         copyDecisionMetadataKey(executionJudgment, metadata, "needs_context_reopen");
+        copyDecisionMetadataKey(executionJudgment, metadata, "evidence_gap_detected");
+        copyDecisionMetadataKey(executionJudgment, metadata, "needs_archive_retrieval");
+        copyDecisionMetadataKey(executionJudgment, metadata, "needs_external_fact_refresh");
         copyDecisionMetadataKey(executionJudgment, metadata, "reopen_candidate_paths");
         copyDecisionMetadataKey(executionJudgment, metadata, "reopen_summary");
         if (!latestWorkerMetadata.isEmpty()) {
@@ -111,6 +138,24 @@ public class RuntimeFactSetAssembler {
             routePreview,
             metadata
         );
+    }
+
+    private List<ToolInvocationRecord> resolveToolInvocations(Task task,
+                                                              TaskRuntimeContext runtimeContext,
+                                                              int limit) {
+        if (runtimeContext != null
+            && runtimeContext.recentToolInvocations() != null
+            && !runtimeContext.recentToolInvocations().isEmpty()) {
+            int boundedLimit = boundedLimit(limit);
+            if (runtimeContext.recentToolInvocations().size() <= boundedLimit) {
+                return runtimeContext.recentToolInvocations();
+            }
+            return runtimeContext.recentToolInvocations().subList(0, boundedLimit);
+        }
+        if (toolInvocationDao == null || task == null) {
+            return List.of();
+        }
+        return toolInvocationDao.listByTask(task.id(), boundedLimit(limit));
     }
 
     private void copyDecisionMetadataKey(Decision decision, Map<String, Object> target, String key) {
@@ -432,6 +477,25 @@ public class RuntimeFactSetAssembler {
                 || !candidateWorkers.isEmpty()
         );
         if (!hasMetadataRoute) {
+            if (currentWorker != null || selectedModelTier != null || selectedExecutionRole != null) {
+                return new WorkerRouter.RouteResult(
+                    task != null ? task.id() : null,
+                    currentWorker,
+                    List.of(),
+                    routeReason,
+                    firstNonBlank(routeSource, "current_task_assignment"),
+                    task != null && task.metadata() != null ? stringValue(task.metadata().get("task_type")) : null,
+                    preferredWorkerHint,
+                    learningHintApplied,
+                    candidateWorkers,
+                    selectedWorkerType,
+                    selectedModelTier,
+                    selectedExecutionRole,
+                    selectionScope,
+                    routeReason,
+                    fallbackReason
+                );
+            }
             return routerPreview;
         }
         return new WorkerRouter.RouteResult(
@@ -506,11 +570,35 @@ public class RuntimeFactSetAssembler {
         if ((executionId == null || executionId.isBlank())
             && (executionStatus == null || executionStatus.isBlank())
             && toolInvocationIds.isEmpty()
-            && toolInvocationCount == null) {
+            && toolInvocationCount == null
+            && !hasCurrentPromptSurface(latestWorkerMetadata, workerId)) {
             return null;
         }
 
         Map<String, Object> metadata = new LinkedHashMap<>();
+        copyMetadataKey(latestWorkerMetadata, metadata, "prompt_rendering_mode");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_mode");
+        copyMetadataKey(latestWorkerMetadata, metadata, "prompt_mode");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_rendered");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_render_used");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_injected");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_panel_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_non_empty_panel_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_context_selection_trace_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+        copyMetadataKey(latestWorkerMetadata, metadata, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_pinned_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_active_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_ancestor_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_sibling_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_evidence_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_index_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "mounted_archive_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_execution_mode");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_step_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_termination_reason");
@@ -542,6 +630,28 @@ public class RuntimeFactSetAssembler {
             firstNonBlank(buildExecutionTraceSummary(latestWorkerMetadata), buildExecutionTraceSummary(toolInvocations)),
             metadata
         );
+    }
+
+    private boolean hasCurrentPromptSurface(Map<String, Object> latestWorkerMetadata, String workerId) {
+        return workerId != null
+            && !workerId.isBlank()
+            && containsAnyMetadataKey(
+                latestWorkerMetadata,
+                "prompt_mode",
+                "mounted_context_rendered",
+                "mounted_render_used",
+                "mounted_context_injected",
+                "mounted_context_panel_count",
+                "mounted_context_non_empty_panel_count",
+                "mounted_context_selection_trace_count",
+                MountedContextPromptBudgetSupport.RENDERED_PANEL_COUNT,
+                MountedContextPromptBudgetSupport.HIDDEN_PANEL_COUNT,
+                MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT,
+                MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT,
+                MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT,
+                MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT,
+                MountedContextPromptBudgetSupport.BUDGET_TRUNCATED
+            );
     }
 
     private RuntimeFactSet.ExecutionBoundary buildExecutionBoundaryFromToolInvocations(List<ToolInvocationRecord> toolInvocations) {
@@ -914,6 +1024,18 @@ public class RuntimeFactSetAssembler {
         if (value != null) {
             target.put(key, value);
         }
+    }
+
+    private boolean containsAnyMetadataKey(Map<String, Object> metadata, String... keys) {
+        if (metadata == null || metadata.isEmpty() || keys == null || keys.length == 0) {
+            return false;
+        }
+        for (String key : keys) {
+            if (key != null && !key.isBlank() && metadata.containsKey(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @SafeVarargs

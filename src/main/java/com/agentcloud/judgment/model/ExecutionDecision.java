@@ -12,6 +12,9 @@ public record ExecutionDecision(
     String nextStep,
     boolean needsCheckpoint,
     boolean needsContextReopen,
+    boolean evidenceGapDetected,
+    boolean needsArchiveRetrieval,
+    boolean needsExternalFactRefresh,
     boolean needsHuman,
     String targetWorker,
     String retryDecision,
@@ -25,7 +28,7 @@ public record ExecutionDecision(
     }
 
     public ExecutionDecision(String action, String reason, String nextStep, boolean needsCheckpoint, boolean needsHuman, String targetWorker) {
-        this(action, reason, nextStep, needsCheckpoint, false, needsHuman, targetWorker, "", "");
+        this(action, reason, nextStep, needsCheckpoint, false, false, false, false, needsHuman, targetWorker, "", "");
     }
 
     public ExecutionDecision(String action,
@@ -35,6 +38,33 @@ public record ExecutionDecision(
                              boolean needsContextReopen,
                              boolean needsHuman,
                              String targetWorker) {
-        this(action, reason, nextStep, needsCheckpoint, needsContextReopen, needsHuman, targetWorker, "", "");
+        this(action, reason, nextStep, needsCheckpoint, needsContextReopen, false, false, false, needsHuman, targetWorker, "", "");
+    }
+
+    public ExecutionDecision(String action,
+                             String reason,
+                             String nextStep,
+                             boolean needsCheckpoint,
+                             boolean needsContextReopen,
+                             boolean evidenceGapDetected,
+                             boolean needsArchiveRetrieval,
+                             boolean needsHuman,
+                             String targetWorker) {
+        this(action, reason, nextStep, needsCheckpoint, needsContextReopen, evidenceGapDetected, needsArchiveRetrieval,
+            false, needsHuman, targetWorker, "", "");
+    }
+
+    public ExecutionDecision(String action,
+                             String reason,
+                             String nextStep,
+                             boolean needsCheckpoint,
+                             boolean needsContextReopen,
+                             boolean evidenceGapDetected,
+                             boolean needsArchiveRetrieval,
+                             boolean needsExternalFactRefresh,
+                             boolean needsHuman,
+                             String targetWorker) {
+        this(action, reason, nextStep, needsCheckpoint, needsContextReopen, evidenceGapDetected, needsArchiveRetrieval,
+            needsExternalFactRefresh, needsHuman, targetWorker, "", "");
     }
 }

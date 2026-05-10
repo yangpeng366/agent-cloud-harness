@@ -34,7 +34,7 @@ class PromptBasedJudgmentServiceTest {
     @Test
     void judgeExecutionUsesReviewChannel() {
         RecordingLlmClient llmClient = new RecordingLlmClient("""
-            {"action":"done","reason":"reviewed","next_step":"close","needs_checkpoint":false,"needs_context_reopen":true,"needs_human":false,"target_worker":""}
+            {"action":"done","reason":"reviewed","next_step":"close","needs_checkpoint":false,"needs_context_reopen":true,"evidence_gap_detected":true,"needs_archive_retrieval":true,"needs_external_fact_refresh":true,"needs_human":false,"target_worker":""}
             """);
         PromptBasedJudgmentService service = new PromptBasedJudgmentService(llmClient);
 
@@ -48,6 +48,9 @@ class PromptBasedJudgmentServiceTest {
 
         assertEquals("done", decision.action());
         assertTrue(decision.needsContextReopen());
+        assertTrue(decision.evidenceGapDetected());
+        assertTrue(decision.needsArchiveRetrieval());
+        assertTrue(decision.needsExternalFactRefresh());
         assertEquals(0, llmClient.chatCalls);
         assertEquals(1, llmClient.reviewCalls);
     }
@@ -316,7 +319,7 @@ class PromptBasedJudgmentServiceTest {
         assertTrue(llmClient.executionPrompt.contains("Execution Boundary:"));
         assertTrue(llmClient.executionPrompt.contains("- execution_status: blocked"));
         assertTrue(llmClient.executionPrompt.contains("- trace_summary: 2 steps"));
-        assertTrue(llmClient.executionPrompt.contains("- proof_summary: proof=tool:tool-1, evidence:tool:read_file:input.txt"));
+        assertTrue(llmClient.executionPrompt.contains("- proof_summary: proof=tool:tool-1, tool:tool-2"));
         assertTrue(llmClient.executionPrompt.contains("- mounted_context_budget: 3/2 objects"));
         assertTrue(llmClient.executionPrompt.contains("- route_worker_matches_execution_worker: true"));
         assertTrue(llmClient.executionPrompt.contains("- execution_and_execution_judgment_prompt_mode_aligned: true"));
@@ -572,8 +575,83 @@ class PromptBasedJudgmentServiceTest {
             runtimeContext("mounted_context_primary"),
             null,
             null,
-            null,
-            null,
+            new com.agentcloud.model.Decision(
+                "dec-exec",
+                "session-review",
+                "task-review",
+                Instant.parse("2026-05-08T01:01:00Z"),
+                "execution_judgment",
+                "Execution judgment: continue",
+                "needs more review",
+                "medium",
+                null,
+                Map.ofEntries(
+                    Map.entry("action", "continue"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_non_empty_panel_count", 3),
+                    Map.entry("mounted_context_selection_trace_count", 4),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 0),
+                    Map.entry("mounted_evidence_count", 2),
+                    Map.entry("mounted_index_count", 0),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 2),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 4),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true),
+                    Map.entry("needs_context_reopen", true),
+                    Map.entry("reopen_candidate_paths", List.of(
+                        "/sessions/session-review/tasks/task-review/tool_invocations",
+                        "/sessions/session-review/tasks/task-review/packets/packet-review-1"
+                    )),
+                    Map.entry("tool_invocation_ids", List.of("tool-1", "tool-2")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
+                )
+            ),
+            new com.agentcloud.model.Decision(
+                "dec-completion",
+                "session-review",
+                "task-review",
+                Instant.parse("2026-05-08T01:01:10Z"),
+                "completion_judgment",
+                "Completion judgment: partial",
+                "needs manual review",
+                "medium",
+                null,
+                Map.ofEntries(
+                    Map.entry("status", "partially_done"),
+                    Map.entry("prompt_mode", "mounted_context_primary"),
+                    Map.entry("mounted_context_rendered", true),
+                    Map.entry("mounted_render_used", true),
+                    Map.entry("mounted_context_injected", true),
+                    Map.entry("mounted_context_panel_count", 7),
+                    Map.entry("mounted_context_non_empty_panel_count", 3),
+                    Map.entry("mounted_context_selection_trace_count", 4),
+                    Map.entry("mounted_pinned_count", 1),
+                    Map.entry("mounted_active_count", 4),
+                    Map.entry("mounted_ancestor_count", 1),
+                    Map.entry("mounted_sibling_count", 0),
+                    Map.entry("mounted_evidence_count", 2),
+                    Map.entry("mounted_index_count", 0),
+                    Map.entry("mounted_archive_count", 1),
+                    Map.entry("mounted_context_rendered_object_count", 3),
+                    Map.entry("mounted_context_hidden_object_count", 2),
+                    Map.entry("mounted_context_rendered_selection_trace_count", 4),
+                    Map.entry("mounted_context_hidden_selection_trace_count", 1),
+                    Map.entry("mounted_context_budget_truncated", true),
+                    Map.entry("tool_invocation_ids", List.of("tool-1", "tool-2")),
+                    Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
+                    Map.entry("unfinished_items", List.of("manual_review"))
+                )
+            ),
             List.of(),
             new RuntimeFactSet.ExecutionBoundary(
                 "exec-123",

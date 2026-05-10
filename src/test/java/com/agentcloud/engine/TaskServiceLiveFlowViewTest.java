@@ -88,7 +88,7 @@ class TaskServiceLiveFlowViewTest {
                 null,
                 "user",
                 "user_note",
-                "这条 session 级消息不应出现在 related_messages 中",
+                "这条 session 级消息现在也应被 related_messages 聚合进来",
                 Instant.now(),
                 Map.of("source_surface", "test")
             ));
@@ -98,11 +98,49 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(task.id(), flow.task().id());
             assertNotNull(flow.runtimeFacts());
             assertEquals(task.id(), flow.runtimeFacts().taskId());
-            assertEquals(2, flow.relatedMessages().size());
+            assertEquals(3, flow.relatedMessages().size());
             assertEquals(task.id(), flow.experimentRun().taskId());
-            assertTrue(flow.relatedMessages().stream().allMatch(message -> task.id().equals(message.taskId())));
             assertTrue(flow.relatedMessages().stream().anyMatch(message -> "task_receipt".equals(message.messageType())));
             assertTrue(flow.relatedMessages().stream().anyMatch(message -> "task_note".equals(message.messageType())));
+            assertTrue(flow.relatedMessages().stream().anyMatch(message ->
+                message.taskId() == null
+                    && "user_note".equals(message.messageType())
+                    && "session".equals(message.metadata().get("continuity_scope"))));
+        }
+    }
+
+    @Test
+    void followupTaskLiveFlowIncludesSessionScopeRelatedMessages() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-followup-session-message.db"))) {
+            TaskService service = service(db);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            Task parent = service.createTask(new TaskCreateRequest(
+                "parent task", "continuation", "user", "high",
+                "先完成第一轮", "形成初稿", null, null, Map.of(), false
+            ));
+            messageDao.insert(new SessionMessage(
+                IdGenerator.newId("msg"),
+                parent.sessionId(),
+                null,
+                "user",
+                "user_note",
+                "第一轮结束后，请沿着 evidence reopen 方向继续，不要重复梳理背景。",
+                Instant.now(),
+                Map.of("source_surface", "dialogue")
+            ));
+
+            Task followup = service.createTask(new TaskCreateRequest(
+                "followup task", "continuation", "user", "high",
+                "继续第二轮", "接着做 follow-up", parent.id(), parent.sessionId(), Map.of(), false
+            ));
+
+            var flow = service.getLiveFlow(followup.id(), 10);
+
+            assertTrue(flow.relatedMessages().stream()
+                .anyMatch(message -> message.taskId() == null
+                    && "session".equals(message.metadata().get("continuity_scope"))
+                    && message.content().contains("evidence reopen")));
         }
     }
 
@@ -342,6 +380,9 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
                     Map.entry("needs_context_reopen", true),
+                    Map.entry("evidence_gap_detected", true),
+                    Map.entry("needs_archive_retrieval", true),
+                    Map.entry("needs_external_fact_refresh", true),
                     Map.entry("reopen_candidate_paths", List.of(
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -386,6 +427,9 @@ class TaskServiceLiveFlowViewTest {
                     Map.entry("mounted_archive_count", 1),
                     Map.entry("candidate_workers", List.of("codex", "kimi")),
                     Map.entry("needs_context_reopen", true),
+                    Map.entry("evidence_gap_detected", true),
+                    Map.entry("needs_archive_retrieval", true),
+                    Map.entry("needs_external_fact_refresh", true),
                     Map.entry("reopen_candidate_paths", List.of(
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                         "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -445,6 +489,9 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("tool:read_file:input.txt"), trace.runtimeFacts().metadata().get("evidence_refs"));
             assertEquals(List.of("manual_review"), trace.runtimeFacts().metadata().get("unfinished_items"));
             assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, trace.runtimeFacts().metadata().get("needs_external_fact_refresh"));
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -472,6 +519,9 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(3, trace.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().needsContextReopen());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().evidenceGapDetected());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, trace.runtimeCognitionSurface().executionJudgment().needsExternalFactRefresh());
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -498,6 +548,9 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(List.of("tool:read_file:input.txt"), flow.runtimeFacts().metadata().get("evidence_refs"));
             assertEquals(List.of("manual_review"), flow.runtimeFacts().metadata().get("unfinished_items"));
             assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("needs_context_reopen"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("evidence_gap_detected"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, flow.runtimeFacts().metadata().get("needs_external_fact_refresh"));
             assertNotNull(flow.runtimeCognitionSurface());
             assertEquals("codex", flow.runtimeCognitionSurface().route().selectedWorker());
             assertEquals("single_tool_round", flow.executionBoundary().metadata().get("tool_execution_mode"));
@@ -516,6 +569,9 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(1, flow.runtimeCognitionSurface().executionJudgment().mountedPinnedCount());
             assertEquals(3, flow.runtimeCognitionSurface().executionJudgment().mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().executionJudgment().needsContextReopen());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().executionJudgment().evidenceGapDetected());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().executionJudgment().needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().executionJudgment().needsExternalFactRefresh());
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -556,6 +612,9 @@ class TaskServiceLiveFlowViewTest {
             assertEquals(3, timelineByStage.get("execution_judgment").mountedContextRenderedObjectCount());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").mountedContextBudgetTruncated());
             assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").needsContextReopen());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").evidenceGapDetected());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, timelineByStage.get("execution_judgment").needsExternalFactRefresh());
             assertEquals(List.of(
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
                     "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet_fact_1"
@@ -568,6 +627,7 @@ class TaskServiceLiveFlowViewTest {
                 timelineByStage.get("execution_judgment").proofSummary());
             assertTrue(timelineByStage.get("execution_judgment").summary().contains("proof=tool:exec_fact_1"));
             assertTrue(timelineByStage.get("execution_judgment").summary().contains("reopen=reopen:tool_invocations"));
+            assertTrue(timelineByStage.get("execution_judgment").summary().contains("needs_external_fact_refresh=true"));
             assertEquals(Boolean.TRUE, timelineByStage.get("completion_judgment").mountedRenderUsed());
             assertEquals(1, timelineByStage.get("completion_judgment").mountedContextHiddenObjectCount());
             assertEquals(List.of("exec_fact_1"), timelineByStage.get("completion_judgment").toolInvocationIds());
@@ -625,8 +685,32 @@ class TaskServiceLiveFlowViewTest {
                 "pause checkpoint captured before waiting",
                 Map.of(
                     "assigned_worker", "codex",
-                    "prompt_mode", "mounted_context_primary",
-                    "open_questions", List.of("confirm handoff target")
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "codex",
+                            "route_source", "checkpoint_surface",
+                            "candidate_workers", List.of("codex", "kimi")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "codex",
+                            "prompt_mode", "mounted_context_primary",
+                            "tool_invocation_ids", List.of("tool-alpha"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/task/checkpoints/cp-1"),
+                            "unfinished_items", List.of("confirm handoff target"),
+                            "proof_summary", "tool=tool-alpha | evidence=/tasks/task/checkpoints/cp-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-checkpoint-1"
+                            )
+                        )
+                    )
                 ),
                 Map.of(),
                 Map.of("artifact_count", 0)
@@ -662,7 +746,34 @@ class TaskServiceLiveFlowViewTest {
                     "previous_worker", "codex",
                     "assigned_worker", "kimi",
                     "target_worker", "kimi",
-                    "prompt_mode", "mounted_context_primary"
+                    "prompt_mode", "mounted_context_primary",
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "kimi",
+                            "route_source", "handoff_surface",
+                            "candidate_workers", List.of("kimi", "codex")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "kimi",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-handoff"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/task/handoffs/handoff-1"),
+                            "unfinished_items", List.of("executor should apply patch"),
+                            "proof_summary", "tool=tool-handoff | evidence=/tasks/task/handoffs/handoff-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/checkpoints",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-handoff-1"
+                            )
+                        )
+                    )
                 )
             ));
             db.jdbi().onDemand(ResumePacketDao.class).insert(new ResumePacket(
@@ -680,9 +791,34 @@ class TaskServiceLiveFlowViewTest {
                     "assigned_worker", "kimi",
                     "current_status", "waiting",
                     "current_node", "packet",
-                    "prompt_mode", "mounted_context_primary",
                     "resume_hint", "continue from packet boundary",
-                    "open_questions", List.of("confirm resume sequencing")
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "kimi",
+                            "route_source", "resume_surface",
+                            "candidate_workers", List.of("kimi", "codex")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "kimi",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-beta"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/task/packets/packet-1"),
+                            "unfinished_items", List.of("confirm resume sequencing"),
+                            "proof_summary", "tool=tool-beta | evidence=/tasks/task/packets/packet-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "needs_context_reopen", true,
+                            "evidence_gap_detected", true,
+                            "needs_archive_retrieval", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-1"
+                            )
+                        )
+                    )
                 )
             ));
 
@@ -701,7 +837,27 @@ class TaskServiceLiveFlowViewTest {
             assertEquals("handoff", continuityEntries.get(2).continuityAction());
             assertEquals("kimi", continuityEntries.get(2).workerId());
             assertEquals("kimi", continuityEntries.get(2).targetWorker());
+            assertEquals("handoff_surface", continuityEntries.get(2).routeSource());
+            assertEquals("waiting", continuityEntries.get(2).executionStatus());
+            assertEquals(Boolean.TRUE, continuityEntries.get(2).needsContextReopen());
+            assertEquals(Boolean.TRUE, continuityEntries.get(2).evidenceGapDetected());
+            assertEquals(Boolean.TRUE, continuityEntries.get(2).needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, continuityEntries.get(2).needsExternalFactRefresh());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/checkpoints",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-handoff-1"
+                ),
+                continuityEntries.get(2).reopenCandidatePaths());
+            assertEquals("reopen=reopen:checkpoints, reopen:packets:packet-handoff-1",
+                continuityEntries.get(2).reopenSummary());
+            assertEquals(List.of("tool-handoff"), continuityEntries.get(2).toolInvocationIds());
+            assertEquals(List.of("/tasks/task/handoffs/handoff-1"), continuityEntries.get(2).evidenceRefs());
+            assertEquals(List.of("executor should apply patch"), continuityEntries.get(2).unfinishedItems());
             assertTrue(continuityEntries.get(2).summary().contains("handoff"));
+            assertTrue(continuityEntries.get(2).summary().contains("reopen=reopen:checkpoints"));
+            assertTrue(continuityEntries.get(2).summary().contains("evidence_gap_detected=true"));
+            assertTrue(continuityEntries.get(2).summary().contains("needs_archive_retrieval=true"));
+            assertTrue(continuityEntries.get(2).summary().contains("needs_external_fact_refresh=true"));
 
             var checkpointEntries = flow.runtimeCognitionTimeline().stream()
                 .filter(entry -> "checkpoint".equals(entry.stage()))
@@ -710,7 +866,22 @@ class TaskServiceLiveFlowViewTest {
             assertEquals("pause_before", checkpointEntries.get(0).checkpointType());
             assertEquals("codex", checkpointEntries.get(0).workerId());
             assertEquals("mounted_context_primary", checkpointEntries.get(0).promptMode());
+            assertEquals("checkpoint_surface", checkpointEntries.get(0).routeSource());
+            assertEquals(Boolean.TRUE, checkpointEntries.get(0).needsContextReopen());
+            assertEquals(Boolean.TRUE, checkpointEntries.get(0).evidenceGapDetected());
+            assertEquals(Boolean.TRUE, checkpointEntries.get(0).needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, checkpointEntries.get(0).needsExternalFactRefresh());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-checkpoint-1"
+                ),
+                checkpointEntries.get(0).reopenCandidatePaths());
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet-checkpoint-1",
+                checkpointEntries.get(0).reopenSummary());
+            assertEquals(List.of("tool-alpha"), checkpointEntries.get(0).toolInvocationIds());
+            assertEquals(List.of("/tasks/task/checkpoints/cp-1"), checkpointEntries.get(0).evidenceRefs());
             assertEquals(List.of("confirm handoff target"), checkpointEntries.get(0).unfinishedItems());
+            assertTrue(checkpointEntries.get(0).summary().contains("reopen=reopen:tool_invocations"));
 
             var packetEntries = flow.runtimeCognitionTimeline().stream()
                 .filter(entry -> "resume_packet".equals(entry.stage()))
@@ -719,9 +890,89 @@ class TaskServiceLiveFlowViewTest {
             assertEquals("resume_packet", packetEntries.get(0).continuityAction());
             assertEquals("kimi", packetEntries.get(0).workerId());
             assertEquals("mounted_context_primary", packetEntries.get(0).promptMode());
+            assertEquals("resume_surface", packetEntries.get(0).routeSource());
             assertEquals("waiting", packetEntries.get(0).executionStatus());
             assertEquals("continue from packet boundary", packetEntries.get(0).reason());
+            assertEquals(Boolean.TRUE, packetEntries.get(0).needsContextReopen());
+            assertEquals(Boolean.TRUE, packetEntries.get(0).evidenceGapDetected());
+            assertEquals(Boolean.TRUE, packetEntries.get(0).needsArchiveRetrieval());
+            assertEquals(Boolean.TRUE, packetEntries.get(0).needsExternalFactRefresh());
+            assertEquals(List.of(
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/tool_invocations",
+                    "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-1"
+                ),
+                packetEntries.get(0).reopenCandidatePaths());
+            assertEquals("reopen=reopen:tool_invocations, reopen:packets:packet-1",
+                packetEntries.get(0).reopenSummary());
+            assertEquals(List.of("tool-beta"), packetEntries.get(0).toolInvocationIds());
+            assertEquals(List.of("/tasks/task/packets/packet-1"), packetEntries.get(0).evidenceRefs());
             assertEquals(List.of("confirm resume sequencing"), packetEntries.get(0).unfinishedItems());
+            assertTrue(packetEntries.get(0).summary().contains("reopen=reopen:tool_invocations"));
+        }
+    }
+
+    @Test
+    void getLiveFlowLabelsExternalFactRefreshCheckpoint() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-external-fact-refresh-checkpoint.db"))) {
+            TaskService service = service(db);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "external fact refresh timeline task", "research", "user", "high",
+                "把 external fact refresh checkpoint 拉进 live flow timeline",
+                "验证 checkpoint label 和 lifecycle signal 可见", null, null,
+                Map.of("prompt_mode", "mounted_context_primary"), false
+            ));
+
+            checkpointDao.insert(new com.agentcloud.model.Checkpoint(
+                IdGenerator.newId("cp"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-09T10:01:00Z"),
+                "external_fact_refresh_before",
+                "external fact refresh checkpoint captured",
+                Map.of(
+                    "assigned_worker", "codex",
+                    "runtime_cognition_surface", Map.of(
+                        "route", Map.of(
+                            "selected_worker", "codex",
+                            "route_source", "external_fact_refresh_surface",
+                            "candidate_workers", List.of("codex", "kimi")
+                        ),
+                        "execution", Map.of(
+                            "worker_id", "codex",
+                            "prompt_mode", "mounted_context_primary",
+                            "execution_status", "waiting",
+                            "tool_invocation_ids", List.of("tool-refresh"),
+                            "tool_invocation_count", 1,
+                            "evidence_refs", List.of("/tasks/task/external-refresh/cache-1"),
+                            "unfinished_items", List.of("refresh external facts"),
+                            "proof_summary", "tool=tool-refresh | evidence=/tasks/task/external-refresh/cache-1"
+                        ),
+                        "execution_judgment", Map.of(
+                            "evidence_gap_detected", true,
+                            "needs_external_fact_refresh", true,
+                            "reopen_candidate_paths", List.of(
+                                "/sessions/" + task.sessionId() + "/tasks/" + task.id() + "/packets/packet-refresh-1"
+                            )
+                        )
+                    )
+                ),
+                Map.of(),
+                Map.of("artifact_count", 0)
+            ));
+
+            var flow = service.getLiveFlow(task.id(), 10);
+
+            var checkpointEntry = flow.runtimeCognitionTimeline().stream()
+                .filter(entry -> "checkpoint".equals(entry.stage()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("external_fact_refresh_before", checkpointEntry.checkpointType());
+            assertEquals("External Fact Refresh Checkpoint", checkpointEntry.label());
+            assertEquals("external_fact_refresh_surface", checkpointEntry.routeSource());
+            assertEquals(Boolean.TRUE, checkpointEntry.needsExternalFactRefresh());
+            assertTrue(checkpointEntry.summary().contains("needs_external_fact_refresh=true"));
         }
     }
 

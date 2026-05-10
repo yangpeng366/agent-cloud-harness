@@ -179,6 +179,9 @@ public class RuntimeCognitionSurfaceAssembler {
                 metadataString(runtimeMetadata, "prompt_mode")
             ),
             metadataBoolean(decisionMetadata, "needs_context_reopen", runtimeMetadata),
+            metadataBoolean(decisionMetadata, "evidence_gap_detected", runtimeMetadata),
+            metadataBoolean(decisionMetadata, "needs_archive_retrieval", runtimeMetadata),
+            metadataBoolean(decisionMetadata, "needs_external_fact_refresh", runtimeMetadata),
             reopenCandidatePaths,
             firstNonBlank(
                 metadataString(decisionMetadata, "reopen_summary"),

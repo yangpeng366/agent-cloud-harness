@@ -116,6 +116,9 @@ public class ContextObjectAdapter {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "role", message.role());
         putIfNotBlank(metadata, "message_type", message.messageType());
+        if (message.metadata() != null && message.metadata().get("continuity_scope") != null) {
+            metadata.put("continuity_scope", message.metadata().get("continuity_scope"));
+        }
         if (message.metadata() != null && !message.metadata().isEmpty()) {
             metadata.put("source_surface", message.metadata().get("source_surface"));
         }
@@ -145,6 +148,9 @@ public class ContextObjectAdapter {
         List<String> evidenceRefs = stringList(decisionMetadata, "evidence_refs");
         List<String> reopenCandidatePaths = stringList(decisionMetadata, "reopen_candidate_paths");
         boolean needsContextReopen = metadataBoolean(decisionMetadata, "needs_context_reopen");
+        boolean evidenceGapDetected = metadataBoolean(decisionMetadata, "evidence_gap_detected");
+        boolean needsArchiveRetrieval = metadataBoolean(decisionMetadata, "needs_archive_retrieval");
+        boolean needsExternalFactRefresh = metadataBoolean(decisionMetadata, "needs_external_fact_refresh");
         List<ContextReference> refs = new ArrayList<>();
         for (String toolInvocationId : toolInvocationIds) {
             refs.add(new ContextReference(
@@ -175,6 +181,15 @@ public class ContextObjectAdapter {
         if (needsContextReopen) {
             metadata.put("needs_context_reopen", true);
         }
+        if (evidenceGapDetected) {
+            metadata.put("evidence_gap_detected", true);
+        }
+        if (needsArchiveRetrieval) {
+            metadata.put("needs_archive_retrieval", true);
+        }
+        if (needsExternalFactRefresh) {
+            metadata.put("needs_external_fact_refresh", true);
+        }
         if (!reopenCandidatePaths.isEmpty()) {
             metadata.put("reopen_candidate_paths", reopenCandidatePaths);
             metadata.put("reopen_candidate_count", reopenCandidatePaths.size());
@@ -202,6 +217,9 @@ public class ContextObjectAdapter {
                     labeledValue("next_step", metadataString(decisionMetadata, "next_step")),
                     labeledValue("suggested_next_action", metadataString(decisionMetadata, "suggested_next_action")),
                     labeledValue("needs_context_reopen", needsContextReopen ? "true" : null),
+                    labeledValue("evidence_gap_detected", evidenceGapDetected ? "true" : null),
+                    labeledValue("needs_archive_retrieval", needsArchiveRetrieval ? "true" : null),
+                    labeledValue("needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null),
                     labeledValue("reopen_candidate_paths", joinList(reopenCandidatePaths))
                 ),
                 decision.summary(),
@@ -218,6 +236,9 @@ public class ContextObjectAdapter {
                 "next_step", metadataString(decisionMetadata, "next_step"),
                 "suggested_next_action", metadataString(decisionMetadata, "suggested_next_action"),
                 "needs_context_reopen", needsContextReopen ? "true" : null,
+                "evidence_gap_detected", evidenceGapDetected ? "true" : null,
+                "needs_archive_retrieval", needsArchiveRetrieval ? "true" : null,
+                "needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null,
                 "reopen_candidate_paths", joinList(reopenCandidatePaths),
                 "tool_invocation_ids", joinList(toolInvocationIds),
                 "evidence_refs", joinList(evidenceRefs)
@@ -317,10 +338,77 @@ public class ContextObjectAdapter {
             return null;
         }
         String taskPath = taskPath(task);
+        Map<String, Object> refinedPacket = checkpoint.refinedPacket() == null ? Map.of() : checkpoint.refinedPacket();
+        Map<String, Object> runtimeCognitionSurface = objectMap(refinedPacket.get("runtime_cognition_surface"));
+        Map<String, Object> routeSurface = objectMap(runtimeCognitionSurface.get("route"));
+        Map<String, Object> executionSurface = objectMap(runtimeCognitionSurface.get("execution"));
+        Map<String, Object> judgmentSurface = objectMap(runtimeCognitionSurface.get("execution_judgment"));
+        List<String> candidateWorkers = firstNonEmpty(
+            stringList(routeSurface, "candidate_workers"),
+            stringList(refinedPacket, "candidate_workers")
+        );
+        List<String> toolInvocationIds = firstNonEmpty(
+            stringList(executionSurface, "tool_invocation_ids"),
+            stringList(refinedPacket, "tool_invocation_ids")
+        );
+        List<String> evidenceRefs = firstNonEmpty(
+            stringList(executionSurface, "evidence_refs"),
+            stringList(refinedPacket, "evidence_refs")
+        );
+        List<String> unfinishedItems = firstNonEmpty(
+            stringList(executionSurface, "unfinished_items"),
+            stringList(refinedPacket, "open_questions")
+        );
+        boolean needsContextReopen = metadataBoolean(judgmentSurface, "needs_context_reopen");
+        boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected");
+        boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval");
+        boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh");
+        List<String> reopenCandidatePaths = stringList(judgmentSurface, "reopen_candidate_paths");
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            joinList(reopenCandidatePaths)
+        );
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "checkpoint_type", checkpoint.checkpointType());
-        metadata.put("refined_packet_keys",
-            checkpoint.refinedPacket() == null ? List.of() : checkpoint.refinedPacket().keySet().stream().sorted().toList());
+        putIfNotBlank(metadata, "prompt_mode", firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
+            metadataString(refinedPacket, "prompt_mode"),
+            metadataString(refinedPacket, "mounted_context_mode"),
+            metadataString(refinedPacket, "prompt_rendering_mode")
+        ));
+        putIfNotBlank(metadata, "route_source", metadataString(routeSurface, "route_source"));
+        if (!candidateWorkers.isEmpty()) {
+            metadata.put("candidate_workers", candidateWorkers);
+        }
+        if (!toolInvocationIds.isEmpty()) {
+            metadata.put("tool_invocation_ids", toolInvocationIds);
+            metadata.put("tool_invocation_count", toolInvocationIds.size());
+        }
+        if (!evidenceRefs.isEmpty()) {
+            metadata.put("evidence_refs", evidenceRefs);
+            metadata.put("evidence_ref_count", evidenceRefs.size());
+        }
+        if (!unfinishedItems.isEmpty()) {
+            metadata.put("unfinished_items", unfinishedItems);
+        }
+        if (needsContextReopen) {
+            metadata.put("needs_context_reopen", true);
+        }
+        if (evidenceGapDetected) {
+            metadata.put("evidence_gap_detected", true);
+        }
+        if (needsArchiveRetrieval) {
+            metadata.put("needs_archive_retrieval", true);
+        }
+        if (needsExternalFactRefresh) {
+            metadata.put("needs_external_fact_refresh", true);
+        }
+        if (!reopenCandidatePaths.isEmpty()) {
+            metadata.put("reopen_candidate_paths", reopenCandidatePaths);
+            metadata.put("reopen_candidate_count", reopenCandidatePaths.size());
+        }
+        putIfNotBlank(metadata, "reopen_summary", reopenSummary);
+        metadata.put("refined_packet_keys", refinedPacket.keySet().stream().sorted().toList());
         return new ContextObject(
             checkpoint.id(),
             taskPath + "/checkpoints/" + checkpoint.id(),
@@ -330,9 +418,25 @@ public class ContextObjectAdapter {
             preview(checkpoint.consolidationSummary()),
             preview(multiline(
                 "summary", checkpoint.consolidationSummary(),
+                "prompt_mode", firstNonBlank(
+                    metadataString(executionSurface, "prompt_mode"),
+                    metadataString(refinedPacket, "prompt_mode"),
+                    metadataString(refinedPacket, "mounted_context_mode"),
+                    metadataString(refinedPacket, "prompt_rendering_mode")
+                ),
+                "route_source", metadataString(routeSurface, "route_source"),
                 "key_decisions", joinList(stringList(checkpoint.refinedPacket(), "key_decisions")),
                 "key_artifacts", joinList(stringList(checkpoint.refinedPacket(), "key_artifacts")),
-                "open_questions", joinList(stringList(checkpoint.refinedPacket(), "open_questions"))
+                "open_questions", joinList(stringList(checkpoint.refinedPacket(), "open_questions")),
+                "tool_invocation_ids", joinList(toolInvocationIds),
+                "evidence_refs", joinList(evidenceRefs),
+                "unfinished_items", joinList(unfinishedItems),
+                "needs_context_reopen", needsContextReopen ? "true" : null,
+                "evidence_gap_detected", evidenceGapDetected ? "true" : null,
+                "needs_archive_retrieval", needsArchiveRetrieval ? "true" : null,
+                "needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null,
+                "reopen_candidate_paths", joinList(reopenCandidatePaths),
+                "reopen_summary", reopenSummary
             )),
             checkpoint.createdAt(),
             ContextRetentionState.HOT_RAW,
@@ -347,11 +451,79 @@ public class ContextObjectAdapter {
             return null;
         }
         String taskPath = taskPath(task);
+        Map<String, Object> payload = packet.payload() == null ? Map.of() : packet.payload();
+        Map<String, Object> runtimeCognitionSurface = objectMap(payload.get("runtime_cognition_surface"));
+        Map<String, Object> routeSurface = objectMap(runtimeCognitionSurface.get("route"));
+        Map<String, Object> executionSurface = objectMap(runtimeCognitionSurface.get("execution"));
+        Map<String, Object> judgmentSurface = objectMap(runtimeCognitionSurface.get("execution_judgment"));
+        List<String> candidateWorkers = firstNonEmpty(
+            stringList(routeSurface, "candidate_workers"),
+            stringList(payload, "candidate_workers")
+        );
+        List<String> toolInvocationIds = firstNonEmpty(
+            stringList(executionSurface, "tool_invocation_ids"),
+            stringList(payload, "tool_invocation_ids")
+        );
+        List<String> evidenceRefs = firstNonEmpty(
+            stringList(executionSurface, "evidence_refs"),
+            stringList(payload, "evidence_refs")
+        );
+        List<String> unfinishedItems = firstNonEmpty(
+            stringList(executionSurface, "unfinished_items"),
+            packet.openQuestions()
+        );
+        boolean needsContextReopen = metadataBoolean(judgmentSurface, "needs_context_reopen");
+        boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected");
+        boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval");
+        boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh");
+        List<String> reopenCandidatePaths = stringList(judgmentSurface, "reopen_candidate_paths");
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            joinList(reopenCandidatePaths)
+        );
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "packet_version", packet.packetVersion());
         putIfNotBlank(metadata, "current_status", packet.currentStatus());
         putIfNotBlank(metadata, "current_node", packet.currentNode());
         putIfNotBlank(metadata, "assigned_worker", packet.assignedWorker());
+        putIfNotBlank(metadata, "prompt_mode", firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
+            metadataString(payload, "prompt_mode"),
+            metadataString(payload, "mounted_context_mode"),
+            metadataString(payload, "prompt_rendering_mode")
+        ));
+        putIfNotBlank(metadata, "route_source", metadataString(routeSurface, "route_source"));
+        if (!candidateWorkers.isEmpty()) {
+            metadata.put("candidate_workers", candidateWorkers);
+        }
+        if (!toolInvocationIds.isEmpty()) {
+            metadata.put("tool_invocation_ids", toolInvocationIds);
+            metadata.put("tool_invocation_count", toolInvocationIds.size());
+        }
+        if (!evidenceRefs.isEmpty()) {
+            metadata.put("evidence_refs", evidenceRefs);
+            metadata.put("evidence_ref_count", evidenceRefs.size());
+        }
+        if (!unfinishedItems.isEmpty()) {
+            metadata.put("unfinished_items", unfinishedItems);
+        }
+        if (needsContextReopen) {
+            metadata.put("needs_context_reopen", true);
+        }
+        if (evidenceGapDetected) {
+            metadata.put("evidence_gap_detected", true);
+        }
+        if (needsArchiveRetrieval) {
+            metadata.put("needs_archive_retrieval", true);
+        }
+        if (needsExternalFactRefresh) {
+            metadata.put("needs_external_fact_refresh", true);
+        }
+        if (!reopenCandidatePaths.isEmpty()) {
+            metadata.put("reopen_candidate_paths", reopenCandidatePaths);
+            metadata.put("reopen_candidate_count", reopenCandidatePaths.size());
+        }
+        putIfNotBlank(metadata, "reopen_summary", reopenSummary);
         metadata.put("open_question_count", packet.openQuestions().size());
         metadata.put("blocker_count", packet.blockers().size());
         return new ContextObject(
@@ -365,9 +537,25 @@ public class ContextObjectAdapter {
                 "active_task_summary", packet.activeTaskSummary(),
                 "decision_summary", packet.decisionSummary(),
                 "artifact_summary", packet.artifactSummary(),
+                "prompt_mode", firstNonBlank(
+                    metadataString(executionSurface, "prompt_mode"),
+                    metadataString(payload, "prompt_mode"),
+                    metadataString(payload, "mounted_context_mode"),
+                    metadataString(payload, "prompt_rendering_mode")
+                ),
+                "route_source", metadataString(routeSurface, "route_source"),
                 "next_step", packet.nextStep(),
                 "open_questions", joinList(packet.openQuestions()),
-                "blockers", joinList(packet.blockers())
+                "blockers", joinList(packet.blockers()),
+                "tool_invocation_ids", joinList(toolInvocationIds),
+                "evidence_refs", joinList(evidenceRefs),
+                "unfinished_items", joinList(unfinishedItems),
+                "needs_context_reopen", needsContextReopen ? "true" : null,
+                "evidence_gap_detected", evidenceGapDetected ? "true" : null,
+                "needs_archive_retrieval", needsArchiveRetrieval ? "true" : null,
+                "needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null,
+                "reopen_candidate_paths", joinList(reopenCandidatePaths),
+                "reopen_summary", reopenSummary
             )),
             packet.createdAt(),
             ContextRetentionState.HOT_RAW,
@@ -382,12 +570,16 @@ public class ContextObjectAdapter {
             return null;
         }
         String taskPath = taskPath(task);
+        Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+        if ("task_control_action".equals(event.eventType())) {
+            return controlActionEvent(task, event, taskPath, payload);
+        }
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "event_type", event.eventType());
         putIfNotBlank(metadata, "actor_type", event.actorType());
         putIfNotBlank(metadata, "actor_id", event.actorId());
-        if (event.payload() != null && !event.payload().isEmpty()) {
-            metadata.put("payload_keys", event.payload().keySet().stream().sorted().toList());
+        if (!payload.isEmpty()) {
+            metadata.put("payload_keys", payload.keySet().stream().sorted().toList());
         }
         return new ContextObject(
             event.id(),
@@ -397,6 +589,160 @@ public class ContextObjectAdapter {
             firstNonBlank(event.eventType(), "event"),
             preview(event.summary()),
             preview(event.summary()),
+            event.createdAt(),
+            ContextRetentionState.WARM_SUMMARY,
+            List.of(),
+            List.of(),
+            metadata
+        );
+    }
+
+    private ContextObject controlActionEvent(Task task,
+                                             Event event,
+                                             String taskPath,
+                                             Map<String, Object> payload) {
+        Map<String, Object> runtimeFacts = objectMap(payload.get("runtime_facts"));
+        Map<String, Object> runtimeCognitionSurface = objectMap(payload.get("runtime_cognition_surface"));
+        Map<String, Object> routeSurface = objectMap(runtimeCognitionSurface.get("route"));
+        Map<String, Object> executionSurface = objectMap(runtimeCognitionSurface.get("execution"));
+        Map<String, Object> judgmentSurface = objectMap(runtimeCognitionSurface.get("execution_judgment"));
+        List<String> candidateWorkers = firstNonEmpty(
+            stringList(routeSurface, "candidate_workers"),
+            stringList(payload, "candidate_workers")
+        );
+        List<String> toolInvocationIds = firstNonEmpty(
+            stringList(executionSurface, "tool_invocation_ids"),
+            stringList(payload, "tool_invocation_ids")
+        );
+        List<String> evidenceRefs = firstNonEmpty(
+            stringList(executionSurface, "evidence_refs"),
+            stringList(payload, "evidence_refs")
+        );
+        List<String> unfinishedItems = firstNonEmpty(
+            stringList(executionSurface, "unfinished_items"),
+            stringList(payload, "unfinished_items")
+        );
+        String action = metadataString(payload, "action");
+        String targetWorker = metadataString(payload, "target_worker");
+        String previousWorker = metadataString(payload, "previous_worker");
+        String currentWorker = firstNonBlank(
+            metadataString(executionSurface, "worker_id"),
+            metadataString(routeSurface, "selected_worker"),
+            metadataString(payload, "assigned_worker")
+        );
+        String promptMode = firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
+            metadataString(payload, "prompt_mode"),
+            metadataString(payload, "mounted_context_mode"),
+            metadataString(payload, "prompt_rendering_mode")
+        );
+        String routeSource = metadataString(routeSurface, "route_source");
+        String reason = metadataString(payload, "reason");
+        String recommendedNextStep = firstNonBlank(
+            metadataString(runtimeFacts, "recommended_next_step"),
+            metadataString(payload, "resume_hint")
+        );
+        String executionStatus = metadataString(executionSurface, "execution_status");
+        boolean needsContextReopen = metadataBoolean(judgmentSurface, "needs_context_reopen");
+        boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected");
+        boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval");
+        boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh");
+        List<String> reopenCandidatePaths = firstNonEmpty(
+            stringList(judgmentSurface, "reopen_candidate_paths"),
+            stringList(payload, "reopen_candidate_paths")
+        );
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            joinList(reopenCandidatePaths)
+        );
+        String proofSummary = firstNonBlank(
+            metadataString(executionSurface, "proof_summary"),
+            metadataString(payload, "proof_summary")
+        );
+
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        putIfNotBlank(metadata, "event_type", event.eventType());
+        putIfNotBlank(metadata, "actor_type", event.actorType());
+        putIfNotBlank(metadata, "actor_id", event.actorId());
+        putIfNotBlank(metadata, "action", action);
+        putIfNotBlank(metadata, "previous_worker", previousWorker);
+        putIfNotBlank(metadata, "assigned_worker", currentWorker);
+        putIfNotBlank(metadata, "target_worker", targetWorker);
+        putIfNotBlank(metadata, "prompt_mode", promptMode);
+        putIfNotBlank(metadata, "route_source", routeSource);
+        putIfNotBlank(metadata, "execution_status", executionStatus);
+        putIfNotBlank(metadata, "recommended_next_step", recommendedNextStep);
+        if (needsContextReopen) {
+            metadata.put("needs_context_reopen", true);
+        }
+        if (evidenceGapDetected) {
+            metadata.put("evidence_gap_detected", true);
+        }
+        if (needsArchiveRetrieval) {
+            metadata.put("needs_archive_retrieval", true);
+        }
+        if (needsExternalFactRefresh) {
+            metadata.put("needs_external_fact_refresh", true);
+        }
+        if (!reopenCandidatePaths.isEmpty()) {
+            metadata.put("reopen_candidate_paths", reopenCandidatePaths);
+            metadata.put("reopen_candidate_count", reopenCandidatePaths.size());
+        }
+        putIfNotBlank(metadata, "reopen_summary", reopenSummary);
+        if (!candidateWorkers.isEmpty()) {
+            metadata.put("candidate_workers", candidateWorkers);
+        }
+        if (!toolInvocationIds.isEmpty()) {
+            metadata.put("tool_invocation_ids", toolInvocationIds);
+            metadata.put("tool_invocation_count", toolInvocationIds.size());
+        }
+        if (!evidenceRefs.isEmpty()) {
+            metadata.put("evidence_refs", evidenceRefs);
+            metadata.put("evidence_ref_count", evidenceRefs.size());
+        }
+        if (!unfinishedItems.isEmpty()) {
+            metadata.put("unfinished_items", unfinishedItems);
+        }
+        if (!payload.isEmpty()) {
+            metadata.put("payload_keys", payload.keySet().stream().sorted().toList());
+        }
+        return new ContextObject(
+            event.id(),
+            taskPath + "/events/" + event.id(),
+            ContextObjectType.EVENT,
+            taskPath,
+            firstNonBlank(action, event.eventType(), "event"),
+            preview(firstNonBlank(
+                joinSummary(
+                    action,
+                    workerTransition(previousWorker, targetWorker),
+                    promptMode,
+                    recommendedNextStep
+                ),
+                event.summary()
+            )),
+            preview(multiline(
+                "summary", event.summary(),
+                "action", action,
+                "previous_worker", previousWorker,
+                "assigned_worker", currentWorker,
+                "target_worker", targetWorker,
+                "prompt_mode", promptMode,
+                "route_source", routeSource,
+                "execution_status", executionStatus,
+                "reason", reason,
+                "recommended_next_step", recommendedNextStep,
+                "needs_context_reopen", needsContextReopen ? "true" : null,
+                "evidence_gap_detected", evidenceGapDetected ? "true" : null,
+                "needs_archive_retrieval", needsArchiveRetrieval ? "true" : null,
+                "needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null,
+                "reopen_candidate_paths", joinList(reopenCandidatePaths),
+                "reopen_summary", reopenSummary,
+                "tool_invocation_ids", joinList(toolInvocationIds),
+                "evidence_refs", joinList(evidenceRefs),
+                "unfinished_items", joinList(unfinishedItems),
+                "proof_summary", proofSummary
+            )),
             event.createdAt(),
             ContextRetentionState.WARM_SUMMARY,
             List.of(),
@@ -471,6 +817,161 @@ public class ContextObjectAdapter {
         );
     }
 
+    public ContextObject reopenCapsule(Task task,
+                                       String capsuleId,
+                                       String scopePath,
+                                       String outcome,
+                                       List<String> keyDecisions,
+                                       List<String> reusableFindings,
+                                       List<String> unresolvedRisks,
+                                       List<String> reopenCandidatePaths,
+                                       List<String> nextFollowups) {
+        if (task == null || capsuleId == null || capsuleId.isBlank()) {
+            return null;
+        }
+        String taskPath = taskPath(task);
+        ContextCapsule capsule = new ContextCapsule(
+            capsuleId,
+            firstNonBlank(scopePath, taskPath + "/archive/reopen"),
+            outcome,
+            copyList(keyDecisions),
+            copyList(reusableFindings),
+            copyList(unresolvedRisks),
+            reopenCandidateRefs(reopenCandidatePaths),
+            copyList(nextFollowups),
+            ContextRetentionState.COLD_CAPSULE
+        );
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("capsule_scope_path", capsule.scopePath());
+        metadata.put("retention_state", capsule.retentionState().wireName());
+        if (!capsule.keyDecisions().isEmpty()) {
+            metadata.put("key_decisions", capsule.keyDecisions());
+        }
+        if (!capsule.reusableFindings().isEmpty()) {
+            metadata.put("reusable_findings", capsule.reusableFindings());
+        }
+        if (!capsule.unresolvedRisks().isEmpty()) {
+            metadata.put("unresolved_risks", capsule.unresolvedRisks());
+        }
+        if (!capsule.evidenceRefs().isEmpty()) {
+            metadata.put("reopen_candidate_paths", capsule.evidenceRefs().stream()
+                .map(ContextReference::targetPath)
+                .toList());
+            metadata.put("reopen_candidate_count", capsule.evidenceRefs().size());
+            metadata.put("target_path", capsule.evidenceRefs().getFirst().targetPath());
+        }
+        if (!capsule.nextFollowups().isEmpty()) {
+            metadata.put("next_followups", capsule.nextFollowups());
+        }
+        return new ContextObject(
+            task.id() + ":" + capsule.id(),
+            capsule.scopePath(),
+            ContextObjectType.CAPSULE,
+            taskPath,
+            "Reopen Capsule",
+            preview(firstNonBlank(capsule.outcome(), joinSummary(capsule.nextFollowups().toArray(String[]::new)))),
+            preview(multiline(
+                "outcome", capsule.outcome(),
+                "key_decisions", joinList(capsule.keyDecisions()),
+                "reusable_findings", joinList(capsule.reusableFindings()),
+                "unresolved_risks", joinList(capsule.unresolvedRisks()),
+                "reopen_candidate_paths", joinList(capsule.evidenceRefs().stream()
+                    .map(ContextReference::targetPath)
+                    .toList()),
+                "next_followups", joinList(capsule.nextFollowups())
+            )),
+            task.updatedAt(),
+            capsule.retentionState(),
+            List.copyOf(capsule.evidenceRefs()),
+            List.of(),
+            metadata
+        );
+    }
+
+    public ContextObject retrievalPolicyCapsule(Task task,
+                                                String capsuleId,
+                                                String scopePath,
+                                                String outcome,
+                                                List<String> keyDecisions,
+                                                List<String> reusableFindings,
+                                                List<String> unresolvedRisks,
+                                                List<String> candidatePaths,
+                                                List<String> nextFollowups,
+                                                boolean needsArchiveRetrieval,
+                                                boolean needsExternalFactRefresh) {
+        if (task == null || capsuleId == null || capsuleId.isBlank()) {
+            return null;
+        }
+        String taskPath = taskPath(task);
+        ContextCapsule capsule = new ContextCapsule(
+            capsuleId,
+            firstNonBlank(scopePath, taskPath + "/archive/retrieval_policy"),
+            outcome,
+            copyList(keyDecisions),
+            copyList(reusableFindings),
+            copyList(unresolvedRisks),
+            reopenCandidateRefs(candidatePaths),
+            copyList(nextFollowups),
+            ContextRetentionState.COLD_CAPSULE
+        );
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("capsule_scope_path", capsule.scopePath());
+        metadata.put("retention_state", capsule.retentionState().wireName());
+        if (needsArchiveRetrieval) {
+            metadata.put("needs_archive_retrieval", true);
+        }
+        if (needsExternalFactRefresh) {
+            metadata.put("needs_external_fact_refresh", true);
+        }
+        if (!capsule.keyDecisions().isEmpty()) {
+            metadata.put("key_decisions", capsule.keyDecisions());
+        }
+        if (!capsule.reusableFindings().isEmpty()) {
+            metadata.put("reusable_findings", capsule.reusableFindings());
+        }
+        if (!capsule.unresolvedRisks().isEmpty()) {
+            metadata.put("unresolved_risks", capsule.unresolvedRisks());
+        }
+        if (!capsule.evidenceRefs().isEmpty()) {
+            List<String> paths = capsule.evidenceRefs().stream()
+                .map(ContextReference::targetPath)
+                .toList();
+            metadata.put("reopen_candidate_paths", paths);
+            metadata.put("retrieval_candidate_paths", paths);
+            metadata.put("reopen_candidate_count", capsule.evidenceRefs().size());
+            metadata.put("retrieval_candidate_count", capsule.evidenceRefs().size());
+            metadata.put("target_path", capsule.evidenceRefs().getFirst().targetPath());
+        }
+        if (!capsule.nextFollowups().isEmpty()) {
+            metadata.put("next_followups", capsule.nextFollowups());
+        }
+        return new ContextObject(
+            task.id() + ":" + capsule.id(),
+            capsule.scopePath(),
+            ContextObjectType.CAPSULE,
+            taskPath,
+            "Retrieval Policy Capsule",
+            preview(firstNonBlank(capsule.outcome(), joinSummary(capsule.nextFollowups().toArray(String[]::new)))),
+            preview(multiline(
+                "outcome", capsule.outcome(),
+                "needs_archive_retrieval", needsArchiveRetrieval ? "true" : null,
+                "needs_external_fact_refresh", needsExternalFactRefresh ? "true" : null,
+                "key_decisions", joinList(capsule.keyDecisions()),
+                "reusable_findings", joinList(capsule.reusableFindings()),
+                "unresolved_risks", joinList(capsule.unresolvedRisks()),
+                "retrieval_candidate_paths", joinList(capsule.evidenceRefs().stream()
+                    .map(ContextReference::targetPath)
+                    .toList()),
+                "next_followups", joinList(capsule.nextFollowups())
+            )),
+            task.updatedAt(),
+            capsule.retentionState(),
+            List.copyOf(capsule.evidenceRefs()),
+            List.of(),
+            metadata
+        );
+    }
+
     public ContextObject parentTaskHandle(Task task) {
         if (task == null || task.parentTaskId() == null || task.parentTaskId().isBlank()) {
             return null;
@@ -506,6 +1007,27 @@ public class ContextObjectAdapter {
             .toList();
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        Map<String, Object> typed = new LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (entry.getKey() != null) {
+                typed.put(entry.getKey().toString(), entry.getValue());
+            }
+        }
+        return typed;
+    }
+
+    private List<String> firstNonEmpty(List<String> primary, List<String> fallback) {
+        if (primary != null && !primary.isEmpty()) {
+            return primary;
+        }
+        return fallback != null ? fallback : List.of();
+    }
+
     private String joinList(List<String> values) {
         if (values == null || values.isEmpty()) {
             return null;
@@ -524,6 +1046,24 @@ public class ContextObjectAdapter {
             }
         }
         return present.isEmpty() ? null : String.join(" | ", present);
+    }
+
+    private String workerTransition(String previousWorker, String targetWorker) {
+        String from = firstNonBlank(previousWorker);
+        String to = firstNonBlank(targetWorker);
+        if (from == null && to == null) {
+            return null;
+        }
+        if (from == null) {
+            return to;
+        }
+        if (to == null) {
+            return from;
+        }
+        if (from.equals(to)) {
+            return from;
+        }
+        return from + " -> " + to;
     }
 
     private String labeledValue(String label, String value) {
@@ -616,6 +1156,34 @@ public class ContextObjectAdapter {
             }
         }
         return tail;
+    }
+
+    private List<ContextReference> reopenCandidateRefs(List<String> reopenCandidatePaths) {
+        if (reopenCandidatePaths == null || reopenCandidatePaths.isEmpty()) {
+            return List.of();
+        }
+        List<ContextReference> refs = new ArrayList<>();
+        for (String reopenCandidatePath : reopenCandidatePaths) {
+            if (reopenCandidatePath == null || reopenCandidatePath.isBlank()) {
+                continue;
+            }
+            refs.add(new ContextReference(
+                "reopen_candidate",
+                reopenCandidatePath,
+                reopenCandidateLabel(reopenCandidatePath)
+            ));
+        }
+        return List.copyOf(refs);
+    }
+
+    private List<String> copyList(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream()
+            .filter(value -> value != null && !value.isBlank())
+            .map(String::trim)
+            .toList();
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {

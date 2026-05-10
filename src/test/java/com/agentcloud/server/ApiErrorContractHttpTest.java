@@ -84,6 +84,26 @@ class ApiErrorContractHttpTest {
     }
 
     @Test
+    void closedSessionMessagePostReturnsStable400() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("closed-session-post.db"))) {
+            ApiCall create = fixture.postJson("/api/v1/sessions", Map.of("title", "closed message session"));
+            String sessionId = create.body().path("data").path("id").asText();
+            ApiCall close = fixture.send("POST", "/api/v1/sessions/" + sessionId + "/close", "", "application/json");
+            assertEquals(200, close.statusCode());
+
+            ApiCall response = fixture.postJson(
+                "/api/v1/sessions/" + sessionId + "/messages",
+                Map.of("role", "user", "content", "should fail")
+            );
+
+            assertEquals(400, response.statusCode());
+            assertFalse(response.body().path("success").asBoolean());
+            assertEquals("400", response.body().path("code").asText());
+            assertEquals("session is closed", response.body().path("message").asText());
+        }
+    }
+
+    @Test
     void missingSessionCloseReturnsStable404() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("missing-session-close.db"))) {
             ApiCall response = fixture.send("POST", "/api/v1/sessions/session-missing/close", "", "application/json");

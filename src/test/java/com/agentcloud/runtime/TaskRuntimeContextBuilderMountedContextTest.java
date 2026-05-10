@@ -109,6 +109,16 @@ class TaskRuntimeContextBuilderMountedContextTest {
             Instant.parse("2026-05-06T05:00:04Z"),
             Map.of()
         );
+        SessionMessage sessionOnlyMessage = new SessionMessage(
+            "msg_2",
+            task.sessionId(),
+            null,
+            "user",
+            "user_note",
+            "task 结束后，用户又在同一个 session 里补充了一条方向说明。",
+            Instant.parse("2026-05-06T05:00:04Z"),
+            Map.of("source_surface", "dialogue")
+        );
         ToolInvocationRecord toolInvocation = new ToolInvocationRecord(
             "tool_1",
             task.sessionId(),
@@ -139,7 +149,20 @@ class TaskRuntimeContextBuilderMountedContextTest {
             Map.of(
                 "assigned_worker", "codex",
                 "current_status", "active",
-                "current_node", "continue"
+                "current_node", "continue",
+                "runtime_cognition_surface", Map.of(
+                    "execution_judgment", Map.of(
+                        "needs_context_reopen", true,
+                        "evidence_gap_detected", true,
+                        "needs_archive_retrieval", true,
+                        "needs_external_fact_refresh", true,
+                        "reopen_candidate_paths", List.of(
+                            "/sessions/session_1/tasks/task_1/tool_invocations",
+                            "/sessions/session_1/tasks/task_1/packets/packet_1"
+                        ),
+                        "reopen_summary", "/sessions/session_1/tasks/task_1/tool_invocations | /sessions/session_1/tasks/task_1/packets/packet_1"
+                    )
+                )
             )
         );
         Checkpoint checkpoint = new Checkpoint(
@@ -161,7 +184,7 @@ class TaskRuntimeContextBuilderMountedContextTest {
             new StubResumePacketDao(packet),
             new StubCheckpointDao(checkpoint),
             new StubToolInvocationDao(toolInvocation),
-            new StubSessionMessageDao(message),
+            new StubSessionMessageDao(message, sessionOnlyMessage),
             new ActiveContextBuilder(
                 new ActiveContextBuilder.DefaultActiveContextPolicy(),
                 new ActiveContextBuilder.DefaultRetentionPolicy(),
@@ -176,7 +199,13 @@ class TaskRuntimeContextBuilderMountedContextTest {
         assertEquals(1, runtimeContext.recentDecisions().size());
         assertEquals(1, runtimeContext.recentArtifacts().size());
         assertEquals(1, runtimeContext.recentToolInvocations().size());
-        assertEquals(1, runtimeContext.recentMessages().size());
+        assertEquals(2, runtimeContext.recentMessages().size());
+        assertTrue(runtimeContext.recentMessages().stream()
+            .anyMatch(item -> item.id().equals("msg_1")
+                && "task".equals(item.metadata().get("continuity_scope"))));
+        assertTrue(runtimeContext.recentMessages().stream()
+            .anyMatch(item -> item.id().equals("msg_2")
+                && "session".equals(item.metadata().get("continuity_scope"))));
         assertNotNull(runtimeContext.activeContext());
         assertNotNull(runtimeContext.mountedContextView());
         assertEquals(task.id(), runtimeContext.mountedContextView().taskId());
@@ -184,6 +213,10 @@ class TaskRuntimeContextBuilderMountedContextTest {
             .anyMatch(object -> object.retentionState() == ContextRetentionState.PINNED));
         assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.ACTIVE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.RESUME_PACKET));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.ACTIVE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.SESSION_MESSAGE
+                && "session".equals(object.metadata().get("continuity_scope"))
+                && object.summary().contains("用户又在同一个 session")));
         assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.ARTIFACT));
         assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
@@ -194,8 +227,40 @@ class TaskRuntimeContextBuilderMountedContextTest {
                 && "execution".equals(object.metadata().get("judgment_stage"))
                 && "codex".equals(object.metadata().get("selected_worker"))
                 && object.summary().contains("action=continue")));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.TOOL_INVOCATION
+                && object.retentionState() == ContextRetentionState.HOT_RAW
+                && Boolean.TRUE.equals(object.metadata().get("rehydrated_from_archive"))
+                && "/sessions/session_1/tasks/task_1/tool_invocations"
+                    .equals(object.metadata().get("rehydrated_target_path"))
+                && object.sourceRefs().stream().anyMatch(ref ->
+                    "reopen_capsule".equals(ref.refType())
+                        && "/sessions/session_1/tasks/task_1/archive/reopen_capsule".equals(ref.targetPath()))));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.RESUME_PACKET
+                && object.retentionState() == ContextRetentionState.HOT_RAW
+                && Boolean.TRUE.equals(object.metadata().get("rehydrated_from_archive"))
+                && "/sessions/session_1/tasks/task_1/packets/packet_1"
+                    .equals(object.metadata().get("rehydrated_target_path"))));
         assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.INDEX).stream()
             .anyMatch(object -> object.summary().contains("tool_invocations=1")));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CAPSULE
+                && object.retentionState() == ContextRetentionState.COLD_CAPSULE
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))));
+        assertTrue(runtimeContext.mountedContextView().objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CAPSULE
+                && "Retrieval Policy Capsule".equals(object.title())
+                && object.retentionState() == ContextRetentionState.COLD_CAPSULE
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                ).equals(object.metadata().get("retrieval_candidate_paths"))));
         assertTrue(runtimeContext.mountedContextView().selectionTrace().stream()
             .anyMatch(item -> item.contains("evidence_decision_window=1/1")));
     }
@@ -376,15 +441,34 @@ class TaskRuntimeContextBuilderMountedContextTest {
         }
     }
 
-    private record StubSessionMessageDao(SessionMessage message) implements SessionMessageDao {
+    private record StubSessionMessageDao(List<SessionMessage> messages) implements SessionMessageDao {
+        private StubSessionMessageDao(SessionMessage... messages) {
+            this(List.of(messages));
+        }
+
         @Override
         public List<SessionMessage> listBySession(String sessionId, int limit) {
-            return List.of(message);
+            return messages;
         }
 
         @Override
         public List<SessionMessage> listBySessionAndTask(String sessionId, String taskId, int limit) {
-            return List.of(message);
+            return messages.stream()
+                .filter(message -> taskId.equals(message.taskId()))
+                .toList();
+        }
+
+        @Override
+        public SessionMessage findById(String id) {
+            return messages.stream()
+                .filter(message -> id.equals(message.id()))
+                .findFirst()
+                .orElse(null);
+        }
+
+        @Override
+        public int updateBinding(String id, String taskId, String metadata) {
+            throw new UnsupportedOperationException();
         }
 
         @Override

@@ -2,6 +2,11 @@ package com.agentcloud.server;
 
 import com.agentcloud.engine.ControlNodeGraph;
 import com.agentcloud.engine.TaskService;
+import com.agentcloud.engine.memory.PacketBuilder;
+import com.agentcloud.engine.router.WorkerRegistry;
+import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.model.Artifact;
+import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.SessionMessage;
@@ -10,13 +15,17 @@ import com.agentcloud.model.TaskCreateRequest;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.ContextReference;
 import com.agentcloud.runtime.context.ContextObjectType;
 import com.agentcloud.runtime.context.ContextRetentionState;
 import com.agentcloud.runtime.context.MountedContextPanel;
 import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.runtime.context.MountedContextView;
+import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.DatabaseManager;
+import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
+import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.TaskDao;
@@ -265,7 +274,17 @@ class TaskHandlerControlActionHttpTest {
                 .filter(panel -> "pinned".equals(panel.get("name")))
                 .findFirst()
                 .orElseThrow();
+            Map<String, Object> archivePanel = panels.stream()
+                .filter(panel -> "archive_handles".equals(panel.get("name")))
+                .findFirst()
+                .orElseThrow();
             List<Map<String, Object>> pinnedObjects = harness.list(pinnedPanel.get("objects"));
+            List<Map<String, Object>> archiveObjects = harness.list(archivePanel.get("objects"));
+            Map<String, Object> retrievalCapsule = archiveObjects.stream()
+                .filter(object -> "Retrieval Policy Capsule".equals(object.get("title")))
+                .findFirst()
+                .orElseThrow();
+            Map<String, Object> retrievalMetadata = harness.map(retrievalCapsule.get("metadata"));
 
             assertEquals(200, response.statusCode());
             assertEquals("task_runtime_http", mountedContextView.get("task_id"));
@@ -277,6 +296,50 @@ class TaskHandlerControlActionHttpTest {
                 pinnedObjects.getFirst().get("path"));
             assertEquals("/sessions/session_runtime_http/tasks/task_runtime_http",
                 pinnedObjects.getFirst().get("parent_path"));
+            assertEquals("cold_capsule", retrievalCapsule.get("retention_state"));
+            assertEquals(Boolean.TRUE, retrievalMetadata.get("needs_archive_retrieval"));
+            assertEquals(Boolean.TRUE, retrievalMetadata.get("needs_external_fact_refresh"));
+            assertEquals(List.of(
+                    "/sessions/session_runtime_http/tasks/task_runtime_http/tool_invocations",
+                    "/sessions/session_runtime_http/tasks/task_runtime_http/packets/packet_runtime_http"
+                ),
+                retrievalMetadata.get("retrieval_candidate_paths"));
+        }
+    }
+
+    @Test
+    void getHandoffPacketReturnsSharedRuntimeFactSurface() throws Exception {
+        try (HandoffPacketHarness harness = new HandoffPacketHarness(tempDir.resolve("task-handler-handoff-packet.db"))) {
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/task_packet_http/handoff_packet?target_worker=kimi"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> handoffPacket = harness.map(data.get("handoff_packet"));
+            Map<String, Object> metadata = harness.map(handoffPacket.get("metadata"));
+            Map<String, Object> runtimeFacts = harness.map(metadata.get("runtime_facts"));
+            Map<String, Object> runtimeSurface = harness.map(metadata.get("runtime_cognition_surface"));
+            Map<String, Object> routeSurface = harness.map(runtimeSurface.get("route"));
+            Map<String, Object> executionSurface = harness.map(runtimeSurface.get("execution"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("task_packet_http", data.get("task_id"));
+            assertEquals("codex", data.get("from_worker"));
+            assertEquals("kimi", data.get("to_worker"));
+            assertEquals("1.0", handoffPacket.get("packet_version"));
+            assertEquals(Boolean.TRUE, handoffPacket.get("machine_readable_first"));
+            assertEquals("orchestrated", metadata.get("model_mode"));
+            assertEquals("execution_pending", metadata.get("orchestration_stage"));
+            assertEquals("mounted_context_shadow", metadata.get("prompt_mode"));
+            assertEquals("task_packet_http", runtimeFacts.get("task_id"));
+            assertEquals("Apply the final executor patch.", runtimeFacts.get("recommended_next_step"));
+            assertEquals("codex", routeSurface.get("selected_worker"));
+            assertEquals("preassigned", routeSurface.get("route_source"));
+            assertEquals("mounted_context_shadow", executionSurface.get("prompt_mode"));
         }
     }
 
@@ -469,6 +532,47 @@ class TaskHandlerControlActionHttpTest {
                                 List.of(),
                                 Map.of("constraint_count", 1)
                             ))
+                        ),
+                        new MountedContextPanel(
+                            MountedContextPanelName.ARCHIVE_HANDLES,
+                            "Archive Handles",
+                            List.of(new ContextObject(
+                                "retrieval_capsule_runtime_http",
+                                "/sessions/session_runtime_http/tasks/task_runtime_http/archive/retrieval_policy_capsule",
+                                ContextObjectType.CAPSULE,
+                                "/sessions/session_runtime_http/tasks/task_runtime_http",
+                                "Retrieval Policy Capsule",
+                                "Archive retrieval is recommended before the next round.",
+                                "needs_archive_retrieval: true\nneeds_external_fact_refresh: true",
+                                Instant.parse("2026-05-06T07:10:03Z"),
+                                ContextRetentionState.COLD_CAPSULE,
+                                List.of(
+                                    new ContextReference(
+                                        "reopen_candidate",
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/tool_invocations",
+                                        "tool_invocations"
+                                    ),
+                                    new ContextReference(
+                                        "reopen_candidate",
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/packets/packet_runtime_http",
+                                        "packets:packet_runtime_http"
+                                    )
+                                ),
+                                List.of(),
+                                Map.of(
+                                    "needs_archive_retrieval", true,
+                                    "needs_external_fact_refresh", true,
+                                    "retrieval_candidate_paths", List.of(
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/tool_invocations",
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/packets/packet_runtime_http"
+                                    ),
+                                    "reopen_candidate_paths", List.of(
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/tool_invocations",
+                                        "/sessions/session_runtime_http/tasks/task_runtime_http/packets/packet_runtime_http"
+                                    ),
+                                    "target_path", "/sessions/session_runtime_http/tasks/task_runtime_http/tool_invocations"
+                                )
+                            ))
                         )
                     ),
                     List.of("compat_mode=task_runtime_context_preserved")
@@ -514,6 +618,168 @@ class TaskHandlerControlActionHttpTest {
         @SuppressWarnings("unchecked")
         private List<Map<String, Object>> list(Object value) {
             return (List<Map<String, Object>>) value;
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+            executor.shutdownNow();
+            db.close();
+        }
+    }
+
+    private static final class HandoffPacketHarness implements AutoCloseable {
+        private final DatabaseManager db;
+        private final HttpServer server;
+        private final ExecutorService executor;
+        private final HttpClient client;
+        private final int port;
+
+        private HandoffPacketHarness(Path dbPath) throws IOException {
+            this.db = new DatabaseManager(dbPath);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+
+            Session session = Session.create("session_packet_http", "handoff packet http", "active");
+            sessionDao.insert(session);
+
+            Task task = new Task(
+                "task_packet_http",
+                session.id(),
+                null,
+                "complete orchestrated execution",
+                "active",
+                "high",
+                Instant.parse("2026-05-07T09:00:00Z"),
+                Instant.parse("2026-05-07T09:00:00Z"),
+                Instant.parse("2026-05-07T09:00:00Z"),
+                null,
+                null,
+                "Planner phase is done and executor should continue.",
+                "Ship the task through executor continuation.",
+                "Apply the final executor patch.",
+                "codex",
+                "handoff",
+                "Need executor continuation.",
+                Map.of(
+                    "task_type", "coding",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "execution_pending",
+                    "prompt_mode", "mounted_context_shadow",
+                    "planner_worker", "codex",
+                    "executor_worker", "kimi",
+                    "route_source", "preassigned",
+                    "candidate_workers", List.of("codex", "kimi"),
+                    "open_questions", List.of("Should executor keep the current file layout?")
+                )
+            );
+            taskDao.insert(task);
+            taskDao.insert(new Task(
+                "task_packet_http_done",
+                session.id(),
+                task.id(),
+                "prepare executor brief",
+                "done",
+                "high",
+                Instant.parse("2026-05-07T09:01:00Z"),
+                Instant.parse("2026-05-07T09:01:00Z"),
+                Instant.parse("2026-05-07T09:01:00Z"),
+                Instant.parse("2026-05-07T09:03:00Z"),
+                null,
+                "Executor brief prepared.",
+                null,
+                null,
+                "codex",
+                "end",
+                null,
+                Map.of()
+            ));
+            taskDao.insert(new Task(
+                "task_packet_http_pending",
+                session.id(),
+                task.id(),
+                "apply executor patch",
+                "active",
+                "high",
+                Instant.parse("2026-05-07T09:02:00Z"),
+                Instant.parse("2026-05-07T09:02:00Z"),
+                Instant.parse("2026-05-07T09:02:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Apply the final executor patch.",
+                "kimi",
+                "scheduler",
+                null,
+                Map.of()
+            ));
+            decisionDao.insert(new Decision(
+                "dec_packet_http",
+                session.id(),
+                task.id(),
+                Instant.parse("2026-05-07T09:04:00Z"),
+                "completion_judgment",
+                "Planner output is ready for executor handoff.",
+                "The remaining work is execution-heavy.",
+                "medium",
+                null,
+                Map.of()
+            ));
+            artifactDao.insert(new Artifact(
+                "art_packet_http",
+                session.id(),
+                task.id(),
+                Instant.parse("2026-05-07T09:05:00Z"),
+                "worker_output",
+                "Planner delegation brief",
+                null,
+                null,
+                "Executor can continue from this brief.",
+                Map.of("selected_model_tier", "strong")
+            ));
+
+            TaskService service = new TaskService(
+                taskDao,
+                sessionDao,
+                eventDao,
+                packetDao,
+                new WorkerRouter(new WorkerRegistry()),
+                new PacketBuilder(decisionDao, artifactDao, taskDao),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            this.server = HttpServer.create(new InetSocketAddress(0), 0);
+            this.executor = Executors.newCachedThreadPool();
+            this.server.setExecutor(executor);
+            this.server.createContext("/api/v1/tasks", new TaskHandler(service, NioHttpServer.SHARED_MAPPER));
+            this.server.start();
+            this.port = server.getAddress().getPort();
+            this.client = HttpClient.newHttpClient();
+        }
+
+        private URI uri(String path) {
+            return URI.create("http://127.0.0.1:" + port + path);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> readJson(String body) throws IOException {
+            return NioHttpServer.SHARED_MAPPER.readValue(body, Map.class);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> map(Object value) {
+            return (Map<String, Object>) value;
         }
 
         @Override

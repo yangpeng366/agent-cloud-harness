@@ -701,6 +701,52 @@ button {
     margin-top: 12px;
 }
 
+.mounted-context,
+.mounted-context__panels,
+.mounted-context__objects {
+    display: grid;
+    gap: 10px;
+}
+
+.mounted-context__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.mounted-context__trace {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.mounted-context__panel,
+.mounted-context__object {
+    padding: 13px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(18, 32, 45, 0.08);
+    background: rgba(255, 255, 255, 0.62);
+}
+
+.mounted-context__panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.mounted-context__object p {
+    margin: 8px 0 0;
+    color: var(--ink-soft);
+    line-height: 1.58;
+    white-space: pre-line;
+}
+
+.mounted-context__chips {
+    margin-top: 10px;
+}
+
 .chip {
     background: rgba(31, 122, 105, 0.09);
     color: var(--accent-deep);

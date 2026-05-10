@@ -14,6 +14,9 @@ import com.agentcloud.judgment.PromptBasedJudgmentService;
 import com.agentcloud.llm.LlmConfig;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.llm.OpenAiCompatibleClient;
+import com.agentcloud.runtime.RuntimeFactPromptFormatter;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
+import com.agentcloud.runtime.RuntimeFactSurfaceExporter;
 import com.agentcloud.runtime.TaskRuntimeContextBuilder;
 import com.agentcloud.runtime.ActiveContextBuilder;
 import com.agentcloud.server.NioHttpServer;
@@ -83,13 +86,7 @@ public class Main {
         BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         WorkerRegistry workerRegistry = new WorkerRegistry(agentProviderRegistry);
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
-        PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao, packetDao);
         ContextReconstructor reconstructor = new ContextReconstructor(taskDao, decisionDao, artifactDao, eventDao, relationDao);
-
-        // 新增: Consolidation Layer
-        ConsolidationService consolidation = new ConsolidationService(
-            decisionDao, artifactDao, eventDao, checkpointDao, taskDao, packetDao
-        );
         RuntimeJudgmentService runtimeJudgmentService = new RuntimeJudgmentService();
 
         // Phase 1 新增: LLM Adapter Layer
@@ -111,6 +108,20 @@ public class Main {
                 eventDao, decisionDao, artifactDao, packetDao, checkpointDao, toolInvocationDao, sessionMessageDao,
                 activeContextBuilder, learningMemoryService
             );
+        RuntimeFactSetAssembler runtimeFactSetAssembler =
+            new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, workerRouter);
+        RuntimeFactPromptFormatter runtimeFactPromptFormatter = new RuntimeFactPromptFormatter();
+        RuntimeFactSurfaceExporter runtimeFactSurfaceExporter = new RuntimeFactSurfaceExporter();
+
+        PacketBuilder packetBuilder = new PacketBuilder(
+            decisionDao, artifactDao, taskDao, packetDao, runtimeFactSetAssembler, runtimeFactSurfaceExporter
+        );
+
+        // 新增: Consolidation Layer
+        ConsolidationService consolidation = new ConsolidationService(
+            decisionDao, artifactDao, eventDao, checkpointDao, taskDao, packetDao,
+            runtimeFactSetAssembler, runtimeFactSurfaceExporter
+        );
 
         // Phase 1 新增: Judgment Layer（当前为占位实现，保留 RuntimeJudgmentService 给 TaskService 使用）
         JudgmentService judgmentService = new PromptBasedJudgmentService(llmClient);
@@ -129,14 +140,22 @@ public class Main {
             .register(new PowerShellTool(workerRegistry, toolPolicy))
             .register(new CmdTool(workerRegistry, toolPolicy));
 
-        WorkerExecutor defaultWorkerExecutor = new DefaultWorkerExecutor(llmClient);
+        WorkerExecutor defaultWorkerExecutor = new DefaultWorkerExecutor(
+            llmClient,
+            null,
+            runtimeFactSetAssembler,
+            runtimeFactPromptFormatter
+        );
         WorkerExecutor toolAwareWorkerExecutor = new ToolAwareWorkerExecutor(
             workerRegistry,
             toolRegistry,
             toolPolicy,
             toolInvocationDao,
             llmClient,
-            defaultWorkerExecutor
+            defaultWorkerExecutor,
+            null,
+            runtimeFactSetAssembler,
+            runtimeFactPromptFormatter
         );
 
         // Agent Provider Layer (Phase 1 skeleton)
@@ -228,6 +247,9 @@ public class Main {
         log.info("  GET  /api/v1/experiment_matrix/cases - list built-in baseline matrix cases");
         log.info("  POST /api/v1/experiment_matrix/runs - create comparable baseline runs");
         log.info("  GET  /api/v1/experiment_matrix/summary?experiment_name=... - summarize matrix results");
+        log.info("  POST /v1/chat/completions - OpenAI-compatible chat facade");
+        log.info("  POST /v1/responses        - OpenAI-compatible responses facade");
+        log.info("  GET  /v1/models           - chat facade model list");
         log.info("  GET  /api/v1/health         - health check");
 
         // 保持运行

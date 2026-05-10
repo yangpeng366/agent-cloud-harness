@@ -86,9 +86,48 @@
   4. 页面筛选器把目标消息过滤掉了
 - **排查步骤**:
   1. 先直接调用 `GET /api/v1/sessions/{id}/messages?limit=20`，确认消息已落库。
-  2. 如果看 `Related Messages`，再调用 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`。
-  3. 确认 `/dialogue/` 左侧当前选中的 session 与 API 返回的 `session_id` 一致。
-  4. 把过滤器先切回 `all + all`。
+  2. 如果看顶部消息流，先把过滤器切回 `all + all`，避免被 `assistant/system` 或 `task-only/session-only` 过滤掉。
+  3. 如果看 `Related Messages`，优先调用 `GET /api/v1/tasks/{taskId}/live_flow?limit=10`，确认 `related_messages` 里是否已经带出目标消息。
+  4. 若消息是 session 级普通连续聊天消息，检查 `related_messages[*].metadata.continuity_scope` 是否为 `session`；这类消息现在会并入当前 task 的 related message surface，但不会带 `task_id`。
+  5. 只有在旧实例或 `live_flow.related_messages` 缺字段时，才再回退检查 `GET /api/v1/sessions/{id}/messages?task_id={taskId}`。
+  6. 确认 `/dialogue/` 左侧当前选中的 session 与 API 返回的 `session_id` 一致。
+
+### 2.4.1 任务已经 `done/failed`，为什么同一个 session 里还能继续聊天或继续发任务
+
+- **典型表现**:
+  1. 某个 task 已经进入 `done` 或 `failed`
+  2. 但 `/dialogue/` 里仍然可以继续发 `user_note`
+  3. 同一个 session 下还能继续创建 follow-up task
+- **这是当前设计，不是 bug**:
+  1. `task` 的终态只表示这一个工作单结束
+  2. `session` 更接近 thread / conversation；只要 session 仍是 `active`，就允许继续聊天和继续发新任务
+  3. 真正的阻断条件不是 `task.done/failed`，而是 `session.closed`
+- **当前 contract**:
+  1. `POST /api/v1/sessions/{id}/messages` 在 `session=active|paused` 且实现允许的前提下仍可写入
+  2. `POST /api/v1/tasks` 只要 `session_id` 对应的 session 没有 `closed`，就仍可创建新任务
+  3. 只有向 `closed session` 写 message / task 时，才会返回 `400 session is closed`
+- **排查步骤**:
+  1. 先看 `GET /api/v1/sessions/{id}`，确认 `status` 是否真的是 `closed`
+  2. 不要只看当前 task 的 `status=done/failed` 就判断 session 应该不可继续
+  3. 如果页面上主按钮被禁用，再看 `/dialogue/` composer 是否提示 `closed session`
+
+### 2.4.2 `/dialogue/` 里“发布任务/发送消息”像点不了
+
+- **典型表现**:
+  1. composer 主按钮是灰的，或者点击后看起来没有响应
+  2. 当前 URL 还停在某个旧 session 上，例如 `#session=...`
+- **可能原因**:
+  1. 当前选中的 session 已经是 `closed`
+  2. 输入为空
+  3. 当前在 `follow-up` 模式，但没有有效父任务
+- **当前恢复路径**:
+  1. `/dialogue/` 现在会在 closed-session 场景明确显示 warning，而不再 silent fail
+  2. composer 下方会直接给出 `新建会话并继续` 按钮
+  3. 点击后会创建一个新 session，并保留当前输入草稿，继续发送
+- **排查步骤**:
+  1. 先看 composer inline warning 是否提示 `closed session`
+  2. 再看左侧 session rail 当前高亮的是不是旧的已关闭 session
+  3. 如果只是想继续聊，不需要 reopen 已完成 task，直接点 `新建会话并继续`
 
 ### 2.5 `/tool_trace` 为空，或 `live_flow` 中没有工具轨迹
 
@@ -146,6 +185,43 @@
 .\scripts\Build-WithJava21.ps1 -SkipTests
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
 ```
+
+### 2.8.1 `/api/v1/health` 正常，但 `/v1/chat/completions`、`/v1/responses`、`/v1/models` 返回 `404`
+
+- **典型表现**:
+  1. `GET /api/v1/health` 返回 `status=up`
+  2. 但 `POST /v1/chat/completions`、`POST /v1/responses`、`GET /v1/models` 都返回 `404 not found`
+- **已确认根因**:
+  1. 启动时用了旧的非 shaded JAR，产物里缺少较新的 façade 类
+  2. 进程因此能启动基础 `/api/v1/*`，但不会真正注册当前源码里的 `/v1/*` façade 路由
+- **解决方案**:
+  1. 优先使用仓库脚本默认值启动，它现在默认指向：
+     `target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar`
+  2. 如果手工启动，也显式使用 shaded JAR：
+
+```powershell
+.\scripts\Run-HarnessWithJava21.ps1 -Port 18080 -Background
+# 或
+java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
+```
+
+- **快速验证**:
+  1. 先打 `GET /v1/models`
+  2. 再跑 `.\scripts\Run-ChatFacadeAcceptanceProbe.ps1 -BaseUrl http://localhost:18080`
+
+### 2.8.2 `Run-ChatFacadeAcceptanceWithLocalHarness.ps1` 跑通了，但 `.tmp` 下还看到 `chat-facade-acceptance*.log`
+
+- **典型表现**:
+  1. acceptance runner 返回成功 JSON
+  2. 但 `.tmp` 目录里仍然能看到 `chat-facade-acceptance*.log`
+- **当前真实结论**:
+  1. 现行脚本在默认模式下已经不会为**新运行**继续留下日志文件
+  2. 如果你看到固定名 `chat-facade-acceptance.out.log/.err.log`，或很早时间戳的 `chat-facade-acceptance-<port>-<time>.log`，通常是旧版本 runner 留下的历史文件
+  3. 只有显式传 `-KeepServerLogs` 时，runner 才会保留本次运行的唯一日志文件，并在 JSON 结果里回传具体路径
+- **处理方式**:
+  1. 若只是排障结束后的目录清理，直接手动删除 `.tmp\chat-facade-acceptance*.log`
+  2. 若需要保留本次运行日志用于定位问题，显式加 `-KeepServerLogs`
+  3. 若怀疑现行脚本仍泄漏日志，先在空目录状态下重新跑一次，再对比新增文件，而不要把旧遗留日志误判成当前运行结果
 
 ### 2.9 Windows 上 `codex` / provider CLI 明明能在 PowerShell 里找到，但任务执行时报 `CreateProcess error=2`
 

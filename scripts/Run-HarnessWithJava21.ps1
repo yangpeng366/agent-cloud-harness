@@ -1,6 +1,6 @@
 param(
     [string]$JdkHome = "C:\Program Files\Java\jdk-21.0.9+10",
-    [string]$JarPath = "target\agent-cloud-harness-0.1.0-SNAPSHOT.jar",
+    [string]$JarPath = "target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar",
     [int]$Port = 8080,
     [switch]$Background,
     [string]$StdOutPath = ".tmp\server.out.log",

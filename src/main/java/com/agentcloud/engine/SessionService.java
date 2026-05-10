@@ -6,6 +6,7 @@ import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.SessionMessageCreateRequest;
 import com.agentcloud.model.Task;
 import com.agentcloud.store.EventDao;
+import com.agentcloud.store.JsonMapper;
 import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.TaskDao;
@@ -115,6 +116,7 @@ public class SessionService {
 
     public SessionMessage addMessage(String sessionId, SessionMessageCreateRequest request) {
         Session session = requireSession(sessionId);
+        ensureSessionOpen(session);
         String content = trimToNull(request.content());
         if (content == null) {
             throw new IllegalArgumentException("message content is required");
@@ -175,6 +177,22 @@ public class SessionService {
             return sessionMessageDao.listBySession(sessionId, safeLimit);
         }
         return sessionMessageDao.listBySessionAndTask(sessionId, normalizedTaskId, safeLimit);
+    }
+
+    public SessionMessage bindMessageToTask(String sessionId, String messageId, String taskId) {
+        requireSession(sessionId);
+        requireTaskInSession(sessionId, taskId);
+        ensureMessageStoreAvailable();
+        SessionMessage existing = sessionMessageDao.findById(messageId);
+        if (existing == null || !sessionId.equals(existing.sessionId())) {
+            throw new IllegalArgumentException("session message not found");
+        }
+        Map<String, Object> metadata = existing.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(existing.metadata());
+        metadata.put("task_id", taskId);
+        sessionMessageDao.updateBinding(existing.id(), taskId, JsonMapper.toJson(metadata));
+        return sessionMessageDao.findById(existing.id());
     }
 
     private Session requireSession(String sessionId) {

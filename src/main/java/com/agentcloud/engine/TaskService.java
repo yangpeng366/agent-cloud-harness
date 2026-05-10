@@ -278,7 +278,11 @@ public class TaskService {
         List<ToolInvocationRecord> toolInvocations = facts.toolInvocations();
         RuntimeFactSet.ExecutionBoundary executionBoundary = facts.executionBoundary();
         List<SessionMessage> relatedMessages = sessionMessageDao != null
-            ? sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit)
+            ? mergeLiveFlowRelatedMessages(
+                sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit),
+                sessionMessageDao.listBySession(task.sessionId(), boundedLimit),
+                boundedLimit
+            )
             : List.of();
         ExperimentRunRecord experimentRun = experimentRunService != null ? experimentRunService.refresh(task) : null;
         ProviderSelectionView providerSelection = agentRunService != null
@@ -413,6 +417,9 @@ public class TaskService {
             null,
             null,
             null,
+            null,
+            null,
+            null,
             List.of(),
             null,
             null,
@@ -462,6 +469,9 @@ public class TaskService {
             null,
             blankToNull(execution.executionStatus()),
             execution.toolInvocationCount(),
+            null,
+            null,
+            null,
             null,
             List.of(),
             null,
@@ -513,6 +523,9 @@ public class TaskService {
             null,
             null,
             surface.needsContextReopen(),
+            surface.evidenceGapDetected(),
+            surface.needsArchiveRetrieval(),
+            surface.needsExternalFactRefresh(),
             surface.reopenCandidatePaths() == null ? List.of() : surface.reopenCandidatePaths(),
             blankToNull(surface.reopenSummary()),
             blankToNull(surface.proofSummary()),
@@ -574,20 +587,48 @@ public class TaskService {
         if (action == null) {
             return null;
         }
+        Map<String, Object> runtimeCognitionSurface = metadataMap(payload, "runtime_cognition_surface");
+        Map<String, Object> executionSurface = metadataMap(runtimeCognitionSurface, "execution");
+        Map<String, Object> routeSurface = metadataMap(runtimeCognitionSurface, "route");
+        Map<String, Object> judgmentSurface = metadataMap(runtimeCognitionSurface, "execution_judgment");
         String workerId = firstNonBlank(
+            metadataString(executionSurface, "worker_id"),
+            metadataString(routeSurface, "selected_worker"),
             metadataString(payload, "assigned_worker"),
             metadataString(payload, "current_worker"),
             metadataString(payload, "previous_worker")
         );
         String promptMode = firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
             metadataString(payload, "prompt_mode"),
             metadataString(payload, "mounted_context_mode"),
             metadataString(payload, "prompt_rendering_mode")
         );
         String targetWorker = metadataString(payload, "target_worker");
         String reason = metadataString(payload, "reason");
+        List<String> reopenCandidatePaths = firstNonEmptyList(
+            metadataStringList(judgmentSurface, "reopen_candidate_paths"),
+            metadataStringList(payload, "reopen_candidate_paths")
+        );
+        Boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected", payload);
+        Boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval", payload);
+        Boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh", payload);
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            reopenSummary(reopenCandidatePaths)
+        );
         String summary = firstNonBlank(
-            summarizeControlActionTimeline(action, workerId, targetWorker, promptMode, reason),
+            summarizeControlActionTimeline(
+                action,
+                workerId,
+                targetWorker,
+                promptMode,
+                reason,
+                reopenSummary,
+                evidenceGapDetected,
+                needsArchiveRetrieval,
+                needsExternalFactRefresh
+            ),
             blankToNull(event.summary())
         );
         return new RuntimeCognitionTimelineEntryView(
@@ -600,27 +641,68 @@ public class TaskService {
             reason,
             targetWorker,
             promptMode,
+            metadataString(routeSurface, "route_source"),
+            metadataString(executionSurface, "execution_status"),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "tool_invocation_count"),
+                sizeOf(metadataStringList(executionSurface, "tool_invocation_ids")),
+                sizeOf(metadataStringList(payload, "tool_invocation_ids"))
+            ),
+            metadataBoolean(judgmentSurface, "needs_context_reopen", payload),
+            evidenceGapDetected,
+            needsArchiveRetrieval,
+            needsExternalFactRefresh,
+            reopenCandidatePaths,
+            reopenSummary,
+            firstNonBlank(
+                metadataString(executionSurface, "proof_summary"),
+                proofSummary(
+                    metadataStringList(executionSurface, "tool_invocation_ids"),
+                    metadataStringList(executionSurface, "evidence_refs")
+                ),
+                proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs"))
+            ),
+            metadataBoolean(executionSurface, "mounted_context_rendered", payload),
+            metadataBoolean(executionSurface, "mounted_render_used", payload),
+            metadataBoolean(executionSurface, "mounted_context_injected", payload),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_panel_count"),
+                metadataInteger(payload, "mounted_context_panel_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_object_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_object_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_selection_trace_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_selection_trace_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
+            ),
+            metadataBoolean(executionSurface, "mounted_context_budget_truncated", payload),
             null,
-            null,
-            null,
-            null,
-            List.of(),
-            null,
-            proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
-            metadataBoolean(payload, "mounted_context_rendered", Map.of()),
-            metadataBoolean(payload, "mounted_render_used", Map.of()),
-            metadataBoolean(payload, "mounted_context_injected", Map.of()),
-            metadataInteger(payload, "mounted_context_panel_count"),
-            metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT),
-            metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT),
-            metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT),
-            metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT),
-            metadataBoolean(payload, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED, Map.of()),
-            null,
-            metadataStringList(payload, "candidate_workers"),
-            metadataStringList(payload, "tool_invocation_ids"),
-            metadataStringList(payload, "evidence_refs"),
-            metadataStringList(payload, "unfinished_items"),
+            firstNonEmptyList(
+                metadataStringList(routeSurface, "candidate_workers"),
+                metadataStringList(payload, "candidate_workers")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "tool_invocation_ids"),
+                metadataStringList(payload, "tool_invocation_ids")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "evidence_refs"),
+                metadataStringList(payload, "evidence_refs")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "unfinished_items"),
+                metadataStringList(payload, "unfinished_items")
+            ),
             summary
         );
     }
@@ -635,17 +717,44 @@ public class TaskService {
         }
         Map<String, Object> refinedPacket = checkpoint.refinedPacket() == null ? Map.of() : checkpoint.refinedPacket();
         Map<String, Object> metadata = checkpoint.metadata() == null ? Map.of() : checkpoint.metadata();
+        Map<String, Object> runtimeCognitionSurface = metadataMap(refinedPacket, "runtime_cognition_surface");
+        Map<String, Object> executionSurface = metadataMap(runtimeCognitionSurface, "execution");
+        Map<String, Object> routeSurface = metadataMap(runtimeCognitionSurface, "route");
+        Map<String, Object> judgmentSurface = metadataMap(runtimeCognitionSurface, "execution_judgment");
         String workerId = firstNonBlank(
+            metadataString(executionSurface, "worker_id"),
+            metadataString(routeSurface, "selected_worker"),
             metadataString(refinedPacket, "assigned_worker"),
             metadataString(metadata, "assigned_worker")
         );
         String promptMode = firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
             metadataString(refinedPacket, "prompt_mode"),
             metadataString(refinedPacket, "mounted_context_mode"),
             metadataString(refinedPacket, "prompt_rendering_mode")
         );
+        List<String> reopenCandidatePaths = firstNonEmptyList(
+            metadataStringList(judgmentSurface, "reopen_candidate_paths"),
+            metadataStringList(refinedPacket, "reopen_candidate_paths")
+        );
+        Boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected", refinedPacket);
+        Boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval", refinedPacket);
+        Boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh", refinedPacket);
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            reopenSummary(reopenCandidatePaths)
+        );
         String summary = firstNonBlank(
-            summarizeCheckpointTimeline(checkpointType, workerId, promptMode, checkpoint.consolidationSummary()),
+            summarizeCheckpointTimeline(
+                checkpointType,
+                workerId,
+                promptMode,
+                checkpoint.consolidationSummary(),
+                reopenSummary,
+                evidenceGapDetected,
+                needsArchiveRetrieval,
+                needsExternalFactRefresh
+            ),
             blankToNull(checkpoint.consolidationSummary())
         );
         return new RuntimeCognitionTimelineEntryView(
@@ -658,27 +767,70 @@ public class TaskService {
             null,
             null,
             promptMode,
+            metadataString(routeSurface, "route_source"),
+            metadataString(executionSurface, "execution_status"),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "tool_invocation_count"),
+                sizeOf(metadataStringList(executionSurface, "tool_invocation_ids"))
+            ),
+            metadataBoolean(judgmentSurface, "needs_context_reopen", refinedPacket),
+            evidenceGapDetected,
+            needsArchiveRetrieval,
+            needsExternalFactRefresh,
+            reopenCandidatePaths,
+            reopenSummary,
+            firstNonBlank(
+                metadataString(executionSurface, "proof_summary"),
+                proofSummary(
+                    metadataStringList(executionSurface, "tool_invocation_ids"),
+                    metadataStringList(executionSurface, "evidence_refs")
+                ),
+                proofSummary(
+                    metadataStringList(refinedPacket, "tool_invocation_ids"),
+                    metadataStringList(refinedPacket, "evidence_refs")
+                )
+            ),
+            metadataBoolean(executionSurface, "mounted_context_rendered", refinedPacket),
+            metadataBoolean(executionSurface, "mounted_render_used", refinedPacket),
+            metadataBoolean(executionSurface, "mounted_context_injected", refinedPacket),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_panel_count"),
+                metadataInteger(refinedPacket, "mounted_context_panel_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_object_count"),
+                metadataInteger(refinedPacket, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_object_count"),
+                metadataInteger(refinedPacket, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_selection_trace_count"),
+                metadataInteger(refinedPacket, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_selection_trace_count"),
+                metadataInteger(refinedPacket, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
+            ),
+            metadataBoolean(executionSurface, "mounted_context_budget_truncated", refinedPacket),
             null,
-            null,
-            null,
-            null,
-            List.of(),
-            null,
-            proofSummary(metadataStringList(refinedPacket, "tool_invocation_ids"), metadataStringList(refinedPacket, "evidence_refs")),
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            metadataStringList(refinedPacket, "candidate_workers"),
-            metadataStringList(refinedPacket, "tool_invocation_ids"),
-            metadataStringList(refinedPacket, "evidence_refs"),
-            metadataStringList(refinedPacket, "open_questions"),
+            firstNonEmptyList(
+                metadataStringList(routeSurface, "candidate_workers"),
+                metadataStringList(refinedPacket, "candidate_workers")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "tool_invocation_ids"),
+                metadataStringList(refinedPacket, "tool_invocation_ids")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "evidence_refs"),
+                metadataStringList(refinedPacket, "evidence_refs")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "unfinished_items"),
+                metadataStringList(refinedPacket, "open_questions")
+            ),
             summary
         );
     }
@@ -688,11 +840,18 @@ public class TaskService {
             return null;
         }
         Map<String, Object> payload = resumePacket.payload() == null ? Map.of() : resumePacket.payload();
+        Map<String, Object> runtimeCognitionSurface = metadataMap(payload, "runtime_cognition_surface");
+        Map<String, Object> executionSurface = metadataMap(runtimeCognitionSurface, "execution");
+        Map<String, Object> routeSurface = metadataMap(runtimeCognitionSurface, "route");
+        Map<String, Object> judgmentSurface = metadataMap(runtimeCognitionSurface, "execution_judgment");
         String workerId = firstNonBlank(
+            metadataString(executionSurface, "worker_id"),
+            metadataString(routeSurface, "selected_worker"),
             blankToNull(resumePacket.assignedWorker()),
             metadataString(payload, "assigned_worker")
         );
         String promptMode = firstNonBlank(
+            metadataString(executionSurface, "prompt_mode"),
             metadataString(payload, "prompt_mode"),
             metadataString(payload, "mounted_context_mode"),
             metadataString(payload, "prompt_rendering_mode")
@@ -701,8 +860,27 @@ public class TaskService {
             metadataString(payload, "resume_hint"),
             blankToNull(resumePacket.nextStep())
         );
+        List<String> reopenCandidatePaths = firstNonEmptyList(
+            metadataStringList(judgmentSurface, "reopen_candidate_paths"),
+            metadataStringList(payload, "reopen_candidate_paths")
+        );
+        Boolean evidenceGapDetected = metadataBoolean(judgmentSurface, "evidence_gap_detected", payload);
+        Boolean needsArchiveRetrieval = metadataBoolean(judgmentSurface, "needs_archive_retrieval", payload);
+        Boolean needsExternalFactRefresh = metadataBoolean(judgmentSurface, "needs_external_fact_refresh", payload);
+        String reopenSummary = firstNonBlank(
+            metadataString(judgmentSurface, "reopen_summary"),
+            reopenSummary(reopenCandidatePaths)
+        );
         String summary = firstNonBlank(
-            summarizeResumePacketTimeline(resumePacket, workerId, promptMode),
+            summarizeResumePacketTimeline(
+                resumePacket,
+                workerId,
+                promptMode,
+                reopenSummary,
+                evidenceGapDetected,
+                needsArchiveRetrieval,
+                needsExternalFactRefresh
+            ),
             blankToNull(resumePacket.latestSummary()),
             blankToNull(resumePacket.activeTaskSummary())
         );
@@ -716,27 +894,67 @@ public class TaskService {
             reason,
             null,
             promptMode,
+            metadataString(routeSurface, "route_source"),
+            firstNonBlank(metadataString(executionSurface, "execution_status"), blankToNull(resumePacket.currentStatus())),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "tool_invocation_count"),
+                sizeOf(metadataStringList(executionSurface, "tool_invocation_ids"))
+            ),
+            metadataBoolean(judgmentSurface, "needs_context_reopen", payload),
+            evidenceGapDetected,
+            needsArchiveRetrieval,
+            needsExternalFactRefresh,
+            reopenCandidatePaths,
+            reopenSummary,
+            firstNonBlank(
+                metadataString(executionSurface, "proof_summary"),
+                proofSummary(
+                    metadataStringList(executionSurface, "tool_invocation_ids"),
+                    metadataStringList(executionSurface, "evidence_refs")
+                ),
+                proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs"))
+            ),
+            metadataBoolean(executionSurface, "mounted_context_rendered", payload),
+            metadataBoolean(executionSurface, "mounted_render_used", payload),
+            metadataBoolean(executionSurface, "mounted_context_injected", payload),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_panel_count"),
+                metadataInteger(payload, "mounted_context_panel_count")
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_object_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_object_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_rendered_selection_trace_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT)
+            ),
+            firstNonNullInt(
+                metadataInteger(executionSurface, "mounted_context_hidden_selection_trace_count"),
+                metadataInteger(payload, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT)
+            ),
+            metadataBoolean(executionSurface, "mounted_context_budget_truncated", payload),
             null,
-            blankToNull(resumePacket.currentStatus()),
-            null,
-            null,
-            List.of(),
-            null,
-            proofSummary(metadataStringList(payload, "tool_invocation_ids"), metadataStringList(payload, "evidence_refs")),
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            metadataStringList(payload, "candidate_workers"),
-            metadataStringList(payload, "tool_invocation_ids"),
-            metadataStringList(payload, "evidence_refs"),
-            resumePacket.openQuestions() == null ? List.of() : resumePacket.openQuestions(),
+            firstNonEmptyList(
+                metadataStringList(routeSurface, "candidate_workers"),
+                metadataStringList(payload, "candidate_workers")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "tool_invocation_ids"),
+                metadataStringList(payload, "tool_invocation_ids")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "evidence_refs"),
+                metadataStringList(payload, "evidence_refs")
+            ),
+            firstNonEmptyList(
+                metadataStringList(executionSurface, "unfinished_items"),
+                resumePacket.openQuestions() == null ? List.of() : resumePacket.openQuestions()
+            ),
             summary
         );
     }
@@ -809,6 +1027,11 @@ public class TaskService {
         String status = decision != null ? metadataString(decision.metadata(), "status") : null;
         String reopen = surface != null ? blankToNull(surface.reopenSummary()) : null;
         String proof = surface != null ? blankToNull(surface.proofSummary()) : null;
+        String lifecycleSignals = surface == null ? null : lifecycleSignalSummary(
+            surface.evidenceGapDetected(),
+            surface.needsArchiveRetrieval(),
+            surface.needsExternalFactRefresh()
+        );
         String budget = surface == null ? null : mountedBudgetSummary(
             surface.mountedContextRenderedObjectCount(),
             surface.mountedContextHiddenObjectCount(),
@@ -817,8 +1040,8 @@ public class TaskService {
             surface.mountedContextBudgetTruncated()
         );
         return firstNonBlank(
-            joinSummary(promptMode, action, status, budget, reopen, proof),
-            joinSummary(promptMode, status, budget, reopen, proof),
+            joinSummary(promptMode, action, status, budget, lifecycleSignals, reopen, proof),
+            joinSummary(promptMode, status, budget, lifecycleSignals, reopen, proof),
             promptMode
         );
     }
@@ -827,10 +1050,21 @@ public class TaskService {
                                                   String workerId,
                                                   String targetWorker,
                                                   String promptMode,
-                                                  String reason) {
+                                                  String reason,
+                                                  String reopenSummary,
+                                                  Boolean evidenceGapDetected,
+                                                  Boolean needsArchiveRetrieval,
+                                                  Boolean needsExternalFactRefresh) {
         String workerTransition = joinArrow(workerId, targetWorker);
         return firstNonBlank(
-            joinSummary(action, workerTransition, promptMode, reason),
+            joinSummary(
+                action,
+                workerTransition,
+                promptMode,
+                reason,
+                lifecycleSignalSummary(evidenceGapDetected, needsArchiveRetrieval, needsExternalFactRefresh),
+                reopenSummary
+            ),
             joinSummary(action, workerTransition, promptMode),
             action
         );
@@ -839,9 +1073,19 @@ public class TaskService {
     private String summarizeCheckpointTimeline(String checkpointType,
                                                String workerId,
                                                String promptMode,
-                                               String consolidationSummary) {
+                                               String consolidationSummary,
+                                               String reopenSummary,
+                                               Boolean evidenceGapDetected,
+                                               Boolean needsArchiveRetrieval,
+                                               Boolean needsExternalFactRefresh) {
         return firstNonBlank(
-            joinSummary(checkpointType, workerId, promptMode),
+            joinSummary(
+                checkpointType,
+                workerId,
+                promptMode,
+                lifecycleSignalSummary(evidenceGapDetected, needsArchiveRetrieval, needsExternalFactRefresh),
+                reopenSummary
+            ),
             joinSummary(checkpointType, workerId),
             blankToNull(consolidationSummary),
             checkpointType
@@ -850,7 +1094,11 @@ public class TaskService {
 
     private String summarizeResumePacketTimeline(ResumePacket resumePacket,
                                                  String workerId,
-                                                 String promptMode) {
+                                                 String promptMode,
+                                                 String reopenSummary,
+                                                 Boolean evidenceGapDetected,
+                                                 Boolean needsArchiveRetrieval,
+                                                 Boolean needsExternalFactRefresh) {
         if (resumePacket == null) {
             return null;
         }
@@ -858,11 +1106,30 @@ public class TaskService {
         String currentStatus = blankToNull(resumePacket.currentStatus());
         String nextStep = blankToNull(resumePacket.nextStep());
         return firstNonBlank(
-            joinSummary("resume packet", workerId, currentNode, currentStatus, promptMode, nextStep),
+            joinSummary(
+                "resume packet",
+                workerId,
+                currentNode,
+                currentStatus,
+                promptMode,
+                nextStep,
+                lifecycleSignalSummary(evidenceGapDetected, needsArchiveRetrieval, needsExternalFactRefresh),
+                reopenSummary
+            ),
             joinSummary("resume packet", workerId, currentNode, currentStatus, promptMode),
             joinSummary("resume packet", workerId, currentNode, currentStatus),
             joinSummary("resume packet", workerId, nextStep),
             "resume packet"
+        );
+    }
+
+    private String lifecycleSignalSummary(Boolean evidenceGapDetected,
+                                          Boolean needsArchiveRetrieval,
+                                          Boolean needsExternalFactRefresh) {
+        return joinSummary(
+            Boolean.TRUE.equals(evidenceGapDetected) ? "evidence_gap_detected=true" : null,
+            Boolean.TRUE.equals(needsArchiveRetrieval) ? "needs_archive_retrieval=true" : null,
+            Boolean.TRUE.equals(needsExternalFactRefresh) ? "needs_external_fact_refresh=true" : null
         );
     }
 
@@ -901,6 +1168,9 @@ public class TaskService {
             case "handoff_before" -> "Handoff Checkpoint";
             case "escalate_before" -> "Escalation Checkpoint";
             case "halt_before" -> "Halt Checkpoint";
+            case "reopen_before" -> "Reopen Checkpoint";
+            case "archive_retrieval_before" -> "Archive Retrieval Checkpoint";
+            case "external_fact_refresh_before" -> "External Fact Refresh Checkpoint";
             case "session_end" -> "Session End Checkpoint";
             case "periodic" -> "Periodic Checkpoint";
             default -> "Checkpoint";
@@ -1153,6 +1423,7 @@ public class TaskService {
         LinkedHashMap<String, Object> metadata = mergeActionMetadata(actionMetadata);
         metadata.put("previous_worker", firstNonBlank(previousWorker, "unassigned"));
         metadata.put("target_worker", firstNonBlank(updated.assignedWorker(), targetWorker, "unassigned"));
+        attachHandoffPacketMetadata(metadata, handoffPacket);
         recordControlActionEvent(updated, "handoff", null, metadata);
         recordTaskActionMessage(updated, "handoff", null, metadata);
         recordTaskStateProjection(t, updated, null, metadata);
@@ -1230,6 +1501,35 @@ public class TaskService {
             }
         }
         return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> metadataMap(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return Map.of();
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> typed = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    typed.put(entry.getKey().toString(), entry.getValue());
+                }
+            }
+            return typed;
+        }
+        return Map.of();
+    }
+
+    private List<String> firstNonEmptyList(List<String> primary, List<String> fallback) {
+        if (primary != null && !primary.isEmpty()) {
+            return primary;
+        }
+        return fallback != null ? fallback : List.of();
+    }
+
+    private Integer sizeOf(List<?> values) {
+        return values == null || values.isEmpty() ? null : values.size();
     }
 
     private Boolean objectBoolean(Object value) {
@@ -1376,6 +1676,51 @@ public class TaskService {
         };
     }
 
+    private List<SessionMessage> mergeLiveFlowRelatedMessages(List<SessionMessage> taskMessages,
+                                                              List<SessionMessage> sessionMessages,
+                                                              int limit) {
+        LinkedHashMap<String, SessionMessage> merged = new LinkedHashMap<>();
+        for (SessionMessage message : nullToEmpty(taskMessages)) {
+            if (message == null || blankToNull(message.id()) == null) {
+                continue;
+            }
+            merged.put(message.id(), withContinuityScope(message, "task"));
+        }
+        for (SessionMessage message : nullToEmpty(sessionMessages)) {
+            if (message == null || blankToNull(message.id()) == null || merged.containsKey(message.id())) {
+                continue;
+            }
+            if (blankToNull(message.taskId()) != null) {
+                continue;
+            }
+            merged.put(message.id(), withContinuityScope(message, "session"));
+        }
+        return merged.values().stream()
+            .sorted(Comparator.comparing(SessionMessage::createdAt))
+            .limit(Math.max(1, limit))
+            .toList();
+    }
+
+    private SessionMessage withContinuityScope(SessionMessage message, String scope) {
+        if (message == null || blankToNull(scope) == null) {
+            return message;
+        }
+        LinkedHashMap<String, Object> metadata = message.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(message.metadata());
+        metadata.putIfAbsent("continuity_scope", scope);
+        return new SessionMessage(
+            message.id(),
+            message.sessionId(),
+            message.taskId(),
+            message.role(),
+            message.messageType(),
+            message.content(),
+            message.createdAt(),
+            metadata
+        );
+    }
+
     private int boundedLimit(int limit) {
         return Math.max(1, Math.min(limit, 20));
     }
@@ -1388,7 +1733,7 @@ public class TaskService {
         String title = taskDisplayName(task);
         String content = autoStart
             ? "任务《" + title + "》已创建，并已自动进入 harness。当前：" + describeTaskSnapshot(task) + "。"
-            : "任务《" + title + "》已创建，当前为 manual-start。等待显式 /continue 后再进入 harness。";
+            : "任务《" + title + "》已创建。当前模式：manual-start。下一步：显式 /continue 后再进入 harness。";
         LinkedHashMap<String, Object> metadata = lifecycleMetadata(task);
         metadata.put("action", "task_create");
         metadata.put("auto_start", autoStart);
@@ -1440,8 +1785,12 @@ public class TaskService {
             currentTask,
             "system",
             "task_state",
-            "任务《" + taskDisplayName(currentTask) + "》状态已从 " + firstNonBlank(previousState, "unknown")
-                + " 更新为 " + firstNonBlank(currentState, "unknown")
+            "任务《" + taskDisplayName(currentTask) + "》状态已更新："
+                + firstNonBlank(previousState, "unknown")
+                + " -> "
+                + firstNonBlank(currentState, "unknown")
+                + "。当前："
+                + describeTaskSnapshot(currentTask)
                 + appendReason(reason),
             metadata
         );
@@ -1451,6 +1800,10 @@ public class TaskService {
         LinkedHashMap<String, Object> metadata = lifecycleMetadata(task);
         metadata.put("action", action);
         metadata.put("action_category", "task_control");
+        String actionLabel = taskActionLabel(action);
+        if (actionLabel != null) {
+            metadata.put("action_label", actionLabel);
+        }
         if (reason != null && !reason.isBlank()) {
             metadata.put("reason", reason);
         }
@@ -1458,9 +1811,10 @@ public class TaskService {
             metadata.putAll(extraMetadata);
         }
         String content = switch (action) {
-            case "handoff" -> "任务《" + taskDisplayName(task) + "》已执行 handoff，当前：" + describeTaskSnapshot(task)
+            case "handoff" -> "任务《" + taskDisplayName(task) + "》已移交，当前：" + describeTaskSnapshot(task)
                 + appendWorkerShift(extraMetadata);
-            default -> "任务《" + taskDisplayName(task) + "》已执行 " + action + "，当前：" + describeTaskSnapshot(task)
+            default -> "任务《" + taskDisplayName(task) + "》" + firstNonBlank(actionLabel, "已执行 " + action)
+                + "。当前：" + describeTaskSnapshot(task)
                 + appendReason(reason);
         };
         appendSessionMessage(task, "system", "task_action", content, metadata);
@@ -1500,6 +1854,7 @@ public class TaskService {
             if (facts.recommendedAction() != null) {
                 metadata.put("judgment_action", facts.recommendedAction());
             }
+            appendRuntimeFactMessageMetadata(task, facts, latestArtifact, metadata);
             if (completionJudgment != null && completionJudgment.metadata() != null) {
                 String completionStatus = stringValue(completionJudgment.metadata().get("status"));
                 if (completionStatus != null) {
@@ -1726,7 +2081,7 @@ public class TaskService {
 
     private String buildAssistantProgressMessage(Task task, String progressSummary, String nextStep) {
         StringBuilder sb = new StringBuilder()
-            .append("任务《").append(taskDisplayName(task)).append("》本轮进展：")
+            .append("任务《").append(taskDisplayName(task)).append("》已完成一轮推进。进展：")
             .append(firstNonBlank(progressSummary, describeTaskSnapshot(task), "已完成一轮推进"));
         if (nextStep != null) {
             sb.append("。下一步：").append(nextStep);
@@ -1737,13 +2092,81 @@ public class TaskService {
 
     private String buildAssistantResultMessage(Task task, String progressSummary, String nextStep) {
         StringBuilder sb = new StringBuilder()
-            .append("任务《").append(taskDisplayName(task)).append("》已形成当前结果：")
+            .append("任务《").append(taskDisplayName(task)).append("》已形成当前结果。结果：")
             .append(firstNonBlank(progressSummary, describeTaskSnapshot(task), "任务已结束"));
         if (nextStep != null) {
             sb.append("。残留下一步：").append(nextStep);
         }
         sb.append("。当前：").append(describeTaskSnapshot(task)).append("。");
         return sb.toString();
+    }
+
+    private void appendRuntimeFactMessageMetadata(Task task,
+                                                  RuntimeFactSet facts,
+                                                  Artifact latestArtifact,
+                                                  Map<String, Object> target) {
+        if (target == null) {
+            return;
+        }
+        if (task != null && task.metadata() != null) {
+            copyMetadataKey(task.metadata(), target, "model_mode");
+            copyMetadataKey(task.metadata(), target, "task_type");
+        }
+        if (facts == null) {
+            return;
+        }
+        Map<String, Object> factMetadata = facts.metadata();
+        copyMetadataKey(factMetadata, target, "selected_worker");
+        copyMetadataKey(factMetadata, target, "selected_worker_type");
+        copyMetadataKey(factMetadata, target, "selected_model_tier");
+        copyMetadataKey(factMetadata, target, "why_selected");
+        copyMetadataKey(factMetadata, target, "route_source");
+        copyMetadataKey(factMetadata, target, "preferred_worker_hint");
+        copyMetadataKey(factMetadata, target, "learning_hint_applied");
+        copyMetadataKey(factMetadata, target, "fallback_reason");
+        copyMetadataKey(factMetadata, target, "orchestration_stage");
+        copyMetadataKey(factMetadata, target, "planner_worker");
+        copyMetadataKey(factMetadata, target, "executor_worker");
+        copyMetadataKey(factMetadata, target, "evaluation_reason");
+        copyMetadataKey(factMetadata, target, "execution_status");
+        copyMetadataKey(factMetadata, target, "evidence_refs");
+        copyMetadataKey(factMetadata, target, "unfinished_items");
+        copyMetadataKey(factMetadata, target, "proof_summary");
+        copyMetadataKey(factMetadata, target, "tool_execution_mode");
+        copyMetadataKey(factMetadata, target, "tool_chain_step_count");
+        copyMetadataKey(factMetadata, target, "tool_chain_termination_reason");
+        copyMetadataKey(factMetadata, target, "tool_chain_trace_summary");
+        copyMetadataKey(factMetadata, target, "tool_chain_tools");
+        copyMetadataKey(factMetadata, target, "needs_context_reopen");
+        copyMetadataKey(factMetadata, target, "needs_archive_retrieval");
+        copyMetadataKey(factMetadata, target, "needs_external_fact_refresh");
+        copyMetadataKey(factMetadata, target, "evidence_gap_detected");
+        copyMetadataKey(factMetadata, target, "reopen_candidate_paths");
+        copyMetadataKey(factMetadata, target, "reopen_summary");
+
+        WorkerRouter.RouteResult routePreview = facts.routePreview();
+        if (routePreview != null) {
+            putIfNonBlank(target, "selected_worker", routePreview.selectedWorker());
+            putIfNonBlank(target, "selected_worker_type", routePreview.selectedWorkerType());
+            putIfNonBlank(target, "route_source", routePreview.routeSource());
+            putIfNonBlank(target, "preferred_worker_hint", routePreview.preferredWorkerHint());
+            putIfNonBlank(target, "why_selected", routePreview.whySelected());
+            putIfPresent(target, "learning_hint_applied", routePreview.learningHintApplied());
+            putIfNonBlank(target, "fallback_reason", routePreview.fallbackReason());
+        }
+
+        RuntimeFactSet.ExecutionBoundary executionBoundary = facts.executionBoundary();
+        if (executionBoundary != null) {
+            putIfNonBlank(target, "execution_status", executionBoundary.executionStatus());
+            putIfPresent(target, "tool_invocation_count", executionBoundary.toolInvocationCount());
+            putIfPresent(target, "tool_invocation_ids", executionBoundary.toolInvocationIds());
+            putIfNonBlank(target, "execution_trace_summary", executionBoundary.traceSummary());
+        }
+        supplementHarnessMetadataFromToolInvocations(target, facts.toolInvocations());
+        if (latestArtifact != null && latestArtifact.metadata() != null) {
+            copyMetadataKey(latestArtifact.metadata(), target, "suggested_next_step");
+            copyMetadataKey(latestArtifact.metadata(), target, "proof_summary");
+        }
     }
 
     private String shorten(String value, int maxLength) {
@@ -1759,6 +2182,21 @@ public class TaskService {
         return normalized == null ? "。" : "。原因：" + normalized + "。";
     }
 
+    private String taskActionLabel(String action) {
+        String normalized = blankToNull(action);
+        if (normalized == null) {
+            return null;
+        }
+        return switch (normalized) {
+            case "pause" -> "已暂停";
+            case "resume" -> "已恢复执行";
+            case "continue" -> "已继续推进";
+            case "escalate" -> "已升级到人工确认";
+            case "handoff" -> "已移交";
+            default -> "已执行 " + normalized;
+        };
+    }
+
     private String appendWorkerShift(Map<String, Object> metadata) {
         if (metadata == null || metadata.isEmpty()) {
             return "。";
@@ -1770,6 +2208,36 @@ public class TaskService {
         }
         return "。worker: " + firstNonBlank(previousWorker, "unassigned") + " -> "
             + firstNonBlank(targetWorker, "unassigned") + "。";
+    }
+
+    private void attachHandoffPacketMetadata(Map<String, Object> target, HandoffPacket handoffPacket) {
+        if (target == null || handoffPacket == null || handoffPacket.metadata() == null || handoffPacket.metadata().isEmpty()) {
+            return;
+        }
+        copyMetadataKey(handoffPacket.metadata(), target, "prompt_rendering_mode");
+        copyMetadataKey(handoffPacket.metadata(), target, "mounted_context_mode");
+        copyMetadataKey(handoffPacket.metadata(), target, "prompt_mode");
+        copyMetadataKey(handoffPacket.metadata(), target, "runtime_facts");
+        copyMetadataKey(handoffPacket.metadata(), target, "runtime_cognition_surface");
+        Map<String, Object> runtimeCognitionSurface = metadataMap(handoffPacket.metadata(), "runtime_cognition_surface");
+        Map<String, Object> routeSurface = metadataMap(runtimeCognitionSurface, "route");
+        Map<String, Object> executionSurface = metadataMap(runtimeCognitionSurface, "execution");
+        copyMetadataKey(routeSurface, target, "route_source");
+        copyMetadataKey(routeSurface, target, "candidate_workers");
+        copyMetadataKey(executionSurface, target, "execution_status");
+        copyMetadataKey(executionSurface, target, "tool_invocation_ids");
+        copyMetadataKey(executionSurface, target, "evidence_refs");
+        copyMetadataKey(executionSurface, target, "unfinished_items");
+        copyMetadataKey(executionSurface, target, "proof_summary");
+        copyMetadataKey(executionSurface, target, "mounted_context_rendered");
+        copyMetadataKey(executionSurface, target, "mounted_render_used");
+        copyMetadataKey(executionSurface, target, "mounted_context_injected");
+        copyMetadataKey(executionSurface, target, "mounted_context_panel_count");
+        copyMetadataKey(executionSurface, target, MountedContextPromptBudgetSupport.RENDERED_OBJECT_COUNT);
+        copyMetadataKey(executionSurface, target, MountedContextPromptBudgetSupport.HIDDEN_OBJECT_COUNT);
+        copyMetadataKey(executionSurface, target, MountedContextPromptBudgetSupport.RENDERED_SELECTION_TRACE_COUNT);
+        copyMetadataKey(executionSurface, target, MountedContextPromptBudgetSupport.HIDDEN_SELECTION_TRACE_COUNT);
+        copyMetadataKey(executionSurface, target, MountedContextPromptBudgetSupport.BUDGET_TRUNCATED);
     }
 
     private boolean statusChanged(Task previousTask, Task currentTask) {

@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -29,6 +30,8 @@ import java.util.List;
  */
 public class TaskRuntimeContextBuilder {
     private static final Logger log = LoggerFactory.getLogger(TaskRuntimeContextBuilder.class);
+    private static final int TASK_MESSAGE_LIMIT = 12;
+    private static final int SESSION_MESSAGE_LIMIT = 8;
     private final EventDao eventDao;
     private final DecisionDao decisionDao;
     private final ArtifactDao artifactDao;
@@ -122,11 +125,14 @@ public class TaskRuntimeContextBuilder {
         log.info("[RuntimeContext] tool invocations loaded task={} count={}", taskId, toolInvocations.size());
 
         log.info("[RuntimeContext] query recent task messages task={}", taskId);
-        List<SessionMessage> messages = sessionMessageDao == null
+        List<SessionMessage> taskMessages = sessionMessageDao == null
             ? List.of()
-            : safeList(() -> sessionMessageDao.listBySessionAndTask(sessionId, taskId, 12));
-        messages = chronological(messages);
-        log.info("[RuntimeContext] task messages loaded task={} count={}", taskId, messages.size());
+            : safeList(() -> sessionMessageDao.listBySessionAndTask(sessionId, taskId, TASK_MESSAGE_LIMIT));
+        List<SessionMessage> sessionMessages = sessionMessageDao == null
+            ? List.of()
+            : safeList(() -> sessionMessageDao.listBySession(sessionId, SESSION_MESSAGE_LIMIT));
+        List<SessionMessage> messages = mergeContinuityMessages(taskMessages, sessionMessages, taskId);
+        log.info("[RuntimeContext] task messages loaded task={} direct={} merged={}", taskId, taskMessages.size(), messages.size());
 
         log.info("[RuntimeContext] query latest packet task={}", taskId);
         ResumePacket packet = packetDao == null ? null : packetDao.getLatestByTask(sessionId, taskId).orElse(null);
@@ -185,5 +191,47 @@ public class TaskRuntimeContextBuilder {
         List<T> copied = new ArrayList<>(values);
         Collections.reverse(copied);
         return copied;
+    }
+
+    private List<SessionMessage> mergeContinuityMessages(List<SessionMessage> taskMessages,
+                                                         List<SessionMessage> sessionMessages,
+                                                         String taskId) {
+        LinkedHashMap<String, SessionMessage> merged = new LinkedHashMap<>();
+        for (SessionMessage message : chronological(taskMessages)) {
+            if (message == null || message.id() == null) {
+                continue;
+            }
+            merged.put(message.id(), withContinuityScope(message, "task"));
+        }
+        for (SessionMessage message : chronological(sessionMessages)) {
+            if (message == null || message.id() == null || merged.containsKey(message.id())) {
+                continue;
+            }
+            if (message.taskId() != null && !message.taskId().isBlank()) {
+                continue;
+            }
+            merged.put(message.id(), withContinuityScope(message, "session"));
+        }
+        return List.copyOf(merged.values());
+    }
+
+    private SessionMessage withContinuityScope(SessionMessage message, String scope) {
+        if (message == null || scope == null || scope.isBlank()) {
+            return message;
+        }
+        LinkedHashMap<String, Object> metadata = message.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(message.metadata());
+        metadata.putIfAbsent("continuity_scope", scope);
+        return new SessionMessage(
+            message.id(),
+            message.sessionId(),
+            message.taskId(),
+            message.role(),
+            message.messageType(),
+            message.content(),
+            message.createdAt(),
+            metadata
+        );
     }
 }

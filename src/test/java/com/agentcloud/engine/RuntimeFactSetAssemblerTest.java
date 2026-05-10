@@ -64,6 +64,9 @@ class RuntimeFactSetAssemblerTest {
                 "action", "pause",
                 "next_step", "review generated draft",
                 "needs_context_reopen", true,
+                "evidence_gap_detected", true,
+                "needs_archive_retrieval", true,
+                "needs_external_fact_refresh", true,
                 "reopen_candidate_paths", List.of(
                     "/sessions/session_1/tasks/task_1/tool_invocations",
                     "/sessions/session_1/tasks/task_1/packets/packet_fact_1"
@@ -174,6 +177,9 @@ class RuntimeFactSetAssemblerTest {
         assertEquals(1, facts.metadata().get("execution_tool_invocation_count"));
         assertEquals("1 tool call · succeeded · write_file", facts.metadata().get("execution_trace_summary"));
         assertEquals(Boolean.TRUE, facts.metadata().get("needs_context_reopen"));
+        assertEquals(Boolean.TRUE, facts.metadata().get("evidence_gap_detected"));
+        assertEquals(Boolean.TRUE, facts.metadata().get("needs_archive_retrieval"));
+        assertEquals(Boolean.TRUE, facts.metadata().get("needs_external_fact_refresh"));
         assertEquals(List.of(
                 "/sessions/session_1/tasks/task_1/tool_invocations",
                 "/sessions/session_1/tasks/task_1/packets/packet_fact_1"

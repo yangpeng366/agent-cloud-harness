@@ -125,8 +125,13 @@ class TaskServiceMessageReceiptTest {
             assertEquals("assistant", progress.role());
             assertEquals("task_progress", progress.messageType());
             assertEquals(task.id(), progress.taskId());
+            assertEquals("auto_start", progress.metadata().get("trigger"));
+            assertEquals("continuation", progress.metadata().get("task_type"));
+            assertEquals("orchestrated", progress.metadata().get("model_mode"));
+            assertEquals("kimi-local-doc", progress.metadata().get("assigned_worker"));
             assertTrue(progress.content().contains("已生成文章提纲与核心论点"));
             assertTrue(progress.content().contains("继续扩写首稿"));
+            assertTrue(progress.content().contains("已完成一轮推进"));
         }
     }
 
@@ -187,8 +192,13 @@ class TaskServiceMessageReceiptTest {
             assertEquals("assistant", resultMessage.role());
             assertEquals("task_result", resultMessage.messageType());
             assertEquals(task.id(), resultMessage.taskId());
+            assertEquals("continue", resultMessage.metadata().get("trigger"));
+            assertEquals("continuation", resultMessage.metadata().get("task_type"));
+            assertEquals("orchestrated", resultMessage.metadata().get("model_mode"));
+            assertEquals("kimi-local-doc", resultMessage.metadata().get("assigned_worker"));
             assertTrue(resultMessage.content().contains("终稿已完成"));
             assertTrue(resultMessage.content().contains("done / end"));
+            assertTrue(resultMessage.content().contains("已形成当前结果"));
         }
     }
 

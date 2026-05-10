@@ -137,6 +137,18 @@ class ConsolidationServiceProtocolTest {
             assertEquals("mounted_context_shadow", refinedPacket.get("prompt_rendering_mode"));
             assertEquals("mounted_context_shadow", refinedPacket.get("mounted_context_mode"));
             assertEquals("mounted_context_shadow", refinedPacket.get("prompt_mode"));
+            Map<?, ?> runtimeFacts = assertInstanceOf(Map.class, refinedPacket.get("runtime_facts"));
+            assertEquals("task_cp_1", runtimeFacts.get("task_id"));
+            assertEquals("paused", runtimeFacts.get("task_status"));
+            assertEquals("Persist refined packet fields.", runtimeFacts.get("recommended_next_step"));
+            Map<?, ?> routePreview = assertInstanceOf(Map.class, runtimeFacts.get("route_preview"));
+            assertEquals("codex", routePreview.get("selected_worker"));
+            Map<?, ?> runtimeCognitionSurface =
+                assertInstanceOf(Map.class, refinedPacket.get("runtime_cognition_surface"));
+            Map<?, ?> routeSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("route"));
+            assertEquals("codex", routeSurface.get("selected_worker"));
+            Map<?, ?> executionSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("execution"));
+            assertEquals("mounted_context_shadow", executionSurface.get("prompt_mode"));
 
             Map<?, ?> taskIdentity = assertInstanceOf(Map.class, refinedPacket.get("task_identity"));
             assertEquals("task_cp_1", taskIdentity.get("task_id"));
@@ -230,6 +242,8 @@ class ConsolidationServiceProtocolTest {
             assertEquals("mounted_context_shadow", refinedPacket.get("prompt_rendering_mode"));
             assertEquals("mounted_context_shadow", refinedPacket.get("mounted_context_mode"));
             assertEquals("mounted_context_shadow", refinedPacket.get("prompt_mode"));
+            assertTrue(refinedPacket.containsKey("runtime_facts"));
+            assertTrue(refinedPacket.containsKey("runtime_cognition_surface"));
         }
     }
 }

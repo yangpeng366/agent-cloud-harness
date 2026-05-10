@@ -101,13 +101,16 @@
   - 发布 task 后会镜像 `task_brief / task_followup`
   - 任务创建、状态更新和控制动作会追加 `task_receipt / task_action / task_state`
   - `auto_start / resume / continue / handoff` 后会 best-effort 追加 `task_progress / task_result`
+  - `task_progress / task_result` 现在已稳定携带 `summary_preview / next_step / route_source / tool_chain_*`
+  - `task_action` 现在已稳定携带 `action_label`
+  - `/dialogue/` message card 已优先消费这些字段，把 assistant/system 回执渲染成更像 thread 的 lifecycle reply
   - `GET /api/v1/tasks/{id}/live_flow` 已开始聚合 task 级 `related_messages`
   - `/dialogue/` 选中任务后会优先消费 `live_flow.related_messages`
   - `/dialogue/` 的 session message 流已支持按 `role(user / assistant / system)` 与 `scope(all / task-only / session-only)` 过滤
   - session message 流已补 `assistant / system` 分组摘要卡片，便于先扫最近回执和 top message types，再下钻明细
 - 还没完成的部分：
-  - assistant message 仍是 best-effort 摘要，不是完整 judgment/artifact 流式投影
-  - 还没有把 session 级普通消息或更细粒度 assistant 投影进一步纳入 `live_flow`
+- assistant message 仍是 best-effort 摘要，不是完整 judgment/artifact 流式投影
+- 还没有把 session 级普通消息或更细粒度 assistant 投影进一步纳入 `live_flow`
 
 所以接下来最重要的是继续收口“消息质量与可观测性”，而不是再扩新概念。
 
@@ -127,7 +130,11 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 ## 6. 分阶段落地
 
+> 说明：下列阶段里，A/B/C 主骨架已经落地。当前文档的作用，已经从“从零设计”转向“标记已完成项，并收口剩余缺口”。
+
 ## 6.1 Phase A：收口后端消息层
+
+当前状态：**已完成**
 
 目标：先把 API 和持久化层做成稳定基线。
 
@@ -215,19 +222,20 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 ## 6.2 Phase B：接入 `/dialogue/` 页面
 
+当前状态：**已完成，并且 UI 已进一步收口为 unified composer + single-surface workspace**
+
 目标：让页面真正可见、可写、可关联。
 
 ### B1. UI 结构
 
-建议在中间区保留“任务链”为主，但新增一块轻量消息流：
+已落地形态不是“双面板长期并列”，而是进一步收成了更接近 thread 的单主视图：
 
-- `Session Messages`
-  - 展示当前 session 最近消息
-  - 风格接近 chat bubble，但比 task bubble 轻
-- `Task Dialogue`
-  - 继续保留现有 task chain
+- 中间主视图默认先看 `Session Messages`
+- 可切到 `任务链`
+- 底部是 unified composer
+- 左侧 session rail 现在支持收起；窄屏下退化成抽屉式 thread picker
 
-换句话说，不是把 task thread 删除，而是让 message 成为 task 之上的补充交互层。
+也就是说，message 已不只是 task thread 旁边的一块附属区域，而是 `/dialogue/` 的默认主工作面。
 
 ### B2. 前端状态
 
@@ -249,16 +257,16 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 ### B3. 页面交互
 
-建议新增一个轻量 message composer：
+当前已落地并稳定的交互包括：
 
-- 输入框：记录备注/澄清/草稿
-- 复选框：是否关联当前选中 task
-- 提交按钮：写入 `session_messages`
-
-消息列表上每条消息至少提供两个动作：
-
-- `用作任务草稿`
-- `查看关联任务`（如果存在 `task_id`）
+- unified composer 按 `聊天 / 新任务 / follow-up` 三种模式切换
+- `聊天` 模式可选择是否关联当前 task
+- 消息列表支持：
+  - `用作任务草稿`
+  - `查看关联任务`
+- 当前 session 若已 `closed`：
+  - composer 会显式 warning
+  - 页面会直接给出 `新建会话并继续` 的恢复入口
 
 ### B4. 发布任务时镜像 user message
 
@@ -280,6 +288,8 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 ### B5. B 阶段验收
 
+当前状态：**已通过**
+
 - 能在 `/dialogue/` 里直接发一条消息
 - 能从消息一键填充 task composer
 - 发布 task 后，消息流里能看到与 `task_id` 关联的 brief
@@ -287,13 +297,16 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 ## 6.3 Phase C：任务详情与 observability
 
+当前状态：**已完成第一轮**
+
 目标：让消息层和 continuity 观测面接起来。
 
-建议在右侧详情面新增：
+当前右侧详情面已经新增：
 
 - `Related Messages`
   - 显示与当前 `task_id` 关联的消息
-  - 先只显示最近 10 条
+  - 同时也会并入 session 级 continuity message
+  - 通过 `metadata.continuity_scope=task|session` 区分来源
 
 这样当前 task 的上下文会同时包含：
 
@@ -324,6 +337,8 @@ MVP 完成后，`/dialogue/` 至少要满足：
 - `auto_start / resume / continue / handoff` 后，若 runtime 已产出可读摘要，还会追加 `assistant / task_progress`
 - 任务进入 `done / failed` 时，会把这条 assistant 回执收成 `task_result`
 - `/dialogue/` 已能把这些回执和 user message 一起展示
+- `/api/v1/sessions/{id}/messages` 已能直接暴露 `summary_preview / next_step / action_label`，前端不再需要只靠原始长文本猜测生命周期含义
+- active session 下，某个 task 即使已经 `done / failed`，用户仍可继续聊天或继续发 follow-up/new task；真正的阻断条件是 `session=closed`
 
 ## 7. 文件级改造清单
 
@@ -390,15 +405,16 @@ MVP 完成后，`/dialogue/` 至少要满足：
 
 如果这条 smoke 走通，说明消息层已经真正落地。
 
+当前已经有对应的 HTTP smoke / contract 回归：
+
+- `dialogueSmokeFlowPersistsNoteTaskBriefAndLiveFlowRelatedMessages()`
+- `sessionMessagesExposeStructuredAssistantProgressMetadata()`
+- `activeSessionStillAcceptsMessagesAndNewTasksAfterPreviousTaskDone()`
+
 ## 10. 当前最该做什么
 
-当前最推荐的下一步，不是继续做样式，而是按这个顺序推进：
+这一轮骨架已经不再是主要矛盾。当前更值得推进的是：
 
-1. 先把后端消息骨架编译、测试、接口验证收稳。
-2. 再把 `/dialogue/` 前端接到 `/sessions/{id}/messages`。
-3. 然后补“发布任务后镜像成一条 user message”。
-4. 最后才做 task details 里的 `Related Messages`。
-
-顺序不要反。
-
-如果先做 UI 样式，不先收口 API，页面很快就会变成“看起来像 chat，实际上没有消息语义”的半成品。
+1. 继续提高 assistant/system message 的可读性和结构化质量，而不只是 best-effort 摘要。
+2. 继续把 message layer 与 `live_flow / runtime_context / continuity` 读面收得更一致。
+3. 如果继续做 UI，重点应该是轻量收口与可恢复性，而不是再引入新的消息概念。

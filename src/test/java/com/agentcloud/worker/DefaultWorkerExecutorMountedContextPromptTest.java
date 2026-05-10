@@ -3,6 +3,7 @@ package com.agentcloud.worker;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.llm.LlmImageInput;
 import com.agentcloud.model.ResumePacket;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -36,6 +37,11 @@ class DefaultWorkerExecutorMountedContextPromptTest {
 
         assertFalse(llmClient.lastUserPrompt.contains("Mounted Context:"));
         assertTrue(llmClient.lastUserPrompt.contains("Active Context:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Runtime Facts:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Runtime Cognition Surface:"));
+        assertTrue(llmClient.lastUserPrompt.contains("Route Surface:"));
+        assertTrue(llmClient.lastUserPrompt.contains("- selected_worker: codex"));
+        assertTrue(llmClient.lastUserPrompt.contains("- prompt_mode: active_context_only"));
         assertEquals("active_context_only", result.metadata().get("prompt_rendering_mode"));
         assertEquals("active_context_only", result.metadata().get("mounted_context_mode"));
         assertEquals("active_context_only", result.metadata().get("prompt_mode"));
@@ -43,6 +49,19 @@ class DefaultWorkerExecutorMountedContextPromptTest {
         assertEquals(false, result.metadata().get("mounted_render_used"));
         assertEquals(1, result.metadata().get("mounted_pinned_count"));
         assertEquals(1, llmClient.chatCalls);
+    }
+
+    @Test
+    void executeOneRoundAnnotatesSessionScopeRecentMessages() {
+        RecordingLlmClient llmClient = new RecordingLlmClient(responseJson());
+        DefaultWorkerExecutor executor = new DefaultWorkerExecutor(llmClient);
+
+        WorkerExecutionResult result = executor.executeOneRound(runtimeContextWithSessionScopeMessage(), "codex");
+
+        assertTrue(llmClient.lastUserPrompt.contains("Recent Messages:"));
+        assertTrue(llmClient.lastUserPrompt.contains("user [user_note] {session}: task 结束后，用户在同一 session 补充了新的方向"));
+        assertEquals(1, llmClient.chatCalls);
+        assertEquals("active_context_only", result.metadata().get("prompt_mode"));
     }
 
     @Test
@@ -503,6 +522,32 @@ class DefaultWorkerExecutorMountedContextPromptTest {
             12
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, MountedContextView.empty(task.id()));
+    }
+
+    private TaskRuntimeContext runtimeContextWithSessionScopeMessage() {
+        TaskRuntimeContext base = runtimeContext(null);
+        SessionMessage sessionMessage = new SessionMessage(
+            "msg_session_scope",
+            base.task().sessionId(),
+            null,
+            "user",
+            "user_note",
+            "task 结束后，用户在同一 session 补充了新的方向，不要从零开始。",
+            Instant.parse("2026-05-06T06:40:00Z"),
+            Map.of("source_surface", "dialogue", "continuity_scope", "session")
+        );
+        return new TaskRuntimeContext(
+            base.task(),
+            base.latestPacket(),
+            base.latestCheckpoint(),
+            base.recentEvents(),
+            base.recentDecisions(),
+            base.recentArtifacts(),
+            base.recentToolInvocations(),
+            List.of(sessionMessage),
+            base.activeContext(),
+            base.mountedContextView()
+        );
     }
 
     private TaskRuntimeContext runtimeContextFromPromptModeAlias(String promptMode) {

@@ -67,6 +67,9 @@ public record RuntimeCognitionSurfaceView(
     public record JudgmentSurface(
         String promptMode,
         Boolean needsContextReopen,
+        Boolean evidenceGapDetected,
+        Boolean needsArchiveRetrieval,
+        Boolean needsExternalFactRefresh,
         List<String> reopenCandidatePaths,
         String reopenSummary,
         Boolean mountedContextRendered,

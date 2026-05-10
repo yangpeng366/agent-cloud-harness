@@ -1,8 +1,19 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.ActiveContext;
+import com.agentcloud.runtime.TaskRuntimeContext;
+import com.agentcloud.runtime.context.ContextObject;
+import com.agentcloud.runtime.context.ContextObjectType;
+import com.agentcloud.runtime.context.ContextReference;
+import com.agentcloud.runtime.context.ContextRetentionState;
+import com.agentcloud.runtime.context.MountedContextPanel;
+import com.agentcloud.runtime.context.MountedContextPanelName;
+import com.agentcloud.runtime.context.MountedContextView;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
+import java.util.List;
 import java.lang.reflect.Method;
 import java.util.Map;
 
@@ -15,17 +26,32 @@ class ControlNodeGraphActionResolutionTest {
 
     @Test
     void checkpointPlusDoneResolvesToCheckpointThenDone() throws Exception {
-        assertEquals("checkpoint_then_done", invokeResolveAction("checkpoint", "done", "high"));
+        assertEquals("checkpoint_then_done", invokeResolveAction("checkpoint", "done", "high", false, false, false));
     }
 
     @Test
     void plainCheckpointStillResolvesToCheckpoint() throws Exception {
-        assertEquals("checkpoint", invokeResolveAction("checkpoint", "partially_done", "high"));
+        assertEquals("checkpoint", invokeResolveAction("checkpoint", "partially_done", "high", false, false, false));
     }
 
     @Test
     void continuePlusDoneResolvesToDone() throws Exception {
-        assertEquals("done", invokeResolveAction("continue", "done", "high"));
+        assertEquals("done", invokeResolveAction("continue", "done", "high", false, false, false));
+    }
+
+    @Test
+    void continuePlusContextReopenResolvesToCheckpoint() throws Exception {
+        assertEquals("reopen", invokeResolveAction("continue", "partially_done", "medium", true, false, false));
+    }
+
+    @Test
+    void continuePlusArchiveRetrievalResolvesToCheckpoint() throws Exception {
+        assertEquals("archive_retrieval", invokeResolveAction("continue", "partially_done", "medium", false, true, false));
+    }
+
+    @Test
+    void continuePlusExternalFactRefreshResolvesToCheckpoint() throws Exception {
+        assertEquals("external_fact_refresh", invokeResolveAction("continue", "partially_done", "medium", false, false, true));
     }
 
     @Test
@@ -147,6 +173,89 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void reopenCandidatePathsConsumesCapsuleRefsBeforeHandleFallback() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("reopenCandidatePaths", TaskRuntimeContext.class);
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high");
+        MountedContextView mountedContextView = new MountedContextView(
+            null,
+            task.id(),
+            List.of(
+                new MountedContextPanel(
+                    MountedContextPanelName.ARCHIVE_HANDLES,
+                    "Archive Handles",
+                    List.of(
+                        new ContextObject(
+                            "task_1:reopen-capsule",
+                            "/sessions/session_1/tasks/task_1/archive/reopen_capsule",
+                            ContextObjectType.CAPSULE,
+                            "/sessions/session_1/tasks/task_1",
+                            "Reopen Capsule",
+                            "targeted reopen",
+                            "targeted reopen",
+                            Instant.parse("2026-05-09T09:00:00Z"),
+                            ContextRetentionState.COLD_CAPSULE,
+                            List.of(
+                                new ContextReference("reopen_candidate", "/sessions/session_1/tasks/task_1/checkpoints", "checkpoints"),
+                                new ContextReference("reopen_candidate", "/sessions/session_1/tasks/task_1/packets/packet_1", "packet_1")
+                            ),
+                            List.of(),
+                            Map.of(
+                                "reopen_candidate_paths", List.of(
+                                    "/sessions/session_1/tasks/task_1/checkpoints",
+                                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                                ),
+                                "target_path", "/sessions/session_1/tasks/task_1/checkpoints"
+                            )
+                        ),
+                        new ContextObject(
+                            "task_1:artifact-history",
+                            "/sessions/session_1/tasks/task_1/archive/artifact-history",
+                            ContextObjectType.HANDLE,
+                            "/sessions/session_1/tasks/task_1",
+                            "Artifact History",
+                            "reload artifact history",
+                            "reload artifact history",
+                            Instant.parse("2026-05-09T09:00:01Z"),
+                            ContextRetentionState.ARCHIVED_HANDLE,
+                            List.of(new ContextReference("handle", "/sessions/session_1/tasks/task_1/artifacts", "artifacts")),
+                            List.of(),
+                            Map.of("target_path", "/sessions/session_1/tasks/task_1/artifacts")
+                        )
+                    )
+                )
+            ),
+            List.of()
+        );
+        TaskRuntimeContext context = new TaskRuntimeContext(
+            task,
+            null,
+            null,
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            List.of(),
+            new ActiveContext("", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), "", "", 12),
+            mountedContextView
+        );
+
+        List<String> paths = (List<String>) method.invoke(graph, context);
+
+        assertEquals(List.of(
+            "/sessions/session_1/tasks/task_1/checkpoints",
+            "/sessions/session_1/tasks/task_1/packets/packet_1",
+            "/sessions/session_1/tasks/task_1/artifacts"
+        ), paths);
+    }
+
+    @Test
     void sameStateTreatsMetadataMutationAsStateChange() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
@@ -163,15 +272,28 @@ class ControlNodeGraphActionResolutionTest {
         assertEquals(Boolean.FALSE, method.invoke(graph, base, changed));
     }
 
-    private String invokeResolveAction(String executionAction, String completionStatus, String alignmentLevel) throws Exception {
+    private String invokeResolveAction(String executionAction,
+                                      String completionStatus,
+                                      String alignmentLevel,
+                                      boolean needsContextReopen,
+                                      boolean needsArchiveRetrieval,
+                                      boolean needsExternalFactRefresh) throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
             null, null, null, null, null, null
         );
         Method method = ControlNodeGraph.class.getDeclaredMethod(
-            "resolveAction", String.class, String.class, String.class
+            "resolveAction", String.class, String.class, String.class, boolean.class, boolean.class, boolean.class
         );
         method.setAccessible(true);
-        return (String) method.invoke(graph, executionAction, completionStatus, alignmentLevel);
+        return (String) method.invoke(
+            graph,
+            executionAction,
+            completionStatus,
+            alignmentLevel,
+            needsContextReopen,
+            needsArchiveRetrieval,
+            needsExternalFactRefresh
+        );
     }
 }

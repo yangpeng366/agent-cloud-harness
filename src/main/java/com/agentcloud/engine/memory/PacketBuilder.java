@@ -1,7 +1,10 @@
 package com.agentcloud.engine.memory;
 
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
+import com.agentcloud.runtime.RuntimeFactSurfaceExporter;
 import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,17 +23,30 @@ public class PacketBuilder {
     private final ArtifactDao artifactDao;
     private final TaskDao taskDao;
     private final ResumePacketDao resumePacketDao;
+    private final RuntimeFactSetAssembler runtimeFactSetAssembler;
+    private final RuntimeFactSurfaceExporter runtimeFactSurfaceExporter;
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao) {
-        this(decisionDao, artifactDao, taskDao, null);
+        this(decisionDao, artifactDao, taskDao, null, null, null);
     }
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
                          ResumePacketDao resumePacketDao) {
+        this(decisionDao, artifactDao, taskDao, resumePacketDao, null, null);
+    }
+
+    public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
+                         ResumePacketDao resumePacketDao,
+                         RuntimeFactSetAssembler runtimeFactSetAssembler,
+                         RuntimeFactSurfaceExporter runtimeFactSurfaceExporter) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.taskDao = taskDao;
         this.resumePacketDao = resumePacketDao;
+        this.runtimeFactSetAssembler = runtimeFactSetAssembler != null ? runtimeFactSetAssembler : new RuntimeFactSetAssembler();
+        this.runtimeFactSurfaceExporter = runtimeFactSurfaceExporter != null
+            ? runtimeFactSurfaceExporter
+            : new RuntimeFactSurfaceExporter();
     }
 
     public ResumePacket buildResumePacket(Task task, Session session) {
@@ -84,6 +100,7 @@ public class PacketBuilder {
         payload.put("relevant_artifacts", artifacts.stream().map(Artifact::title).toList());
         payload.put("key_constraints", List.of());
         putPromptModeContinuityFields(payload, task);
+        attachRuntimeFactSurface(payload, task);
 
         return new ResumePacket(
             java.util.UUID.randomUUID().toString(),
@@ -134,6 +151,7 @@ public class PacketBuilder {
         copyMetadata(task.metadata(), metadata, "selected_model_tier");
         copyMetadata(task.metadata(), metadata, "fallback_reason");
         putPromptModeContinuityFields(metadata, task);
+        attachRuntimeFactSurface(metadata, task);
 
         log.info("Handoff packet built for task={} from={} to={}", task.id(), fromWorker, toWorker);
         return new HandoffPacket(
@@ -394,6 +412,46 @@ public class PacketBuilder {
         target.put("prompt_rendering_mode", wireName);
         target.put("mounted_context_mode", wireName);
         target.put("prompt_mode", wireName);
+    }
+
+    private void attachRuntimeFactSurface(Map<String, Object> target, Task task) {
+        if (target == null || task == null) {
+            return;
+        }
+        RuntimeFactSet factSet = runtimeFactSetAssembler.assemble(task, 10, currentContinuityMetadata(task));
+        Map<String, Object> runtimeFacts = runtimeFactSurfaceExporter.exportRuntimeFacts(factSet);
+        Map<String, Object> runtimeCognitionSurface =
+            runtimeFactSurfaceExporter.exportRuntimeCognitionSurface(factSet);
+        if (!runtimeFacts.isEmpty()) {
+            target.put("runtime_facts", runtimeFacts);
+        }
+        if (!runtimeCognitionSurface.isEmpty()) {
+            target.put("runtime_cognition_surface", runtimeCognitionSurface);
+        }
+    }
+
+    private Map<String, Object> currentContinuityMetadata(Task task) {
+        if (task == null) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (task.assignedWorker() != null && !task.assignedWorker().isBlank()) {
+            metadata.put("selected_worker", task.assignedWorker());
+        }
+        if (task.metadata() != null) {
+            copyMetadata(task.metadata(), metadata, "prompt_rendering_mode");
+            copyMetadata(task.metadata(), metadata, "mounted_context_mode");
+            copyMetadata(task.metadata(), metadata, "prompt_mode");
+            copyMetadata(task.metadata(), metadata, "selected_model_tier");
+            copyMetadata(task.metadata(), metadata, "execution_role");
+            copyMetadata(task.metadata(), metadata, "selection_scope");
+            copyMetadata(task.metadata(), metadata, "candidate_workers");
+            copyMetadata(task.metadata(), metadata, "preferred_worker_hint");
+            copyMetadata(task.metadata(), metadata, "learning_hint_applied");
+            copyMetadata(task.metadata(), metadata, "fallback_reason");
+            copyMetadata(task.metadata(), metadata, "route_source");
+        }
+        return metadata;
     }
 
     private Task resolvePromptModeSource(Task task) {

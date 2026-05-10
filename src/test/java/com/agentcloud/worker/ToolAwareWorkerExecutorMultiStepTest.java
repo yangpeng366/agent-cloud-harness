@@ -1024,6 +1024,11 @@ class ToolAwareWorkerExecutorMultiStepTest {
             assertTrue(llmClient.firstUserPrompt.contains("Pinned (1)"));
             assertTrue(llmClient.firstUserPrompt.contains("constraint/pinned/Constraints"));
             assertTrue(llmClient.firstUserPrompt.contains("Mounted Context Selection Trace:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Runtime Facts:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Runtime Cognition Surface:"));
+            assertTrue(llmClient.firstUserPrompt.contains("Route Surface:"));
+            assertTrue(llmClient.firstUserPrompt.contains("- selected_worker: tool-mounted"));
+            assertTrue(llmClient.firstUserPrompt.contains("- prompt_mode: mounted_context_primary"));
             assertEquals("mounted_context_primary", result.metadata().get("prompt_mode"));
             assertEquals(true, result.metadata().get("mounted_render_used"));
             assertEquals(1, result.metadata().get("mounted_pinned_count"));

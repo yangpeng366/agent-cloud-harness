@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import static java.util.Map.entry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,7 +66,31 @@ class ContextViewBuilderTest {
                 "current_status", "active",
                 "current_node", "continue",
                 "assigned_worker", "codex",
-                "blockers", List.of("需要保证旧执行链不变")
+                "blockers", List.of("需要保证旧执行链不变"),
+                "runtime_cognition_surface", Map.of(
+                    "route", Map.of(
+                        "selected_worker", "codex",
+                        "route_source", "runtime_context_resume_surface",
+                        "candidate_workers", List.of("codex", "kimi")
+                    ),
+                    "execution", Map.of(
+                        "worker_id", "codex",
+                        "prompt_mode", "mounted_context_primary",
+                        "tool_invocation_ids", List.of("tool_1"),
+                        "evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java"),
+                        "unfinished_items", List.of("补 builder seam 测试")
+                    ),
+                    "execution_judgment", Map.of(
+                        "needs_context_reopen", true,
+                        "evidence_gap_detected", true,
+                        "needs_archive_retrieval", true,
+                        "needs_external_fact_refresh", true,
+                        "reopen_candidate_paths", List.of(
+                            "/sessions/session_1/tasks/task_1/tool_invocations",
+                            "/sessions/session_1/tasks/task_1/packets/packet_1"
+                        )
+                    )
+                )
             )
         );
         Checkpoint checkpoint = new Checkpoint(
@@ -78,7 +103,31 @@ class ContextViewBuilderTest {
             Map.of(
                 "key_decisions", List.of("先保留 ActiveContext 消费路径"),
                 "key_artifacts", List.of("runtime_context JSON 仍兼容旧字段"),
-                "open_questions", List.of("后续是否把 mounted panel 直接渲染进 prompt")
+                "open_questions", List.of("后续是否把 mounted panel 直接渲染进 prompt"),
+                "runtime_cognition_surface", Map.of(
+                    "route", Map.of(
+                        "selected_worker", "codex",
+                        "route_source", "runtime_context_checkpoint_surface",
+                        "candidate_workers", List.of("codex", "kimi")
+                    ),
+                    "execution", Map.of(
+                        "worker_id", "codex",
+                        "prompt_mode", "mounted_context_shadow",
+                        "tool_invocation_ids", List.of("tool_1"),
+                        "evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java"),
+                        "unfinished_items", List.of("后续是否把 mounted panel 直接渲染进 prompt")
+                    ),
+                    "execution_judgment", Map.of(
+                        "needs_context_reopen", true,
+                        "evidence_gap_detected", true,
+                        "needs_archive_retrieval", true,
+                        "needs_external_fact_refresh", true,
+                        "reopen_candidate_paths", List.of(
+                            "/sessions/session_1/tasks/task_1/tool_invocations",
+                            "/sessions/session_1/tasks/task_1/checkpoints/checkpoint_1"
+                        )
+                    )
+                )
             ),
             Map.of(),
             Map.of()
@@ -93,18 +142,21 @@ class ContextViewBuilderTest {
             "先并行构建 mounted view，再观察 live flow 和 runtime_context 响应。",
             "high",
             null,
-            Map.of(
-                "judgment_stage", "execution",
-                "selected_worker", "codex",
-                "action", "continue",
-                "next_step", "补 builder seam 测试",
-                "needs_context_reopen", true,
-                "reopen_candidate_paths", List.of(
+            Map.ofEntries(
+                entry("judgment_stage", "execution"),
+                entry("selected_worker", "codex"),
+                entry("action", "continue"),
+                entry("next_step", "补 builder seam 测试"),
+                entry("needs_context_reopen", true),
+                entry("evidence_gap_detected", true),
+                entry("needs_archive_retrieval", true),
+                entry("needs_external_fact_refresh", true),
+                entry("reopen_candidate_paths", List.of(
                     "/sessions/session_1/tasks/task_1/tool_invocations",
                     "/sessions/session_1/tasks/task_1/packets/packet_1"
-                ),
-                "tool_invocation_ids", List.of("tool_1"),
-                "evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java")
+                )),
+                entry("tool_invocation_ids", List.of("tool_1")),
+                entry("evidence_refs", List.of("tool:patch_file:ContextViewBuilder.java"))
             )
         );
         Decision completionDecision = new Decision(
@@ -176,6 +228,53 @@ class ContextViewBuilderTest {
             "新 mounted view 已并行生成。",
             Map.of("phase", "compat")
         );
+        Event handoffEvent = new Event(
+            "event_2",
+            task.sessionId(),
+            task.id(),
+            now.plusSeconds(5),
+            "task_control_action",
+            "task_service",
+            null,
+            "Task control action: handoff",
+            Map.of(
+                "action", "handoff",
+                "previous_worker", "codex",
+                "assigned_worker", "kimi",
+                "target_worker", "kimi",
+                "prompt_mode", "mounted_context_shadow",
+                "runtime_facts", Map.of(
+                    "task_id", task.id(),
+                    "recommended_next_step", "Apply the final mounted handoff patch."
+                ),
+                "runtime_cognition_surface", Map.of(
+                    "route", Map.of(
+                        "selected_worker", "kimi",
+                        "route_source", "runtime_context_handoff_surface",
+                        "candidate_workers", List.of("kimi", "codex")
+                    ),
+                    "execution", Map.of(
+                        "worker_id", "kimi",
+                        "prompt_mode", "mounted_context_shadow",
+                        "execution_status", "waiting",
+                        "tool_invocation_ids", List.of("tool_handoff"),
+                        "evidence_refs", List.of("/tasks/task_1/handoffs/handoff-1"),
+                        "unfinished_items", List.of("apply mounted handoff patch"),
+                        "proof_summary", "tool=tool_handoff | evidence=/tasks/task_1/handoffs/handoff-1"
+                    ),
+                    "execution_judgment", Map.of(
+                        "needs_context_reopen", true,
+                        "evidence_gap_detected", true,
+                        "needs_archive_retrieval", true,
+                        "needs_external_fact_refresh", true,
+                        "reopen_candidate_paths", List.of(
+                            "/sessions/session_1/tasks/task_1/checkpoints",
+                            "/sessions/session_1/tasks/task_1/packets/packet_handoff_1"
+                        )
+                    )
+                )
+            )
+        );
         SessionMessage oldMessage = new SessionMessage(
             "msg_1",
             task.sessionId(),
@@ -215,7 +314,7 @@ class ContextViewBuilderTest {
             task,
             packet,
             checkpoint,
-            List.of(event),
+            List.of(handoffEvent, event),
             List.of(executionDecision, completionDecision, routingDecision),
             List.of(artifact),
             List.of(toolInvocation),
@@ -239,6 +338,38 @@ class ContextViewBuilderTest {
             .anyMatch(object -> object.type() == ContextObjectType.CHECKPOINT
                 && object.retentionState() == ContextRetentionState.HOT_RAW));
         assertTrue(mountedView.objects(MountedContextPanelName.ACTIVE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.RESUME_PACKET
+                && "mounted_context_primary".equals(object.metadata().get("prompt_mode"))
+                && "runtime_context_resume_surface".equals(object.metadata().get("route_source"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_context_reopen"))
+                && Boolean.TRUE.equals(object.metadata().get("evidence_gap_detected"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))
+                && " /sessions/session_1/tasks/task_1/tool_invocations | /sessions/session_1/tasks/task_1/packets/packet_1".trim()
+                    .equals(String.valueOf(object.metadata().get("reopen_summary")))
+                && List.of("tool_1").equals(object.metadata().get("tool_invocation_ids"))
+                && List.of("tool:patch_file:ContextViewBuilder.java").equals(object.metadata().get("evidence_refs"))
+                && List.of("补 builder seam 测试").equals(object.metadata().get("unfinished_items"))));
+        assertTrue(mountedView.objects(MountedContextPanelName.ACTIVE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CHECKPOINT
+                && "mounted_context_shadow".equals(object.metadata().get("prompt_mode"))
+                && "runtime_context_checkpoint_surface".equals(object.metadata().get("route_source"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_context_reopen"))
+                && Boolean.TRUE.equals(object.metadata().get("evidence_gap_detected"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/checkpoints/checkpoint_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))
+                && List.of("tool_1").equals(object.metadata().get("tool_invocation_ids"))
+                && List.of("tool:patch_file:ContextViewBuilder.java").equals(object.metadata().get("evidence_refs"))
+                && List.of("后续是否把 mounted panel 直接渲染进 prompt").equals(object.metadata().get("unfinished_items"))));
+        assertTrue(mountedView.objects(MountedContextPanelName.ACTIVE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.SESSION_MESSAGE
                 && object.retentionState() == ContextRetentionState.HOT_RAW));
         assertEquals(3, mountedView.objects(MountedContextPanelName.ACTIVE).stream()
@@ -247,6 +378,15 @@ class ContextViewBuilderTest {
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.ARTIFACT
                 && object.retentionState() == ContextRetentionState.WARM_SUMMARY));
+        assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CHECKPOINT
+                && object.retentionState() == ContextRetentionState.HOT_RAW
+                && Boolean.TRUE.equals(object.metadata().get("rehydrated_from_archive"))
+                && "/sessions/session_1/tasks/task_1/checkpoints"
+                    .equals(object.metadata().get("rehydrated_target_path"))
+                && object.sourceRefs().stream().anyMatch(ref ->
+                    "reopen_capsule".equals(ref.refType())
+                        && "/sessions/session_1/tasks/task_1/archive/reopen_capsule".equals(ref.targetPath()))));
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.TOOL_INVOCATION
                 && object.summary().contains("mounted evidence")));
@@ -258,13 +398,41 @@ class ContextViewBuilderTest {
                 && "execution".equals(object.metadata().get("judgment_stage"))
                 && "codex".equals(object.metadata().get("selected_worker"))
                 && Boolean.TRUE.equals(object.metadata().get("needs_context_reopen"))
-                && object.contentPreview().contains("reopen_candidate_paths")
-                && object.summary().contains("action=continue")));
+                && Boolean.TRUE.equals(object.metadata().get("evidence_gap_detected"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/tool_invocations",
+                    "/sessions/session_1/tasks/task_1/packets/packet_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))
+                && List.of("tool_1").equals(object.metadata().get("tool_invocation_ids"))
+                && List.of("tool:patch_file:ContextViewBuilder.java").equals(object.metadata().get("evidence_refs"))));
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .noneMatch(object -> object.type() == ContextObjectType.DECISION
                 && "route_preview".equals(object.metadata().get("decision_type"))));
         assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
             .anyMatch(object -> object.type() == ContextObjectType.EVENT));
+        assertTrue(mountedView.objects(MountedContextPanelName.EVIDENCE).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.EVENT
+                && "handoff".equals(object.metadata().get("action"))
+                && "mounted_context_shadow".equals(object.metadata().get("prompt_mode"))
+                && "runtime_context_handoff_surface".equals(object.metadata().get("route_source"))
+                && "waiting".equals(object.metadata().get("execution_status"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_context_reopen"))
+                && Boolean.TRUE.equals(object.metadata().get("evidence_gap_detected"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/checkpoints",
+                    "/sessions/session_1/tasks/task_1/packets/packet_handoff_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))
+                && "/sessions/session_1/tasks/task_1/checkpoints | /sessions/session_1/tasks/task_1/packets/packet_handoff_1"
+                    .equals(object.metadata().get("reopen_summary"))
+                && List.of("tool_handoff").equals(object.metadata().get("tool_invocation_ids"))
+                && List.of("/tasks/task_1/handoffs/handoff-1").equals(object.metadata().get("evidence_refs"))
+                && List.of("apply mounted handoff patch").equals(object.metadata().get("unfinished_items"))
+                && object.summary().contains("Apply the final mounted handoff patch.")
+                && object.contentPreview().contains("runtime_context_handoff_surface")));
         assertEquals(1, mountedView.objects(MountedContextPanelName.INDEX).size());
         assertTrue(mountedView.objects(MountedContextPanelName.INDEX).stream()
             .anyMatch(object -> object.summary().contains("tool_invocations=1")));
@@ -273,7 +441,36 @@ class ContextViewBuilderTest {
         assertEquals(2, mountedView.objects(MountedContextPanelName.SIBLING).size());
         assertFalse(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).isEmpty());
         assertTrue(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CAPSULE
+                && object.retentionState() == ContextRetentionState.COLD_CAPSULE
+                && "Reopen Capsule".equals(object.title())
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/checkpoints",
+                    "/sessions/session_1/tasks/task_1/packets/packet_handoff_1"
+                ).equals(object.metadata().get("reopen_candidate_paths"))
+                && "/sessions/session_1/tasks/task_1/checkpoints"
+                    .equals(object.metadata().get("target_path"))
+                && object.summary().contains("/sessions/session_1/tasks/task_1/checkpoints")
+                && object.refs().size() == 2));
+        assertTrue(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
+            .anyMatch(object -> object.type() == ContextObjectType.CAPSULE
+                && object.retentionState() == ContextRetentionState.COLD_CAPSULE
+                && "Retrieval Policy Capsule".equals(object.title())
+                && Boolean.TRUE.equals(object.metadata().get("needs_archive_retrieval"))
+                && Boolean.TRUE.equals(object.metadata().get("needs_external_fact_refresh"))
+                && List.of(
+                    "/sessions/session_1/tasks/task_1/checkpoints",
+                    "/sessions/session_1/tasks/task_1/packets/packet_handoff_1"
+                ).equals(object.metadata().get("retrieval_candidate_paths"))
+                && "/sessions/session_1/tasks/task_1/checkpoints"
+                    .equals(object.metadata().get("target_path"))
+                && object.summary().contains("/sessions/session_1/tasks/task_1/checkpoints")
+                && object.contentPreview().contains("needs_archive_retrieval: true")
+                && object.refs().size() == 2));
+        assertTrue(mountedView.objects(MountedContextPanelName.ARCHIVE_HANDLES).stream()
             .anyMatch(object -> object.summary().contains("tool invocation evidence")));
+        assertTrue(mountedView.selectionTrace().stream()
+            .anyMatch(item -> item.contains("retention_states=pinned,hot_raw,warm_summary,cold_capsule,archived_handle")));
         assertTrue(mountedView.selectionTrace().stream()
             .anyMatch(item -> item.contains("compat_mode=task_runtime_context_preserved")));
         assertTrue(mountedView.selectionTrace().stream()

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PacketBuilderProtocolTest {
@@ -116,6 +117,18 @@ class PacketBuilderProtocolTest {
             assertEquals("mounted_context_primary", packet.payload().get("prompt_rendering_mode"));
             assertEquals("mounted_context_primary", packet.payload().get("mounted_context_mode"));
             assertEquals("mounted_context_primary", packet.payload().get("prompt_mode"));
+            Map<?, ?> runtimeFacts = assertInstanceOf(Map.class, packet.payload().get("runtime_facts"));
+            assertEquals("task_1", runtimeFacts.get("task_id"));
+            assertEquals("active", runtimeFacts.get("task_status"));
+            assertEquals("Finish executor handoff.", runtimeFacts.get("recommended_next_step"));
+            Map<?, ?> routePreview = assertInstanceOf(Map.class, runtimeFacts.get("route_preview"));
+            assertEquals("codex", routePreview.get("selected_worker"));
+            Map<?, ?> runtimeCognitionSurface =
+                assertInstanceOf(Map.class, packet.payload().get("runtime_cognition_surface"));
+            Map<?, ?> routeSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("route"));
+            assertEquals("codex", routeSurface.get("selected_worker"));
+            Map<?, ?> executionSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("execution"));
+            assertEquals("mounted_context_primary", executionSurface.get("prompt_mode"));
             assertEquals(Boolean.TRUE, packet.machineReadableFirst());
         }
     }
@@ -246,6 +259,14 @@ class PacketBuilderProtocolTest {
             assertEquals("mounted_context_shadow", packet.metadata().get("prompt_rendering_mode"));
             assertEquals("mounted_context_shadow", packet.metadata().get("mounted_context_mode"));
             assertEquals("mounted_context_shadow", packet.metadata().get("prompt_mode"));
+            Map<?, ?> runtimeFacts = assertInstanceOf(Map.class, packet.metadata().get("runtime_facts"));
+            assertEquals("task_2", runtimeFacts.get("task_id"));
+            Map<?, ?> routePreview = assertInstanceOf(Map.class, runtimeFacts.get("route_preview"));
+            assertEquals("codex", routePreview.get("selected_worker"));
+            Map<?, ?> runtimeCognitionSurface =
+                assertInstanceOf(Map.class, packet.metadata().get("runtime_cognition_surface"));
+            Map<?, ?> routeSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("route"));
+            assertEquals("codex", routeSurface.get("selected_worker"));
         }
     }
 
@@ -303,6 +324,8 @@ class PacketBuilderProtocolTest {
             assertEquals("mounted_context_primary", packet.payload().get("prompt_rendering_mode"));
             assertEquals("mounted_context_primary", packet.payload().get("mounted_context_mode"));
             assertEquals("mounted_context_primary", packet.payload().get("prompt_mode"));
+            assertTrue(packet.payload().containsKey("runtime_facts"));
+            assertTrue(packet.payload().containsKey("runtime_cognition_surface"));
         }
     }
 }

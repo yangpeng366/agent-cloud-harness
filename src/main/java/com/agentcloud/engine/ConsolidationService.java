@@ -1,7 +1,10 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.*;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
+import com.agentcloud.runtime.RuntimeFactSurfaceExporter;
 import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,20 +28,33 @@ public class ConsolidationService {
     private final CheckpointDao checkpointDao;
     private final TaskDao taskDao;
     private final ResumePacketDao resumePacketDao;
+    private final RuntimeFactSetAssembler runtimeFactSetAssembler;
+    private final RuntimeFactSurfaceExporter runtimeFactSurfaceExporter;
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao) {
-        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, null);
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, null, null, null);
     }
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao) {
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, resumePacketDao, null, null);
+    }
+
+    public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
+                                CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao,
+                                RuntimeFactSetAssembler runtimeFactSetAssembler,
+                                RuntimeFactSurfaceExporter runtimeFactSurfaceExporter) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.eventDao = eventDao;
         this.checkpointDao = checkpointDao;
         this.taskDao = taskDao;
         this.resumePacketDao = resumePacketDao;
+        this.runtimeFactSetAssembler = runtimeFactSetAssembler != null ? runtimeFactSetAssembler : new RuntimeFactSetAssembler();
+        this.runtimeFactSurfaceExporter = runtimeFactSurfaceExporter != null
+            ? runtimeFactSurfaceExporter
+            : new RuntimeFactSurfaceExporter();
     }
 
     public Checkpoint consolidate(Task task, String triggerType) {
@@ -124,6 +140,7 @@ public class ConsolidationService {
         refinedPacket.put("task_summary", firstNonBlank(task.summary(), task.title()));
         refinedPacket.put("assigned_worker", task.assignedWorker());
         putPromptModeContinuityFields(refinedPacket, task);
+        attachRuntimeFactSurface(refinedPacket, task);
         refinedPacket.put("consolidated_at", Instant.now().toString());
 
         Map<String, Object> worldModelDelta = new HashMap<>();
@@ -352,6 +369,56 @@ public class ConsolidationService {
         target.put("prompt_rendering_mode", wireName);
         target.put("mounted_context_mode", wireName);
         target.put("prompt_mode", wireName);
+    }
+
+    private void attachRuntimeFactSurface(Map<String, Object> target, Task task) {
+        if (target == null || task == null) {
+            return;
+        }
+        RuntimeFactSet factSet = runtimeFactSetAssembler.assemble(task, 10, currentContinuityMetadata(task));
+        Map<String, Object> runtimeFacts = runtimeFactSurfaceExporter.exportRuntimeFacts(factSet);
+        Map<String, Object> runtimeCognitionSurface =
+            runtimeFactSurfaceExporter.exportRuntimeCognitionSurface(factSet);
+        if (!runtimeFacts.isEmpty()) {
+            target.put("runtime_facts", runtimeFacts);
+        }
+        if (!runtimeCognitionSurface.isEmpty()) {
+            target.put("runtime_cognition_surface", runtimeCognitionSurface);
+        }
+    }
+
+    private Map<String, Object> currentContinuityMetadata(Task task) {
+        if (task == null) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        if (task.assignedWorker() != null && !task.assignedWorker().isBlank()) {
+            metadata.put("selected_worker", task.assignedWorker());
+        }
+        if (task.metadata() != null) {
+            copyMetadata(task.metadata(), metadata, "prompt_rendering_mode");
+            copyMetadata(task.metadata(), metadata, "mounted_context_mode");
+            copyMetadata(task.metadata(), metadata, "prompt_mode");
+            copyMetadata(task.metadata(), metadata, "selected_model_tier");
+            copyMetadata(task.metadata(), metadata, "execution_role");
+            copyMetadata(task.metadata(), metadata, "selection_scope");
+            copyMetadata(task.metadata(), metadata, "candidate_workers");
+            copyMetadata(task.metadata(), metadata, "preferred_worker_hint");
+            copyMetadata(task.metadata(), metadata, "learning_hint_applied");
+            copyMetadata(task.metadata(), metadata, "fallback_reason");
+            copyMetadata(task.metadata(), metadata, "route_source");
+        }
+        return metadata;
+    }
+
+    private void copyMetadata(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source == null || target == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private Task resolvePromptModeSource(Task task) {

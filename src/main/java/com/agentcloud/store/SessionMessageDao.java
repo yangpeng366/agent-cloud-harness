@@ -46,4 +46,12 @@ public interface SessionMessageDao extends SqlObject {
     List<SessionMessage> listBySessionAndTask(@Bind("sessionId") String sessionId,
                                               @Bind("taskId") String taskId,
                                               @Bind("limit") int limit);
+
+    @SqlQuery("SELECT * FROM session_messages WHERE id = :id")
+    SessionMessage findById(@Bind("id") String id);
+
+    @SqlUpdate("UPDATE session_messages SET task_id = :taskId, metadata_json = :metadata WHERE id = :id")
+    int updateBinding(@Bind("id") String id,
+                      @Bind("taskId") String taskId,
+                      @Bind("metadata") String metadata);
 }

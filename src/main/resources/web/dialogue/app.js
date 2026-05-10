@@ -1,3 +1,32 @@
+import { buildComposerSubmissionPlan } from "./composer-plan.js";
+import { buildMessageSignalPlan } from "./message-card-plan.js";
+import { buildFacadeReplyFeedback } from "./facade-reply-plan.js";
+import { scopedFacadeReply } from "./facade-reply-scope.js";
+import { buildMessageRoleSummary } from "./message-summary-plan.js";
+import { buildMessageSummaryStackPlan } from "./message-summary-stack-plan.js";
+import { renderMessageSummaryStackHtml } from "./message-summary-render-plan.js";
+import { buildJudgmentCardBody } from "./judgment-card-plan.js";
+import { buildRouteBoxPlan } from "./route-box-plan.js";
+import { buildExperimentSummaryPlan } from "./experiment-summary-plan.js";
+import { buildRelatedMessagesPlan } from "./related-messages-plan.js";
+import { buildContinuitySummaryPlan } from "./continuity-summary-plan.js";
+import { buildFacadeReplyHighlightPlan } from "./facade-reply-highlight-plan.js";
+import { buildChainContextPlan } from "./chain-context-plan.js";
+import { renderChainContextListHtml } from "./chain-context-render-plan.js";
+import { buildTaskActionPlan } from "./task-action-plan.js";
+import { renderTaskActionHtml } from "./task-action-render-plan.js";
+import { buildTaskOverviewPlan } from "./task-overview-plan.js";
+import { renderTaskHeaderHtml } from "./task-header-render-plan.js";
+import { renderComposerInlineSignalsHtml } from "./composer-inline-render-plan.js";
+import { renderFacadeReplyBadgeHtml } from "./facade-reply-badge-render-plan.js";
+import { buildFacadeRequest } from "./composer-request-plan.js";
+import { requestFacadeCompletion } from "./facade-client-plan.js";
+import {
+    readFacadeSurfaceFromHash,
+    facadeSurfaceSummaryLabel,
+    writeFacadeSurfaceToParams
+} from "./facade-surface-plan.js";
+
 const state = {
     sessions: [],
     tasks: [],
@@ -5,14 +34,20 @@ const state = {
     relatedMessages: [],
     messageFilterRole: "all",
     messageFilterScope: "all",
+    taskStatusFilter: "all",
+    composerMode: "auto",
+    sidebarOpen: true,
+    detailsOpen: false,
     workers: [],
     selectedSessionId: null,
     selectedTaskId: null,
     followupParentTaskId: null,
+    lastFacadeReply: null,
     liveFlow: null,
     experimentSummary: null,
     toastTimer: null,
-    pollingTimer: null
+    pollingTimer: null,
+    facadeSurface: "chat_completions"
 };
 
 const dom = {
@@ -21,52 +56,84 @@ const dom = {
     taskCount: document.getElementById("taskCount"),
     chainCount: document.getElementById("chainCount"),
     selectedStatus: document.getElementById("selectedStatus"),
+    sessionSidebar: document.getElementById("sessionSidebar"),
+    sidebarToggle: document.getElementById("sidebarToggle"),
+    sidebarBackdrop: document.getElementById("sidebarBackdrop"),
     sessionList: document.getElementById("sessionList"),
     sessionForm: document.getElementById("sessionForm"),
     sessionTitle: document.getElementById("sessionTitle"),
     refreshSessionsButton: document.getElementById("refreshSessionsButton"),
     heroTitle: document.getElementById("heroTitle"),
     heroSubtitle: document.getElementById("heroSubtitle"),
+    workspaceSurfaceTitle: document.getElementById("workspaceSurfaceTitle"),
     messagePanelHint: document.getElementById("messagePanelHint"),
     messageRoleFilters: document.getElementById("messageRoleFilters"),
     messageScopeFilters: document.getElementById("messageScopeFilters"),
     messageSummary: document.getElementById("messageSummary"),
     messageList: document.getElementById("messageList"),
-    messageForm: document.getElementById("messageForm"),
-    messageContent: document.getElementById("messageContent"),
+    threadDrawer: document.getElementById("threadDrawer"),
+    threadDrawerMeta: document.getElementById("threadDrawerMeta"),
+    embeddedThreadPanel: document.getElementById("embeddedThreadPanel"),
     messageAttachTask: document.getElementById("messageAttachTask"),
+    messageAttachTaskWrap: document.getElementById("messageAttachTaskWrap"),
     clearMessageButton: document.getElementById("clearMessageButton"),
-    messageSessionLabel: document.getElementById("messageSessionLabel"),
     messageHint: document.getElementById("messageHint"),
+    composerModeSwitch: document.getElementById("composerModeSwitch"),
+    composerRouting: document.getElementById("composerRouting"),
+    composerRoutingMeta: document.getElementById("composerRoutingMeta"),
+    composerAdvanced: document.getElementById("composerAdvanced"),
     threadHint: document.getElementById("threadHint"),
+    taskStatusFilters: document.getElementById("taskStatusFilters"),
     refreshThreadButton: document.getElementById("refreshThreadButton"),
     taskThread: document.getElementById("taskThread"),
     taskForm: document.getElementById("taskForm"),
     taskTitle: document.getElementById("taskTitle"),
     taskType: document.getElementById("taskType"),
     taskPriority: document.getElementById("taskPriority"),
+    taskAssignedWorker: document.getElementById("taskAssignedWorker"),
+    taskModelMode: document.getElementById("taskModelMode"),
     taskGoal: document.getElementById("taskGoal"),
     taskAutoStart: document.getElementById("taskAutoStart"),
     taskIntent: document.getElementById("taskIntent"),
+    submitTaskButton: document.getElementById("submitTaskButton"),
     composerSessionLabel: document.getElementById("composerSessionLabel"),
     composerTaskHint: document.getElementById("composerTaskHint"),
+    composerInlineState: document.getElementById("composerInlineState"),
+    composerRecovery: document.getElementById("composerRecovery"),
+    composerModeHint: document.getElementById("composerModeHint"),
     followupButton: document.getElementById("followupButton"),
     clearFollowupButton: document.getElementById("clearFollowupButton"),
+    detailsToggleButton: document.getElementById("detailsToggleButton"),
+    taskDetailsPanel: document.getElementById("taskDetailsPanel"),
+    detailsCloseButton: document.getElementById("detailsCloseButton"),
     detailTitle: document.getElementById("detailTitle"),
     taskOverview: document.getElementById("taskOverview"),
     taskActions: document.getElementById("taskActions"),
+    taskSecondaryActions: document.getElementById("taskSecondaryActions"),
+    taskActionDrawer: document.getElementById("taskActionDrawer"),
     handoffWorker: document.getElementById("handoffWorker"),
     handoffButton: document.getElementById("handoffButton"),
     chainContext: document.getElementById("chainContext"),
     continuitySummary: document.getElementById("continuitySummary"),
     continuityChips: document.getElementById("continuityChips"),
+    mountedContext: document.getElementById("mountedContext"),
     routeBox: document.getElementById("routeBox"),
     experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
     artifactList: document.getElementById("artifactList"),
     relatedMessages: document.getElementById("relatedMessages"),
     toolList: document.getElementById("toolList"),
-    toast: document.getElementById("toast")
+    toast: document.getElementById("toast"),
+    taskDetailModal: document.getElementById("taskDetailModal"),
+    modalTitle: document.getElementById("modalTitle"),
+    modalBody: document.getElementById("modalBody"),
+    modalTaskInfo: document.getElementById("modalTaskInfo"),
+    modalFullContent: document.getElementById("modalFullContent"),
+    modalRouteInfo: document.getElementById("modalRouteInfo"),
+    modalDecisions: document.getElementById("modalDecisions"),
+    modalTools: document.getElementById("modalTools"),
+    modalCloseButton: document.getElementById("modalCloseButton"),
+    modalCloseBtn: document.getElementById("modalCloseBtn")
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -78,8 +145,12 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function bindEvents() {
-    dom.sessionForm.addEventListener("submit", onCreateSession);
+    dom.sessionForm.addEventListener("submit", (event) => {
+        onCreateSession(event).catch(handleError);
+    });
     dom.refreshSessionsButton.addEventListener("click", () => refreshAll(true));
+    dom.sidebarToggle.addEventListener("click", toggleSidebar);
+    dom.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
     dom.refreshThreadButton.addEventListener("click", () => {
         if (state.selectedTaskId) {
             loadSelectedTask(state.selectedTaskId, true).catch(handleError);
@@ -87,21 +158,57 @@ function bindEvents() {
         }
         refreshAll(true).catch(handleError);
     });
-    dom.messageForm.addEventListener("submit", onCreateMessage);
+    dom.detailsToggleButton.addEventListener("click", toggleDetailsPanel);
+    dom.detailsCloseButton.addEventListener("click", () => setDetailsOpen(false));
     dom.messageAttachTask.addEventListener("change", renderMessageComposerContext);
-    dom.clearMessageButton.addEventListener("click", onClearMessage);
+    dom.composerModeSwitch.addEventListener("click", onComposerModeClick);
+    dom.composerAdvanced.addEventListener("toggle", onComposerAdvancedToggle);
+    dom.clearMessageButton.addEventListener("click", onClearComposerInput);
+    dom.composerRecovery.addEventListener("click", (event) => {
+        onComposerRecoveryClick(event).catch(handleError);
+    });
     dom.messageRoleFilters.addEventListener("click", onMessageFilterClick);
     dom.messageScopeFilters.addEventListener("click", onMessageFilterClick);
+    dom.taskStatusFilters.addEventListener("click", onTaskStatusFilterClick);
     dom.messageList.addEventListener("click", onMessageActionClick);
     dom.relatedMessages.addEventListener("click", onMessageActionClick);
-    dom.taskForm.addEventListener("submit", onCreateTask);
+    dom.taskForm.addEventListener("submit", (event) => {
+        onCreateTask(event).catch(handleError);
+    });
+    dom.taskIntent.addEventListener("keydown", onComposerKeydown);
+    [
+        dom.taskTitle,
+        dom.taskGoal,
+        dom.taskType,
+        dom.taskPriority,
+        dom.taskAssignedWorker,
+        dom.taskModelMode,
+        dom.taskAutoStart
+    ].forEach((element) => {
+        if (!element) {
+            return;
+        }
+        const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
+        element.addEventListener(eventName, onComposerMetadataChange);
+    });
     dom.followupButton.addEventListener("click", onFollowupDraft);
     dom.clearFollowupButton.addEventListener("click", onClearFollowup);
     dom.taskThread.addEventListener("click", onThreadClick);
     dom.taskThread.addEventListener("keydown", onThreadKeydown);
     dom.chainContext.addEventListener("click", onChainContextClick);
-    dom.taskActions.addEventListener("click", onTaskActionClick);
-    dom.handoffButton.addEventListener("click", onHandoff);
+    dom.taskActions.addEventListener("click", (event) => {
+        onTaskActionClick(event).catch(handleError);
+    });
+    dom.handoffButton.addEventListener("click", () => {
+        onHandoff().catch(handleError);
+    });
+    dom.modalCloseButton.addEventListener("click", closeModal);
+    dom.modalCloseBtn.addEventListener("click", closeModal);
+    dom.taskDetailModal.addEventListener("click", (e) => {
+        if (e.target === dom.taskDetailModal) {
+            closeModal();
+        }
+    });
     window.addEventListener("hashchange", () => {
         applyLocationSelection();
         refreshAll(false).catch(handleError);
@@ -110,9 +217,12 @@ function bindEvents() {
 
 async function init() {
     applyLocationSelection();
+    syncSidebarForViewport();
+    renderDetailsPanelState();
     await Promise.all([loadHealth(), loadWorkers()]);
     await refreshAll(false);
     startPolling();
+    window.addEventListener("resize", onViewportResize);
 }
 
 async function refreshAll(loud) {
@@ -160,7 +270,6 @@ async function loadSessions() {
     dom.sessionCount.textContent = String(state.sessions.length);
     const currentSession = state.sessions.find((session) => session.id === state.selectedSessionId);
     dom.composerSessionLabel.textContent = currentSession?.title || "自动创建";
-    dom.messageSessionLabel.textContent = currentSession?.title || "自动创建";
     dom.heroTitle.textContent = currentSession
         ? `会话：${currentSession.title}`
         : "把 task 当作对话发给 harness";
@@ -290,7 +399,34 @@ async function onCreateSession(event) {
     await loadTasks();
     await loadMessages(session.id);
     renderSessions();
+    if (window.innerWidth <= 1140) {
+        setSidebarOpen(false);
+    }
     showToast(`已创建会话 ${session.title || session.id}`);
+}
+
+async function createRecoverySession() {
+    const seed = dom.taskTitle.value.trim() || dom.taskIntent.value.trim() || "继续当前对话";
+    const session = await api("/api/v1/sessions", {
+        method: "POST",
+        body: JSON.stringify({ title: deriveTitle(seed) })
+    });
+    state.selectedSessionId = session.id;
+    state.selectedTaskId = null;
+    state.followupParentTaskId = null;
+    await loadSessions();
+    await loadTasks();
+    await loadMessages(session.id);
+    renderSessions();
+    renderMessages();
+    renderThread();
+    renderDetails();
+    renderComposerContext();
+    renderMessageComposerContext();
+    if (window.innerWidth <= 1140) {
+        setSidebarOpen(false);
+    }
+    showToast(`已切到新会话 ${session.title || session.id}`);
 }
 
 async function onCreateTask(event) {
@@ -302,104 +438,78 @@ async function onCreateTask(event) {
         return;
     }
 
-    const followupParentTaskId = state.followupParentTaskId;
-    const goal = dom.taskGoal.value.trim() || null;
-    const autoStart = dom.taskAutoStart.checked;
-    const body = {
-        title: dom.taskTitle.value.trim() || deriveTitle(intent),
-        task_type: dom.taskType.value,
-        source: "user",
-        priority: dom.taskPriority.value,
-        intent,
-        goal,
-        parent_task_id: followupParentTaskId,
-        auto_start: autoStart,
-        session_id: state.selectedSessionId,
-        metadata: {
-            source_surface: "web_dialogue",
-            created_via: "dialogue_workspace",
-            ...(followupParentTaskId ? { followup_parent_task_id: followupParentTaskId } : {})
-        }
-    };
-
-    const task = await api("/api/v1/tasks", {
-        method: "POST",
-        body: JSON.stringify(body)
-    });
-
-    dom.taskTitle.value = "";
-    dom.taskGoal.value = "";
-    dom.taskIntent.value = "";
-    dom.taskAutoStart.checked = true;
-    state.followupParentTaskId = null;
-
-    const sessionId = taskSessionId(task);
-    if (!state.selectedSessionId || sessionId !== state.selectedSessionId) {
-        state.selectedSessionId = sessionId;
-        await loadSessions();
-    }
-
-    try {
-        await mirrorTaskAsMessage(task, {
-            intent,
-            goal,
-            autoStart,
-            followupParentTaskId
-        });
-    } catch (error) {
-        console.warn("task mirror message failed", error);
-    }
-
-    await loadTasks();
-    await loadMessages(sessionId);
-    await selectTask(task.id, false);
-    showToast(`任务已发布：${task.title}`);
-}
-
-async function onCreateMessage(event) {
-    event.preventDefault();
-    const content = dom.messageContent.value.trim();
-    if (!content) {
-        showToast("请先填写消息内容", true);
-        dom.messageContent.focus();
+    const session = currentSession();
+    if (isClosedSession(session)) {
+        showToast("当前 session 已关闭，请先新建会话后再发布任务", true);
         return;
     }
 
-    const session = await ensureSessionForMessage(content);
-    const task = dom.messageAttachTask.checked ? selectedTask() : null;
-    const message = await api(`/api/v1/sessions/${encodeURIComponent(session.id)}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-            role: "user",
-            message_type: task ? "task_note" : "user_note",
-            content,
-            task_id: task?.id || null,
-            metadata: {
-                source_surface: "web_dialogue",
-                created_via: "dialogue_workspace",
-                attached_task: Boolean(task),
-                ...(task ? { attached_task_id: task.id } : {})
-            }
-        })
-    });
-
-    dom.messageContent.value = "";
-    await loadSessions();
-    await loadTasks();
-    await loadMessages(session.id);
-    if (task && task.id === state.selectedTaskId) {
-        await loadRelatedMessages(task);
-    } else if (!task) {
-        state.relatedMessages = [];
+    const submissionPlan = composerSubmissionPlan();
+    const busyLabel = submissionPlan.resolvedMode === "message" ? "发送中..." : "发布中...";
+    try {
+        setButtonBusy(dom.submitTaskButton, true, submitTaskButtonLabel(), busyLabel);
+        const completion = await submitComposerThroughChatFacade(intent, submissionPlan);
+        await applyChatFacadeCompletion(completion, intent, submissionPlan);
+    } finally {
+        setButtonBusy(dom.submitTaskButton, false, submitTaskButtonLabel(), busyLabel);
     }
-    renderDetails();
-    showToast(`已记录消息：${formatMessageType(message.message_type || message.messageType)}`);
 }
 
-function onClearMessage() {
-    dom.messageContent.value = "";
-    dom.messageContent.focus();
-    showToast("已清空消息草稿");
+function onClearComposerInput() {
+    dom.taskIntent.value = "";
+    dom.taskIntent.focus();
+    showToast("已清空输入草稿");
+}
+
+function onComposerModeClick(event) {
+    const button = event.target.closest("[data-composer-mode]");
+    if (!button) {
+        return;
+    }
+    const mode = button.dataset.composerMode;
+    if (!mode || state.composerMode === mode) {
+        return;
+    }
+    state.composerMode = mode;
+    if (mode !== "auto") {
+        state.followupParentTaskId = null;
+    }
+    renderComposerContext();
+    renderMessageComposerContext();
+}
+
+function onComposerAdvancedToggle() {
+    renderComposerContext();
+    renderMessageComposerContext();
+}
+
+function onComposerMetadataChange() {
+    renderComposerContext();
+    renderMessageComposerContext();
+}
+
+async function onComposerRecoveryClick(event) {
+    const button = event.target.closest("[data-composer-recovery]");
+    if (!button) {
+        return;
+    }
+    if (button.dataset.composerRecovery === "new-session") {
+        await createRecoverySession();
+    }
+}
+
+function onComposerKeydown(event) {
+    if (!event || event.key !== "Enter") {
+        return;
+    }
+    if (!event.ctrlKey && !event.metaKey) {
+        return;
+    }
+    event.preventDefault();
+    if (!dom.submitTaskButton || dom.submitTaskButton.disabled) {
+        return;
+    }
+    dom.taskForm.requestSubmit();
 }
 
 function onMessageActionClick(event) {
@@ -482,7 +592,9 @@ function onFollowupDraft() {
     dom.taskType.value = draft.taskType;
     dom.taskPriority.value = draft.priority;
     state.followupParentTaskId = task.id;
+    state.composerMode = "auto";
     renderComposerContext();
+    renderMessageComposerContext();
     dom.taskIntent.focus();
     dom.taskIntent.setSelectionRange(dom.taskIntent.value.length, dom.taskIntent.value.length);
     showToast(`已生成 ${task.title || task.id} 的 follow-up 草稿`);
@@ -491,15 +603,29 @@ function onFollowupDraft() {
 function onClearFollowup() {
     state.followupParentTaskId = null;
     renderComposerContext();
+    renderMessageComposerContext();
     showToast("已清除 follow-up 关联");
 }
 
+let clickTimer = null;
 function onThreadClick(event) {
     const taskCard = event.target.closest("[data-task-id]");
     if (!taskCard) {
         return;
     }
-    selectTask(taskCard.dataset.taskId, false).catch(handleError);
+    const taskId = taskCard.dataset.taskId;
+    
+    if (clickTimer) {
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        openTaskDetailModal(taskId).catch(handleError);
+        return;
+    }
+    
+    clickTimer = setTimeout(() => {
+        clickTimer = null;
+        selectTask(taskId, false).catch(handleError);
+    }, 250);
 }
 
 function onThreadKeydown(event) {
@@ -560,6 +686,9 @@ function renderSessions() {
                 renderDetails();
                 renderMessageComposerContext();
             }
+            if (window.innerWidth <= 1140) {
+                setSidebarOpen(false);
+            }
         });
     });
 }
@@ -574,23 +703,38 @@ function renderMessages() {
     }
 
     const filteredMessages = filteredSessionMessages();
+    const facadeReplyHighlight = buildFacadeReplyHighlightPlan(
+        filteredMessages,
+        scopedLastFacadeReply(selectedTask()),
+        state.selectedTaskId || ""
+    );
     dom.messageSummary.innerHTML = renderMessageSummary(filteredMessages);
     dom.messagePanelHint.textContent = state.messages.length > 0
         ? `当前 session 共 ${state.messages.length} 条消息，当前筛出 ${filteredMessages.length} 条${describeMessageFilterSummary()}。`
         : "当前 session 还没有消息，可以先记上下文，再发布 task。";
     dom.messageList.innerHTML = filteredMessages.length > 0
-        ? filteredMessages.map((message) => renderMessageCard(message)).join("")
+        ? filteredMessages.map((message) => renderMessageCard(message, { facadeReplyHighlight })).join("")
         : emptyState(emptyMessageFilterText());
 }
 
 function renderThread() {
+    renderThreadDrawer();
     if (state.tasks.length === 0) {
         dom.taskThread.innerHTML = emptyState("当前会话还没有任务。把下面的输入区当作 chat composer 来用。");
         return;
     }
 
-    const tasksById = mapById(state.tasks);
-    const chains = buildTaskChains(state.tasks);
+    const filteredTasks = state.taskStatusFilter === "all"
+        ? state.tasks
+        : state.tasks.filter(task => (task.status || "active").toLowerCase() === state.taskStatusFilter);
+
+    if (filteredTasks.length === 0) {
+        dom.taskThread.innerHTML = emptyState(`没有 ${state.taskStatusFilter} 状态的任务。`);
+        return;
+    }
+
+    const tasksById = mapById(filteredTasks);
+    const chains = buildTaskChains(filteredTasks);
     dom.taskThread.innerHTML = chains.map((chain, chainIndex) => {
         const selectedInChain = chain.tasks.some((task) => task.id === state.selectedTaskId) ? "is-active" : "";
         const rootTask = chain.rootTask || chain.tasks[0];
@@ -670,16 +814,21 @@ function renderDetails() {
         dom.detailTitle.textContent = "选择一个任务";
         dom.selectedStatus.textContent = "idle";
         dom.taskOverview.innerHTML = emptyState("当前未选中任务。");
+        dom.taskActions.innerHTML = emptyState("选择任务后可继续推进。");
+        dom.taskSecondaryActions.innerHTML = "";
+        dom.taskActionDrawer.open = false;
         dom.chainContext.innerHTML = emptyState("当前没有迭代链。");
         dom.relatedMessages.innerHTML = emptyState("选中一个任务后，这里会显示它关联的 session messages。");
         dom.continuitySummary.innerHTML = "选中一个任务后，这里会显示 active context 和 continuity 摘要。";
         dom.continuityChips.innerHTML = "";
+        dom.mountedContext.innerHTML = emptyState("当前任务没有 mounted context。");
         dom.routeBox.innerHTML = emptyState("暂无 route preview");
         dom.experimentSummary.innerHTML = emptyState("当前任务不属于 experiment batch。");
         dom.decisionList.innerHTML = emptyState("暂无 decision");
         dom.artifactList.innerHTML = emptyState("暂无 artifact");
         dom.toolList.innerHTML = emptyState("暂无 tool trace");
         setTaskActionState(false);
+        renderDetailsPanelState();
         return;
     }
 
@@ -707,27 +856,81 @@ function renderDetails() {
     const toolFacts = toolChainFacts(flow, tools);
     const toolLabel = toolChainLabel(flow, tools);
     const toolSummary = toolChainNarrative(flow, tools);
+    const overviewPlan = buildTaskOverviewPlan(task, {
+        experimentMode: humanizeToken(experimentMode) || experimentMode,
+        toolLabel: toolLabel || "none"
+    });
+    const relatedMessagesPlan = buildRelatedMessagesPlan(state.relatedMessages);
+    const continuityPlan = buildContinuitySummaryPlan({
+        summary: continuitySummary,
+        openQuestions,
+        nextCandidates
+    });
+    const taskActionPlan = buildTaskActionPlan(task);
+    const taskActionRender = renderTaskActionHtml(taskActionPlan, {
+        renderButton: renderTaskActionButton,
+        renderEmpty: emptyState
+    });
+    const headerRender = renderTaskHeaderHtml({
+        focusLine: overviewPlan.focusLine,
+        overviewCards: overviewPlan.cards,
+        primaryAction: taskActionPlan.primary,
+        secondaryActions: taskActionPlan.secondary.filter((item) => item.action !== "handoff")
+    }, {
+        renderCard: (item) => overviewCard(item.label, item.value),
+        renderAction: (item) => item ? renderTaskActionButton(item, item.action !== taskActionPlan.primary?.action) : emptyState("当前任务已到终态；如需继续处理，可使用移交或新建 follow-up。")
+    });
 
     dom.detailTitle.textContent = task.title || task.id;
-    dom.selectedStatus.textContent = `${task.status || "active"} / ${task.control_node || task.controlNode || "intake"}`;
-    dom.taskOverview.innerHTML = [
-        overviewCard("任务 ID", task.id),
-        overviewCard("状态", task.status || "active"),
-        overviewCard("控制节点", task.control_node || task.controlNode || "intake"),
-        overviewCard("Worker", task.assigned_worker || task.assignedWorker || "unassigned"),
-        overviewCard("实验模式", humanizeToken(experimentMode) || experimentMode),
-        overviewCard("Tool chain", toolLabel || "none")
-    ].join("");
+    dom.selectedStatus.textContent = headerRender.focusLine;
+    dom.taskOverview.innerHTML = headerRender.overviewHtml;
+    dom.taskActions.innerHTML = taskActionRender.primaryHtml;
+    dom.taskSecondaryActions.innerHTML = taskActionRender.secondaryHtml;
+    dom.taskActionDrawer.hidden = headerRender.secondaryHidden;
+    if (taskActionPlan.primary == null) {
+        dom.taskActionDrawer.open = false;
+    }
 
     dom.chainContext.innerHTML = renderChainContext(task);
     dom.relatedMessages.innerHTML = state.relatedMessages.length > 0
-        ? state.relatedMessages.map((message) => renderMessageCard(message, { compact: true, relatedOnly: true })).join("")
+        ? `
+            <div class="stack-list">
+                ${relatedMessagesPlan.visibleMessages
+                    .map((message) => renderMessageCard(message, { compact: true, relatedOnly: true }))
+                    .join("")}
+            </div>
+            ${relatedMessagesPlan.hasDrawer ? `
+                <details class="inline-preview-drawer">
+                    <summary class="inline-preview-drawer__summary">${escapeHtml(relatedMessagesPlan.drawerSummary)}</summary>
+                    <div class="inline-preview-drawer__body stack-list">
+                        ${relatedMessagesPlan.hiddenMessages
+                            .map((message) => renderMessageCard(message, { compact: true, relatedOnly: true }))
+                            .join("")}
+                    </div>
+                </details>
+            ` : ""}
+        `
         : emptyState("当前任务还没有关联消息。");
-    dom.continuitySummary.textContent = continuitySummary || "暂无 continuity summary";
-    dom.continuityChips.innerHTML = [
-        ...toChipLines("open", openQuestions),
-        ...toChipLines("next", nextCandidates)
-    ].map((line) => `<span class="chip">${escapeHtml(line)}</span>`).join("");
+    dom.continuitySummary.innerHTML = `
+        <div class="rich-copy">${escapeHtml(continuityPlan.previewText)}</div>
+        ${continuityPlan.hasDrawer ? `
+            <details class="inline-preview-drawer">
+                <summary class="inline-preview-drawer__summary">${escapeHtml(continuityPlan.drawerSummary)}</summary>
+                <div class="inline-preview-drawer__body">
+                    <div class="rich-copy">${escapeHtml(continuitySummary || "暂无 continuity summary")}</div>
+                    ${continuityPlan.hiddenChips.length > 0 ? `
+                        <div class="chip-list">
+                            ${continuityPlan.hiddenChips.map((line) => `<span class="chip">${escapeHtml(line)}</span>`).join("")}
+                        </div>
+                    ` : ""}
+                </div>
+            </details>
+        ` : ""}
+    `;
+    dom.continuityChips.innerHTML = continuityPlan.visibleChips
+        .map((line) => `<span class="chip">${escapeHtml(line)}</span>`)
+        .join("");
+    dom.mountedContext.innerHTML = renderMountedContext((flow?.runtime_context || flow?.runtimeContext || {}).mounted_context_view || (flow?.runtime_context || flow?.runtimeContext || {}).mountedContextView);
 
     dom.routeBox.innerHTML = renderRouteBox(flow, task);
     dom.experimentSummary.innerHTML = renderExperimentSummary(flow, state.experimentSummary);
@@ -770,6 +973,7 @@ function renderDetails() {
 
     setTaskActionState(true);
     renderComposerContext();
+    renderDetailsPanelState();
 }
 
 function renderWorkerOptions() {
@@ -779,6 +983,11 @@ function renderWorkerOptions() {
     });
     dom.handoffWorker.innerHTML = options.join("");
     dom.handoffButton.disabled = options.length === 0;
+    dom.taskAssignedWorker.innerHTML = `<option value="">自动选择</option>${options.join("")}`;
+}
+
+function renderTaskActionButton(item, ghost) {
+    return `<button class="button ${ghost ? "button--ghost" : ""}" data-task-action="${escapeHtml(item.action)}" type="button">${escapeHtml(item.label)}</button>`;
 }
 
 function renderMessageCard(message, options = {}) {
@@ -787,7 +996,15 @@ function renderMessageCard(message, options = {}) {
     const taskId = messageTaskId(message);
     const isRelated = taskId && taskId === state.selectedTaskId;
     const compact = options.compact === true;
-    const body = preview(message.content || "", compact ? 180 : 280);
+    const metadata = message?.metadata || {};
+    const signalPlan = buildMessageSignalPlan(metadata, options);
+    const body = messageCardBody(message, compact);
+    const detail = messageCardDetail(message, compact);
+    const continuityScope = firstNonBlank(
+        metadata.continuity_scope,
+        metadata.continuityScope
+    );
+    const isLatestFacadeReply = options.facadeReplyHighlight?.messageId === message.id;
     const actions = [];
     if (canUseMessageAsDraft(message)) {
         actions.push(
@@ -803,6 +1020,7 @@ function renderMessageCard(message, options = {}) {
         "message-card",
         compact ? "message-card--compact" : "",
         isRelated ? "is-related" : "",
+        isLatestFacadeReply ? "is-facade-reply" : "",
         `message-card--${role}`
     ].filter(Boolean).join(" ");
 
@@ -811,11 +1029,15 @@ function renderMessageCard(message, options = {}) {
             <div class="message-card__meta">
                 <span class="task-badge" data-tone="${messageRoleTone(role)}">${escapeHtml(formatMessageRole(role))}</span>
                 <span class="task-badge">${escapeHtml(formatMessageType(type))}</span>
-                ${renderMessageSignals(message)}
+                ${continuityScope === "session" ? `<span class="task-badge" data-tone="manual">session continuity</span>` : ""}
+                ${continuityScope === "task" ? `<span class="task-badge" data-tone="active">task-bound</span>` : ""}
+                ${isLatestFacadeReply ? renderFacadeReplyBadgeHtml(options.facadeReplyHighlight, { escapeHtml }) : ""}
+                ${renderMessageSignals(signalPlan)}
                 ${taskId ? `<span class="task-badge" data-tone="${isRelated ? "active" : "default"}">${escapeHtml(`task · ${preview(taskId, 18)}`)}</span>` : ""}
                 <span>${formatTime(message.created_at || message.createdAt)}</span>
             </div>
             <div class="message-card__body">${escapeHtml(body)}</div>
+            ${detail ? `<div class="message-card__hint">${escapeHtml(detail)}</div>` : ""}
             ${options.relatedOnly && taskId ? `<div class="message-card__hint mono">${escapeHtml(taskId)}</div>` : ""}
             ${actions.length > 0 ? `<div class="message-card__actions">${actions.join("")}</div>` : ""}
         </article>
@@ -825,61 +1047,61 @@ function renderMessageCard(message, options = {}) {
 function renderMessageComposerContext() {
     const session = currentSession();
     const task = selectedTask();
+    const sessionClosed = isClosedSession(session);
+    const plan = composerSubmissionPlan();
+    const messageMode = plan.resolvedMode === "message";
 
-    dom.messageSessionLabel.textContent = session?.title || "自动创建";
-    dom.messageAttachTask.disabled = !task;
+    dom.messageAttachTask.disabled = !messageMode || !task || sessionClosed;
+    if (dom.messageAttachTaskWrap) {
+        dom.messageAttachTaskWrap.hidden = !messageMode;
+    }
     if (!task) {
         dom.messageAttachTask.checked = false;
     }
 
-    const sessionLine = session
-        ? `当前 session：${session.title || session.id}`
-        : "当前未锁定 session，提交第一条消息时会自动创建。";
+    const sessionLine = sessionClosed
+        ? `当前 session：${session.title || session.id} 已关闭`
+        : session
+            ? `当前 session：${session.title || session.id}`
+            : "当前未锁定 session，提交第一条消息时会自动创建。";
+    const facadeLine = `发送面：${facadeSurfaceSummaryLabel(state.facadeSurface)}`;
     const taskLine = task
         ? (dom.messageAttachTask.checked
             ? `消息会关联 task：${task.title || task.id}`
             : `当前 task：${task.title || task.id}，但本条消息只写入 session。`)
         : "当前没有选中 task，本条消息不会附着到任务。";
-    dom.messageHint.textContent = [sessionLine, taskLine].join(" · ");
+    const closedLine = sessionClosed ? "closed session 不再接受新消息，请先新建会话。" : null;
+    dom.messageHint.textContent = [sessionLine, facadeLine, taskLine, closedLine].filter(Boolean).join(" · ");
+    if (dom.composerRoutingMeta) {
+        dom.composerRoutingMeta.textContent = plan.reasonLabel || "默认聊天发送";
+    }
+    if (dom.composerModeHint) {
+        dom.composerModeHint.textContent = sessionClosed
+            ? "当前 session 已关闭，不能继续记录消息或发布任务。"
+            : plan.resolvedMode === "followup"
+                ? `当前会直接发布 follow-up task${followupSourceTask() ? `：${followupSourceTask().title || followupSourceTask().id}` : ""}。按 Ctrl/Cmd+Enter 可直接发送。`
+                : plan.resolvedMode === "task"
+                    ? `当前会直接发布新任务。原因：${plan.reasonLabel}。按 Ctrl/Cmd+Enter 可直接发送。`
+                    : task
+                        ? (dom.messageAttachTask.checked
+                            ? `当前会先记录为 task-bound message：${task.title || task.id}。按 Ctrl/Cmd+Enter 可直接发送。`
+                            : `当前会先记录为 session message；不会绑定 ${task.title || task.id}。按 Ctrl/Cmd+Enter 可直接发送。`)
+                        : "当前没有选中 task；这一轮会先记入 session。按 Ctrl/Cmd+Enter 可直接发送。";
+    }
 }
 
 function renderMessageSummary(messages) {
     const summaries = ["assistant", "system"]
-        .map((role) => summarizeMessageRole(messages, role))
+        .map((role) => buildMessageRoleSummary(messages, role))
         .filter(Boolean);
-    if (summaries.length === 0) {
+    const stackPlan = buildMessageSummaryStackPlan(summaries);
+    if (!stackPlan.primary) {
         return "";
     }
-    return summaries.map((summary) => renderMessageSummaryCard(summary)).join("");
-}
-
-function summarizeMessageRole(messages, role) {
-    const roleMessages = (messages || []).filter((message) => normalizeMessageRole(message?.role) === role);
-    if (roleMessages.length === 0) {
-        return null;
-    }
-
-    const latest = roleMessages[roleMessages.length - 1];
-    const typeCounts = new Map();
-    roleMessages.forEach((message) => {
-        const type = normalizeMessageType(message.message_type || message.messageType) || "message";
-        typeCounts.set(type, (typeCounts.get(type) || 0) + 1);
+    return renderMessageSummaryStackHtml(stackPlan, {
+        renderCard: renderMessageSummaryCard,
+        renderBrief: renderMessageSummaryBrief
     });
-
-    const topTypes = [...typeCounts.entries()]
-        .sort((left, right) => right[1] - left[1])
-        .slice(0, 3)
-        .map(([type, count]) => `${formatMessageType(type)} × ${count}`);
-    const metadata = latest?.metadata || {};
-    return {
-        role,
-        count: roleMessages.length,
-        latestAt: latest?.created_at || latest?.createdAt,
-        latestText: preview(latest?.content || "", 160),
-        topTypes,
-        latestTaskId: messageTaskId(latest),
-        signals: messageSignalTexts(metadata).slice(0, 3)
-    };
 }
 
 function renderMessageSummaryCard(summary) {
@@ -892,16 +1114,31 @@ function renderMessageSummaryCard(summary) {
                 ${summary.latestAt ? `<span>${escapeHtml(formatTime(summary.latestAt))}</span>` : ""}
             </div>
             <div class="message-summary-card__body">${escapeHtml(summary.latestText || "暂无可读摘要。")}</div>
-            ${summary.signals.length > 0 ? `
+            ${summary.primarySignal ? `
                 <div class="message-summary-card__signals">
-                    ${summary.signals.map((line) => `<span class="signal">${escapeHtml(line)}</span>`).join("")}
+                    <span class="signal">${escapeHtml(summary.primarySignal)}</span>
                 </div>
             ` : ""}
-            ${summary.topTypes.length > 0 ? `
+            ${summary.topTypeLine ? `
                 <div class="message-summary-card__foot">
-                    ${escapeHtml(`top types · ${summary.topTypes.join(" / ")}`)}
+                    ${escapeHtml(summary.topTypeLine)}
                 </div>
             ` : ""}
+        </section>
+    `;
+}
+
+function renderMessageSummaryBrief(summary) {
+    return `
+        <section class="message-summary-brief" data-role="${escapeHtml(summary.role)}">
+            <div class="message-summary-brief__meta">
+                <span class="task-badge" data-tone="${messageRoleTone(summary.role)}">${escapeHtml(formatMessageRole(summary.role))}</span>
+                <span>${escapeHtml(`${summary.count} messages`)}</span>
+                ${summary.latestAt ? `<span>${escapeHtml(formatTime(summary.latestAt))}</span>` : ""}
+            </div>
+            <div class="message-summary-brief__body">
+                ${escapeHtml(summary.primarySignal || summary.latestText || "暂无摘要。")}
+            </div>
         </section>
     `;
 }
@@ -922,6 +1159,22 @@ function onMessageFilterClick(event) {
     if (group === "scope" && state.messageFilterScope !== value) {
         state.messageFilterScope = value;
         renderMessages();
+    }
+}
+
+function onTaskStatusFilterClick(event) {
+    const button = event.target.closest("[data-filter-group][data-filter-value]");
+    if (!button) {
+        return;
+    }
+
+    const value = button.dataset.filterValue;
+    if (state.taskStatusFilter !== value) {
+        state.taskStatusFilter = value;
+        dom.taskStatusFilters.querySelectorAll(".filter-chip").forEach((chip) => {
+            chip.classList.toggle("is-active", chip.dataset.filterValue === value);
+        });
+        renderThread();
     }
 }
 
@@ -1070,109 +1323,76 @@ function canUseMessageAsDraft(message) {
     return normalizeMessageRole(message?.role) === "user";
 }
 
-function renderMessageSignals(message) {
-    const metadata = message?.metadata || {};
-    return messageSignalEntries(metadata)
+function renderMessageSignals(plan) {
+    return (plan?.entries || [])
         .map((entry) => signalBadge(entry.value, entry.tone, entry.label))
         .filter(Boolean)
-        .slice(0, 4)
         .join("");
 }
 
-function messageSignalEntries(metadata = {}) {
-    const route = messageRouteSignal(metadata);
-    const tools = messageToolSignal(metadata);
-    const modelMode = firstNonBlank(metadata.model_mode, metadata.modelMode);
-    const preferredWorkerHint = firstNonBlank(
-        metadata.preferred_worker_hint,
-        metadata.preferredWorkerHint
+function messageCardBody(message, compact = false) {
+    const type = normalizeMessageType(message?.message_type || message?.messageType);
+    const metadata = message?.metadata || {};
+    const summaryPreview = firstNonBlank(
+        metadata.summary_preview,
+        metadata.summaryPreview
     );
-    const learningHintApplied = booleanValue(
-        metadata.learning_hint_applied,
-        metadata.learningHintApplied
+    const actionLabel = firstNonBlank(
+        metadata.action_label,
+        metadata.actionLabel
     );
-    return [
-        { value: metadata.trigger, tone: "default", label: "trigger" },
-        { value: route, tone: "active", label: "route" },
-        { value: tools, tone: "default", label: "tools" },
-        { value: metadata.completion_status || metadata.completionStatus, tone: "done", label: "completion" },
-        { value: metadata.acceptance_result || metadata.acceptanceResult, tone: "done", label: "accept" },
-        { value: metadata.judgment_action || metadata.judgmentAction, tone: "auto", label: "action" },
-        { value: modelMode ? humanizeToken(modelMode) || modelMode : null, tone: "active", label: "mode" },
-        { value: messageLearningSignal(preferredWorkerHint, learningHintApplied), tone: "auto", label: "hint" }
-    ].filter((entry) => firstNonBlank(entry.value));
+    const reason = firstNonBlank(metadata.reason);
+    const currentState = firstNonBlank(
+        metadata.current_state,
+        metadata.currentState
+    );
+    const previousState = firstNonBlank(
+        metadata.previous_state,
+        metadata.previousState
+    );
+    const content = firstNonBlank(message?.content, "");
+    const max = compact ? 180 : 280;
+
+    if ((type === "task_progress" || type === "task_result") && summaryPreview) {
+        return preview(summaryPreview, max);
+    }
+    if (type === "task_action" && actionLabel) {
+        const parts = [actionLabel, reason ? `原因：${reason}` : null].filter(Boolean);
+        return preview(parts.join(" · "), max);
+    }
+    if (type === "task_state" && currentState) {
+        const stateLine = previousState ? `${previousState} -> ${currentState}` : currentState;
+        const parts = [stateLine, reason ? `原因：${reason}` : null].filter(Boolean);
+        return preview(parts.join(" · "), max);
+    }
+    return preview(content, max);
 }
 
-function messageSignalTexts(metadata = {}) {
-    return messageSignalEntries(metadata)
-        .map((entry) => signalText(entry.value, entry.label))
-        .filter(Boolean);
-}
-
-function messageRouteSignal(metadata = {}) {
-    const worker = firstNonBlank(
-        metadata.selected_worker,
-        metadata.selectedWorker,
-        metadata.assigned_worker,
-        metadata.assignedWorker,
-        metadata.executor_worker,
-        metadata.executorWorker
+function messageCardDetail(message, compact = false) {
+    const type = normalizeMessageType(message?.message_type || message?.messageType);
+    const metadata = message?.metadata || {};
+    const nextStep = firstNonBlank(
+        metadata.next_step,
+        metadata.nextStep,
+        metadata.suggested_next_step,
+        metadata.suggestedNextStep
     );
-    const source = firstNonBlank(
-        metadata.route_source,
-        metadata.routeSource
+    const current = firstNonBlank(
+        metadata.task_status && metadata.control_node
+            ? `${metadata.task_status} / ${metadata.control_node}`
+            : null,
+        metadata.taskStatus && metadata.controlNode
+            ? `${metadata.taskStatus} / ${metadata.controlNode}`
+            : null
     );
-    if (!worker) {
-        return null;
+    const detailParts = [];
+    if ((type === "task_progress" || type === "task_result") && nextStep) {
+        detailParts.push(`next · ${preview(nextStep, compact ? 80 : 120)}`);
     }
-    return source ? `${worker} via ${humanizeToken(source) || source}` : worker;
-}
-
-function messageToolSignal(metadata = {}) {
-    const traceSummary = firstNonBlank(
-        metadata.tool_chain_trace_summary,
-        metadata.toolChainTraceSummary
-    );
-    if (traceSummary) {
-        return traceSummary.replace(/_/g, " ");
+    if ((type === "task_action" || type === "task_state" || type === "task_receipt") && current) {
+        detailParts.push(`current · ${current}`);
     }
-    const stepCount = numberOrNull(
-        metadata.tool_chain_step_count,
-        metadata.toolChainStepCount
-    );
-    const terminationReason = firstNonBlank(
-        metadata.tool_chain_termination_reason,
-        metadata.toolChainTerminationReason
-    );
-    const executionMode = firstNonBlank(
-        metadata.tool_execution_mode,
-        metadata.toolExecutionMode
-    );
-    const parts = [
-        stepCount ? formatCount(stepCount, "step") : null,
-        terminationReason ? humanizeToken(terminationReason) || terminationReason : null,
-        !terminationReason && executionMode ? humanizeToken(executionMode) || executionMode : null
-    ].filter(Boolean);
-    return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-function messageLearningSignal(preferredWorkerHint, learningHintApplied) {
-    if (!preferredWorkerHint && learningHintApplied == null) {
-        return null;
-    }
-    if (preferredWorkerHint && learningHintApplied === true) {
-        return `${preferredWorkerHint} applied`;
-    }
-    if (preferredWorkerHint && learningHintApplied === false) {
-        return `${preferredWorkerHint} observed`;
-    }
-    if (learningHintApplied === true) {
-        return "applied";
-    }
-    if (learningHintApplied === false) {
-        return "observed";
-    }
-    return preferredWorkerHint;
+    return detailParts.length > 0 ? detailParts.join("  ") : "";
 }
 
 function signalBadge(value, tone, label) {
@@ -1181,11 +1401,6 @@ function signalBadge(value, tone, label) {
         return "";
     }
     return `<span class="task-badge" data-tone="${escapeHtml(tone || "default")}">${escapeHtml(`${label} · ${preview(text, 24)}`)}</span>`;
-}
-
-function signalText(value, label) {
-    const text = firstNonBlank(value);
-    return text ? `${label} · ${preview(text, 28)}` : null;
 }
 
 function overviewCard(label, value) {
@@ -1200,22 +1415,16 @@ function overviewCard(label, value) {
 function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
     const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
     const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
-    const bodyParts = [
-        preview(decision.rationale || decision.reason || "", 220),
-        boundaryFacts.label || boundaryFacts.traceSummary
-            ? `Execution: ${preview(boundaryFacts.traceSummary || boundaryFacts.label, 120)}`
-            : null,
-        diagnostics.metrics.length > 0 ? diagnostics.metrics.join(" · ") : null,
-        diagnostics.cognitionRows.length > 0 ? diagnostics.cognitionRows.map((row) => `${row.label}: ${row.value}`).join(" · ") : null,
-        diagnostics.alignmentChips.length > 0 ? diagnostics.alignmentChips.join(" · ") : null,
-        diagnostics.candidateWorkers.length > 0 ? `Candidates: ${diagnostics.candidateWorkers.join(", ")}` : null,
-        diagnostics.evidenceRefs.length > 0 ? `Evidence: ${diagnostics.evidenceRefs.join(" · ")}` : null,
-        diagnostics.unfinishedItems.length > 0 ? `Unfinished: ${diagnostics.unfinishedItems.join(" · ")}` : null
-    ].filter(Boolean);
     return stackItem(
         type,
         decision.summary || "no summary",
-        bodyParts.join("\n"),
+        buildJudgmentCardBody({
+            rationale: decision.rationale,
+            reason: decision.reason,
+            executionLine: boundaryFacts.traceSummary || boundaryFacts.label,
+            metrics: diagnostics.metrics,
+            cognitionRows: diagnostics.cognitionRows
+        }),
         decision.created_at || decision.createdAt ? formatTime(decision.created_at || decision.createdAt) : ""
     );
 }
@@ -1423,10 +1632,29 @@ function renderComposerContext() {
     const task = selectedTask();
     const followupParent = followupSourceTask();
     const contextTask = followupParent || task;
+    const session = currentSession();
+    const sessionClosed = isClosedSession(session);
+    const plan = composerSubmissionPlan();
+    dom.composerSessionLabel.textContent = session?.title || "自动创建";
+    renderComposerRecovery(sessionClosed);
+    syncComposerModeSwitch();
     if (!contextTask) {
-        dom.composerTaskHint.textContent = "选择一个任务后，可以基于它的 next step 生成 follow-up 草稿。";
+        dom.composerTaskHint.textContent = sessionClosed
+            ? "当前 session 已关闭。请新建会话后继续聊天或发布新任务。"
+            : plan.resolvedMode === "task"
+                ? `当前会直接发布新任务。原因：${plan.reasonLabel}。`
+                : "当前没有绑定任务；默认会先把这一轮输入记入 session。";
+        if (dom.composerInlineState) {
+            dom.composerInlineState.innerHTML = sessionClosed
+                ? `<span class="signal signal--warn">closed session 不接受新消息或新任务。先新建一个 session，再继续。</span>`
+                : composerInlineSignals(null, null, false, plan);
+        }
         dom.followupButton.disabled = true;
         dom.clearFollowupButton.disabled = true;
+        if (dom.submitTaskButton) {
+            dom.submitTaskButton.disabled = sessionClosed;
+            dom.submitTaskButton.textContent = submitTaskButtonLabel();
+        }
         return;
     }
 
@@ -1449,8 +1677,193 @@ function renderComposerContext() {
     dom.composerTaskHint.textContent = [selectedLine, followupLine, nextLine]
         .filter(Boolean)
         .join(" · ");
-    dom.followupButton.disabled = !task;
+    if (dom.composerInlineState) {
+        dom.composerInlineState.innerHTML = composerInlineSignals(task, followupParent, sessionClosed, plan);
+    }
+    dom.followupButton.disabled = !task || sessionClosed;
     dom.clearFollowupButton.disabled = !followupParent;
+    if (dom.submitTaskButton) {
+        dom.submitTaskButton.disabled = sessionClosed;
+        dom.submitTaskButton.textContent = submitTaskButtonLabel();
+    }
+}
+
+function renderComposerRecovery(sessionClosed) {
+    if (!dom.composerRecovery) {
+        return;
+    }
+    if (!sessionClosed) {
+        dom.composerRecovery.innerHTML = "";
+        return;
+    }
+    dom.composerRecovery.innerHTML = `
+        <button class="button button--ghost composer-recovery__button" type="button" data-composer-recovery="new-session">
+            新建会话并继续
+        </button>
+    `;
+}
+
+function syncComposerModeSwitch() {
+    if (!dom.composerModeSwitch) {
+        return;
+    }
+    dom.composerModeSwitch.querySelectorAll("[data-composer-mode]").forEach((button) => {
+        button.classList.toggle("is-active", button.dataset.composerMode === state.composerMode);
+    });
+}
+
+function composerInlineSignals(task, followupParent, sessionClosed, plan = composerSubmissionPlan()) {
+    return renderComposerInlineSignalsHtml({
+        sessionClosed,
+        facadeReply: scopedLastFacadeReply(task),
+        plan,
+        task,
+        followupParent
+    }, {
+        escapeHtml,
+        preview
+    });
+}
+
+function scopedLastFacadeReply(task) {
+    return scopedFacadeReply(
+        state.lastFacadeReply,
+        state.selectedSessionId || "",
+        task?.id || state.selectedTaskId || ""
+    );
+}
+
+function submitTaskButtonLabel() {
+    switch (composerSubmissionPlan().resolvedMode) {
+        case "followup":
+            return "发布 follow-up";
+        case "task":
+            return "发布任务";
+        default:
+            return "发送";
+    }
+}
+
+async function submitComposerThroughChatFacade(intent, plan = composerSubmissionPlan()) {
+    const session = await ensureSessionForMessage(intent);
+    const referencedTask = resolveComposerReferencedTask();
+    const followupParentTaskId = plan.resolvedMode === "followup"
+        ? (state.followupParentTaskId || selectedTask()?.id || null)
+        : null;
+    const goal = dom.taskGoal.value.trim() || null;
+    const title = dom.taskTitle.value.trim() || null;
+    const assignedWorker = dom.taskAssignedWorker.value.trim() || null;
+    const modelMode = dom.taskModelMode.value.trim() || null;
+    const autoStart = dom.taskAutoStart.checked;
+
+    return requestFacadeCompletion(state.facadeSurface, buildFacadeRequest({
+        intent,
+        sessionId: session.id,
+        facadeModel: facadeModelForComposer(),
+        facadeSurface: state.facadeSurface,
+        taskMode: composerTaskMode(plan),
+        title,
+        derivedTitle: deriveTitle(intent),
+        goal,
+        assignedWorker,
+        modelMode,
+        followupParentTaskId,
+        referencedTaskId: referencedTask?.id || "",
+        taskType: dom.taskType.value,
+        taskPriority: dom.taskPriority.value,
+        autoStart
+    }));
+}
+
+async function applyChatFacadeCompletion(completion, intent, plan = composerSubmissionPlan()) {
+    const agentcloud = completion?.agentcloud || {};
+    const sessionId = firstNonBlank(agentcloud.session_id, agentcloud.sessionId, state.selectedSessionId);
+    const taskId = firstNonBlank(agentcloud.task_id, agentcloud.taskId);
+    const taskStatus = firstNonBlank(agentcloud.task_status, agentcloud.taskStatus);
+    const replyType = firstNonBlank(agentcloud.reply_type, agentcloud.replyType);
+    const replySource = firstNonBlank(agentcloud.reply_source, agentcloud.replySource);
+    const referencedTask = resolveComposerReferencedTask();
+    const replyFeedback = buildFacadeReplyFeedback({
+        resolvedMode: plan.resolvedMode,
+        replyType,
+        replySource,
+        sessionId,
+        taskId,
+        taskStatus,
+        intent,
+        referencedTaskTitle: referencedTask?.title || referencedTask?.id || ""
+    });
+
+    dom.taskTitle.value = "";
+    dom.taskGoal.value = "";
+    dom.taskIntent.value = "";
+    dom.taskAutoStart.checked = true;
+    dom.taskAssignedWorker.value = "";
+    dom.taskModelMode.value = "";
+    state.followupParentTaskId = null;
+
+    if (sessionId) {
+        state.selectedSessionId = sessionId;
+    }
+    state.lastFacadeReply = replyFeedback;
+    await loadSessions();
+    await loadTasks();
+    if (sessionId) {
+        await loadMessages(sessionId);
+    } else {
+        await loadMessages();
+    }
+
+    if (taskId) {
+        await selectTask(taskId, false);
+    } else {
+        state.relatedMessages = [];
+        renderDetails();
+    }
+
+    renderComposerContext();
+    renderMessageComposerContext();
+    showToast(replyFeedback.toastText);
+}
+
+function composerTaskMode(plan = composerSubmissionPlan()) {
+    if (plan.resolvedMode === "message") {
+        return "message_only";
+    }
+    return "task_required";
+}
+
+function resolveComposerReferencedTask() {
+    if (composerSubmissionPlan().resolvedMode === "message") {
+        return dom.messageAttachTask.checked ? selectedTask() : null;
+    }
+    return null;
+}
+
+function facadeModelForComposer() {
+    switch (dom.taskModelMode.value) {
+        case "strong_only":
+            return "agentcloud-strong";
+        case "small_only":
+            return "agentcloud-fast";
+        default:
+            return "agentcloud-default";
+    }
+}
+
+function composerSubmissionPlan() {
+    return buildComposerSubmissionPlan({
+        composerMode: state.composerMode,
+        followupParentTaskId: state.followupParentTaskId,
+        advancedOpen: Boolean(dom.composerAdvanced?.open),
+        taskTitle: dom.taskTitle.value,
+        taskGoal: dom.taskGoal.value,
+        taskAssignedWorker: dom.taskAssignedWorker.value,
+        taskModelMode: dom.taskModelMode.value,
+        taskAutoStart: dom.taskAutoStart.checked,
+        taskType: dom.taskType.value,
+        taskPriority: dom.taskPriority.value
+    });
 }
 
 async function ensureSessionForMessage(content) {
@@ -1466,32 +1879,6 @@ async function ensureSessionForMessage(content) {
     });
     state.selectedSessionId = session.id;
     return session;
-}
-
-async function mirrorTaskAsMessage(task, context) {
-    const sessionId = taskSessionId(task);
-    if (!sessionId) {
-        return;
-    }
-
-    await api(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
-        method: "POST",
-        body: JSON.stringify({
-            role: "user",
-            message_type: context.followupParentTaskId ? "task_followup" : "task_brief",
-            content: context.intent,
-            task_id: task.id,
-            metadata: {
-                source_surface: "web_dialogue",
-                created_via: "dialogue_workspace",
-                mirrored_from: "task_form",
-                auto_start: context.autoStart,
-                task_title: task.title,
-                ...(context.goal ? { goal: context.goal } : {}),
-                ...(context.followupParentTaskId ? { parent_task_id: context.followupParentTaskId } : {})
-            }
-        })
-    });
 }
 
 function currentSession() {
@@ -1638,21 +2025,37 @@ function renderRouteBox(flow, task) {
     if (!selectedWorker && !routeReason && candidateWorkers.length === 0 && routeChips.length === 0) {
         return emptyState("暂无 route preview");
     }
+    const routePlan = buildRouteBoxPlan({
+        selectedWorker,
+        routeSource,
+        routeReason,
+        taskType,
+        candidateWorkers,
+        routeChips,
+        cognitionTimeline
+    });
     return `
         <div class="route-box">
             <div class="stack-item__meta">
-                <span class="task-badge">${escapeHtml(selectedWorker)}</span>
-                <span>${escapeHtml(routeSource)}</span>
-                <span>${escapeHtml(taskType)}</span>
+                <span class="task-badge">${escapeHtml(routePlan.worker)}</span>
+                <span>${escapeHtml(routePlan.routeSource)}</span>
+                ${routePlan.taskType ? `<span>${escapeHtml(routePlan.taskType)}</span>` : ""}
             </div>
-            ${routeReason ? `<strong>${escapeHtml(preview(routeReason, 220))}</strong>` : ""}
-            ${candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(candidateWorkers.join(", "))}</p>` : ""}
-            ${routeChips.length > 0 ? `
-                <div class="chip-list experiment-summary__chips">
-                    ${routeChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
-                </div>
+            ${routePlan.routeReason ? `<strong>${escapeHtml(preview(routePlan.routeReason, 220))}</strong>` : ""}
+            ${routePlan.hasDrawer ? `
+                <details class="route-box__drawer">
+                    <summary class="route-box__summary">${escapeHtml(routePlan.drawerSummary)}</summary>
+                    <div class="route-box__body">
+                        ${routePlan.candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(routePlan.candidateWorkers.join(", "))}</p>` : ""}
+                        ${routePlan.routeChips.length > 0 ? `
+                            <div class="chip-list experiment-summary__chips">
+                                ${routePlan.routeChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
+                            </div>
+                        ` : ""}
+                        ${renderCognitionTimeline(routePlan.cognitionTimeline)}
+                    </div>
+                </details>
             ` : ""}
-            ${renderCognitionTimeline(cognitionTimeline)}
         </div>
     `;
 }
@@ -1737,34 +2140,62 @@ function renderExperimentSummary(flow, summary) {
         `bucket: ${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
         summary ? `runs: ${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)}` : null
     ].filter(Boolean);
+    const experimentPlan = buildExperimentSummaryPlan({
+        experimentName,
+        taskLabel: firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "current task"),
+        summaryChips,
+        modeSummaries,
+        currentMode,
+        currentCase,
+        supportedModes,
+        promptModeSummaries,
+        executionJudgmentPromptModeSummaries,
+        completionJudgmentPromptModeSummaries
+    });
     return `
         <div class="experiment-summary">
             <div class="stack-item__meta">
-                <span class="task-badge">${escapeHtml(experimentName)}</span>
-                <span>${escapeHtml(firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "current task"))}</span>
+                <span class="task-badge">${escapeHtml(experimentPlan.experimentName)}</span>
+                <span>${escapeHtml(experimentPlan.taskLabel)}</span>
             </div>
             <div class="chip-list experiment-summary__chips">
-                ${summaryChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
+                ${experimentPlan.summaryChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
             </div>
             ${summary ? `
-                <div class="experiment-summary__grid">
-                    ${modeSummaries.map((mode) => renderExperimentModeCard(mode, currentMode)).join("")}
-                </div>
-                ${renderExperimentPromptModeComparisonSection(
-                    promptModeSummaries,
-                    executionJudgmentPromptModeSummaries,
-                    completionJudgmentPromptModeSummaries,
-                    currentWorkerPromptMode,
-                    currentExecutionJudgmentPromptMode,
-                    currentCompletionJudgmentPromptMode
-                )}
-                ${currentCase ? `
-                    <div class="experiment-summary__case-grid">
-                        ${(supportedModes.length > 0 ? supportedModes : Object.keys(currentCase.runs_by_mode || currentCase.runsByMode || {}))
-                            .map((mode) => renderExperimentCaseCard(mode, currentCase, currentMode))
-                            .join("")}
+                ${experimentPlan.currentModeCard ? `
+                    <div class="experiment-summary__headline">
+                        ${renderExperimentModeCard(experimentPlan.currentModeCard, currentMode)}
                     </div>
-                ` : emptyState("当前 task case 还没有三种 mode 对比。")}
+                ` : ""}
+                ${experimentPlan.hasDrawer ? `
+                    <details class="experiment-summary__drawer">
+                        <summary class="experiment-summary__drawer-summary">${escapeHtml(experimentPlan.drawerSummary)}</summary>
+                        <div class="experiment-summary__drawer-body">
+                            ${experimentPlan.comparisonModeCards.length > 0 ? `
+                                <div class="experiment-summary__grid">
+                                    ${experimentPlan.comparisonModeCards
+                                        .map((mode) => renderExperimentModeCard(mode, currentMode))
+                                        .join("")}
+                                </div>
+                            ` : ""}
+                            ${renderExperimentPromptModeComparisonSection(
+                                promptModeSummaries,
+                                executionJudgmentPromptModeSummaries,
+                                completionJudgmentPromptModeSummaries,
+                                currentWorkerPromptMode,
+                                currentExecutionJudgmentPromptMode,
+                                currentCompletionJudgmentPromptMode
+                            )}
+                            ${experimentPlan.hasCaseComparison ? `
+                                <div class="experiment-summary__case-grid">
+                                    ${experimentPlan.caseModes
+                                        .map((mode) => renderExperimentCaseCard(mode, currentCase, currentMode))
+                                        .join("")}
+                                </div>
+                            ` : emptyState("当前 task case 还没有三种 mode 对比。")}
+                        </div>
+                    </details>
+                ` : ""}
             ` : `
                 ${emptyState("实验 run 已识别，但聚合 summary 暂时不可用。")}
             `}
@@ -2097,6 +2528,12 @@ function cognitionTimelineChips(entry) {
         entry?.mountedContextBudgetTruncated
     );
     const aligned = booleanValue(entry?.aligned_with_previous_prompt_mode, entry?.alignedWithPreviousPromptMode);
+    const needsContextReopen = booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen);
+    const evidenceGapDetected = booleanValue(entry?.evidence_gap_detected, entry?.evidenceGapDetected);
+    const needsArchiveRetrieval = booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval);
+    const needsExternalFactRefresh = booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh);
+    const reopenSummary = firstNonBlank(entry?.reopen_summary, entry?.reopenSummary);
+    const reopenCandidatePaths = normalizeTextList(entry?.reopen_candidate_paths, entry?.reopenCandidatePaths);
     const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
     const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
     return [
@@ -2107,6 +2544,12 @@ function cognitionTimelineChips(entry) {
         routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
         promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
         executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
+        needsArchiveRetrieval === true ? "archive retrieval requested" : null,
+        needsExternalFactRefresh === true ? "external fact refresh requested" : null,
+        needsContextReopen === true ? "context reopen requested" : null,
+        evidenceGapDetected === true ? "evidence gap detected" : null,
+        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} reopen targets` : null,
+        reopenSummary ? `reopen: ${preview(reopenSummary, 72)}` : null,
         toolCount === null ? null : `${toolCount} tools`,
         mountedRendered === true ? "mounted rendered" : null,
         mountedInjected === true ? "mounted injected" : null,
@@ -2135,6 +2578,16 @@ function summarizeCognitionTimelineEntry(entry) {
         firstNonBlank(entry?.prompt_mode, entry?.promptMode),
         firstNonBlank(entry?.execution_status, entry?.executionStatus),
         firstNonBlank(entry?.route_source, entry?.routeSource),
+        booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval) === true
+            ? "archive retrieval requested"
+            : null,
+        booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh) === true
+            ? "external fact refresh requested"
+            : null,
+        booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen) === true
+            ? "context reopen requested"
+            : null,
+        firstNonBlank(entry?.reopen_summary, entry?.reopenSummary),
         firstNonBlank(entry?.reason)
     ].filter(Boolean).join(" · ");
 }
@@ -2487,12 +2940,25 @@ function applyLocationSelection() {
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const sessionId = firstNonBlank(params.get("session"), params.get("session_id"));
     const taskId = firstNonBlank(params.get("task"), params.get("task_id"));
+    const rail = firstNonBlank(params.get("rail"), params.get("sidebar"));
+    const details = firstNonBlank(params.get("details"), params.get("panel"));
     if (sessionId) {
         state.selectedSessionId = sessionId;
     }
     if (taskId) {
         state.selectedTaskId = taskId;
     }
+    if (rail === "open") {
+        state.sidebarOpen = true;
+    } else if (rail === "closed") {
+        state.sidebarOpen = false;
+    }
+    if (details === "open") {
+        state.detailsOpen = true;
+    } else if (details === "closed") {
+        state.detailsOpen = false;
+    }
+    state.facadeSurface = readFacadeSurfaceFromHash(window.location.hash, { firstNonBlank });
 }
 
 function syncLocationSelection() {
@@ -2503,11 +2969,102 @@ function syncLocationSelection() {
     if (state.selectedTaskId) {
         params.set("task", state.selectedTaskId);
     }
+    if (window.innerWidth > 1140 && !state.sidebarOpen) {
+        params.set("rail", "closed");
+    }
+    if (state.detailsOpen) {
+        params.set("details", "open");
+    }
+    writeFacadeSurfaceToParams(state.facadeSurface, params);
     const nextHash = params.toString() ? `#${params.toString()}` : "";
     if (window.location.hash === nextHash) {
         return;
     }
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+}
+
+function renderWorkspaceSurface() {
+    if (dom.workspaceSurfaceTitle) {
+        dom.workspaceSurfaceTitle.textContent = "Session Transcript";
+    }
+}
+
+function renderThreadDrawer() {
+    if (dom.threadDrawer) {
+        dom.threadDrawer.hidden = !state.selectedSessionId;
+    }
+    if (dom.threadDrawerMeta) {
+        if (!state.selectedSessionId) {
+            dom.threadDrawerMeta.textContent = "先选一个 session。";
+        } else if (state.tasks.length === 0) {
+            dom.threadDrawerMeta.textContent = "当前 session 还没有任务。";
+        } else {
+            const activeCount = state.tasks.filter((task) => (task.status || "active").toLowerCase() === "active").length;
+            dom.threadDrawerMeta.textContent = `${state.tasks.length} 个任务，${activeCount} 个 active`;
+        }
+    }
+}
+
+function toggleSidebar() {
+    setSidebarOpen(!state.sidebarOpen);
+}
+
+function setSidebarOpen(open) {
+    state.sidebarOpen = open;
+    renderSidebarState();
+    syncLocationSelection();
+}
+
+function toggleDetailsPanel() {
+    setDetailsOpen(!state.detailsOpen);
+}
+
+function setDetailsOpen(open) {
+    state.detailsOpen = open;
+    renderDetailsPanelState();
+    syncLocationSelection();
+}
+
+function renderSidebarState() {
+    const open = state.sidebarOpen;
+    document.body.classList.toggle("sidebar-open", open);
+    document.body.classList.toggle("sidebar-collapsed", !open && window.innerWidth > 1140);
+    if (dom.sessionSidebar) {
+        dom.sessionSidebar.classList.toggle("is-open", open);
+    }
+    if (dom.sidebarToggle) {
+        dom.sidebarToggle.setAttribute("aria-expanded", String(open));
+        dom.sidebarToggle.classList.toggle("is-active", open);
+    }
+    if (dom.sidebarBackdrop) {
+        dom.sidebarBackdrop.hidden = !(open && window.innerWidth <= 1140);
+    }
+}
+
+function renderDetailsPanelState() {
+    const open = state.detailsOpen;
+    document.body.classList.toggle("details-collapsed", !open);
+    if (dom.taskDetailsPanel) {
+        dom.taskDetailsPanel.setAttribute("aria-hidden", String(!open));
+    }
+    if (dom.detailsToggleButton) {
+        dom.detailsToggleButton.textContent = open ? "收起任务面板" : "查看任务面板";
+        dom.detailsToggleButton.classList.toggle("is-active", open);
+    }
+}
+
+function syncSidebarForViewport() {
+    if (window.innerWidth <= 1140 && !window.location.hash.includes("rail=open")) {
+        state.sidebarOpen = false;
+    } else if (window.innerWidth > 1140 && !window.location.hash.includes("rail=closed")) {
+        state.sidebarOpen = true;
+    }
+    renderSidebarState();
+}
+
+function onViewportResize() {
+    syncSidebarForViewport();
+    renderDetailsPanelState();
 }
 
 function buildTaskChains(tasks) {
@@ -2550,9 +3107,10 @@ function renderChainContext(task) {
         return emptyState("当前任务还没有迭代链上下文。");
     }
 
-    const previousTask = currentIndex > 0 ? chain.tasks[currentIndex - 1] : null;
-    const nextTask = currentIndex < chain.tasks.length - 1 ? chain.tasks[currentIndex + 1] : null;
-    const currentRound = currentIndex === 0 ? "root" : `round ${currentIndex + 1}`;
+    const chainPlan = buildChainContextPlan(chain.tasks, task.id);
+    const previousTask = chainPlan.previousTask;
+    const nextTask = chainPlan.nextTask;
+    const currentRound = chainPlan.currentIndex <= 0 ? "root" : `round ${chainPlan.currentIndex + 1}`;
     const latestTask = chain.latestTask || chain.tasks[chain.tasks.length - 1];
 
     return `
@@ -2576,29 +3134,113 @@ function renderChainContext(task) {
                     ${nextTask ? `下一轮 · ${escapeHtml(nextTask.title || nextTask.id)}` : "已经是最新一轮"}
                 </button>
             </div>
-            <div class="chain-context__list">
-                ${chain.tasks.map((item, index) => {
-                    const active = item.id === task.id ? "is-active" : "";
-                    const roundLabel = index === 0 ? "root" : `round ${index + 1}`;
-                    return `
-                        <button class="chain-context__task ${active}" type="button" data-chain-task-id="${escapeHtml(item.id)}">
-                            <div class="chain-context__task-head">
-                                <span class="task-badge">${escapeHtml(roundLabel)}</span>
-                                <span class="task-badge" data-tone="${toneForStatus(item.status)}">${escapeHtml(item.status || "active")}</span>
-                                ${renderStartModeBadge(item)}
-                            </div>
-                            <strong class="chain-context__task-title">${escapeHtml(item.title || item.id)}</strong>
-                            <div class="chain-context__task-meta">
-                                <span>${formatTime(item.created_at || item.createdAt)}</span>
-                                <span>${escapeHtml(item.control_node || item.controlNode || "intake")}</span>
-                                <span class="mono">${escapeHtml(item.id)}</span>
-                            </div>
-                        </button>
-                    `;
-                }).join("")}
+            ${renderChainContextListHtml(chainPlan, {
+                escapeHtml,
+                renderTask: (item) => renderChainContextTask(item, chain.tasks, task.id)
+            })}
+        </div>
+    `;
+}
+
+function renderChainContextTask(item, allTasks, selectedTaskId) {
+    const index = allTasks.findIndex((task) => task.id === item.id);
+    const active = item.id === selectedTaskId ? "is-active" : "";
+    const roundLabel = index === 0 ? "root" : `round ${index + 1}`;
+    return `
+        <button class="chain-context__task ${active}" type="button" data-chain-task-id="${escapeHtml(item.id)}">
+            <div class="chain-context__task-head">
+                <span class="task-badge">${escapeHtml(roundLabel)}</span>
+                <span class="task-badge" data-tone="${toneForStatus(item.status)}">${escapeHtml(item.status || "active")}</span>
+                ${renderStartModeBadge(item)}
+            </div>
+            <strong class="chain-context__task-title">${escapeHtml(item.title || item.id)}</strong>
+            <div class="chain-context__task-meta">
+                <span>${formatTime(item.created_at || item.createdAt)}</span>
+                <span>${escapeHtml(item.control_node || item.controlNode || "intake")}</span>
+                <span class="mono">${escapeHtml(item.id)}</span>
+            </div>
+        </button>
+    `;
+}
+
+function renderMountedContext(view) {
+    if (!view || typeof view !== "object") {
+        return emptyState("当前任务没有 mounted context。");
+    }
+    const panels = Array.isArray(view.panels) ? view.panels.filter(Boolean) : [];
+    const selectionTrace = normalizeTextList(view.selection_trace, view.selectionTrace);
+    const nonEmptyPanels = panels.filter((panel) => Array.isArray(panel?.objects) && panel.objects.filter(Boolean).length > 0);
+    if (nonEmptyPanels.length === 0 && selectionTrace.length === 0) {
+        return emptyState("当前 mounted context 为空。");
+    }
+    const traceHtml = selectionTrace.length > 0
+        ? `<div class="chip-list mounted-context__trace">${selectionTrace.slice(0, 8).map((item) => `<span class="chip">${escapeHtml(preview(item, 120))}</span>`).join("")}</div>`
+        : "";
+    return `
+        <div class="mounted-context">
+            <div class="stack-item__meta mounted-context__meta">
+                <span class="task-badge">${escapeHtml(`${nonEmptyPanels.length} panels`)}</span>
+                ${view.task_id || view.taskId ? `<span class="task-badge mono">${escapeHtml(view.task_id || view.taskId)}</span>` : ""}
+            </div>
+            ${traceHtml}
+            <div class="stack-list mounted-context__panels">
+                ${nonEmptyPanels.map(renderMountedPanel).join("")}
             </div>
         </div>
     `;
+}
+
+function renderMountedPanel(panel) {
+    const name = firstNonBlank(panel?.title, humanizeToken(panel?.name), panel?.name, "panel");
+    const objects = Array.isArray(panel?.objects) ? panel.objects.filter(Boolean) : [];
+    return `
+        <div class="stack-item mounted-context__panel">
+            <div class="stack-item__meta">
+                <span class="task-badge">${escapeHtml(name)}</span>
+                <span class="task-badge">${escapeHtml(String(objects.length))}</span>
+            </div>
+            <strong>${escapeHtml(name)}</strong>
+            <div class="stack-list mounted-context__objects">
+                ${objects.slice(0, 6).map(renderMountedObjectCard).join("")}
+                ${objects.length > 6 ? emptyState(`还有 ${objects.length - 6} 个对象未展开。`) : ""}
+            </div>
+        </div>
+    `;
+}
+
+function renderMountedObjectCard(object) {
+    const title = firstNonBlank(object?.title, object?.path, object?.id, "object");
+    const summary = firstNonBlank(object?.summary, object?.content_preview, object?.contentPreview, "");
+    const type = firstNonBlank(object?.type, "object");
+    const retention = firstNonBlank(object?.retention_state, object?.retentionState);
+    const metadata = object?.metadata && typeof object.metadata === "object" ? object.metadata : {};
+    const refs = Array.isArray(object?.refs) ? object.refs.filter(Boolean) : [];
+    const candidatePaths = normalizeTextList(
+        metadata.retrieval_candidate_paths,
+        metadata.reopen_candidate_paths,
+        metadata.retrievalCandidatePaths,
+        metadata.reopenCandidatePaths
+    );
+    const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
+    const chips = [
+        retention ? `retention: ${retention}` : null,
+        Boolean.TRUE.equals(metadata.rehydrated_from_archive) ? "rehydrated" : null,
+        Boolean.TRUE.equals(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
+        Boolean.TRUE.equals(metadata.needs_external_fact_refresh) ? "external refresh" : null,
+        Boolean.TRUE.equals(metadata.needs_context_reopen) ? "context reopen" : null,
+        refs.length > 0 ? `refs: ${refs.length}` : null
+    ].filter(Boolean);
+    const detailLines = [
+        summary,
+        candidatePaths.length > 0 ? `targets: ${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
+        nextFollowups.length > 0 ? `next: ${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
+    ].filter(Boolean);
+    return stackItem(
+        humanizeToken(type) || type,
+        preview(title, 96),
+        [detailLines.join("\n"), chips.length > 0 ? chips.join(" · ") : null].filter(Boolean).join("\n"),
+        retention ? humanizeToken(retention) || retention : ""
+    );
 }
 
 function resolveRootTaskId(task, tasksById) {
@@ -2740,8 +3382,23 @@ function setTaskActionState(enabled) {
     dom.taskActions.querySelectorAll("button").forEach((button) => {
         button.disabled = !enabled;
     });
+    dom.taskSecondaryActions.querySelectorAll("button").forEach((button) => {
+        button.disabled = !enabled;
+    });
     dom.handoffButton.disabled = !enabled || state.workers.length === 0;
     dom.refreshThreadButton.disabled = false;
+}
+
+function setButtonBusy(button, busy, idleLabel, busyLabel) {
+    if (!button) {
+        return;
+    }
+    button.disabled = busy;
+    button.textContent = busy ? busyLabel : idleLabel;
+}
+
+function isClosedSession(session) {
+    return (session?.status || "").toLowerCase() === "closed";
 }
 
 function handleError(error) {
@@ -2794,4 +3451,147 @@ function startPolling() {
             console.error(error);
         }
     }, 5000);
+}
+
+function closeModal() {
+    dom.taskDetailModal.style.display = "none";
+    document.body.style.overflow = "";
+}
+
+async function openTaskDetailModal(taskId) {
+    const flow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    const task = flow?.task;
+    
+    if (!task) {
+        showToast("无法获取任务详情", true);
+        return;
+    }
+    
+    dom.modalTitle.textContent = task.title || task.id;
+    document.body.style.overflow = "hidden";
+    
+    dom.modalTaskInfo.innerHTML = `
+        <div class="info-item">
+            <label>任务 ID</label>
+            <value>${escapeHtml(task.id)}</value>
+        </div>
+        <div class="info-item">
+            <label>状态</label>
+            <value>${escapeHtml(task.status || "active")}</value>
+        </div>
+        <div class="info-item">
+            <label>控制节点</label>
+            <value>${escapeHtml(task.control_node || task.controlNode || "intake")}</value>
+        </div>
+        <div class="info-item">
+            <label>Worker</label>
+            <value>${escapeHtml(task.assigned_worker || task.assignedWorker || "unassigned")}</value>
+        </div>
+        <div class="info-item">
+            <label>优先级</label>
+            <value>${escapeHtml(task.priority || "high")}</value>
+        </div>
+        <div class="info-item">
+            <label>任务类型</label>
+            <value>${escapeHtml(task.task_type || task.taskType || "general")}</value>
+        </div>
+        <div class="info-item">
+            <label>创建时间</label>
+            <value>${escapeHtml(formatTime(task.created_at || task.createdAt))}</value>
+        </div>
+        <div class="info-item">
+            <label>更新时间</label>
+            <value>${escapeHtml(formatTime(task.updated_at || task.updatedAt))}</value>
+        </div>
+    `;
+    
+    const fullContent = firstNonBlank(
+        flow?.runtime_context?.active_context?.continuity_summary,
+        flow?.runtimeContext?.activeContext?.continuitySummary,
+        flow?.judgment_trace?.completion_judgment?.summary,
+        flow?.judgmentTrace?.completionJudgment?.summary,
+        flow?.judgment_trace?.execution_judgment?.summary,
+        flow?.judgmentTrace?.executionJudgment?.summary,
+        task.summary,
+        task.next_step,
+        task.nextStep,
+        task.intent,
+        "暂无完整内容"
+    );
+    dom.modalFullContent.textContent = fullContent;
+    
+    const routePreview = flow?.route_preview || flow?.routePreview;
+    if (routePreview) {
+        dom.modalRouteInfo.innerHTML = `
+            <div class="info-grid" style="grid-template-columns: 1fr;">
+                <div class="info-item">
+                    <label>路由来源</label>
+                    <value>${escapeHtml(routePreview.route_source || routePreview.routeSource || "unknown")}</value>
+                </div>
+                <div class="info-item">
+                    <label>选中 Worker</label>
+                    <value>${escapeHtml(routePreview.selected_worker || routePreview.selectedWorker || "unknown")}</value>
+                </div>
+                <div class="info-item">
+                    <label>选择原因</label>
+                    <value>${escapeHtml(routePreview.why_selected || routePreview.whySelected || routePreview.route_reason || routePreview.routeReason || "not specified")}</value>
+                </div>
+                <div class="info-item">
+                    <label>候选 Workers</label>
+                    <value>${escapeHtml((routePreview.candidate_workers || routePreview.candidateWorkers || []).join(", ") || "none")}</value>
+                </div>
+            </div>
+        `;
+    } else {
+        dom.modalRouteInfo.innerHTML = emptyState("暂无路由信息");
+    }
+    
+    const decisions = flow?.decisions || [];
+    const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
+    const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
+    const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
+    
+    const decisionItems = [];
+    if (executionJudgment) {
+        decisionItems.push(`
+            <div class="info-item">
+                <label>执行判断</label>
+                <value>${escapeHtml(executionJudgment.action || executionJudgment.status || "unknown")}</value>
+            </div>
+        `);
+    }
+    if (completionJudgment) {
+        decisionItems.push(`
+            <div class="info-item">
+                <label>完成判断</label>
+                <value>${escapeHtml(completionJudgment.status || "unknown")}</value>
+            </div>
+        `);
+    }
+    decisions.forEach((decision, index) => {
+        decisionItems.push(`
+            <div class="info-item">
+                <label>决策 ${index + 1}</label>
+                <value>${escapeHtml(decision.decision_type || decision.decisionType || "decision")}: ${escapeHtml(decision.result || decision.summary || "no result")}</value>
+            </div>
+        `);
+    });
+    
+    dom.modalDecisions.innerHTML = decisionItems.length > 0 
+        ? `<div class="info-grid" style="grid-template-columns: 1fr;">${decisionItems.join("")}</div>`
+        : emptyState("暂无决策记录");
+    
+    const tools = flow?.tool_invocations || flow?.toolInvocations || [];
+    if (tools.length > 0) {
+        dom.modalTools.innerHTML = tools.map((tool) => `
+            <div class="info-item">
+                <label>${escapeHtml(tool.tool_name || tool.toolName || "tool")}</label>
+                <value>状态: ${tool.success ? "success" : "failed"} · ${escapeHtml(tool.result_summary || tool.resultSummary || "no summary")}</value>
+            </div>
+        `).join("");
+    } else {
+        dom.modalTools.innerHTML = emptyState("暂无工具调用记录");
+    }
+    
+    dom.taskDetailModal.style.display = "flex";
 }

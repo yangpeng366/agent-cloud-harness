@@ -91,6 +91,9 @@ class TaskServiceControlActionProjectionTest {
             assertEquals("waiting for review", stateMessage.metadata().get("reason"));
             assertEquals("task_service", stateMessage.metadata().get("source_surface"));
             assertFalse(stateMessage.metadata().containsKey("assigned_worker"));
+            assertTrue(stateMessage.content().contains("状态已更新"));
+            assertTrue(stateMessage.content().contains("active -> paused"));
+            assertTrue(stateMessage.content().contains("当前：paused / intake"));
 
             Event stateEvent = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 20).stream()
                 .filter(event -> "task_state_changed".equals(event.eventType()))
@@ -172,6 +175,7 @@ class TaskServiceControlActionProjectionTest {
             SessionMessage actionMessage = messages.get(1);
             assertEquals("task_action", actionMessage.messageType());
             assertEquals("pause", actionMessage.metadata().get("action"));
+            assertEquals("已暂停", actionMessage.metadata().get("action_label"));
             assertEquals("task_control", actionMessage.metadata().get("action_category"));
             assertEquals("paused", actionMessage.metadata().get("task_status"));
             assertEquals("packet", actionMessage.metadata().get("control_node"));
@@ -180,6 +184,8 @@ class TaskServiceControlActionProjectionTest {
             assertEquals("http_api", actionMessage.metadata().get("requested_via"));
             assertEquals("POST", actionMessage.metadata().get("request_method"));
             assertEquals("/api/v1/tasks/" + task.id() + "/pause", actionMessage.metadata().get("request_path"));
+            assertTrue(actionMessage.content().contains("已暂停"));
+            assertTrue(actionMessage.content().contains("当前：paused / packet"));
 
             Event actionEvent = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 20).stream()
                 .filter(event -> "task_control_action".equals(event.eventType()))

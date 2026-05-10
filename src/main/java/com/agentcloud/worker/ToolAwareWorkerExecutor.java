@@ -8,11 +8,14 @@ import com.agentcloud.llm.LlmImageInputResolver;
 import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.model.Worker;
 import com.agentcloud.model.SessionMessage;
+import com.agentcloud.runtime.RuntimeFactPromptFormatter;
+import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
 import com.agentcloud.runtime.context.MountedContextPromptMetrics;
 import com.agentcloud.runtime.context.MountedContextPromptRenderer;
 import com.agentcloud.runtime.context.PromptRenderingMode;
+import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.JsonMapper;
 import com.agentcloud.store.ToolInvocationDao;
 import com.agentcloud.tool.Tool;
@@ -64,6 +67,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private final LlmClient llmClient;
     private final WorkerExecutor fallbackExecutor;
     private final MountedContextPromptRenderer mountedContextPromptRenderer;
+    private final RuntimeFactSetAssembler runtimeFactSetAssembler;
+    private final RuntimeFactPromptFormatter runtimeFactPromptFormatter;
 
     public ToolAwareWorkerExecutor(WorkerRegistry workerRegistry,
                                    ToolRegistry toolRegistry,
@@ -72,16 +77,29 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                    LlmClient llmClient,
                                    WorkerExecutor fallbackExecutor) {
         this(workerRegistry, toolRegistry, toolPolicy, toolInvocationDao, llmClient, fallbackExecutor,
-            new MountedContextPromptRenderer());
+            new MountedContextPromptRenderer(), new RuntimeFactSetAssembler(), new RuntimeFactPromptFormatter());
     }
 
     ToolAwareWorkerExecutor(WorkerRegistry workerRegistry,
+                            ToolRegistry toolRegistry,
+                            ToolPolicy toolPolicy,
+                            ToolInvocationDao toolInvocationDao,
+                            LlmClient llmClient,
+                            WorkerExecutor fallbackExecutor,
+                            MountedContextPromptRenderer mountedContextPromptRenderer) {
+        this(workerRegistry, toolRegistry, toolPolicy, toolInvocationDao, llmClient, fallbackExecutor,
+            mountedContextPromptRenderer, new RuntimeFactSetAssembler(), new RuntimeFactPromptFormatter());
+    }
+
+    public ToolAwareWorkerExecutor(WorkerRegistry workerRegistry,
                                    ToolRegistry toolRegistry,
                                    ToolPolicy toolPolicy,
                                    ToolInvocationDao toolInvocationDao,
                                    LlmClient llmClient,
                                    WorkerExecutor fallbackExecutor,
-                                   MountedContextPromptRenderer mountedContextPromptRenderer) {
+                                   MountedContextPromptRenderer mountedContextPromptRenderer,
+                                   RuntimeFactSetAssembler runtimeFactSetAssembler,
+                                   RuntimeFactPromptFormatter runtimeFactPromptFormatter) {
         this.workerRegistry = workerRegistry;
         this.toolRegistry = toolRegistry;
         this.toolPolicy = toolPolicy;
@@ -91,6 +109,12 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         this.mountedContextPromptRenderer = mountedContextPromptRenderer == null
             ? new MountedContextPromptRenderer()
             : mountedContextPromptRenderer;
+        this.runtimeFactSetAssembler = runtimeFactSetAssembler == null
+            ? new RuntimeFactSetAssembler()
+            : runtimeFactSetAssembler;
+        this.runtimeFactPromptFormatter = runtimeFactPromptFormatter == null
+            ? new RuntimeFactPromptFormatter()
+            : runtimeFactPromptFormatter;
     }
 
     @Override
@@ -1422,7 +1446,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                         TaskToolState toolStateBefore,
                                                         TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context)));
+        sb.append(buildTaskPrompt(context, worker, true, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(worker.toolCapabilities());
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1818,7 +1842,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                            PromptRenderingMode renderingMode) {
         StringBuilder sb = new StringBuilder();
         List<String> registeredTools = registeredToolCapabilities(worker);
-        sb.append(buildTaskPrompt(context, true, renderingMode));
+        sb.append(buildTaskPrompt(context, worker, true, renderingMode));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredTools);
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1864,7 +1888,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                             TaskToolState toolState,
                                             ToolPlan originalPlan) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context)));
+        sb.append(buildTaskPrompt(context, worker, false, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -1902,7 +1926,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                  ImageInputDiagnostics imageDiagnostics,
                                                  String visualBrief) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, false, PromptRenderingMode.resolve(context)));
+        sb.append(buildTaskPrompt(context, worker, false, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -2607,7 +2631,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                                                TaskToolState toolStateBefore,
                                                TaskToolState toolStateAfter) {
         StringBuilder sb = new StringBuilder();
-        sb.append(buildTaskPrompt(context, true, PromptRenderingMode.resolve(context)));
+        sb.append(buildTaskPrompt(context, worker, true, PromptRenderingMode.resolve(context)));
         sb.append("\n\nWorker Tool Capabilities: ").append(registeredToolCapabilities(worker));
         if (!worker.toolScope().isEmpty()) {
             sb.append("\nWorker Tool Scope: ").append(worker.toolScope());
@@ -2634,16 +2658,21 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context) {
-        return buildTaskPrompt(context, true, PromptRenderingMode.resolve(context));
+        return buildTaskPrompt(context, null, true, PromptRenderingMode.resolve(context));
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context, boolean includeFullActiveContext) {
-        return buildTaskPrompt(context, includeFullActiveContext, PromptRenderingMode.resolve(context));
+        return buildTaskPrompt(context, null, includeFullActiveContext, PromptRenderingMode.resolve(context));
     }
 
     private String buildTaskPrompt(TaskRuntimeContext context,
+                                   Worker worker,
                                    boolean includeFullActiveContext,
                                    PromptRenderingMode renderingMode) {
+        MountedContextPromptRenderResult mountedRenderResult = renderingMode != null && renderingMode.shouldRenderMountedPrompt()
+            ? mountedContextPromptRenderer.renderResult(context)
+            : MountedContextPromptRenderResult.empty();
+        MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult);
         var task = context.task();
         StringBuilder sb = new StringBuilder();
         sb.append("Task Title: ").append(task.title()).append("\n");
@@ -2661,17 +2690,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         if (task.nextStep() != null && !task.nextStep().isBlank()) {
             sb.append("Next Step: ").append(task.nextStep()).append("\n");
         }
-        appendMountedContext(sb, renderingMode, mountedContextPromptRenderer.renderResult(context));
+        appendMountedContext(sb, renderingMode, mountedRenderResult);
         if (includeFullActiveContext
             && context.activeContext() != null
             && !context.activeContext().synthesizedContext().isBlank()) {
             sb.append("\nActive Context:\n").append(context.activeContext().synthesizedContext()).append("\n");
-        } else if (context.latestPacket() != null && context.latestPacket().activeTaskSummary() != null) {
-            sb.append("\nContext Summary: ").append(context.latestPacket().activeTaskSummary()).append("\n");
-        } else if (context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
-            sb.append("\nContext Summary: ")
-                .append(truncate(context.activeContext().synthesizedContext(), 2200))
-                .append("\n");
         }
         if (context.recentMessages() != null && !context.recentMessages().isEmpty()) {
             sb.append("\nRecent Messages:\n");
@@ -2679,6 +2702,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 sb.append("- ").append(line).append("\n");
             }
         }
+        if (!(includeFullActiveContext
+            && context.activeContext() != null
+            && !context.activeContext().synthesizedContext().isBlank())
+            && context.latestPacket() != null && context.latestPacket().activeTaskSummary() != null) {
+            sb.append("\nContext Summary: ").append(context.latestPacket().activeTaskSummary()).append("\n");
+        } else if (!(includeFullActiveContext
+            && context.activeContext() != null
+            && !context.activeContext().synthesizedContext().isBlank())
+            && context.activeContext() != null && !context.activeContext().synthesizedContext().isBlank()) {
+            sb.append("\nContext Summary: ")
+                .append(truncate(context.activeContext().synthesizedContext(), 2200))
+                .append("\n");
+        }
+        appendRuntimeFactSurface(sb, context, worker != null ? worker.workerId() : null, metrics);
         appendImageDiagnosticsPrompt(sb, imageInputDiagnostics(context));
         return sb.toString();
     }
@@ -2694,6 +2731,41 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             return;
         }
         sb.append("\n").append(mountedPrompt);
+    }
+
+    private void appendRuntimeFactSurface(StringBuilder sb,
+                                          TaskRuntimeContext context,
+                                          String workerId,
+                                          MountedContextPromptMetrics metrics) {
+        RuntimeFactSet factSet = resolveRuntimeFactSet(context, workerId, metrics);
+        if (factSet == null) {
+            return;
+        }
+        if (sb.length() > 0 && sb.charAt(sb.length() - 1) != '\n') {
+            sb.append("\n");
+        }
+        runtimeFactPromptFormatter.append(sb, factSet);
+    }
+
+    private RuntimeFactSet resolveRuntimeFactSet(TaskRuntimeContext context,
+                                                 String workerId,
+                                                 MountedContextPromptMetrics metrics) {
+        if (context == null || context.task() == null) {
+            return null;
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (metrics != null) {
+            metadata.putAll(metrics.toMetadata());
+        }
+        if (workerId != null && !workerId.isBlank()) {
+            metadata.put("selected_worker", workerId);
+        }
+        return runtimeFactSetAssembler.assemble(
+            context.task(),
+            context,
+            12,
+            metadata
+        );
     }
 
     private WorkerExecutionResult withPromptRenderingMetadata(WorkerExecutionResult result,
@@ -2736,11 +2808,15 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             }
             String role = message.role() == null || message.role().isBlank() ? "message" : message.role();
             String type = message.messageType() == null || message.messageType().isBlank() ? "" : " [" + message.messageType() + "]";
+            String scope = "";
+            if (message.metadata() != null && message.metadata().get("continuity_scope") != null) {
+                scope = " {" + message.metadata().get("continuity_scope") + "}";
+            }
             String content = message.content().replaceAll("\\s+", " ").trim();
             if (content.length() > 240) {
                 content = content.substring(0, 240) + "...";
             }
-            lines.add(role + type + ": " + content);
+            lines.add(role + type + scope + ": " + content);
         }
         return lines;
     }

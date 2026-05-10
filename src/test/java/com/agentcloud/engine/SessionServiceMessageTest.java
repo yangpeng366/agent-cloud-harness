@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -100,6 +101,30 @@ class SessionServiceMessageTest {
             assertEquals(1, messages.size());
             assertEquals("task_filter", messages.get(0).taskId());
             assertEquals("task_brief", messages.get(0).messageType());
+        }
+    }
+
+    @Test
+    void addMessageRejectsClosedSession() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-message-closed.db"))) {
+            SessionService service = service(db);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+
+            Session session = service.createSession("closed session");
+            Instant closedAt = Instant.now();
+            sessionDao.updateState(session.id(), "closed", closedAt, closedAt, null, "closed for follow-up");
+
+            IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                service.addMessage(session.id(), new SessionMessageCreateRequest(
+                    "user",
+                    "note",
+                    "这条消息不应写入 closed session。",
+                    null,
+                    Map.of()
+                ))
+            );
+
+            assertEquals("session is closed", error.getMessage());
         }
     }
 
