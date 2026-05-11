@@ -3,6 +3,7 @@ param(
     [string]$JarPath = "target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar",
     [int]$Port = 18080,
     [int]$StartupTimeoutSec = 45,
+    [string[]]$JavaArgs = @("-Xms128m", "-Xmx512m"),
     [switch]$SkipBuild,
     [switch]$KeepServerLogs,
     [string]$StdOutPath = ".tmp\chat-facade-acceptance.out.log",
@@ -107,7 +108,7 @@ Assert-PortFree -TargetPort $Port
 $resolvedJar = (Resolve-Path -LiteralPath $JarPath).Path
 . (Join-Path $PSScriptRoot "Use-Java21.ps1") -JdkHome $JdkHome -Quiet
 $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
-$argumentList = @("--enable-preview", "-Dserver.port=$Port", "-jar", $resolvedJar)
+$argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)
 $harness = Start-Process `
     -FilePath $javaExe `
     -ArgumentList $argumentList `

@@ -22,6 +22,9 @@
   - `git diff --cached --name-only`
 - `chat-first / facade product line` 与 `acceptance harness and operator docs` 也已真实进入暂存区：
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
+- 当前三段主 slice 还已通过一次 index audit：
+  - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+  - 当前 `baseline / product / harness` 都是 `staged_only`
 
 ## 现在不要优先做的事
 

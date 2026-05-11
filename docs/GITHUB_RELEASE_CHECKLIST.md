@@ -65,6 +65,8 @@
   - `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
 - 当前真实 staged file list：见
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
+- 当前 index 稳定性审计：见
+  - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - README 发布占位策略与真实 URL gate：见
   - `README.md`
 - 首发提交命令块：见
@@ -81,6 +83,8 @@
   - `docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`
 - 当前真实暂存区命中清单：见
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
+- 当前 staged vs unstaged 漂移审计：见
+  - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - 当前首发优先动作：见
   - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`
 - 本地首发预检脚本：见

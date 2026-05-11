@@ -20,7 +20,8 @@ function Assert-FacadeReady {
     $healthUp = $false
     try {
         $health = Invoke-RestMethod -Uri ($BaseUrl + '/api/v1/health') -TimeoutSec 5
-        if ($health.status -eq 'up' -or $health.data.status -eq 'up') {
+        $status = if ($null -ne $health.data) { $health.data.status } else { $health.status }
+        if ($status -eq 'up') {
             $healthUp = $true
         }
     } catch {
@@ -28,10 +29,7 @@ function Assert-FacadeReady {
 
     try {
         $models = Invoke-RestMethod -Uri ($BaseUrl + '/v1/models') -TimeoutSec 10
-        if ($null -eq $models) {
-            throw 'empty /v1/models response'
-        }
-        return
+        Assert-True -Condition ($null -ne $models) -Message 'empty /v1/models response'
     } catch {
         $message = $_.Exception.Message
         if ($healthUp) {
@@ -129,7 +127,7 @@ $sessionId = [string]$sessionResponse.data.id
 Assert-True -Condition (-not [string]::IsNullOrWhiteSpace($sessionId)) -Message 'failed to create session'
 
 $messageOnlyResponse = Invoke-FacadePost -Path $surfacePath -Body (New-FacadeBody `
-    -Text '先记一条会话草稿，暂时不要物化任务。' `
+    -Text 'Record a session draft only. Do not materialize a task yet.' `
     -Metadata @{
         task_mode = 'message_only'
         session_id = $sessionId
@@ -140,7 +138,7 @@ Assert-True -Condition ($messageOnlyAgentcloud.reply_source -eq 'session_ack') -
 Assert-True -Condition ([string]::IsNullOrWhiteSpace([string]$messageOnlyAgentcloud.task_id)) -Message 'message_only unexpectedly materialized a task'
 
 $manualTaskResponse = Invoke-FacadePost -Path $surfacePath -Body (New-FacadeBody `
-    -Text '把刚才的草稿整理成一个 manual-start 新任务。' `
+    -Text 'Turn the previous draft into a manual-start task.' `
     -Metadata @{
         task_mode = 'task_required'
         session_id = $sessionId
@@ -156,7 +154,7 @@ Assert-True -Condition ($manualTaskAgentcloud.reply_type -eq 'task_receipt') -Me
 Assert-True -Condition ($manualTaskAgentcloud.reply_source -eq 'task_receipt') -Message 'manual-start task reply_source mismatch'
 
 $taskNoteResponse = Invoke-FacadePost -Path $surfacePath -Body (New-FacadeBody `
-    -Text '这一轮先作为 task note 附着，不推进执行链。' `
+    -Text 'Attach this turn as a task note only. Do not progress execution.' `
     -Metadata @{
         task_mode = 'message_only'
         session_id = $sessionId
@@ -168,7 +166,7 @@ Assert-True -Condition ($taskNoteAgentcloud.reply_source -eq 'session_ack') -Mes
 Assert-True -Condition ([string]$taskNoteAgentcloud.task_id -eq $taskId) -Message 'task note did not remain attached to existing task'
 
 $manualContinuationResponse = Invoke-FacadePost -Path $surfacePath -Body (New-FacadeBody `
-    -Text '保持当前任务上下文，但这轮不要自动继续执行。' `
+    -Text 'Keep the current task context, but do not auto-continue execution.' `
     -Metadata @{
         task_mode = 'task_auto'
         session_id = $sessionId
@@ -181,7 +179,7 @@ Assert-True -Condition ($manualContinuationAgentcloud.reply_source -eq 'session_
 Assert-True -Condition ([string]$manualContinuationAgentcloud.task_id -eq $taskId) -Message 'manual continuity reply was not bound to existing task'
 
 $followupResponse = Invoke-FacadePost -Path $surfacePath -Body (New-FacadeBody `
-    -Text '基于当前任务，再建一个 manual-start follow-up。' `
+    -Text 'Create a manual-start follow-up from the current task.' `
     -Metadata @{
         task_mode = 'task_required'
         session_id = $sessionId
@@ -203,7 +201,7 @@ $parentTask = $sessionTasks | Where-Object { $_.id -eq $taskId } | Select-Object
 $childTask = $sessionTasks | Where-Object { $_.id -eq $followupTaskId } | Select-Object -First 1
 Assert-True -Condition ($null -ne $parentTask) -Message 'parent task not found in session task list'
 Assert-True -Condition ($null -ne $childTask) -Message 'child task not found in session task list'
-Assert-True -Condition ([string]($childTask.parent_task_id) -eq $taskId) -Message 'child task parent_task_id mismatch'
+Assert-True -Condition ([string]$childTask.parent_task_id -eq $taskId) -Message 'child task parent_task_id mismatch'
 
 $allMessages = Get-SessionMessages -SessionId $sessionId
 Assert-True -Condition ($allMessages.Count -ge 8) -Message 'session message stream is unexpectedly short'
@@ -214,21 +212,33 @@ Assert-True -Condition ($allMessageTypes -contains 'task_note') -Message 'task_n
 Assert-True -Condition ($allMessageTypes -contains 'task_followup') -Message 'task_followup missing from session message stream'
 
 $taskMessages = Get-SessionMessages -SessionId $sessionId -TaskId $taskId
-$attachCount = ($taskMessages | Where-Object { $_.message_type -eq 'task_note' -and $_.metadata.task_mode -eq 'message_only' }).Count
-$manualCount = ($taskMessages | Where-Object { $_.message_type -eq 'task_note' -and $_.metadata.auto_start -eq $false }).Count
+$attachCount = @(
+    $taskMessages | Where-Object {
+        $_.message_type -eq 'task_note' -and $_.metadata.task_mode -eq 'message_only'
+    }
+).Count
+$manualCount = @(
+    $taskMessages | Where-Object {
+        $_.message_type -eq 'task_note' -and $_.metadata.auto_start -eq $false
+    }
+).Count
 Assert-True -Condition ($attachCount -ge 1) -Message 'task-bound attach note missing'
 Assert-True -Condition ($manualCount -ge 1) -Message 'manual-start continuity note missing'
 
 $followupMessages = Get-SessionMessages -SessionId $sessionId -TaskId $followupTaskId
-$followupCount = ($followupMessages | Where-Object { $_.message_type -eq 'task_followup' }).Count
-$followupProgressCount = ($followupMessages | Where-Object { $_.message_type -eq 'task_progress' }).Count
+$followupCount = @(
+    $followupMessages | Where-Object { $_.message_type -eq 'task_followup' }
+).Count
+$followupProgressCount = @(
+    $followupMessages | Where-Object { $_.message_type -eq 'task_progress' }
+).Count
 Assert-True -Condition ($followupCount -ge 1) -Message 'task_followup message missing from child task view'
 Assert-True -Condition ($followupProgressCount -eq 0) -Message 'manual-start follow-up unexpectedly progressed'
 
 $parentTaskDetail = Get-Task -TaskId $taskId
 $childTaskDetail = Get-Task -TaskId $followupTaskId
-Assert-True -Condition ([string]($parentTaskDetail.control_node) -eq 'intake') -Message 'parent task control node drifted after manual continuity'
-Assert-True -Condition ([string]($childTaskDetail.control_node) -eq 'intake') -Message 'child task control node drifted after manual follow-up'
+Assert-True -Condition ([string]$parentTaskDetail.control_node -eq 'intake') -Message 'parent task control node drifted after manual continuity'
+Assert-True -Condition ([string]$childTaskDetail.control_node -eq 'intake') -Message 'child task control node drifted after manual follow-up'
 
 [pscustomobject]@{
     surface = $surfaceLabel

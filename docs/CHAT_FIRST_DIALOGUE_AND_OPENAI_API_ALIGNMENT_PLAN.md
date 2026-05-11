@@ -859,15 +859,159 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 - `/dialogue/` 对 façade request / response / reply affordance 也已有独立 helper 和 smoke 覆盖
 - 还新增了一支本地 acceptance probe：`scripts/Run-ChatFacadeAcceptanceProbe.ps1`，可直接对已启动的本地 harness 分别跑 `chat_completions` 和 `responses` 两条最小 façade 路径
 - 同时补了一支更接近真实环境的本地 acceptance runner：`scripts/Run-ChatFacadeAcceptanceWithLocalHarness.ps1`，会自动启动 harness 并串起两条 façade probe
+- 现在又补了一支 deterministic live path matrix probe：`scripts/Run-ChatFacadePathMatrixProbe.ps1`
+  - 可直接对已启动 harness 分别跑 `chat_completions` 和 `responses`
+  - 覆盖 `message_only -> manual-start task -> task note attach -> manual-start continuity -> manual-start follow-up`
+  - 验证真实 session/task/message contract 和 `parent_task_id / control_node=intake` 等关键 continuity 语义
+- 还新增了一支更接近真实 UI 的浏览器级 probe：`scripts/Run-DialogueBrowserAcceptanceProbe.ps1`
+  - 使用本机 Edge headless + CDP 驱动真实 `/dialogue/` 页面
+  - 目前已跑通 `chat_completions` surface 下的 `message_only`、`manual-start task`、`task_note_attach`、`manual-start continuity`、`manual-start follow-up`
+  - `responses` surface 下也已具备同级真实页面证据：`message_only`、`manual-start task`、`task_note_attach`、`manual-start continuity`、`manual-start follow-up`
+  - 现在还补上了两条 surface 下的 scripted browser `stream fallback` 证据：
+    - 页面内只发一次 façade POST
+    - 响应头保留 `text/event-stream`
+    - 但 body 可直接返回普通 completion JSON / response JSON
+    - `/dialogue/` 会在同一次响应里完成 fallback 解析，不再补发第二次请求
+  - 为了让真实 auto-start path 不必等待长请求完整返回，`/dialogue/` 现在新增了一个 pending auto-task seam：
+    - 当新建 `task_required + auto_start=true` 且当前还拿不到最终 `task_id/reply_type` 时
+    - 前端会短暂跟踪当前 session 的 task 列表
+    - 一旦新 task 出现，就提前把它选中并把 inline state 收敛到“已提交任务，正在推进”
+    - 这条 seam 已在 `responses` surface 的 richer scripted browser path 上得到 fresh harness 证据
+  - 为避免把正常的异步页面收敛误判成 UI 缺陷，当前 probe 已改成等待
+    `task=` hash、active task card、composer inline receipt、detail title 同时到位
+  - `/dialogue/` 前端 task 选择也新增了 sticky selection，避免 façade 回包后的中间刷新把新 task 选中态冲掉
+  - 在 `18160` / `18162` 的 fresh harness 上重跑后，`responses` surface 最小路径和 richer path 当前都有稳定浏览器级证据
+  - 后续 completion audit 还把一条真实运行风险收成了显式运维边界：
+    - richer browser probe 曾把默认 local harness 推到 JVM native OOM
+    - 这类失败表现为 `ERR_INSUFFICIENT_RESOURCES -> ERR_CONNECTION_REFUSED -> hs_err_pid*.log`
+    - 现已通过 acceptance harness 默认 JVM 参数收口：
+      - `Start-DialogueChatFacadeManualAcceptance.ps1`
+      - `Run-ChatFacadeAcceptanceWithLocalHarness.ps1`
+      均默认使用 `-Xms128m -Xmx512m`
+    - 在 `18180` fresh harness 上复验后，默认 `chat_completions` richer browser path 当前也已重新稳定通过
+  - 为了把 `manual-start continuity` 从“只有 HTTP/path-matrix 语义”推进成真实页面路径，`/dialogue/` 还新增了一个 advanced-only seam：
+    `继续当前任务`
+    它会在任务模式下把当前输入发送成 `task_required + task_id + auto_start=false`
+    但不会把这条 continuity 操作抬成新的顶层 composer mode
+  - 同时通过这条 probe 发现并收口了一个真实 provenance 缺口：
+    `/v1/responses` 虽然复用同一套 continuity contract，但旧实现写回 session/task message metadata 的 `request_path` 仍误标成 `/v1/chat/completions`
+    现已在 `ChatFacadeService` 修正，并由 `ChatFacadeHandlerHttpTest.postResponsesCreatesTaskRequiredResponseEnvelope()` 锁住
+  - 这条 probe 还顺手暴露了 `/dialogue/` 静态资源服务只放行 `index.html/app.css/app.js` 的真实生产缺口；该缺口现已在 `WebConsoleHandler` 收口，并由 `WebConsoleHandlerHttpTest` 新增模块资源回归保护
 - `/dialogue/` 壳层本身也不再只靠前端 markup smoke；`WebConsoleHandlerHttpTest` 已补上真实 HTTP 级验证，锁住 transcript-first shell 与 `/dialogue/app.js` 的资源路由
 - 现在还补了一支真实 `/dialogue/` shell probe：`scripts/Run-DialogueShellAcceptanceProbe.ps1`，并已接入 local harness runner
   - 当前真实运行结果：`Run-ChatFacadeAcceptanceWithLocalHarness.ps1 -SkipBuild -Port 18127` 已同时返回 `dialogue_shell_probe + chat_probe + responses_probe`
 - acceptance runner 的默认清理行为也已经过真实复验：不传 `-KeepServerLogs` 时，新运行不会继续留下日志文件；`.tmp` 中残留的固定名日志属于旧版本遗留，不再是当前 runner 的已知缺陷
+- 手工验收准备链也进一步收口了：
+  - `Start-DialogueChatFacadeManualAcceptance.ps1` 的 `manual_acceptance` 现在不只返回 `recommended_screenshot_dir / candidate_pngs / command_examples / record_seed`
+  - 还会显式返回 `record_seed_output_path`
+  - starter 现在也会自动把完整返回 JSON 落到 `.tmp\dialogue-manual-<port>.json`
+  - 并尝试自动生成一份未勾选的 A-H markdown 骨架到 `.tmp\dialogue-record-seed-<port>.md`
+    - 结果通过 `record_seed_generated / record_seed_error` 显式返回
+    - 若骨架生成成功，starter 现在还会直接内嵌一份 `record_seed_probe`
+      - 用于证明骨架文件确实存在，且首段内容正确
+  - 其中：
+    - `command_examples.render_record_seed` 可把 starter JSON 渲染成可复制的 A-H markdown 骨架
+    - `command_examples.render_record_seed_to_file` 可把骨架半自动落到 `.tmp\dialogue-record-seed-<port>.md`
+  - 对应 helper 已落地：
+    - `scripts/Render-DialogueAcceptanceRecordSeed.ps1`
+    - `scripts/Run-DialogueRecordSeedProbe.ps1`
+  - 当前真实验证结果：
+    - `18230` starter JSON 已返回 `render_record_seed`
+    - `18232` starter JSON 已返回 `render_record_seed_to_file`
+    - `18234` starter JSON 已返回 `record_seed_output_path`
+    - `18240` starter 已自动落出 `.tmp\dialogue-manual-18240.json`
+    - `18242` starter 已自动同时落出：
+      - `.tmp\dialogue-manual-18242.json`
+      - `.tmp\dialogue-record-seed-18242.md`
+      - 且 `record_seed_generated = true`
+    - `18244` starter 已直接内嵌：
+      - `record_seed_probe.output_path`
+      - `record_seed_probe.bytes`
+      - `record_seed_probe.preview`
+    - `18246` starter 已进一步确认：
+      - `record_seed_probe.has_run_metadata = true`
+      - `record_seed_probe.has_useful_commands = true`
+      - `record_seed_probe.has_base_url = true`
+      - `record_seed_probe.has_result_json = true`
+      - `record_seed_probe.has_completion_gate = true`
+    - `Run-DialogueRecordSeedProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18234.json` 已真实确认：
+      - `.tmp\dialogue-record-seed-18234.md` 会被生成
+      - `## Run Metadata / ## Useful Commands / Base URL / Result JSON / Completion Gate` 都存在
+      - A/H 节和 Entry URL 都存在
+      - probe 输出本身还会带回首段 `preview`
+  - 这层能力的定位仍然只是“人工验收准备”和“半自动记录骨架”，不等于 runbook 第 3 节 A-H 已完成真实手工点验
 
 当前仍然更像“尾声收口项”而不是“主能力缺口”的，主要还剩两类：
 
 - 少量组合级 render smoke 或真实浏览器手工验收，继续验证已收下来的 UI contract 没有被真实 DOM 拼装打坏
 - 如果要继续扩 façade，就不该再细分既有 helper，而应直接进入真正的增量 `stream=true` / tool-call delta / `/v1/responses`
+
+## 10.5 当前 completion audit checklist
+
+把这条 chat-first / façade 子线按“交付物 -> 证据 -> 未覆盖 gate”拆开，当前状态是：
+
+1. `/dialogue/` transcript-first shell
+   - 证据：
+     - `WebConsoleHandlerHttpTest.dialogueRouteServesTranscriptFirstShell()`
+     - `Run-DialogueShellAcceptanceProbe.ps1`
+   - 未覆盖 gate：
+     - 还缺真实人工手点，不应只靠 shell probe 视为完成
+
+2. `/v1/chat/completions` continuity contract
+   - 证据：
+     - `ChatFacadeHandlerHttpTest` 系列
+     - `Run-ChatFacadePathMatrixProbe.ps1`
+   - 未覆盖 gate：
+     - 当前仍主要是 HTTP / deterministic path matrix 证据，不能替代真实页面手工验收
+
+3. `/v1/responses` 最小 surface
+   - 证据：
+     - `postResponsesCreatesTaskRequiredResponseEnvelope()`
+     - `postResponsesSupportsMinimalSseStream()`
+     - `dialogue-responses-path-matrix.test.mjs`
+   - 未覆盖 gate：
+     - 仍不是完整 Responses API 验收
+
+4. 浏览器级 scripted evidence
+   - 证据：
+     - `Run-DialogueBrowserAcceptanceProbe.ps1`
+     - `chat` / `responses` richer browser paths
+     - scripted browser `stream fallback`
+   - 未覆盖 gate：
+     - 这些 PNG/JSON 仍只是辅助证据，不等于 A-H 真实人工手点已完成
+
+5. 人工验收准备链
+   - 证据：
+     - `Start-DialogueChatFacadeManualAcceptance.ps1`
+     - `Render-DialogueAcceptanceRecordSeed.ps1`
+     - `Run-DialogueRecordSeedProbe.ps1`
+     - `record_seed_output_path`
+     - `record_seed_probe`
+   - 当前最新实证：
+     - `18246` starter JSON 里已内嵌：
+       - `has_run_metadata = true`
+       - `has_useful_commands = true`
+       - `has_base_url = true`
+       - `has_result_json = true`
+       - `has_completion_gate = true`
+     - 重新渲染后的 `dialogue-record-seed-18246.md` 已把这些 probe 字段写回 markdown scratch pad
+   - 未覆盖 gate：
+     - 它只证明“可做人工验收”和“可半自动生成记录骨架”，不证明人工验收已完成
+
+6. 验收宿主环境稳定性
+   - 证据：
+     - runbook 已补充 `CLR failed / 0x800705AF / paging file too small` 的环境级排障说明
+   - 当前判断：
+     - 这类失败应优先归类为**本机验收环境问题**
+     - 不能直接当作 `/dialogue/`、`/v1/chat/completions` 或 `/v1/responses` 的产品回归
+   - 未覆盖 gate：
+     - 若宿主机反复出现该问题，真实人工验收仍可能被阻塞；这属于环境可用性缺口，不属于当前 façade contract 证据链本身
+
+结论：
+
+- 这条子线当前最强的自动化、HTTP、scripted browser、record-seed 证据都已经到位
+- 但最终 gate 仍然只有一个：runbook 第 3 节 A-H 八条真实 `/dialogue/` 人工手点
+- 在这些条目逐条回填前，不应把这条子线标记为完成
 
 ## 11. 推荐的下一步
 

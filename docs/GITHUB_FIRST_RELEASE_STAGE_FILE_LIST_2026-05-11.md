@@ -7,6 +7,7 @@
 本文件基于以下真实证据整理：
 
 - `git status --short`
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_baseline_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_product_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_harness_2026-05-11.md`
@@ -159,3 +160,14 @@ git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md
 - `/dialogue/` A-H 八条真实人工验收已完成并回填
 - GitHub Actions 已在真实远端仓库跑绿
 - 项目已达到 production-ready distributed platform 水平
+
+## 7. 当前 index 读数
+
+按最新一轮 `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`：
+
+- `baseline` 当前是 `staged_only = 21`
+- `product` 当前是 `staged_only = 24`
+- `harness` 当前是 `staged_only = 15`
+- 三段主 slice 当前都没有 `staged_and_unstaged` 漂移
+
+这说明这份 stage file list 现在不只是“应该怎么 stage”，而是和当前真实 index 状态对得上。

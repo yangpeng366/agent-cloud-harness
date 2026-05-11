@@ -48,6 +48,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseStagePr
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_product_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md`
 
+如需确认当前三段主 slice 是否已经稳定留在 index、没有 `staged_and_unstaged` 漂移，额外执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseIndexAudit.ps1 -WriteMarkdown
+```
+
+对应产物：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+
 ## 1. Commit 1: Repository Baseline
 
 ### 1.1 建议 stage 命令

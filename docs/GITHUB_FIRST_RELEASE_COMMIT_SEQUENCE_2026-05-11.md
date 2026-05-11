@@ -60,6 +60,11 @@ git diff --cached --name-only
 - acceptance harness 脚本
 - acceptance records / dry-run / stage preview working logs
 
+当前可再交叉核对：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- baseline 当前应显示为 `staged_only`
+
 ### 2.4 提交后最小验证
 
 ```powershell
@@ -120,6 +125,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 - acceptance harness 脚本
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_*`
 - `docs/GITHUB_FIRST_RELEASE_*` working logs
+
+当前可再交叉核对：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- product 当前应显示为 `staged_only`
 
 ### 3.4 提交后最小验证
 
@@ -186,6 +196,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseCommitD
 
 - `Needs manual review = none`
 - `Unmatched = none`
+
+当前可再交叉核对：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- harness 当前应显示为 `staged_only`
 
 ### 4.4 提交后最小验证
 

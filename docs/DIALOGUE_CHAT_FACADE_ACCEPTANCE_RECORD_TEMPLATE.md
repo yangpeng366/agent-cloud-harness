@@ -17,6 +17,63 @@
 - 相关命令：
   - `powershell -ExecutionPolicy Bypass -File .\scripts\Run-ChatFacadeAcceptanceWithLocalHarness.ps1 -SkipBuild -Port _____`
   - `powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -MavenArgs '-Dtest=WebConsoleHandlerHttpTest,ChatFacadeHandlerHttpTest'`
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\Start-DialogueChatFacadeManualAcceptance.ps1 -SkipBuild -KeepHarnessRunning -Port _____`
+
+手工验收建议：
+
+- 先运行 `Start-DialogueChatFacadeManualAcceptance.ps1`
+- 直接使用返回 JSON 里的 `manual_acceptance.recommended_order`
+- 优先按 `chat -> responses` 顺序点验
+- `BrowserProbeSurface=both` 当前不应视为稳定 green gate；scripted browser evidence 请按 surface 分开跑
+- starter 当前不会自动写记录草稿
+  - 请直接使用返回 JSON 里的 `record_suggestion` 作为当天记录文件名建议
+  - 再基于本模板手动创建 / 回填
+  - 未实际执行的 Java/Node 测试和 A-H 手工路径仍应保持未勾选
+- starter 的 `manual_acceptance` 现在还会直接给出：
+  - `result_json_path`
+  - `recommended_screenshot_dir`
+  - `record_seed_output_path`
+  - `record_seed_generated`
+  - `record_seed_error`
+  - 若骨架已自动生成，还会直接带一份 `record_seed_probe`
+  - 每条 A-H 路径对应的 `candidate_pngs`
+  - `command_examples`
+  - `record_seed`
+  - 其中 `command_examples.render_record_seed` 可直接生成一段可复制的 A-H markdown 骨架
+    - 当前骨架顶部还会带出 `base_url / dialogue_url / responses_dialogue_url / result_json_path / record_seed_output_path / recommended_screenshot_dir / completion_gate`
+    - 同时会把 `keep_running / chat_browser_probe / responses_browser_probe / probe_record_seed_output` 收进同一份 markdown 头部
+  - `command_examples.render_record_seed_to_file` 可把这段骨架落到 `record_seed_output_path`
+  - `command_examples.probe_record_seed_output` 可直接验证这条半自动骨架链
+  - 建议优先按这些路径收集或核对 PNG，再回填到第 3 节
+- starter 当前会把完整返回 JSON 自动落到 `manual_acceptance.result_json_path`
+  - 因此后续执行 `render_record_seed*` / `probe_record_seed_output` 时，不再需要调用方先手动把 stdout 重定向到 `.tmp\dialogue-manual-<port>.json`
+- starter 当前还会尝试把一份未勾选的 A-H markdown 骨架自动落到 `manual_acceptance.record_seed_output_path`
+  - 若 `record_seed_generated=true`，可直接打开这份 `.md` 继续人工回填
+  - 若同时返回 `record_seed_probe`，可把其中的 `preview` 当作“骨架首段已生成”的直接辅助证据
+  - 即便如此，它仍只是“骨架准备”，不是正式 acceptance record，更不等于真实人工验收已完成
+- 若 starter 同时带了 `-RunBrowserProbes`
+  - 返回 JSON 里的 `manual_acceptance.browser_probe_screenshot_dir`
+    通常会和 `recommended_screenshot_dir` 一致
+  - `browser_probe.screenshot_dir` 和每条路径的 `screenshot_path`
+    可直接作为当天人工验收的辅助取证来源
+- 若要验证 starter 的 `record_seed_output_path + render_record_seed_to_file`
+  - 可运行：
+    `powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueRecordSeedProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18234.json`
+  - 这只证明 A-H markdown 骨架可以半自动落盘，不等于真实人工验收已完成
+  - 当前 probe 除了 `preview`，还会检查：
+    - `## Run Metadata`
+    - `## Useful Commands`
+    - `Base URL / Result JSON / Completion Gate`
+    - A/H 节和 Entry URL
+- 如果用了 `Run-DialogueBrowserAcceptanceProbe.ps1 -ScreenshotDir ...`
+  - 可直接把生成的 PNG 文件路径当作“最小取证”之一回填到第 3 节备注
+  - 建议按 surface 分开保存：
+    - `chat`：`.tmp/dialogue-browser-screens-<port>/chat-*.png`
+    - `responses`：`.tmp/dialogue-browser-screens-<port>/responses-*.png`
+  - 例如：
+    - A `message_only` 可回填 `chat-message-only.png` 或 `responses-message-only.png`
+    - F `stream fallback` 可回填 `chat-stream-fallback.png` 或 `responses-stream-fallback.png`
+    - H `#facade=responses + task_required` 可回填 `responses-auto-start-task.png`
 
 ---
 
@@ -88,70 +145,110 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 > - 页面入口
 > - 观察到的 UI 反馈
 > - 若失败，失败点在哪一层：shell / request / response / affordance / continuity
+> - 至少一条最小取证：截图、task id、network 观察说明，三者至少其一
+>
+> 若先使用 scripted browser 取证，再做人工手点，可优先按下面的“现成 PNG 对照”回填：
+> - A `message_only`
+>   - `chat-message-only.png`
+>   - `responses-message-only.png`
+> - B `message_only + task_id`
+>   - `chat-task-note-attach.png`
+>   - `responses-task-note-attach.png`
+> - C `task_required`
+>   - `chat-auto-start-task.png`
+>   - `responses-auto-start-task.png`
+> - D `follow-up + manual-start`
+>   - `chat-followup-manual-start.png`
+>   - `responses-followup-manual-start.png`
+> - E `manual-start continuity`
+>   - `chat-manual-start-continuity.png`
+>   - `responses-manual-start-continuity.png`
+> - F `stream fallback`
+>   - `chat-stream-fallback.png`
+>   - `responses-stream-fallback.png`
+> - G `#facade=responses + message_only`
+>   - `responses-message-only.png`
+> - H `#facade=responses + task_required`
+>   - `responses-auto-start-task.png`
+>
+> 注意：这些 PNG 只是“最小取证”候选，不等于对应路径已通过；仍需要真实人工手点后再勾选。
+>
+> 若 starter JSON 已落在 `.tmp/dialogue-manual-<port>.json`，也可先用下面的 helper 生成一段可复制的 A-H markdown 骨架，再粘贴回本模板：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceRecordSeed.ps1 `
+>   -InputJsonPath .\.tmp\dialogue-manual-18228.json
+> ```
+> 或：
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceRecordSeed.ps1 `
+>   -InputJsonPath .\.tmp\dialogue-manual-18228.json > .\.tmp\dialogue-record-seed-18228.md
+> ```
+> 当前 helper 的稳定 contract 是“输出 markdown 到控制台”；若需要写入文件，请由外层命令或编辑器自行保存。
+> 现在输出不只包含 A-H 条目，还会先给出一段 run metadata 和关键命令，便于直接拿去做人工回填。
 
 ### A. `message_only`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `chat-message-only.png`；若在 Responses surface 手点，可改挂 `responses-message-only.png`
 
 ### B. `message_only + task_id`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `chat-task-note-attach.png`；若在 Responses surface 手点，可改挂 `responses-task-note-attach.png`
 
 ### C. `task_required`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `chat-auto-start-task.png`；若在 Responses surface 手点，可改挂 `responses-auto-start-task.png`
 
 ### D. `follow-up + manual-start`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `chat-followup-manual-start.png`；若在 Responses surface 手点，可改挂 `responses-followup-manual-start.png`
 
 ### E. `manual-start continuity`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `chat-manual-start-continuity.png`；若在 Responses surface 手点，可改挂 `responses-manual-start-continuity.png`
 
 ### F. `stream fallback`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/`
 - Network / 观察结果：
 - 是否只出现一次请求：
-- 备注：
+- 备注：可优先参考 `chat-stream-fallback.png`；若在 Responses surface 手点，可改挂 `responses-stream-fallback.png`
 
 ### G. `#facade=responses + message_only`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/#facade=responses`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `responses-message-only.png`
 
 ### H. `#facade=responses + task_required`
 
 - [ ] 通过
-- 页面入口：
+- 页面入口：`/dialogue/#facade=responses`
 - 输入：
 - 观察结果：
-- 备注：
+- 备注：可优先参考 `responses-auto-start-task.png`
 
 ---
 

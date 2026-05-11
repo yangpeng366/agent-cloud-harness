@@ -56,6 +56,11 @@
 - `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
 - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`
 
+当前还有一轮 index audit 证据：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- baseline 当前为 `staged_only`
+
 ## Commit 2: chat-first / facade product line
 
 建议内容：
@@ -82,6 +87,11 @@
 
 - `powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseStagePreview.ps1 -Commit product -WriteMarkdown`
 - 产物：`docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_product_2026-05-11.md`
+
+当前还有一轮 index audit 证据：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- product 当前为 `staged_only`
 
 ## Commit 3: acceptance harness and operator docs
 
@@ -115,6 +125,11 @@
 
 - `powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseStagePreview.ps1 -Commit harness -WriteMarkdown`
 - 产物：`docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md`
+
+当前还有一轮 index audit 证据：
+
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
+- harness 当前为 `staged_only`
 
 ## Working logs
 

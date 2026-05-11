@@ -56,6 +56,7 @@
 - `scripts/Run-GitHubFirstReleaseDryRun.ps1`
 - `scripts/Run-GitHubFirstReleaseCommitDryRun.ps1`
 - `scripts/Run-GitHubFirstReleaseStagePreview.ps1`
+- `scripts/Run-GitHubFirstReleaseIndexAudit.ps1`
 - `scripts/Run-GitHubFirstReleasePrecheck.ps1`
 
 ### 5. 对外需要的说明文档
@@ -87,6 +88,7 @@
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_product_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_harness_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-05-11.md`
+- `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_baseline_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_product_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md`
