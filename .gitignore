@@ -6,6 +6,7 @@ target/
 .idea/
 .vscode/
 .tmp/
+test-results/
 *.db
 *.db-journal
 hs_err_pid*

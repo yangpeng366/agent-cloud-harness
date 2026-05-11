@@ -1,0 +1,53 @@
+name: Bug report
+description: Report a reproducible bug in Agent Cloud Harness
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include exact API calls, UI path, or script command when possible.
+      placeholder: |
+        1. Start server with ...
+        2. Open /dialogue/ ...
+        3. Send ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs / screenshots / evidence
+      description: Paste relevant logs, packet IDs, screenshots, or test output.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Java version, Maven version, and whether you used chat_completions or responses façade.
+    validations:
+      required: true

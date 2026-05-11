@@ -33,10 +33,12 @@ Agent Cloud Harness 是一个**单进程、零外部依赖**的本地/单机控�
 ### 1. 克隆与构建
 
 ```bash
-git clone <repo-url>
+git clone <your-published-repo-url>
 cd agent-cloud-harness
 mvn package
 ```
+
+> 对外发布时，请把 `<your-published-repo-url>` 替换成真实公开仓库地址；在仓库正式公开前，不要把示例写成伪造的 GitHub 占位 URL。
 
 > Windows 用户如果环境中有多个 JDK，推荐先执行仓库脚本确保使用 Java 21：
 > ```powershell
@@ -45,18 +47,19 @@ mvn package
 > ```
 
 构建产物：
-- `target/agent-cloud-harness-0.1.0-SNAPSHOT.jar` — 可执行的 uber JAR（推荐，shade 后主产物）
+- `target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar` — 推荐运行的 shaded JAR
+- `target/agent-cloud-harness-0.1.0-SNAPSHOT.jar` — 当前同样可直接运行
 - `target/original-agent-cloud-harness-0.1.0-SNAPSHOT.jar` — shade 前原始 JAR
 
 ### 2. 启动服务
 
 ```bash
-java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT.jar
+java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 ```
 
 默认监听 `8080`。如需换端口：
 ```bash
-java -Dserver.port=9090 --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT.jar
+java -Dserver.port=9090 --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 ```
 
 Windows PowerShell 建议优先使用仓库脚本，避免 `-D...` 参数被当前 shell/JDK 组合误解析：
@@ -67,7 +70,7 @@ Windows PowerShell 建议优先使用仓库脚本，避免 `-D...` 参数被当�
 如果你要直接在 PowerShell 里调用 `java`，请先切到 Java 21，并把 `-D...` 参数作为单独字符串传入：
 ```powershell
 . .\scripts\Use-Java21.ps1
-java --enable-preview '-Dserver.port=9090' -jar .\target\agent-cloud-harness-0.1.0-SNAPSHOT.jar
+java --enable-preview '-Dserver.port=9090' -jar .\target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 ```
 
 启动成功后，控制台会打印所有可用端点，并显示：
@@ -183,6 +186,14 @@ agent-cloud-harness/
 | [`AGENTS.md`](AGENTS.md) | 面向 AI Coding Agent 的开发指南（代码风格、陷阱、回归保护） |
 | [`docs/PHASE2_ROADMAP.md`](docs/PHASE2_ROADMAP.md) | Phase 2 路线图 |
 | [`docs/NEXT_5_ENGINEERING_PRIORITIES.md`](docs/NEXT_5_ENGINEERING_PRIORITIES.md) | 接下来 5 项工程优先级 |
+| [`docs/GITHUB_RELEASE_CHECKLIST.md`](docs/GITHUB_RELEASE_CHECKLIST.md) | GitHub 首发前检查清单 |
+| [`docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md`](docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md) | 当前首发建议范围与公开边界 |
+| [`docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`](docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md) | 当前最值得执行的首发后续动作 |
+| [`docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md) | 当前三段首发提交的真实 staged file list |
+| [`docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md) | 三段首发提交的建议 commit subject/body 与每步验证点 |
+| [`docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md) | 当前 worktree 的可执行 staged slice 清单 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 贡献约定与提交流程 |
+| [`SECURITY.md`](SECURITY.md) | 当前安全边界与漏洞反馈说明 |
 
 ---
 
