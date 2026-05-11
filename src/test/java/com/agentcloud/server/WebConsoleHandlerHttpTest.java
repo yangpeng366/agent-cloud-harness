@@ -48,6 +48,30 @@ class WebConsoleHandlerHttpTest {
         }
     }
 
+    @Test
+    void dialogueRouteServesImportedJavascriptModules() throws Exception {
+        try (HttpFixture fixture = new HttpFixture()) {
+            HttpResponse<String> composerRequest = fixture.get("/dialogue/composer-request-plan.js");
+            HttpResponse<String> facadeClient = fixture.get("/dialogue/facade-client-plan.js");
+            HttpResponse<String> taskActionRender = fixture.get("/dialogue/task-action-render-plan.js");
+
+            assertEquals(200, composerRequest.statusCode());
+            assertEquals("application/javascript; charset=UTF-8",
+                composerRequest.headers().firstValue("Content-Type").orElse(null));
+            assertTrue(composerRequest.body().contains("buildFacadeRequest"));
+
+            assertEquals(200, facadeClient.statusCode());
+            assertEquals("application/javascript; charset=UTF-8",
+                facadeClient.headers().firstValue("Content-Type").orElse(null));
+            assertTrue(facadeClient.body().contains("requestFacadeCompletion"));
+
+            assertEquals(200, taskActionRender.statusCode());
+            assertEquals("application/javascript; charset=UTF-8",
+                taskActionRender.headers().firstValue("Content-Type").orElse(null));
+            assertTrue(taskActionRender.body().contains("renderTaskActionHtml"));
+        }
+    }
+
     private static final class HttpFixture implements AutoCloseable {
         private final HttpServer server;
         private final ExecutorService executor;

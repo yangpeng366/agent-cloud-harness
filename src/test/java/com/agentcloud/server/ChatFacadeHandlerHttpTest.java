@@ -679,7 +679,15 @@ class ChatFacadeHandlerHttpTest {
             assertFalse(response.body().path("output_text").asText().isBlank());
             assertEquals("task_progress", response.body().path("agentcloud").path("reply_type").asText());
             assertEquals("task_progress", response.body().path("agentcloud").path("reply_source").asText());
-            assertFalse(response.body().path("agentcloud").path("task_id").asText().isBlank());
+            String taskId = response.body().path("agentcloud").path("task_id").asText();
+            assertFalse(taskId.isBlank());
+
+            String sessionId = response.body().path("agentcloud").path("session_id").asText();
+            List<SessionMessage> messages = fixture.sessionMessageDao.listBySession(sessionId, 12);
+            assertTrue(messages.stream().anyMatch(message ->
+                taskId.equals(message.taskId())
+                    && "/v1/responses".equals(message.metadata().get("request_path"))
+                    && "chat_facade".equals(message.metadata().get("source_surface"))));
         }
     }
 

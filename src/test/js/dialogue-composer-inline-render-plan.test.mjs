@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { renderComposerInlineSignalsHtml } from "../../main/resources/web/dialogue/composer-inline-render-plan.js";
+import { scopedFacadeReply } from "../../main/resources/web/dialogue/facade-reply-scope.js";
 
 test("composer inline render plan surfaces facade reply and follow-up hint", () => {
     const html = renderComposerInlineSignalsHtml({
@@ -41,4 +42,27 @@ test("composer inline render plan surfaces closed-session warning before other h
     assert.match(html, /当前 session 已关闭/);
     assert.doesNotMatch(html, /任务已推进/);
     assert.match(html, /未选中 task；当前更接近纯 thread chat/);
+});
+
+test("composer inline render plan should preserve task receipt inline text before task selection catches up", () => {
+    const scopedReply = scopedFacadeReply({
+        inlineText: "最近回执：任务已记录，当前 active。",
+        toneClass: "signal--manual",
+        sessionId: "session_1",
+        taskId: "task_1"
+    }, "session_1", "");
+
+    const html = renderComposerInlineSignalsHtml({
+        sessionClosed: false,
+        facadeReply: scopedReply,
+        plan: { resolvedMode: "task", reasonLabel: "显式新任务模式" },
+        task: null,
+        followupParent: null
+    }, {
+        escapeHtml: (value) => String(value),
+        preview: (value) => String(value).slice(0, 28)
+    });
+
+    assert.match(html, /最近回执：任务已记录，当前 active/);
+    assert.doesNotMatch(html, /当前会直接发布成新 task/);
 });

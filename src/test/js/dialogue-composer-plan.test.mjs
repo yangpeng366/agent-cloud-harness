@@ -41,6 +41,18 @@ test("auto mode upgrades to task when task-only fields are customized", () => {
     assert.equal(hasTaskIntentOverrides({ taskAssignedWorker: "codex" }), true);
 });
 
+test("auto mode upgrades to task when continue current task is enabled", () => {
+    const plan = buildComposerSubmissionPlan({
+        composerMode: "auto",
+        taskContinueCurrent: true
+    });
+
+    assert.equal(plan.resolvedMode, "task");
+    assert.equal(plan.reasonLabel, "已切到继续当前任务");
+    assert.equal(hasTaskIntentOverrides({ taskContinueCurrent: true }), true);
+    assert.equal(taskIntentOverrideReason({ taskContinueCurrent: true }), "已切到继续当前任务");
+});
+
 test("follow-up parent always upgrades auto mode to followup", () => {
     const plan = buildComposerSubmissionPlan({
         composerMode: "auto",

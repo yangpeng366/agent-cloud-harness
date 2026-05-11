@@ -27,6 +27,8 @@ export function buildChatFacadeRequest(input) {
     }
     if (normalized.referencedTaskId) {
         metadata.task_id = normalized.referencedTaskId;
+    } else if (normalized.continueCurrentTaskId) {
+        metadata.task_id = normalized.continueCurrentTaskId;
     }
     return {
         model: normalized.facadeModel,
@@ -68,6 +70,8 @@ export function buildResponsesFacadeRequest(input) {
     }
     if (normalized.referencedTaskId) {
         metadata.task_id = normalized.referencedTaskId;
+    } else if (normalized.continueCurrentTaskId) {
+        metadata.task_id = normalized.continueCurrentTaskId;
     }
     return {
         model: normalized.facadeModel,
@@ -101,6 +105,7 @@ function normalizeRequestInput(input) {
         modelMode: normalizeText(source.modelMode),
         followupParentTaskId: normalizeText(source.followupParentTaskId),
         referencedTaskId: normalizeText(source.referencedTaskId),
+        continueCurrentTaskId: normalizeText(source.continueCurrentTaskId),
         taskType: normalizeText(source.taskType) || "continuation",
         taskPriority: normalizeText(source.taskPriority) || "high",
         autoStart: source.autoStart !== false

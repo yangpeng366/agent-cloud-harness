@@ -84,6 +84,23 @@ test("composer request plan preserves referenced task note attach", () => {
     assert.equal(request.metadata.task_id, "task_note_1");
 });
 
+test("composer request plan preserves continue-current task continuity metadata", () => {
+    const request = buildChatFacadeRequest({
+        intent: "先记一轮 continuity，但不要继续执行",
+        sessionId: "session_5",
+        facadeModel: "agentcloud-default",
+        taskMode: "task_required",
+        derivedTitle: "先记一轮 continuity，但不要继续执行",
+        continueCurrentTaskId: "task_existing_1",
+        autoStart: false
+    });
+
+    assert.equal(request.metadata.task_mode, "task_required");
+    assert.equal(request.metadata.task_id, "task_existing_1");
+    assert.equal(request.metadata.auto_start, false);
+    assert.equal(request.metadata.parent_task_id, undefined);
+});
+
 test("composer request plan requires intent and session id", () => {
     assert.throws(() => buildChatFacadeRequest({
         sessionId: "session_missing_intent",

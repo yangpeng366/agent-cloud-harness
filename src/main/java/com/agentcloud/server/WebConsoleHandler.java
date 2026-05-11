@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -16,9 +17,12 @@ import java.util.Map;
 class WebConsoleHandler implements HttpHandler {
     private static final Logger log = LoggerFactory.getLogger(WebConsoleHandler.class);
     private static final Map<String, String> CONTENT_TYPES = Map.of(
-        "/index.html", "text/html; charset=UTF-8",
-        "/app.css", "text/css; charset=UTF-8",
-        "/app.js", "application/javascript; charset=UTF-8"
+        "html", "text/html; charset=UTF-8",
+        "css", "text/css; charset=UTF-8",
+        "js", "application/javascript; charset=UTF-8",
+        "json", "application/json; charset=UTF-8",
+        "svg", "image/svg+xml",
+        "txt", "text/plain; charset=UTF-8"
     );
     private final String routePrefix;
     private final String resourceRoot;
@@ -57,7 +61,7 @@ class WebConsoleHandler implements HttpHandler {
             }
 
             byte[] body = readResource(resourceRoot + resourcePath);
-            exchange.getResponseHeaders().set("Content-Type", CONTENT_TYPES.getOrDefault(resourcePath, "application/octet-stream"));
+            exchange.getResponseHeaders().set("Content-Type", contentTypeFor(resourcePath));
             exchange.sendResponseHeaders(200, headOnly ? -1 : body.length);
             if (!headOnly) {
                 exchange.getResponseBody().write(body);
@@ -79,11 +83,35 @@ class WebConsoleHandler implements HttpHandler {
         }
         if (requestPath.startsWith(routePrefix + "/")) {
             String relative = requestPath.substring(routePrefix.length());
-            if (CONTENT_TYPES.containsKey(relative)) {
+            if (isSafeStaticResource(relative)) {
                 return relative;
             }
         }
         return null;
+    }
+
+    private String contentTypeFor(String resourcePath) {
+        int extensionIndex = resourcePath.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex >= resourcePath.length() - 1) {
+            return "application/octet-stream";
+        }
+        String extension = resourcePath.substring(extensionIndex + 1).toLowerCase(Locale.ROOT);
+        return CONTENT_TYPES.getOrDefault(extension, "application/octet-stream");
+    }
+
+    private boolean isSafeStaticResource(String relativePath) {
+        if (relativePath == null || relativePath.isBlank() || !relativePath.startsWith("/")) {
+            return false;
+        }
+        if (relativePath.contains("..") || relativePath.contains("\\") || relativePath.endsWith("/")) {
+            return false;
+        }
+        int extensionIndex = relativePath.lastIndexOf('.');
+        if (extensionIndex < 0 || extensionIndex >= relativePath.length() - 1) {
+            return false;
+        }
+        String extension = relativePath.substring(extensionIndex + 1).toLowerCase(Locale.ROOT);
+        return CONTENT_TYPES.containsKey(extension);
     }
 
     private byte[] readResource(String resourcePath) throws IOException {

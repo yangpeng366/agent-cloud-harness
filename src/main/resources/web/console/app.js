@@ -3167,10 +3167,10 @@ function renderMountedObjectCard(object) {
     const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
     const chips = [
         retention ? `retention: ${retention}` : null,
-        Boolean.TRUE.equals(metadata.rehydrated_from_archive) ? "rehydrated" : null,
-        Boolean.TRUE.equals(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
-        Boolean.TRUE.equals(metadata.needs_external_fact_refresh) ? "external refresh" : null,
-        Boolean.TRUE.equals(metadata.needs_context_reopen) ? "context reopen" : null,
+        metadata.rehydrated_from_archive === true ? "rehydrated" : null,
+        metadata.needs_archive_retrieval === true ? "archive retrieval" : null,
+        metadata.needs_external_fact_refresh === true ? "external refresh" : null,
+        metadata.needs_context_reopen === true ? "context reopen" : null,
         refs.length > 0 ? `refs: ${refs.length}` : null
     ].filter(Boolean);
     const detailLines = [

@@ -68,3 +68,15 @@ test("scoped façade reply only survives matching session and task", () => {
     assert.equal(scopedFacadeReply(reply, "session_b", "task_a"), null);
     assert.equal(scopedFacadeReply(reply, "session_a", "task_b"), null);
 });
+
+test("pending submit reply may surface before task selection catches up", () => {
+    const pendingReply = {
+        inlineText: "最近回执：已提交任务，正在推进 task_1。",
+        replySource: "pending_submit",
+        sessionId: "session_a",
+        taskId: "task_1"
+    };
+
+    assert.equal(scopedFacadeReply(pendingReply, "session_a", "")?.taskId, "task_1");
+    assert.equal(scopedFacadeReply(pendingReply, "session_b", ""), null);
+});

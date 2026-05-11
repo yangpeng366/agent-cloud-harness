@@ -28,6 +28,7 @@ export function hasTaskIntentOverrides(input) {
         || normalized.taskGoal
         || normalized.taskAssignedWorker
         || normalized.taskModelMode
+        || normalized.taskContinueCurrent
         || !normalized.taskAutoStart
         || normalized.taskType !== "continuation"
         || normalized.taskPriority !== "high"
@@ -47,6 +48,9 @@ export function taskIntentOverrideReason(input) {
     }
     if (normalized.taskModelMode) {
         return "已指定模型模式";
+    }
+    if (normalized.taskContinueCurrent) {
+        return "已切到继续当前任务";
     }
     if (!normalized.taskAutoStart) {
         return "已切到 manual-start";
@@ -70,6 +74,7 @@ function normalizeComposerPlanInput(input) {
         taskGoal: normalizeText(source.taskGoal),
         taskAssignedWorker: normalizeText(source.taskAssignedWorker),
         taskModelMode: normalizeText(source.taskModelMode),
+        taskContinueCurrent: source.taskContinueCurrent === true,
         taskAutoStart: source.taskAutoStart !== false,
         taskType: normalizeText(source.taskType) || "continuation",
         taskPriority: normalizeText(source.taskPriority) || "high"

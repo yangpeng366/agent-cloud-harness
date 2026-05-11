@@ -26,6 +26,7 @@ public class ChatFacadeService {
         "agentcloud-fast"
     );
     private static final String CHAT_COMPLETION_PATH = "/v1/chat/completions";
+    private static final String RESPONSES_PATH = "/v1/responses";
 
     private final SessionService sessionService;
     private final TaskService taskService;
@@ -36,6 +37,10 @@ public class ChatFacadeService {
     }
 
     public ChatCompletionResponse createCompletion(ChatCompletionRequest request) {
+        return createCompletion(request, CHAT_COMPLETION_PATH);
+    }
+
+    private ChatCompletionResponse createCompletion(ChatCompletionRequest request, String requestPath) {
         if (request == null) {
             throw new IllegalArgumentException("request body is required");
         }
@@ -51,7 +56,7 @@ public class ChatFacadeService {
         Task referencedTask = resolveReferencedTask(taskId);
         String sessionId = resolveSessionId(metadata, referencedTask);
         Session session = sessionId == null
-            ? sessionService.createSession(deriveSessionTitle(lastUserTurn), requestMetadata())
+            ? sessionService.createSession(deriveSessionTitle(lastUserTurn), requestMetadata(requestPath))
             : requireSession(sessionId);
 
         if (referencedTask != null) {
@@ -62,15 +67,16 @@ public class ChatFacadeService {
                 lastUserTurn,
                 facadeModel,
                 taskMode,
-                metadata
+                metadata,
+                requestPath
             );
             if ("message_only".equals(taskMode)) {
-                return replyWithAck(facadeModel, session, referencedTask, "已记录到当前任务上下文。");
+                return replyWithAck(facadeModel, session, referencedTask, "已记录到当前任务上下文。", requestPath);
             }
             if (!autoStart) {
-                return replyWithAck(facadeModel, session, referencedTask, "已记录到当前任务上下文，等待手动继续。");
+                return replyWithAck(facadeModel, session, referencedTask, "已记录到当前任务上下文，等待手动继续。", requestPath);
             }
-            taskService.continueTask(referencedTask.id(), requestMetadata());
+            taskService.continueTask(referencedTask.id(), requestMetadata(requestPath));
             return buildTaskCompletion(facadeModel, requireTask(referencedTask.id()), session.id());
         }
 
@@ -83,12 +89,13 @@ public class ChatFacadeService {
                 lastUserTurn,
                 facadeModel,
                 taskMode,
-                metadata
+                metadata,
+                requestPath
             );
             if (!autoStart) {
-                return replyWithAck(facadeModel, session, activeTask, "已记录到当前任务上下文，等待手动继续。");
+                return replyWithAck(facadeModel, session, activeTask, "已记录到当前任务上下文，等待手动继续。", requestPath);
             }
-            taskService.continueTask(activeTask.id(), requestMetadata());
+            taskService.continueTask(activeTask.id(), requestMetadata(requestPath));
             return buildTaskCompletion(facadeModel, requireTask(activeTask.id()), session.id());
         }
 
@@ -102,10 +109,17 @@ public class ChatFacadeService {
             lastUserTurn,
             facadeModel,
             taskMode,
-            metadata
+            metadata,
+            requestPath
         );
         if ("message_only".equals(taskMode)) {
-            return replyWithAck(facadeModel, session, null, "已记录到当前会话。如需进入 harness 执行，请使用 task_auto 或 task_required。");
+            return replyWithAck(
+                facadeModel,
+                session,
+                null,
+                "已记录到当前会话。如需进入 harness 执行，请使用 task_auto 或 task_required。",
+                requestPath
+            );
         }
 
         TaskCreateRequest taskRequest = new TaskCreateRequest(
@@ -120,7 +134,7 @@ public class ChatFacadeService {
             buildTaskMetadata(metadata, facadeModel),
             autoStart
         );
-        Task task = taskService.createTask(taskRequest, requestMetadata());
+        Task task = taskService.createTask(taskRequest, requestMetadata(requestPath));
         backfillTaskBinding(session.id(), stagedUserTurn, task);
         return buildTaskCompletion(facadeModel, requireTask(task.id()), session.id());
     }
@@ -129,12 +143,15 @@ public class ChatFacadeService {
         if (request == null) {
             throw new IllegalArgumentException("request body is required");
         }
-        ChatCompletionResponse completion = createCompletion(new ChatCompletionRequest(
-            request.model(),
-            responseInputToMessages(request.input(), request.instructions()),
-            request.stream(),
-            request.metadata()
-        ));
+        ChatCompletionResponse completion = createCompletion(
+            new ChatCompletionRequest(
+                request.model(),
+                responseInputToMessages(request.input(), request.instructions()),
+                request.stream(),
+                request.metadata()
+            ),
+            RESPONSES_PATH
+        );
         return toResponsesResponse(completion, request.previousResponseId());
     }
 
@@ -193,7 +210,8 @@ public class ChatFacadeService {
     private ChatCompletionResponse replyWithAck(String facadeModel,
                                                 Session session,
                                                 Task task,
-                                                String content) {
+                                                String content,
+                                                String requestPath) {
         SessionMessage message = sessionService.addMessage(
             session.id(),
             new SessionMessageCreateRequest(
@@ -201,7 +219,7 @@ public class ChatFacadeService {
                 "chat_reply",
                 content,
                 task != null ? task.id() : null,
-                assistantReplyMetadata(facadeModel, task)
+                assistantReplyMetadata(facadeModel, task, requestPath)
             )
         );
         return buildCompletionResponse(
@@ -318,12 +336,12 @@ public class ChatFacadeService {
         };
     }
 
-    private Map<String, Object> assistantReplyMetadata(String facadeModel, Task task) {
+    private Map<String, Object> assistantReplyMetadata(String facadeModel, Task task, String requestPath) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source_surface", "chat_facade");
         metadata.put("created_via", "chat_facade");
         metadata.put("chat_completion_model", facadeModel);
-        metadata.put("request_path", CHAT_COMPLETION_PATH);
+        metadata.put("request_path", requestPath);
         if (task != null) {
             metadata.put("task_status", task.status());
             metadata.put("control_node", task.controlNode());
@@ -337,7 +355,8 @@ public class ChatFacadeService {
                                        String content,
                                        String facadeModel,
                                        String taskMode,
-                                       Map<String, Object> requestMetadata) {
+                                       Map<String, Object> requestMetadata,
+                                       String requestPath) {
         return sessionService.addMessage(
             sessionId,
             new SessionMessageCreateRequest(
@@ -345,7 +364,7 @@ public class ChatFacadeService {
                 messageType,
                 content,
                 taskId,
-                userTurnMetadata(facadeModel, taskMode, requestMetadata)
+                userTurnMetadata(facadeModel, taskMode, requestMetadata, requestPath)
             )
         );
     }
@@ -366,13 +385,14 @@ public class ChatFacadeService {
 
     private Map<String, Object> userTurnMetadata(String facadeModel,
                                                  String taskMode,
-                                                 Map<String, Object> requestMetadata) {
+                                                 Map<String, Object> requestMetadata,
+                                                 String requestPath) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source_surface", "chat_facade");
         metadata.put("created_via", "chat_facade");
         metadata.put("chat_completion_model", facadeModel);
         metadata.put("task_mode", taskMode);
-        metadata.put("request_path", CHAT_COMPLETION_PATH);
+        metadata.put("request_path", requestPath);
         copyIfPresent(requestMetadata, metadata, "title");
         copyIfPresent(requestMetadata, metadata, "goal");
         copyIfPresent(requestMetadata, metadata, "task_type");
@@ -532,11 +552,11 @@ public class ChatFacadeService {
         throw new IllegalArgumentException("at least one user message with content is required");
     }
 
-    private Map<String, Object> requestMetadata() {
+    private Map<String, Object> requestMetadata(String requestPath) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("requested_via", "chat_facade");
         metadata.put("request_method", "POST");
-        metadata.put("request_path", CHAT_COMPLETION_PATH);
+        metadata.put("request_path", requestPath);
         metadata.put("openai_compatible", true);
         return metadata;
     }

@@ -19,8 +19,13 @@ import { buildTaskOverviewPlan } from "./task-overview-plan.js";
 import { renderTaskHeaderHtml } from "./task-header-render-plan.js";
 import { renderComposerInlineSignalsHtml } from "./composer-inline-render-plan.js";
 import { renderFacadeReplyBadgeHtml } from "./facade-reply-badge-render-plan.js";
+import { buildExecutionBoundaryFacts } from "./execution-boundary-plan.js";
+import { buildPendingFacadeReply } from "./facade-pending-plan.js";
+import { buildPendingAutoTaskTracker, resolvePendingAutoTaskCandidate } from "./pending-auto-task-plan.js";
 import { buildFacadeRequest } from "./composer-request-plan.js";
 import { requestFacadeCompletion } from "./facade-client-plan.js";
+import { reconcileTaskSelection } from "./task-selection-plan.js";
+import { isTrueFlag } from "./mounted-object-plan.js";
 import {
     readFacadeSurfaceFromHash,
     facadeSurfaceSummaryLabel,
@@ -42,6 +47,7 @@ const state = {
     selectedSessionId: null,
     selectedTaskId: null,
     followupParentTaskId: null,
+    pendingAutoTaskTracker: null,
     lastFacadeReply: null,
     liveFlow: null,
     experimentSummary: null,
@@ -94,6 +100,7 @@ const dom = {
     taskModelMode: document.getElementById("taskModelMode"),
     taskGoal: document.getElementById("taskGoal"),
     taskAutoStart: document.getElementById("taskAutoStart"),
+    taskContinueCurrent: document.getElementById("taskContinueCurrent"),
     taskIntent: document.getElementById("taskIntent"),
     submitTaskButton: document.getElementById("submitTaskButton"),
     composerSessionLabel: document.getElementById("composerSessionLabel"),
@@ -183,7 +190,8 @@ function bindEvents() {
         dom.taskPriority,
         dom.taskAssignedWorker,
         dom.taskModelMode,
-        dom.taskAutoStart
+        dom.taskAutoStart,
+        dom.taskContinueCurrent
     ].forEach((element) => {
         if (!element) {
             return;
@@ -292,11 +300,35 @@ async function loadTasks() {
         .slice()
         .sort((a, b) => new Date(a.created_at || a.createdAt || 0) - new Date(b.created_at || b.createdAt || 0));
 
-    if (state.selectedTaskId && !state.tasks.some((task) => task.id === state.selectedTaskId)) {
-        state.selectedTaskId = state.tasks[state.tasks.length - 1]?.id ?? null;
+    const taskSelection = reconcileTaskSelection({
+        tasks: state.tasks,
+        selectedTaskId: state.selectedTaskId,
+        currentSessionId: state.selectedSessionId,
+        liveFlowTaskId: firstNonBlank(state.liveFlow?.task?.id),
+        liveFlowSessionId: taskSessionId(state.liveFlow?.task),
+        facadeReplyTaskId: state.lastFacadeReply?.taskId || "",
+        facadeReplySessionId: state.lastFacadeReply?.sessionId || ""
+    });
+    state.selectedTaskId = taskSelection.selectedTaskId;
+    const pendingAutoTaskId = resolvePendingAutoTaskCandidate({
+        tracker: state.pendingAutoTaskTracker,
+        currentSessionId: state.selectedSessionId,
+        tasks: state.tasks
+    });
+    if (pendingAutoTaskId) {
+        state.selectedTaskId = pendingAutoTaskId;
+        state.pendingAutoTaskTracker = null;
+    }
+    if (!taskSelection.keepLiveFlow) {
+        state.liveFlow = null;
+        state.experimentSummary = null;
+        state.relatedMessages = [];
     }
     if (state.followupParentTaskId && !state.tasks.some((task) => task.id === state.followupParentTaskId)) {
         state.followupParentTaskId = null;
+    }
+    if (dom.taskContinueCurrent.checked && !state.tasks.some((task) => task.id === state.selectedTaskId)) {
+        dom.taskContinueCurrent.checked = false;
     }
 
     const chains = buildTaskChains(state.tasks);
@@ -356,6 +388,9 @@ function applyRelatedMessagesFromLiveFlow(flow) {
 
 async function loadSelectedTask(taskId, loud) {
     const liveFlow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    if (state.selectedTaskId !== taskId) {
+        return;
+    }
     const task = liveFlow?.task || null;
     const sessionId = taskSessionId(task);
     if (sessionId && sessionId !== state.selectedSessionId) {
@@ -363,13 +398,22 @@ async function loadSelectedTask(taskId, loud) {
         await loadSessions();
         await loadTasks();
         await loadMessages(sessionId);
+        if (state.selectedTaskId !== taskId) {
+            return;
+        }
     }
 
     state.liveFlow = liveFlow;
     state.experimentSummary = await loadTaskExperimentSummary(taskId, liveFlow);
+    if (state.selectedTaskId !== taskId) {
+        return;
+    }
     state.selectedTaskId = taskId;
     if (!applyRelatedMessagesFromLiveFlow(liveFlow)) {
         await loadRelatedMessages(task);
+        if (state.selectedTaskId !== taskId) {
+            return;
+        }
     }
     renderMessages();
     renderThread();
@@ -383,6 +427,8 @@ async function loadSelectedTask(taskId, loud) {
 }
 
 async function selectTask(taskId, loud = false) {
+    state.selectedTaskId = taskId;
+    syncLocationSelection();
     await loadSelectedTask(taskId, loud);
 }
 
@@ -394,8 +440,21 @@ async function onCreateSession(event) {
         body: JSON.stringify({ title })
     });
     dom.sessionTitle.value = "";
-    await loadSessions();
     state.selectedSessionId = session.id;
+    state.selectedTaskId = null;
+    state.liveFlow = null;
+    state.experimentSummary = null;
+    state.relatedMessages = [];
+    state.lastFacadeReply = null;
+    state.followupParentTaskId = null;
+    state.pendingAutoTaskTracker = null;
+    dom.taskContinueCurrent.checked = false;
+    syncLocationSelection();
+    renderThread();
+    renderDetails();
+    renderComposerContext();
+    renderMessageComposerContext();
+    await loadSessions();
     await loadTasks();
     await loadMessages(session.id);
     renderSessions();
@@ -413,7 +472,14 @@ async function createRecoverySession() {
     });
     state.selectedSessionId = session.id;
     state.selectedTaskId = null;
+    state.liveFlow = null;
+    state.experimentSummary = null;
+    state.relatedMessages = [];
+    state.lastFacadeReply = null;
     state.followupParentTaskId = null;
+    state.pendingAutoTaskTracker = null;
+    dom.taskContinueCurrent.checked = false;
+    syncLocationSelection();
     await loadSessions();
     await loadTasks();
     await loadMessages(session.id);
@@ -448,7 +514,29 @@ async function onCreateTask(event) {
     const busyLabel = submissionPlan.resolvedMode === "message" ? "发送中..." : "发布中...";
     try {
         setButtonBusy(dom.submitTaskButton, true, submitTaskButtonLabel(), busyLabel);
-        const completion = await submitComposerThroughChatFacade(intent, submissionPlan);
+        const session = await ensureSessionForMessage(intent);
+        const referencedTask = resolveComposerReferencedTask();
+        const pendingTaskId = submissionPlan.resolvedMode === "followup"
+            ? (state.followupParentTaskId || selectedTask()?.id || "")
+            : (referencedTask?.id || (shouldContinueCurrentTask(submissionPlan) ? selectedTask()?.id || "" : ""));
+        const pendingReply = buildPendingFacadeReply({
+            sessionId: session.id,
+            taskId: pendingTaskId,
+            resolvedMode: submissionPlan.resolvedMode
+        });
+        state.pendingAutoTaskTracker = buildPendingAutoTaskTracker({
+            sessionId: session.id,
+            resolvedMode: submissionPlan.resolvedMode,
+            existingTaskId: pendingTaskId,
+            currentTaskIds: state.tasks.map((task) => task?.id || "")
+        });
+        if (pendingReply) {
+            state.selectedSessionId = session.id;
+            state.lastFacadeReply = pendingReply;
+            renderComposerContext();
+            renderMessageComposerContext();
+        }
+        const completion = await submitComposerThroughChatFacade(intent, submissionPlan, session);
         await applyChatFacadeCompletion(completion, intent, submissionPlan);
     } finally {
         setButtonBusy(dom.submitTaskButton, false, submitTaskButtonLabel(), busyLabel);
@@ -591,6 +679,7 @@ function onFollowupDraft() {
     dom.taskIntent.value = draft.intent;
     dom.taskType.value = draft.taskType;
     dom.taskPriority.value = draft.priority;
+    dom.taskContinueCurrent.checked = false;
     state.followupParentTaskId = task.id;
     state.composerMode = "auto";
     renderComposerContext();
@@ -602,6 +691,7 @@ function onFollowupDraft() {
 
 function onClearFollowup() {
     state.followupParentTaskId = null;
+    dom.taskContinueCurrent.checked = false;
     renderComposerContext();
     renderMessageComposerContext();
     showToast("已清除 follow-up 关联");
@@ -672,16 +762,19 @@ function renderSessions() {
     dom.sessionList.querySelectorAll("[data-session-id]").forEach((button) => {
         button.addEventListener("click", async () => {
             state.selectedSessionId = button.dataset.sessionId;
+            state.followupParentTaskId = null;
+            dom.taskContinueCurrent.checked = false;
             await loadSessions();
             await loadTasks();
             await loadMessages(state.selectedSessionId);
             if (state.tasks.length > 0) {
                 await selectTask(state.tasks[state.tasks.length - 1].id, false);
             } else {
-                state.selectedTaskId = null;
-                state.liveFlow = null;
-                state.relatedMessages = [];
-                renderMessages();
+            state.selectedTaskId = null;
+            state.liveFlow = null;
+            state.relatedMessages = [];
+            state.pendingAutoTaskTracker = null;
+            renderMessages();
                 renderThread();
                 renderDetails();
                 renderMessageComposerContext();
@@ -1070,8 +1163,11 @@ function renderMessageComposerContext() {
             ? `消息会关联 task：${task.title || task.id}`
             : `当前 task：${task.title || task.id}，但本条消息只写入 session。`)
         : "当前没有选中 task，本条消息不会附着到任务。";
+    const continuityLine = shouldContinueCurrentTask(plan)
+        ? `本轮会继续当前任务：${task?.title || task?.id}。`
+        : null;
     const closedLine = sessionClosed ? "closed session 不再接受新消息，请先新建会话。" : null;
-    dom.messageHint.textContent = [sessionLine, facadeLine, taskLine, closedLine].filter(Boolean).join(" · ");
+    dom.messageHint.textContent = [sessionLine, facadeLine, taskLine, continuityLine, closedLine].filter(Boolean).join(" · ");
     if (dom.composerRoutingMeta) {
         dom.composerRoutingMeta.textContent = plan.reasonLabel || "默认聊天发送";
     }
@@ -1081,7 +1177,9 @@ function renderMessageComposerContext() {
             : plan.resolvedMode === "followup"
                 ? `当前会直接发布 follow-up task${followupSourceTask() ? `：${followupSourceTask().title || followupSourceTask().id}` : ""}。按 Ctrl/Cmd+Enter 可直接发送。`
                 : plan.resolvedMode === "task"
-                    ? `当前会直接发布新任务。原因：${plan.reasonLabel}。按 Ctrl/Cmd+Enter 可直接发送。`
+                    ? (dom.taskContinueCurrent.checked && task
+                        ? `当前会作为 existing-task continuity 继续 ${task.title || task.id}。原因：${plan.reasonLabel}。按 Ctrl/Cmd+Enter 可直接发送。`
+                        : `当前会直接发布新任务。原因：${plan.reasonLabel}。按 Ctrl/Cmd+Enter 可直接发送。`)
                     : task
                         ? (dom.messageAttachTask.checked
                             ? `当前会先记录为 task-bound message：${task.title || task.id}。按 Ctrl/Cmd+Enter 可直接发送。`
@@ -1414,7 +1512,7 @@ function overviewCard(label, value) {
 
 function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
     const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
-    const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
+    const boundaryFacts = buildExecutionBoundaryFacts({ execution_boundary: executionBoundary }, []);
     return stackItem(
         type,
         decision.summary || "no summary",
@@ -1744,8 +1842,8 @@ function submitTaskButtonLabel() {
     }
 }
 
-async function submitComposerThroughChatFacade(intent, plan = composerSubmissionPlan()) {
-    const session = await ensureSessionForMessage(intent);
+async function submitComposerThroughChatFacade(intent, plan = composerSubmissionPlan(), ensuredSession = null) {
+    const session = ensuredSession || await ensureSessionForMessage(intent);
     const referencedTask = resolveComposerReferencedTask();
     const followupParentTaskId = plan.resolvedMode === "followup"
         ? (state.followupParentTaskId || selectedTask()?.id || null)
@@ -1769,6 +1867,7 @@ async function submitComposerThroughChatFacade(intent, plan = composerSubmission
         modelMode,
         followupParentTaskId,
         referencedTaskId: referencedTask?.id || "",
+        continueCurrentTaskId: shouldContinueCurrentTask(plan) ? selectedTask()?.id || "" : "",
         taskType: dom.taskType.value,
         taskPriority: dom.taskPriority.value,
         autoStart
@@ -1793,11 +1892,13 @@ async function applyChatFacadeCompletion(completion, intent, plan = composerSubm
         intent,
         referencedTaskTitle: referencedTask?.title || referencedTask?.id || ""
     });
+    state.pendingAutoTaskTracker = null;
 
     dom.taskTitle.value = "";
     dom.taskGoal.value = "";
     dom.taskIntent.value = "";
     dom.taskAutoStart.checked = true;
+    dom.taskContinueCurrent.checked = false;
     dom.taskAssignedWorker.value = "";
     dom.taskModelMode.value = "";
     state.followupParentTaskId = null;
@@ -1806,6 +1907,9 @@ async function applyChatFacadeCompletion(completion, intent, plan = composerSubm
         state.selectedSessionId = sessionId;
     }
     state.lastFacadeReply = replyFeedback;
+    if (taskId) {
+        state.selectedTaskId = taskId;
+    }
     await loadSessions();
     await loadTasks();
     if (sessionId) {
@@ -1831,6 +1935,13 @@ function composerTaskMode(plan = composerSubmissionPlan()) {
         return "message_only";
     }
     return "task_required";
+}
+
+function shouldContinueCurrentTask(plan = composerSubmissionPlan()) {
+    return plan.resolvedMode === "task"
+        && dom.taskContinueCurrent.checked
+        && !state.followupParentTaskId
+        && Boolean(selectedTask());
 }
 
 function resolveComposerReferencedTask() {
@@ -1860,6 +1971,7 @@ function composerSubmissionPlan() {
         taskGoal: dom.taskGoal.value,
         taskAssignedWorker: dom.taskAssignedWorker.value,
         taskModelMode: dom.taskModelMode.value,
+        taskContinueCurrent: dom.taskContinueCurrent.checked,
         taskAutoStart: dom.taskAutoStart.checked,
         taskType: dom.taskType.value,
         taskPriority: dom.taskPriority.value
@@ -3224,10 +3336,10 @@ function renderMountedObjectCard(object) {
     const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
     const chips = [
         retention ? `retention: ${retention}` : null,
-        Boolean.TRUE.equals(metadata.rehydrated_from_archive) ? "rehydrated" : null,
-        Boolean.TRUE.equals(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
-        Boolean.TRUE.equals(metadata.needs_external_fact_refresh) ? "external refresh" : null,
-        Boolean.TRUE.equals(metadata.needs_context_reopen) ? "context reopen" : null,
+        isTrueFlag(metadata.rehydrated_from_archive) ? "rehydrated" : null,
+        isTrueFlag(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
+        isTrueFlag(metadata.needs_external_fact_refresh) ? "external refresh" : null,
+        isTrueFlag(metadata.needs_context_reopen) ? "context reopen" : null,
         refs.length > 0 ? `refs: ${refs.length}` : null
     ].filter(Boolean);
     const detailLines = [
