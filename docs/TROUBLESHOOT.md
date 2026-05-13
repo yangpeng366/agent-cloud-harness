@@ -38,6 +38,81 @@
 
 ## 2. 常见错误场景
 
+### 2.0 worker 执行失败后，什么时候该自动切 worker，什么时候该停到人工确认
+
+- **位置**: `ControlNodeGraph.continue/handoff/human_gate`, `/dialogue/`
+- **现象**: 当前 task 已经创建，但执行回执里出现 worker/provider 失败，例如 thread 丢失、provider session 失效、不可读错误输出。
+- **不要直接拍脑袋处理**:
+  - 不是所有失败都适合自动切 worker
+  - 也不是所有失败都应该让用户手工选
+- **统一策略**: 参考 `docs/WORKER_FAILURE_RECOVERY_POLICY.md`
+  - `worker_runtime_transient`：先同 worker 冷重试，再自动 handoff 一次
+  - `task_environment_blocked`：默认不要自动切，优先 `human_gate`
+  - `partial_result_or_quality_risk`：默认人工确认
+
+### 2.0.1 `/dialogue/` 里为什么“聊天”现在会直接进入 task，而不是只记一条 session note
+
+- **当前位置**: `/dialogue/` 主 composer, `ChatFacadeService`
+- **当前口径**:
+  1. `/dialogue/` 的默认“聊天”现在等于 `task_auto`
+  2. 如果当前上下文里已经有 task，这轮输入会作为该 task 的 continuity turn
+  3. 如果当前只有 session，没有 task，这轮输入会 materialize 成新 task
+- **为什么这样改**:
+  1. 真实项目场景里，用户通常希望“聊天即推进任务”，而不是先收到一条“已记录到会话”的空回执
+  2. `message_only` 仍保留在 façade/API 层，但不再是 `/dialogue/` 主路径
+
+### 2.0.1.a `task_auto` 后端已经建了 task，但页面还没切到这个 task
+
+- **典型表现**:
+  1. `/v1/chat/completions` 这轮用户输入已经被写成 `task_brief`
+  2. `/api/v1/sessions/{id}/tasks` 也已经出现新 task
+  3. 但 `/dialogue/` 当前 hash 还停在只有 `session=`，没有及时带上新的 `task=`
+- **当前结论**:
+  1. 这不表示后端没 materialize task
+  2. 更准确地说，这是前端没有及时追上新 task 选择
+  3. 若 provider 执行链较长、请求尚未返回，这个 gap 会更明显：页面可能一直停在 session-only shell，直到 façade 响应结束
+- **更合理的目标行为**:
+  1. 页面先显示 `task_pending` 回执
+  2. 然后在请求未结束时，短轮询同 session 的 task 列表
+  3. 一旦发现新的 unseen task，就立刻把当前 selection/hash 追过去
+- **排查顺序**:
+  1. 先查 `sessions/{id}/messages`，确认这一轮是不是 `task_brief`
+  2. 再查 `sessions/{id}/tasks`，确认新 task 是否已经存在
+  3. 只有这两步都没结果时，才继续怀疑 `task_auto` 语义失效
+
+### 2.0.1.b `继续当前任务` 看起来像生效了，但其实又新建了一条 task
+
+- **典型表现**:
+  1. 页面上已经勾了“继续当前任务”
+  2. 但提交后 `sessions/{id}/tasks` 里出现的是一条新 task
+  3. 原 task 的 `live_flow` / related messages 里只看到一条 `continuity_scope=session` 的 `task_brief`
+- **当前结论**:
+  1. 这不表示后端不会继续当前任务
+  2. 更准确地说，是前端请求没有把当前 task continuity 正确绑定进 façade 请求
+  3. 因此前端体感像“继续当前任务”，实际落库却仍是“materialize 一条新 task”
+- **更合理的目标行为**:
+  1. 只要当前已选中 task，且用户勾了“继续当前任务”
+  2. 这轮输入就应该绑定到当前 task
+  3. 即使页面表面仍使用 `task_required` 风格文案，也不应再 materialize 新 task
+- **排查顺序**:
+  1. 先查 `sessions/{id}/tasks`，确认是否真的新增了 task
+  2. 再查原 task 的 `live_flow.related_messages`，确认这轮输入是不是只作为 `continuity_scope=session` 的 `task_brief`
+  3. 最后再回看前端请求分流，重点看 `continueCurrentTaskId / task_id / task_mode`
+
+### 2.0.2 `/dialogue/` 里出现乱码，但 details/live_flow 也没有真正结果，应该怎么理解
+
+- **现象**: 主聊天流里出现类似 `����: ...` 的 `task_progress / task_result`
+- **不要误判**:
+  1. 这通常不是前端自己编码坏了
+  2. 更常见的是当前 worker/provider 返回了不可读失败输出，前端只是把摘要投影出来
+- **当前 UI 原则**:
+  1. 主聊天流优先显示可读失败摘要
+  2. 原始失败 trace 下沉到 `details / live_flow / judgment_trace`
+- **当前编码口径**:
+  1. 仓库文件、HTTP、前端静态资源继续严格使用 UTF-8
+  2. 只有外部进程输出（shell/cmd/powershell/git/provider-native cli）走“UTF-8 优先 + 自适应兜底”
+  3. 详细策略见 `docs/TEXT_ENCODING_COMPATIBILITY_PLAN.md`
+
 ### 2.1 服务启动失败，提示无法打开数据库
 
 - **典型表现**: 启动阶段抛出 SQLite 或文件权限相关异常。
@@ -222,6 +297,87 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
   1. 若只是排障结束后的目录清理，直接手动删除 `.tmp\chat-facade-acceptance*.log`
   2. 若需要保留本次运行日志用于定位问题，显式加 `-KeepServerLogs`
   3. 若怀疑现行脚本仍泄漏日志，先在空目录状态下重新跑一次，再对比新增文件，而不要把旧遗留日志误判成当前运行结果
+
+### 2.8.3 `/dialogue/` 的 shell screenshot 或 `dialogue-business-smoke.js` 出现 flaky / 500 / 导航超时
+
+- **典型表现**:
+  1. 用隔离 DB 启动本地实例后，`scripts/screenshot.js` 可以稳定输出 desktop/narrow/responses 三张截图和 JSON report
+  2. `scripts/dialogue-business-smoke.js` 可能在 `create session` 或页面导航阶段失败
+  3. 某些情况下，`/dialogue/` 本身会返回 `500 console render failed`
+- **当前真实结论**:
+  1. 这不应直接判定成 `/dialogue/` 产品功能回归
+  2. 这类问题历史上暴露过：
+     - 等待条件过度依赖脆弱 DOM 文案
+     - `puppeteer-core` 导航阶段偶发 `GET /dialogue/ net::ERR_ABORTED` / navigation timeout
+  3. 还真实出现过另外一类非产品性故障：后台实例运行期间又重建 `target\\*.jar`，导致 `WebConsoleHandler` 在分发 `/dialogue/` 静态资源时抛 `ZipFile invalid LOC header (bad signature)`，页面因此返回 `500 console render failed`
+  4. 当前已验证的收口手段是：
+     - Puppeteer 打开 `/dialogue/` 改为先等 `/api/v1/health`，再显式等 shell，而不是依赖脆弱的 `networkidle2`
+     - `scripts/Run-HarnessWithJava21.ps1 -Background` 改为先复制 runtime jar 到 `.tmp\\runtime-jars\\` 再启动
+     - `scripts/Run-HarnessWithJava21.ps1 -Background` 现在会在端口已被占用时直接失败，避免验证误打到旧实例
+  5. 在 fresh 隔离实例 `http://localhost:18328` 上，`scripts/screenshot.js` 与 `scripts/dialogue-business-smoke.js` 当前都已经通过；因此当前更准确的口径是“已有真实绿灯，但 richer acceptance 仍需单独工具链”，而不是“business smoke 仍未收口”
+  6. 最近这轮 `/dialogue/` 还真实改动了壳层 HTML/CSS：左 rail 更像 recent thread list，header 更薄，details 入口更轻，顶部状态更弱化；如果只看到旧截图，不要把历史 `18268/18276/18282` 壳层样本误当成当前页面
+  6. `18264` 这类失败当前更应优先判定为 build/start sequencing 风险：当 fresh 启动和本机重建并行时，后台 harness 曾真实报过 `NoClassDefFoundError: com/fasterxml/jackson/databind/PropertyNamingStrategies`
+- **建议处理方式**:
+  1. 先按 `STARTUP_GUIDE.md` 或 `docs/DIALOGUE_UI_VALIDATION_RUNBOOK.md` 用隔离 DB 起实例
+  2. 先看 `scripts/screenshot.js` 是否通过
+  3. 再跑 `scripts/dialogue-business-smoke.js`
+  4. 如果出现 `/dialogue/` 返回 `500 console render failed`，优先检查服务端日志里是否有 `ZipFile invalid LOC header`；若有，先 fresh 重启实例，不要直接记成前端回归
+  5. 即使本地两条 smoke 都通过，也不要把它当成 richer continuity / acceptance 的替代品
+
+### 2.8.4 明明已经重新构建，但 `/dialogue/` 页面看起来还是旧的
+
+- **典型表现**:
+  1. 已经改了 `src/main/resources/web/dialogue/index.html|app.css|app.js`
+  2. 也重新跑了 `mvn package` 或 `Build-WithJava21.ps1`
+  3. 但浏览器里看到的 `/dialogue/` 还是旧样式
+- **已确认根因**:
+  1. `/dialogue/` 静态资源由 `WebConsoleHandler` 从运行时 JAR 的 classpath 读取，不是直接从源码目录读取
+  2. `Run-HarnessWithJava21.ps1 -Background` 会先复制运行 JAR 到 `.tmp\runtime-jars\` 再启动
+  3. 所以后续重新构建，只会生成新的 `target\*.jar`，不会热更新已经跑起来的实例
+  4. 如果把“重新构建”和“fresh 后台启动”并行跑，新的后台实例也可能先复制到旧的 `target\*.jar`，表现成：
+     - 源码里已经有新 CSS / 新 HTML
+     - 浏览器实际拿到的 `/dialogue/app.css` 仍是旧版本
+     - 页面看起来像“前端改动没生效”
+  5. 当前这类问题已经在 `18328` fresh 样本上被真实对照过：必须先等 build 完成，再单独启动新实例；否则像 `thread rail + details` 列宽这类 CSS 收口，可能只停留在源码里，服务端实际返回的 `app.css` 仍是旧值
+- **处理方式**:
+  1. 改了 `src/main/resources/web/dialogue/*` 后，按“重新构建 + 重启 fresh 实例”处理
+  2. 不要指望刷新浏览器就能看到改动
+  3. 如果只是改了 `scripts/screenshot.js`、`scripts/dialogue-business-smoke.js` 这类本地验证脚本，则不需要 Maven 构建；下次直接运行脚本即可
+  4. 更稳的顺序是：**先等构建完成，再单独启动 fresh 实例**
+
+### 2.8.5 工作区源码已经改了，但 `8080` 上真实页面还是旧语义
+
+- **典型表现**:
+  1. 工作区里已经把默认聊天改成“直接推进 task”
+  2. 真实页面却仍然显示：
+     - `已记录到当前会话。如需进入 harness 执行，请使用 task_auto 或 task_required`
+  3. 或者工作区里已经把不可读失败输出改成可读摘要
+  4. 真实页面里仍然直接出现 `����...` 一类 mojibake
+- **已确认根因**:
+  1. 当前运行中的实例仍然在吃旧的运行 JAR
+  2. 或者本机构建脚本没有真正成功执行，新的前端资源根本没被重新打包
+  3. 因此“源码状态”和“真实运行页面状态”会短时间分叉
+- **快速判断方式**:
+  1. 先看当前 `java.exe` 进程命令行，确认它加载的是哪一份 JAR
+  2. 再确认 build 是否真的完成，而不是中途因为 `mvn` 缺失或 PATH 问题直接失败
+  3. 再判断这是不是页面逻辑回归
+- **处理方式**:
+  1. 不要先继续改前端
+  2. 先修好 build / fresh start 链
+  3. 确认新实例真的吃到新资源后，再复验 `/dialogue/`
+
+### 2.8.6 `Build-WithJava21.ps1` / `Test-WithJava21.ps1` 报 `mvn` 找不到
+
+- **典型表现**:
+  1. `The term 'mvn' is not recognized`
+  2. 目标 JAR 虽然还在 `target/`，但它可能只是旧构建
+- **风险**:
+  1. 你会误以为“已经重新构建”
+  2. 实际上 fresh 实例仍在吃旧语义页面
+- **处理方式**:
+  1. 先确认本机是否安装 Maven
+  2. 若已安装但未进 PATH，优先让仓库脚本自动解析本机 Maven 可执行路径
+  3. 只有在 build 真正成功之后，再起 fresh 实例验证 `/dialogue/`
 
 ### 2.9 Windows 上 `codex` / provider CLI 明明能在 PowerShell 里找到，但任务执行时报 `CreateProcess error=2`
 

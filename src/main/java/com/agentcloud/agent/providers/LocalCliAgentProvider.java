@@ -3,12 +3,11 @@ package com.agentcloud.agent.providers;
 import com.agentcloud.agent.AgentProvider;
 import com.agentcloud.agent.AgentProviderDescriptor;
 import com.agentcloud.agent.AgentProviderStatus;
-import com.agentcloud.tool.HostToolAvailability;
+import com.agentcloud.runtime.TextDecoding;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -133,7 +132,7 @@ public class LocalCliAgentProvider implements AgentProvider {
                 process.destroyForcibly();
                 return null;
             }
-            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            String output = TextDecoding.decodeExternalProcessOutput(process.getInputStream().readAllBytes()).trim();
             if (output.isBlank()) {
                 return null;
             }

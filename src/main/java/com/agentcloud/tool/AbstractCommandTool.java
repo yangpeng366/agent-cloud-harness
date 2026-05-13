@@ -2,11 +2,11 @@ package com.agentcloud.tool;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Worker;
+import com.agentcloud.runtime.TextDecoding;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -202,7 +202,7 @@ abstract class AbstractCommandTool implements Tool {
         }
 
         private String output() {
-            String text = buffer.toString(StandardCharsets.UTF_8);
+            String text = TextDecoding.decodeExternalProcessOutput(buffer.toByteArray());
             return truncated ? text + "\n...[truncated]" : text;
         }
     }

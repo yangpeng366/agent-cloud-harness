@@ -24,7 +24,7 @@
 - [x] worktree 已整理出首发范围提案与 dry-run
 - [x] 首发提交批次已有建议方案
 - [x] 首发提交批次已有可执行的 staging / execution guide
-- [x] 三批首发主提交范围已真实进入暂存区，且 evidence-only 文件仍未混入
+- [x] 三批首发主提交范围已真实进入本地 Git 历史，且 evidence-only 文件未混入这三批主提交
 - [x] `.tmp/`、`test-results/`、本机 crash log、数据库文件不会进入公开提交
 - [x] 首发范围与非首发证据文件已明确区分
 
@@ -38,6 +38,8 @@
 
 ## 5. 产品级 gate
 
+- [x] `/dialogue/` 页面发布前测试矩阵至少完整串行跑过一轮
+- [x] Windows 宿主下的外部进程输出编码兼容已收口为“UTF-8 优先 + 本地编码兜底”
 - [ ] `/dialogue/` A-H 八条真实人工验收至少完成一轮
 - [ ] 验收记录已回填
 - [ ] 公开说明中没有把当前状态夸大成 production-ready distributed platform
@@ -63,7 +65,13 @@
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md`
 - 首发执行指南：见
   - `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
-- 当前真实 staged file list：见
+- 页面功能发布前测试矩阵：见
+  - `docs/DIALOGUE_GITHUB_RELEASE_TEST_MATRIX.md`
+- 文本编码兼容策略：见
+  - `docs/TEXT_ENCODING_COMPATIBILITY_PLAN.md`
+- 当前 `/dialogue/` 页面发布前预检记录：见
+  - `docs/DIALOGUE_GITHUB_RELEASE_PRECHECK_2026-05-12.md`
+- 当前目标 staged file list / replay slice：见
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 - 当前 index 稳定性审计：见
   - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
@@ -81,7 +89,7 @@
   - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_all_2026-05-11.md`
 - 当前 worktree 的 staged slice 清单：见
   - `docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`
-- 当前真实暂存区命中清单：见
+- 当前目标暂存区命中清单 / replay 清单：见
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 - 当前 staged vs unstaged 漂移审计：见
   - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
@@ -95,3 +103,7 @@
 - 最新 `all` commit dry-run：见
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
   - 当前 `unmatched = none`
+- 当前真实本地首发主提交：见
+  - `8350a8c chore: prepare repository baseline for public first release`
+  - `d7fefea feat: ship chat-first dialogue facade and related UI flows`
+  - `4f559c2 chore: add acceptance harness and operator release tooling`

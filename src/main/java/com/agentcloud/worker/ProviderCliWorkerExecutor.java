@@ -8,6 +8,7 @@ import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.agent.providers.LocalCliProviderConfig;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Task;
+import com.agentcloud.runtime.TextDecoding;
 import com.agentcloud.model.Worker;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -15,10 +16,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.io.StringReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
@@ -101,16 +104,22 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 builder.environment().putAll(plan.environment());
             }
             process = builder.start();
+            Process runningProcess = process;
+            OutputCapture capture = new OutputCapture();
+            Thread drainer = Thread.ofVirtual().start(() -> capture.drain(runningProcess.getInputStream()));
             if (plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank()) {
                 writePromptToStdin(process, plan.stdinPrompt());
             }
-            output = consume(process, providerId);
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+                drainer.join(2_000);
                 long durationMs = System.currentTimeMillis() - startedAtMs;
                 return failureResult("timeout", "provider-native cli timed out",
                     providerId, workerId, cwd, plan, providerStatus, durationMs, null);
             }
+            drainer.join(2_000);
+            output = consume(capture.bytes(), providerId);
             output = output.withExitCode(process.exitValue());
         } catch (IOException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
@@ -429,8 +438,9 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         );
     }
 
-    private ProviderCliOutput consume(Process process, String providerId) throws IOException {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+    private ProviderCliOutput consume(byte[] bytes, String providerId) throws IOException {
+        String decoded = TextDecoding.decodeExternalProcessOutput(bytes);
+        try (BufferedReader reader = new BufferedReader(new StringReader(decoded))) {
             return switch (providerId.toLowerCase(Locale.ROOT)) {
                 case "cursor" -> consumeCursor(reader);
                 case "openclaw" -> consumeOpenClaw(reader);
@@ -442,6 +452,26 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 case "opencode" -> consumeOpenCode(reader);
                 default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
             };
+        }
+    }
+
+    private static final class OutputCapture {
+        private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+
+        private void drain(InputStream input) {
+            byte[] chunk = new byte[8192];
+            try (input) {
+                int read;
+                while ((read = input.read(chunk)) != -1) {
+                    buffer.write(chunk, 0, read);
+                }
+            } catch (IOException ignored) {
+                // 让上层用已有内容继续解析，避免输出链因为收尾失败彻底丢失。
+            }
+        }
+
+        private byte[] bytes() {
+            return buffer.toByteArray();
         }
     }
 
