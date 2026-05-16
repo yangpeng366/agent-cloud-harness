@@ -40,11 +40,17 @@ async function main() {
         const submit = document.querySelector('#submitTaskButton');
         const sessionForm = document.querySelector('#sessionForm');
         const intent = document.querySelector('#taskIntent');
-        const hint = document.querySelector('#messageHint')?.textContent || '';
-        return Boolean(submit && sessionForm && intent && hint.includes('发送面：'));
+        const surfaceTitle = document.querySelector('#workspaceSurfaceTitle')?.textContent?.trim() || '';
+        return Boolean(
+          submit
+          && sessionForm
+          && intent
+          && surfaceTitle === 'Session Transcript'
+        );
       }, 'dialogue shell did not render');
 
       const surfaceLabel = await textContent(page, '#messageHint');
+      const surfaceModeHint = await textContent(page, '#composerModeHint');
       const currentHash = await evaluate(page, () => window.location.hash || '');
       if (expectedSurface === 'responses' && !/facade=responses/.test(currentHash)) {
         throw new Error(`responses surface hash not applied: ${currentHash}`);
@@ -52,8 +58,15 @@ async function main() {
       if (expectedSurface === 'chat_completions' && /facade=responses/.test(currentHash)) {
         throw new Error(`chat surface unexpectedly stayed on responses hash: ${currentHash}`);
       }
-      if (!surfaceLabel.includes(expectedSurface === 'responses' ? 'Responses façade' : 'Chat façade')) {
+      const expectedSurfaceLabel = expectedSurface === 'responses' ? 'Responses façade' : 'Chat façade';
+      if (surfaceLabel && surfaceLabel.includes('façade') && !surfaceLabel.includes(expectedSurfaceLabel)) {
         throw new Error(`surface label mismatch in messageHint: ${surfaceLabel}`);
+      }
+      if (expectedSurface === 'chat_completions' && /Responses façade/.test(surfaceLabel + surfaceModeHint)) {
+        throw new Error(`chat surface unexpectedly rendered responses label: ${surfaceLabel} / ${surfaceModeHint}`);
+      }
+      if (expectedSurface === 'responses' && !/Responses façade/.test(surfaceLabel + surfaceModeHint) && !/facade=responses/.test(currentHash)) {
+        throw new Error(`responses surface label/hash did not converge: ${surfaceLabel} / ${surfaceModeHint} / ${currentHash}`);
       }
 
       await installProbeHooks(page);
@@ -82,32 +95,38 @@ async function main() {
         );
       }, 'new session did not become active and empty', createdSessionTitle);
 
-      const messageIntent = `${mode} browser probe note only`;
+      const messageIntent = `${mode} browser probe default task auto`;
       await setTextareaValue(page, '#taskIntent', messageIntent);
       await click(page, '#submitTaskButton');
       await waitForCondition(page, (expectedText) => {
         const summary = document.querySelector('#composerInlineState');
         const list = document.querySelector('#messageList');
-        return Boolean(summary && summary.textContent.includes('已记录') && list && list.textContent.includes(expectedText));
-      }, 'message_only path did not render expected ack', messageIntent);
+        return Boolean(
+          summary
+          && /已记录|已提交任务，正在推进|任务已推进|任务已完成/.test(summary.textContent)
+          && list
+          && list.textContent.includes(expectedText)
+        );
+      }, 'default task_auto path did not render expected ack', messageIntent);
 
       const afterMessage = await evaluate(page, () => {
+        const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
         return {
           hash: window.location.hash || '',
           inline: document.querySelector('#composerInlineState')?.textContent?.trim() || '',
           threadMeta: document.querySelector('#threadDrawerMeta')?.textContent?.trim() || '',
           taskCards: document.querySelectorAll('#taskThread [data-task-id]').length,
+          selectedTaskId: selectedTask?.getAttribute('data-task-id') || '',
           taskThreadText: document.querySelector('#taskThread')?.textContent || '',
-          messages: document.querySelector('#messageList')?.textContent || ''
+          messages: document.querySelector('#messageList')?.textContent || '',
+          detailTitle: document.querySelector('#detailTitle')?.textContent?.trim() || '',
+          selectedStatus: document.querySelector('#selectedStatus')?.textContent?.trim() || ''
         };
       });
-      if (afterMessage.taskCards !== 0 && !afterMessage.taskThreadText.includes('当前会话还没有任务')) {
-        throw new Error(`message_only unexpectedly materialized task cards: ${JSON.stringify(afterMessage)}`);
+      if (!/已记录|已提交任务，正在推进|任务已推进|任务已完成/.test(afterMessage.inline)) {
+        throw new Error(`default task_auto inline ack mismatch: ${afterMessage.inline}`);
       }
-      if (!/已记录/.test(afterMessage.inline)) {
-        throw new Error(`message_only inline ack mismatch: ${afterMessage.inline}`);
-      }
-      const messageOnlyScreenshot = await captureScreenshot(page, screenshotDir, mode, 'message-only');
+      const defaultTaskAutoScreenshot = await captureScreenshot(page, screenshotDir, mode, 'default-task-auto');
 
       const beforeFallbackRequestCount = await evaluate(page, (surface) => {
         const requestPath = surface === 'responses' ? '/v1/responses' : '/v1/chat/completions';
@@ -117,7 +136,7 @@ async function main() {
           && entry.url.includes(requestPath)
         ).length;
       }, expectedSurface);
-      await evaluate(page, (surface) => {
+      const fallbackOverrideConfigured = await evaluate(page, (surface) => {
         if (typeof window.__dialogueProbeConfigureNextFacadeOverride !== 'function') {
           throw new Error('dialogue probe override hook is not installed');
         }
@@ -128,15 +147,32 @@ async function main() {
           assistantText: '同响应内回退成功'
         });
       }, expectedSurface);
+      if (!fallbackOverrideConfigured) {
+        throw new Error('stream fallback override hook did not acknowledge configuration');
+      }
 
       const streamFallbackIntent = `${mode} browser probe stream fallback`;
       await setTextareaValue(page, '#taskIntent', streamFallbackIntent);
       await click(page, '#submitTaskButton');
-      await waitForCondition(page, (expectedText) => {
+      await waitForCondition(page, (expectedText, beforeCount, surface) => {
         const summary = document.querySelector('#composerInlineState');
-        const list = document.querySelector('#messageList');
-        return Boolean(summary && summary.textContent.includes('已记录') && list && list.textContent.includes(expectedText));
-      }, 'stream fallback path did not render expected ack', streamFallbackIntent);
+        const requestPath = surface === 'responses' ? '/v1/responses' : '/v1/chat/completions';
+        const facadeFetches = (window.__dialogueProbe?.fetches || []).filter((entry) =>
+          typeof entry.url === 'string'
+          && entry.method === 'POST'
+          && entry.url.includes(requestPath)
+        );
+        const matchingFetch = facadeFetches.find((entry) =>
+          typeof entry.requestBody === 'string'
+          && entry.requestBody.includes(expectedText)
+        );
+        return Boolean(
+          summary
+          && /已记录|已提交任务，正在推进|任务已推进|任务已完成|已写入当前任务上下文|任务已记录/.test(summary.textContent)
+          && facadeFetches.length - beforeCount >= 1
+          && matchingFetch
+        );
+      }, 'stream fallback path did not render expected ack', streamFallbackIntent, beforeFallbackRequestCount, expectedSurface);
 
       const afterStreamFallback = await evaluate(page, (expectedText, beforeCount, surface) => {
         const requestPath = surface === 'responses' ? '/v1/responses' : '/v1/chat/completions';
@@ -156,6 +192,11 @@ async function main() {
         return {
           inline: document.querySelector('#composerInlineState')?.textContent?.trim() || '',
           taskCards: document.querySelectorAll('#taskThread [data-task-id]').length,
+          selectedTaskId: document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '',
+          detailTitle: document.querySelector('#detailTitle')?.textContent?.trim() || '',
+          selectedStatus: document.querySelector('#selectedStatus')?.textContent?.trim() || '',
+          hash: window.location.hash || '',
+          overridePending: Boolean(window.__dialogueProbe?.nextFacadeResponseOverride),
           requestCountDelta: facadeFetches.length - beforeCount,
           requestUrl: matchingFetch?.url || '',
           responseContentType: matchingFetch?.contentType || '',
@@ -166,15 +207,28 @@ async function main() {
           overrideMode: matchingOverride?.mode || '',
           overrideResponsePreview: typeof matchingOverride?.responseTextPreview === 'string'
             ? matchingOverride.responseTextPreview
-            : ''
+            : '',
+          recentFetches: facadeFetches.slice(-3).map((entry) => ({
+            url: entry?.url || '',
+            method: entry?.method || '',
+            contentType: entry?.contentType || '',
+            phase: entry?.phase || '',
+            requestBodyPreview: typeof entry?.requestBody === 'string'
+              ? entry.requestBody.slice(0, 220)
+              : '',
+            responseTextPreview: typeof entry?.responseText === 'string'
+              ? entry.responseText.slice(0, 220)
+              : ''
+          })),
+          recentOverrides: (window.__dialogueProbe?.fetchOverrides || []).slice(-3)
         };
       }, streamFallbackIntent, beforeFallbackRequestCount, expectedSurface);
 
-      if (!/已记录/.test(afterStreamFallback.inline)) {
+      if (!/已记录|已提交任务，正在推进|任务已推进|任务已完成|已写入当前任务上下文|任务已记录/.test(afterStreamFallback.inline)) {
         throw new Error(`stream fallback inline ack mismatch: ${JSON.stringify(afterStreamFallback)}`);
       }
-      if (afterStreamFallback.taskCards !== 0) {
-        throw new Error(`stream fallback unexpectedly materialized task cards: ${JSON.stringify(afterStreamFallback)}`);
+      if (afterStreamFallback.selectedTaskId && !/task=/.test(afterStreamFallback.hash)) {
+        throw new Error(`stream fallback selected task was not reflected into hash: ${JSON.stringify(afterStreamFallback)}`);
       }
       if (afterStreamFallback.requestCountDelta !== 1) {
         throw new Error(`stream fallback issued unexpected number of facade requests: ${JSON.stringify(afterStreamFallback)}`);
@@ -255,6 +309,8 @@ async function main() {
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
         const latestTask = taskCards[taskCards.length - 1];
         const latestReplyBadge = document.querySelector('.message-card.is-facade-reply .task-badge[data-tone="active"], .message-card.is-facade-reply .task-badge[data-tone="done"]')?.textContent?.trim() || '';
+        const pinnedLatestRoundOutput = document.querySelector('[data-testid="pinned-latest-round-output"]')?.textContent?.trim() || '';
+        const messageSummaryText = document.querySelector('#messageSummary')?.textContent?.trim() || '';
         return {
           inline: document.querySelector('#composerInlineState')?.textContent?.trim() || '',
           requestCountDelta: facadeFetches.length - beforeCount,
@@ -272,7 +328,9 @@ async function main() {
           replySource: String(agentcloud.reply_source || ''),
           responseTaskId: String(agentcloud.task_id || ''),
           responseTaskStatus: String(agentcloud.task_status || ''),
-          responseContentType: latestFacadePost?.contentType || ''
+          responseContentType: latestFacadePost?.contentType || '',
+          pinnedLatestRoundOutput,
+          messageSummaryText
         };
       }, beforeAutoTaskRequestCount, expectedSurface, autoTaskIntent);
 
@@ -295,6 +353,9 @@ async function main() {
       }
       if (!/task=/.test(afterAutoTask.hash)) {
         throw new Error(`auto-start task selection hash did not converge: ${JSON.stringify(afterAutoTask)}`);
+      }
+      if (!/latest round output/i.test(afterAutoTask.pinnedLatestRoundOutput + afterAutoTask.messageSummaryText)) {
+        throw new Error(`auto-start task did not expose pinned latest round output summary: ${JSON.stringify(afterAutoTask)}`);
       }
       const autoStartTaskScreenshot = await captureScreenshot(page, screenshotDir, mode, 'auto-start-task');
 
@@ -323,14 +384,30 @@ async function main() {
       await waitForCondition(page, () => {
         const detailTitle = document.querySelector('#detailTitle')?.textContent?.trim() || '';
         const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+        const hashTaskId = (() => {
+          const hash = window.location.hash || '';
+          const match = /(?:[#&]|^)task=([^&]+)/.exec(hash);
+          return match ? decodeURIComponent(match[1]) : '';
+        })();
+        const selectedStatus = document.querySelector('#selectedStatus')?.textContent?.trim() || '';
         const inline = document.querySelector('#composerInlineState')?.textContent || '';
-        return Boolean(selectedTaskId) && detailTitle !== '选择一个任务' && inline.includes('任务已记录');
+        return Boolean(selectedTaskId)
+          && detailTitle !== '选择一个任务'
+          && inline.includes('任务已记录')
+          && hashTaskId === selectedTaskId
+          && selectedStatus.length > 0
+          && !/idle/i.test(selectedStatus);
       }, 'manual-start task state did not fully converge');
 
       const afterTask = await evaluate(page, () => {
         const taskCards = Array.from(document.querySelectorAll('#taskThread [data-task-id]'));
         const latestTask = taskCards[taskCards.length - 1];
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
+        const hashTaskId = (() => {
+          const hash = window.location.hash || '';
+          const match = /(?:[#&]|^)task=([^&]+)/.exec(hash);
+          return match ? decodeURIComponent(match[1]) : '';
+        })();
         return {
           hash: window.location.hash || '',
           inline: document.querySelector('#composerInlineState')?.textContent?.trim() || '',
@@ -338,9 +415,11 @@ async function main() {
           latestTaskText: latestTask?.textContent || '',
           latestTaskId: latestTask?.getAttribute('data-task-id') || '',
           selectedTaskId: selectedTask?.getAttribute('data-task-id') || '',
+          hashTaskId,
           detailTitle: document.querySelector('#detailTitle')?.textContent?.trim() || '',
           latestBadgeText: latestTask?.querySelector('.task-badge[data-tone="manual"]')?.textContent?.trim() || '',
-          threadMeta: document.querySelector('#threadDrawerMeta')?.textContent?.trim() || ''
+          threadMeta: document.querySelector('#threadDrawerMeta')?.textContent?.trim() || '',
+          selectedStatus: document.querySelector('#selectedStatus')?.textContent?.trim() || ''
         };
       });
 
@@ -356,44 +435,67 @@ async function main() {
       if (!/session=/.test(afterTask.hash)) {
         throw new Error(`selected session was not reflected into hash: ${afterTask.hash}`);
       }
+      if (afterTask.hashTaskId !== afterTask.selectedTaskId) {
+        throw new Error(`manual-start task hash and selected task diverged: ${JSON.stringify(afterTask)}`);
+      }
       if (!afterTask.selectedTaskId && afterTask.detailTitle === '选择一个任务' && !/task=/.test(afterTask.hash)) {
         throw new Error(`manual-start task was created but no selected-task signal appeared: ${JSON.stringify(afterTask)}`);
       }
       const manualStartTaskScreenshot = await captureScreenshot(page, screenshotDir, mode, 'manual-start-task');
 
-      await click(page, '#composerModeSwitch [data-composer-mode="message"]');
+      await click(page, '#composerModeSwitch [data-composer-mode="auto"]');
       await waitForCondition(page, () => {
-        const attachWrap = document.querySelector('#messageAttachTaskWrap');
-        const attach = document.querySelector('#messageAttachTask');
-        return Boolean(attachWrap && !attachWrap.hidden && attach && !attach.disabled);
-      }, 'message mode did not expose task attach toggle');
-      await setCheckbox(page, '#messageAttachTask', true);
+        const activeMode = document.querySelector('#composerModeSwitch [data-composer-mode].is-active');
+        const routingMeta = document.querySelector('#composerRoutingMeta')?.textContent || '';
+        return Boolean(
+          activeMode
+          && activeMode.getAttribute('data-composer-mode') === 'auto'
+          && /默认聊天/.test(routingMeta)
+        );
+      }, 'composer did not return to auto mode');
 
-      const taskNoteIntent = `${mode} browser probe task note attach`;
+      const taskNoteIntent = `${mode} browser probe continue-current note`;
       await setTextareaValue(page, '#taskIntent', taskNoteIntent);
       await click(page, '#submitTaskButton');
       await waitForCondition(page, (expectedText) => {
         const inline = document.querySelector('#composerInlineState')?.textContent || '';
         const list = document.querySelector('#messageList')?.textContent || '';
-        return inline.includes('当前任务上下文') && list.includes(expectedText);
-      }, 'task-note attach path did not render expected ack', taskNoteIntent);
+        return /最近回执：/.test(inline) && list.includes(expectedText);
+      }, 'selected-task continuity path did not render expected ack', taskNoteIntent);
 
-      const afterTaskNote = await evaluate(page, (expectedText, expectedTaskId) => {
+      const afterTaskNote = await evaluate(page, async (expectedText, expectedTaskId) => {
         const taskCards = Array.from(document.querySelectorAll('#taskThread [data-task-id]'));
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
         const noteCard = Array.from(document.querySelectorAll('#messageList .message-card')).find((card) =>
           (card.textContent || '').includes(expectedText)
         );
-        const fetches = (window.__dialogueProbe?.fetches || []).slice().reverse();
-        const latestMessagesFetch = fetches.find((entry) =>
-          typeof entry.url === 'string'
-          && entry.url.includes('/api/v1/sessions/')
-          && entry.url.includes('/messages?limit=80')
-        );
+        const threadDrawer = document.querySelector('#threadDrawer');
+        const threadDrawerSummary = document.querySelector('.thread-drawer__summary');
+        const composerPanel = document.querySelector('.composer-panel');
+        const messagePanelBody = document.querySelector('.message-panel__body');
+        const messageStream = document.querySelector('.message-stream');
+        const messageList = document.querySelector('#messageList');
+        const lastMessageCard = messageList?.lastElementChild || null;
+        function rect(el) {
+          if (!el) {
+            return null;
+          }
+          const box = el.getBoundingClientRect();
+          return {
+            top: Math.round(box.top),
+            bottom: Math.round(box.bottom),
+            height: Math.round(box.height)
+          };
+        }
+        const sessionMatch = (window.location.hash || '').match(/session=([^&]+)/);
+        const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
         let taskNoteMessage = null;
-        if (latestMessagesFetch?.responseText) {
+        if (sessionId) {
           try {
-            const payload = JSON.parse(latestMessagesFetch.responseText);
+            const response = await fetch(`/api/v1/sessions/${sessionId}/messages?limit=120`, {
+              credentials: 'same-origin'
+            });
+            const payload = await response.json();
             const messages = Array.isArray(payload?.data) ? payload.data : [];
             taskNoteMessage = messages.find((message) =>
               (message?.message_type || '').toLowerCase() === 'task_note'
@@ -414,12 +516,31 @@ async function main() {
             (badge.textContent || '').includes('task ·')
           ),
           taskNoteMessageType: taskNoteMessage?.message_type || '',
-          taskNoteMessageTaskId: taskNoteMessage?.task_id || ''
+          taskNoteMessageTaskId: taskNoteMessage?.task_id || '',
+          layoutMetrics: {
+            bodySlackAboveStream: messagePanelBody && messageStream
+              ? Math.round(messageStream.getBoundingClientRect().top - messagePanelBody.getBoundingClientRect().top)
+              : null,
+            gapBetweenLastCardAndDrawer: lastMessageCard && threadDrawer
+              ? Math.round(threadDrawer.getBoundingClientRect().top - lastMessageCard.getBoundingClientRect().bottom)
+              : null,
+            gapBetweenDrawerAndComposer: threadDrawer && composerPanel
+              ? Math.round(composerPanel.getBoundingClientRect().top - threadDrawer.getBoundingClientRect().bottom)
+              : null,
+            drawerHeight: threadDrawer ? Math.round(threadDrawer.getBoundingClientRect().height) : null,
+            drawerSummaryHeight: threadDrawerSummary ? Math.round(threadDrawerSummary.getBoundingClientRect().height) : null,
+            messageCount: messageList ? messageList.children.length : 0,
+            bodyRect: rect(messagePanelBody),
+            streamRect: rect(messageStream),
+            listRect: rect(messageList),
+            drawerRect: rect(threadDrawer),
+            composerRect: rect(composerPanel)
+          }
         };
       }, taskNoteIntent, afterTask.selectedTaskId);
 
-      if (!/当前任务上下文/.test(afterTaskNote.inline)) {
-        throw new Error(`task-note attach inline ack mismatch: ${afterTaskNote.inline}`);
+      if (!/最近回执：/.test(afterTaskNote.inline)) {
+        throw new Error(`selected-task continuity inline ack mismatch: ${afterTaskNote.inline}`);
       }
       if (afterTaskNote.taskCards !== afterTask.taskCards) {
         throw new Error(`task-note attach unexpectedly changed task count: ${JSON.stringify(afterTaskNote)}`);
@@ -433,6 +554,14 @@ async function main() {
       if (afterTaskNote.taskNoteMessageType !== 'task_note' || afterTaskNote.taskNoteMessageTaskId !== afterTask.selectedTaskId) {
         throw new Error(`task-note attach did not persist task_note message: ${JSON.stringify(afterTaskNote)}`);
       }
+      if (afterTaskNote.layoutMetrics?.gapBetweenDrawerAndComposer != null
+        && afterTaskNote.layoutMetrics.gapBetweenDrawerAndComposer > 28) {
+        throw new Error(`task-note attach left too much space between thread drawer and composer: ${JSON.stringify(afterTaskNote.layoutMetrics)}`);
+      }
+      if (afterTaskNote.layoutMetrics?.drawerSummaryHeight != null
+        && afterTaskNote.layoutMetrics.drawerSummaryHeight > 28) {
+        throw new Error(`task-note attach thread drawer summary is still too tall: ${JSON.stringify(afterTaskNote.layoutMetrics)}`);
+      }
       const taskNoteScreenshot = await captureScreenshot(page, screenshotDir, mode, 'task-note-attach');
 
       await click(page, '#composerModeSwitch [data-composer-mode="task"]');
@@ -445,30 +574,27 @@ async function main() {
       const continuityIntent = `${mode} browser probe manual-start continuity`;
       await setTextareaValue(page, '#taskIntent', continuityIntent);
       await click(page, '#submitTaskButton');
-      await waitForCondition(page, (expectedText, expectedTaskId, previousTaskCount) => {
+      await waitForCondition(page, (expectedTaskId, previousTaskCount) => {
         const inline = document.querySelector('#composerInlineState')?.textContent || '';
-        const list = document.querySelector('#messageList')?.textContent || '';
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
         const taskCards = document.querySelectorAll('#taskThread [data-task-id]').length;
-        return inline.includes('已记录')
-          && list.includes(expectedText)
+        return /已记录|已写入当前任务上下文|任务已记录/.test(inline)
           && selectedTask === expectedTaskId
           && taskCards === previousTaskCount;
-      }, 'manual-start continuity path did not render expected ack', continuityIntent, afterTask.selectedTaskId, afterTask.taskCards);
+      }, 'manual-start continuity path did not render expected ack', afterTask.selectedTaskId, afterTask.taskCards);
 
-      const afterContinuity = await evaluate(page, (expectedText, expectedTaskId) => {
+      const afterContinuity = await evaluate(page, async (expectedText, expectedTaskId) => {
         const taskCards = Array.from(document.querySelectorAll('#taskThread [data-task-id]'));
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
-        const fetches = (window.__dialogueProbe?.fetches || []).slice().reverse();
-        const latestMessagesFetch = fetches.find((entry) =>
-          typeof entry.url === 'string'
-          && entry.url.includes('/api/v1/sessions/')
-          && entry.url.includes('/messages?limit=80')
-        );
+        const sessionMatch = (window.location.hash || '').match(/session=([^&]+)/);
+        const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
         let continuityNote = null;
-        if (latestMessagesFetch?.responseText) {
+        if (sessionId) {
           try {
-            const payload = JSON.parse(latestMessagesFetch.responseText);
+            const response = await fetch(`/api/v1/sessions/${sessionId}/messages?limit=120`, {
+              credentials: 'same-origin'
+            });
+            const payload = await response.json();
             const messages = Array.isArray(payload?.data) ? payload.data : [];
             continuityNote = messages.find((message) =>
               (message?.message_type || '').toLowerCase() === 'task_note'
@@ -493,7 +619,7 @@ async function main() {
         };
       }, continuityIntent, afterTask.selectedTaskId);
 
-      if (!/已记录/.test(afterContinuity.inline)) {
+      if (!/已记录|已写入当前任务上下文|任务已记录/.test(afterContinuity.inline)) {
         throw new Error(`manual-start continuity inline ack mismatch: ${JSON.stringify(afterContinuity)}`);
       }
       if (afterContinuity.taskCards !== afterTask.taskCards) {
@@ -513,8 +639,16 @@ async function main() {
       await click(page, '#followupButton');
       await waitForCondition(page, () => {
         const hint = document.querySelector('#composerTaskHint')?.textContent || '';
+        const modeHint = document.querySelector('#composerModeHint')?.textContent || '';
         const button = document.querySelector('#submitTaskButton');
-        return hint.includes('已绑定 follow-up') && Boolean(button && button.textContent.includes('follow-up'));
+        return Boolean(
+          button
+          && button.textContent.includes('follow-up')
+          && (
+            hint.includes('follow-up of')
+            || modeHint.includes('follow-up task')
+          )
+        );
       }, 'follow-up draft was not prepared');
       await setCheckbox(page, '#taskAutoStart', false);
       await click(page, '#submitTaskButton');
@@ -529,39 +663,30 @@ async function main() {
         return Boolean(selectedTaskId) && detailTitle !== '选择一个任务';
       }, 'follow-up child task state did not fully converge');
 
-      const afterFollowup = await evaluate(page, (parentTaskId) => {
+      const afterFollowup = await evaluate(page, async (parentTaskId) => {
         const taskCards = Array.from(document.querySelectorAll('#taskThread [data-task-id]'));
         const latestTask = taskCards[taskCards.length - 1];
         const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
         const sessionMatch = (window.location.hash || '').match(/session=([^&]+)/);
         const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
-        const fetches = (window.__dialogueProbe?.fetches || []).slice().reverse();
-        const latestTasksFetch = fetches.find((entry) =>
-          typeof entry.url === 'string'
-          && sessionId
-          && entry.url.includes(`/api/v1/sessions/${sessionId}/tasks`)
-        );
-        const latestMessagesFetch = fetches.find((entry) =>
-          typeof entry.url === 'string'
-          && sessionId
-          && entry.url.includes(`/api/v1/sessions/${sessionId}/messages?limit=80`)
-        );
         let childTask = null;
         let followupMessage = null;
-        if (latestTasksFetch?.responseText) {
+        if (sessionId) {
           try {
-            const payload = JSON.parse(latestTasksFetch.responseText);
-            const tasks = Array.isArray(payload?.data) ? payload.data : [];
             const latestTaskId = latestTask?.getAttribute('data-task-id') || '';
+            const [tasksResponse, messagesResponse] = await Promise.all([
+              fetch(`/api/v1/sessions/${sessionId}/tasks`, {
+                credentials: 'same-origin'
+              }),
+              fetch(`/api/v1/sessions/${sessionId}/messages?limit=120`, {
+                credentials: 'same-origin'
+              })
+            ]);
+            const tasksPayload = await tasksResponse.json();
+            const tasks = Array.isArray(tasksPayload?.data) ? tasksPayload.data : [];
             childTask = tasks.find((task) => (task?.id || '') === latestTaskId) || null;
-          } catch {
-          }
-        }
-        if (latestMessagesFetch?.responseText) {
-          try {
-            const payload = JSON.parse(latestMessagesFetch.responseText);
-            const messages = Array.isArray(payload?.data) ? payload.data : [];
-            const latestTaskId = latestTask?.getAttribute('data-task-id') || '';
+            const messagesPayload = await messagesResponse.json();
+            const messages = Array.isArray(messagesPayload?.data) ? messagesPayload.data : [];
             followupMessage = messages.find((message) =>
               (message?.message_type || '').toLowerCase() === 'task_followup'
               && (message?.task_id || '') === latestTaskId
@@ -606,11 +731,11 @@ async function main() {
       process.stdout.write(JSON.stringify({
         surface: expectedSurface,
         session_title: createdSessionTitle,
-        message_only: {
+        default_task_auto: {
           inline_ack: afterMessage.inline,
           task_cards: afterMessage.taskCards,
           thread_meta: afterMessage.threadMeta,
-          screenshot_path: messageOnlyScreenshot
+          screenshot_path: defaultTaskAutoScreenshot
         },
         stream_fallback: {
           inline_ack: afterStreamFallback.inline,
@@ -657,6 +782,7 @@ async function main() {
           detail_title: afterTaskNote.detailTitle,
           task_cards: afterTaskNote.taskCards,
           task_note_message_type: afterTaskNote.taskNoteMessageType,
+          layout_metrics: afterTaskNote.layoutMetrics,
           screenshot_path: taskNoteScreenshot
         },
         manual_start_continuity: {
@@ -1217,6 +1343,41 @@ async function installProbeHooks(page) {
           return responseForClient;
         }
       }
+      const nextOverride = probe.nextFacadeResponseOverride;
+      if (nextOverride
+        && String(method).toUpperCase() === 'POST'
+        && typeof url === 'string'
+        && url.includes(facadeRequestPathForSurface(nextOverride.surface))
+        && nextOverride.mode === 'same_response_json_fallback') {
+        probe.nextFacadeResponseOverride = null;
+        const headers = new Headers();
+        if (nextOverride.contentType) {
+          headers.set('Content-Type', nextOverride.contentType);
+        }
+        const fallbackPayload = buildFallbackFacadePayload(nextOverride, bodyText);
+        const syntheticBodyText = JSON.stringify(fallbackPayload);
+        const responseForClient = new Response(syntheticBodyText, {
+          status: 200,
+          statusText: 'OK',
+          headers
+        });
+        pushLimited(probe.fetchOverrides, {
+          url,
+          method,
+          mode: nextOverride.mode || '',
+          surface: normalizeFacadeSurface(nextOverride.surface),
+          contentType: headers.get('Content-Type') || '',
+          requestBody: captureRequestBody(bodyText),
+          responseTextPreview: syntheticBodyText.slice(0, 500)
+        }, 8);
+        if (trackedFetchEntry) {
+          trackedFetchEntry.status = responseForClient.status;
+          trackedFetchEntry.contentType = responseForClient.headers.get('Content-Type') || '';
+          trackedFetchEntry.responseText = syntheticBodyText;
+          trackedFetchEntry.phase = 'completed';
+        }
+        return responseForClient;
+      }
       let response;
       try {
         response = await originalFetch(...args);
@@ -1228,7 +1389,6 @@ async function installProbeHooks(page) {
         throw error;
       }
       let responseForClient = response;
-      const nextOverride = probe.nextFacadeResponseOverride;
       if (nextOverride
         && String(method).toUpperCase() === 'POST'
         && typeof url === 'string'

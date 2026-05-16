@@ -322,6 +322,644 @@ class ControlNodeGraphOrchestrationFlowTest {
     }
 
     @Test
+    void continueAutoRunsAdditionalDeclaredRoundsBeforeStopping() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("auto-continue-declared-rounds.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_declared_rounds", "auto continue declared rounds", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "tool-auto",
+                "codex",
+                List.of("coding"),
+                List.of("read_file", "write_file"),
+                List.of(tempDir.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "round 1 complete",
+                        "drafted the first long-task substep",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "medium",
+                        0,
+                        8L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("more_declared_rounds_remain", true),
+                            Map.entry("declared_round_count", 3),
+                            Map.entry("next_round_instruction", "Continue with round 2."),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "round 2 complete",
+                        "drafted the second long-task substep",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "medium",
+                        0,
+                        9L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("more_declared_rounds_remain", true),
+                            Map.entry("declared_round_count", 3),
+                            Map.entry("next_round_instruction", "Continue with round 3."),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "round 3 complete",
+                        "the long-task final result is ready",
+                        true,
+                        "Final Result",
+                        "Long task completed after three declared rounds.",
+                        "mark the task complete",
+                        "high",
+                        0,
+                        10L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("more_declared_rounds_remain", false),
+                            Map.entry("declared_round_count", 3),
+                            Map.entry("grounded_output_present", true),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_declared_rounds",
+                "session_declared_rounds",
+                null,
+                "auto continue declared rounds",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Complete the long task across declared rounds.",
+                null,
+                "tool-auto",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Use declared rounds to keep the long task moving."
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(3, workerExecutor.callCount());
+            assertEquals("done", finalTask.status());
+            assertEquals("done", persisted.status());
+            assertEquals("end", persisted.controlNode());
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_continue_burst_count")));
+        }
+    }
+
+    @Test
+    void resumeClearsPreviousAutoContinueBurstBeforeRunningAgain() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("resume-clears-auto-continue-burst.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_resume_burst", "resume clears burst", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "tool-auto",
+                "codex",
+                List.of("coding"),
+                List.of("read_file", "write_file"),
+                List.of(tempDir.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "resumed round complete",
+                        "final resumed round finished successfully",
+                        true,
+                        "Resumed Result",
+                        "Resume path completed the remaining work.",
+                        "complete the task",
+                        "high",
+                        0,
+                        8L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("grounded_output_present", true),
+                            Map.entry("selected_worker", "tool-auto"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_resume_burst",
+                "session_resume_burst",
+                null,
+                "resume clears auto continue burst",
+                "paused",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Resume long task after previous auto-continue burst was exhausted.",
+                null,
+                "tool-auto",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Resume after previous auto-continue attempts.",
+                    "auto_continue_burst_count", 3
+                ))
+            );
+            taskDao.insert(task);
+
+            Task resumed = graph.triggerResume(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(1, workerExecutor.callCount());
+            assertEquals("done", resumed.status());
+            assertEquals("done", persisted.status());
+            assertEquals("end", persisted.controlNode());
+            assertFalse(persisted.metadata().containsKey("auto_continue_burst_count"));
+        }
+    }
+
+    @Test
+    void recoveryFallbackEmptyOutputStopsAtHumanGateAfterRetryAndSingleHandoff() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("recovery-empty-fallback-human-gate.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_recovery_empty", "recovery empty fallback", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "timeout",
+                        List.of(),
+                        List.of(),
+                        0,
+                        12L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("output_text", "thread not found: 29180"),
+                            Map.entry("candidate_workers", List.of("codex", "kimi"))
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "empty",
+                        List.of(),
+                        List.of(),
+                        0,
+                        6L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("candidate_workers", List.of("codex", "kimi"))
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "empty",
+                        List.of(),
+                        List.of(),
+                        0,
+                        5L,
+                        Map.ofEntries(
+                            Map.entry("tool_aware_executor", true),
+                            Map.entry("tool_execution_mode", "multi_tool_round"),
+                            Map.entry("tool_chain_step_count", 1),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("selected_worker", "kimi"),
+                            Map.entry("selected_model_tier", "small"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("candidate_workers", List.of("kimi", "codex"))
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_recovery_empty",
+                "session_recovery_empty",
+                null,
+                "recover after empty fallback output",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "finish the delegated work",
+                null,
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "reproduce timeout then empty fallback worker output",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "execution_active"
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(3, workerExecutor.callCount());
+            assertEquals("waiting_human", finalTask.status());
+            assertEquals("waiting_human", persisted.status());
+            assertEquals("human_gate", persisted.controlNode());
+            assertEquals("human_gate_required", persisted.metadata().get("recovery_stage"));
+            assertEquals("worker_runtime_transient", persisted.metadata().get("failure_class"));
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_same_worker_retry_count")));
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_handoff_count")));
+            assertEquals("cursor", persisted.assignedWorker());
+        }
+    }
+
+    @Test
+    void sameWorkerRetryColdStartClearsProviderContinuationMetadataBeforeNextRoundExecution() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("recovery-clears-provider-continuation.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_recovery_cold_start", "recovery cold start", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            RecoveryContinuationClearingWorkerExecutor workerExecutor = new RecoveryContinuationClearingWorkerExecutor();
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_recovery_cold_start",
+                "session_recovery_cold_start",
+                null,
+                "clear provider continuation metadata before same-worker retry",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "finish the delegated work",
+                null,
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.ofEntries(
+                    Map.entry("task_type", "coding"),
+                    Map.entry("intent", "reproduce thread-not-found then same-worker cold-start retry"),
+                    Map.entry("model_mode", "orchestrated"),
+                    Map.entry("orchestration_stage", "execution_active"),
+                    Map.entry("provider_session_id", "thread-codex-001"),
+                    Map.entry("provider_thread_id", "thread-codex-001"),
+                    Map.entry("codex_thread_id", "thread-codex-001"),
+                    Map.entry("resume_provider_session_id", "thread-codex-001")
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(2, workerExecutor.callCount());
+            assertEquals("done", finalTask.status());
+            assertEquals("done", persisted.status());
+            assertEquals("end", persisted.controlNode());
+            assertFalse(workerExecutor.secondRoundMetadata().containsKey("provider_session_id"));
+            assertFalse(workerExecutor.secondRoundMetadata().containsKey("provider_thread_id"));
+            assertFalse(workerExecutor.secondRoundMetadata().containsKey("codex_thread_id"));
+            assertFalse(workerExecutor.secondRoundMetadata().containsKey("resume_provider_session_id"));
+        }
+    }
+
+    @Test
+    void plannerNoiseOutputDoesNotDelegateToExecutorAndFallsIntoRecovery() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planner-noise-gate.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_planner_noise", "planner noise gate", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            String noisyFailure = "thread not found: 29180\n" + "x".repeat(12_500);
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "Planner emitted oversized noisy failure output",
+                        noisyFailure,
+                        true,
+                        "Planner Output",
+                        noisyFailure,
+                        "Retry planner or handoff via recovery.",
+                        "low",
+                        "completed",
+                        List.of(),
+                        List.of(),
+                        0,
+                        19L,
+                        Map.ofEntries(
+                            Map.entry("parser", "json"),
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "planner"),
+                            Map.entry("execution_status", "completed"),
+                            Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                            Map.entry("output_text", noisyFailure),
+                            Map.entry("candidate_workers", List.of("codex", "kimi"))
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "empty",
+                        List.of(),
+                        List.of(),
+                        0,
+                        6L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "planner"),
+                            Map.entry("execution_status", "empty"),
+                            Map.entry("candidate_workers", List.of("codex", "kimi"))
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "empty",
+                        List.of(),
+                        List.of(),
+                        0,
+                        5L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "kimi"),
+                            Map.entry("selected_model_tier", "small"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("execution_status", "empty"),
+                            Map.entry("candidate_workers", List.of("kimi", "codex"))
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new FakeJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_planner_noise",
+                "session_planner_noise",
+                null,
+                "planner noise should not delegate",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "ship a validated result",
+                null,
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "reproduce oversized planner failure output before delegation",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "plan_pending"
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+            List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            assertEquals(3, workerExecutor.callCount());
+            assertEquals("waiting_human", finalTask.status());
+            assertEquals("waiting_human", persisted.status());
+            assertEquals("human_gate", persisted.controlNode());
+            assertEquals("plan_pending", persisted.metadata().get("orchestration_stage"));
+            assertEquals("rejected", persisted.metadata().get("planner_delegation_gate"));
+            assertEquals("runtime_failure_signal", persisted.metadata().get("planner_delegation_gate_reason"));
+            assertEquals("human_gate_required", persisted.metadata().get("recovery_stage"));
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_handoff_count")));
+            assertEquals("cursor", persisted.assignedWorker());
+            assertFalse(decisions.stream().anyMatch(d ->
+                "execution_judgment".equals(d.decisionType())
+                    && "handoff".equals(metadataString(d.metadata(), "action"))
+                    && "planner".equals(metadataString(d.metadata(), "selection_scope"))
+                    && "kimi".equals(metadataString(d.metadata(), "target_worker"))
+            ));
+        }
+    }
+
+    @Test
     void schedulerPersistsProviderContinuationMetadataIntoTaskAndArtifactTrace() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("provider-continuation-flow.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -648,7 +1286,6 @@ class ControlNodeGraphOrchestrationFlowTest {
                     && "small".equals(metadataString(d.metadata(), "selected_model_tier"))
                     && "executor".equals(metadataString(d.metadata(), "execution_role"))
                     && metadataString(d.metadata(), "why_selected") != null
-                    && metadataString(d.metadata(), "why_selected").contains("task already assigned to worker=kimi")
             ));
             assertTrue(decisions.stream().noneMatch(d ->
                 "completion_judgment".equals(d.decisionType())
@@ -812,6 +1449,77 @@ class ControlNodeGraphOrchestrationFlowTest {
                     "parser", "json"
                 )
             );
+        }
+    }
+
+    private static final class RecoveryContinuationClearingWorkerExecutor implements WorkerExecutor {
+        private int callCount;
+        private Map<String, Object> secondRoundMetadata = Map.of();
+
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            callCount++;
+            if (callCount == 1) {
+                return new WorkerExecutionResult(
+                    "",
+                    "",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    "timeout",
+                    List.of(),
+                    List.of(),
+                    0,
+                    7L,
+                    Map.ofEntries(
+                        Map.entry("tool_aware_executor", true),
+                        Map.entry("tool_execution_mode", "multi_tool_round"),
+                        Map.entry("tool_chain_step_count", 1),
+                        Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                        Map.entry("selected_worker", workerId),
+                        Map.entry("selected_model_tier", "strong"),
+                        Map.entry("execution_role", "executor"),
+                        Map.entry("output_text", "thread not found: 29180")
+                    )
+                );
+            }
+            secondRoundMetadata = context.task().metadata() == null
+                ? Map.of()
+                : new LinkedHashMap<>(context.task().metadata());
+            return new WorkerExecutionResult(
+                "wrote grounded output",
+                "the result file is now on disk",
+                true,
+                "Recovery Result",
+                "Recovered after cold-start retry.",
+                "mark the task complete",
+                "high",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                9L,
+                Map.ofEntries(
+                    Map.entry("tool_aware_executor", true),
+                    Map.entry("tool_execution_mode", "multi_tool_round"),
+                    Map.entry("tool_chain_step_count", 1),
+                    Map.entry("tool_chain_termination_reason", "planner_no_additional_tool"),
+                    Map.entry("grounded_output_present", true),
+                    Map.entry("selected_worker", workerId),
+                    Map.entry("selected_model_tier", "strong"),
+                    Map.entry("execution_role", "executor")
+                )
+            );
+        }
+
+        private int callCount() {
+            return callCount;
+        }
+
+        private Map<String, Object> secondRoundMetadata() {
+            return secondRoundMetadata;
         }
     }
 

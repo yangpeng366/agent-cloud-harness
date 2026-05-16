@@ -61,6 +61,8 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 - 可通过 JVM 系统属性覆盖端口：`-Dserver.port=9090`
 - SQLite 数据库路径：`${user.home}/.agentcloud/agent_cloud.db`
 
+> ⚠️ **注意**：启动前请确保关闭已有的 Agent Cloud Harness 进程，避免端口冲突和内存占用过高。
+
 ### 测试
 
 当前仓库已经有一批 JUnit 5 测试，可直接通过 `src/test/java` 里的现有结构继续补充。运行测试前应先切到 JDK 21，推荐使用：
@@ -68,6 +70,8 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
 ```bash
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1
 ```
+
+> ⚠️ **注意**：运行测试前请关闭已有的 Agent Cloud Harness 进程，避免内存占用过高影响测试执行。
 
 ## 代码组织
 
@@ -353,6 +357,17 @@ SessionService → TaskService → ExperimentMatrixService → NioHttpServer
   - 若新增数据实体，在 `model/` 定义 Record，在 `store/` 定义 DAO，在 `schema.sql` 加表，在 `DatabaseManager` 注册 RowMapper。
   - 不要在现有项目中引入 Spring Boot 或其他 Web 框架。
 
+## 调研与文档沉淀约定
+
+- 对于**调研、排查、方案设计、验收结论整理**这类任务，默认先把结论沉淀到仓库文档，再决定是否动代码。
+- 文档优先落到**最贴近主题的现有 `docs/*.md`**；只有现有文档都不合适时，才新增新的 plan / runbook / record。
+- 如果调研最终导向代码修改，顺序应优先是：**先更新文档，再修改代码，再补验证证据**。
+- 不要把关键调研结论只留在对话里；至少应在文档中写清：
+  - 背景/问题
+  - 真实结论
+  - 证据或验证入口
+  - 后续动作
+
 ## 安全注意事项
 
 | 编号 | 风险 | 等级 | 说明 |
@@ -384,6 +399,7 @@ SessionService → TaskService → ExperimentMatrixService → NioHttpServer
 | `pom.xml` | Maven 构建、依赖版本、shade 插件配置 |
 | `src/main/resources/schema.sql` | 数据库表结构与索引 |
 | `src/main/resources/logback.xml` | 日志级别与输出格式 |
+| `STARTUP_GUIDE.md` | 启动指南（中文） |
 | `docs/ARCHITECTURE.md` | 详细架构说明（中文） |
 | `docs/SPEC.md` | 功能规格与状态机（中文） |
 | `docs/API_CONTRACTS.md` | API 契约与数据库设计（中文） |

@@ -94,6 +94,4 @@
 
 > A local, continuity-first agent control plane prototype with a runnable web UI, task/session control APIs, OpenAI-compatible chat façade, packet/checkpoint continuity, and a growing acceptance/test harness.
 
-而不是描述为：
-
-> Production-ready distributed agent cloud platform.
+避免使用会把当前状态抬高成“已可直接公网部署”或“已达到分布式生产级平台成熟度”的表述。

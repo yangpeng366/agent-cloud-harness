@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Agent Provider run 的最小落盘服务。
@@ -96,6 +97,24 @@ public class AgentRunService {
         );
     }
 
+    public boolean shouldDeprioritizeProvider(String providerId) {
+        String normalizedProviderId = trimFilter(providerId);
+        if (normalizedProviderId == null || agentRunDao == null) {
+            return false;
+        }
+        List<AgentRunRecord> recentRuns = agentRunDao.listByProvider(normalizedProviderId, 3);
+        if (recentRuns.size() < 2) {
+            return false;
+        }
+        int transientFailureCount = 0;
+        for (AgentRunRecord run : recentRuns) {
+            if (isProviderTransientFailure(run)) {
+                transientFailureCount++;
+            }
+        }
+        return transientFailureCount >= 2;
+    }
+
     public RuntimeHealthView runtimeHealth(int limit) {
         int boundedLimit = Math.max(1, Math.min(limit, 100));
         int statsLimit = Math.max(boundedLimit, 200);
@@ -114,7 +133,7 @@ public class AgentRunService {
             .filter(run -> withinWindow(run, cutoff))
             .toList();
         List<AgentRunRecord> recentFailures = windowRuns.stream()
-            .filter(run -> "failed".equals(normalizeStatus(run.status())))
+            .filter(this::countsAsProviderFailure)
             .limit(boundedLimit)
             .toList();
         long durationCount = windowRuns.stream()
@@ -136,16 +155,27 @@ public class AgentRunService {
         List<AgentProviderStatus> authProblemProviders = providerStatuses.stream()
             .filter(status -> "auth_needed".equalsIgnoreCase(status.authStatus()))
             .toList();
+        List<String> deprioritizedProviders = windowRuns.stream()
+            .map(AgentRunRecord::providerId)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(providerId -> !providerId.isBlank())
+            .distinct()
+            .filter(this::shouldDeprioritizeProvider)
+            .toList();
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("stats_window", "24h");
         metadata.put("recent_sample_size", sampledRuns.size());
         metadata.put("approximate_counts", true);
+        if (!deprioritizedProviders.isEmpty()) {
+            metadata.put("deprioritized_providers", deprioritizedProviders);
+        }
 
         return new RuntimeHealthView(
             checkedAt,
             activeRuns.size(),
-            (int) windowRuns.stream().filter(run -> "failed".equals(normalizeStatus(run.status()))).count(),
+            (int) windowRuns.stream().filter(this::countsAsProviderFailure).count(),
             (int) windowRuns.stream().filter(this::isCrashedRun).count(),
             (int) windowRuns.stream().filter(run -> "cancelled".equals(normalizeStatus(run.status()))).count(),
             unavailableProviders.size(),
@@ -176,8 +206,10 @@ public class AgentRunService {
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         putIfNotBlank(metadata, "route_source", route.routeSource());
-        putIfNotBlank(metadata, "task_type", firstNonBlank(route.taskType(),
-            metadataString(task != null ? task.metadata() : null, "task_type")));
+        putIfNotBlank(metadata, "task_type", firstNonBlank(
+            route.taskType(),
+            task != null ? TaskTypeHeuristics.effectiveTaskType(task, null) : null
+        ));
         putIfNotBlank(metadata, "selected_worker_type", route.selectedWorkerType());
         putIfNotBlank(metadata, "preferred_worker_hint", route.preferredWorkerHint());
         metadata.put("learning_hint_applied", route.learningHintApplied());
@@ -187,6 +219,7 @@ public class AgentRunService {
         if (route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
             metadata.put("fallback_workers", route.fallbackWorkers());
         }
+        appendProviderDeprioritizationMetadata(route, metadata);
         metadata.put("provider_registered", provider != null);
         if (status != null) {
             putIfNotBlank(metadata, "provider_readiness_reason", status.readinessReason());
@@ -370,7 +403,7 @@ public class AgentRunService {
             runEndedAt,
             durationMs,
             summary,
-            "failed".equals(status) ? "run.failed" : "run.completed",
+            countsAsProviderFailureStatus(status) ? "run.failed" : "run.completed",
             artifactCount,
             metadata
         );
@@ -381,10 +414,11 @@ public class AgentRunService {
     private String normalizeRunStatus(String raw) {
         String value = raw == null || raw.isBlank() ? "completed" : raw.trim().toLowerCase(Locale.ROOT);
         return switch (value) {
-            case "queued", "starting", "running", "completed", "failed", "cancelled" -> value;
-            case "done", "success", "succeeded", "ok", "unknown" -> "completed";
+            case "queued", "starting", "running", "completed", "failed", "cancelled",
+                 "timeout", "blocked", "empty", "unknown" -> value;
+            case "done", "success", "succeeded", "ok" -> "completed";
             case "error" -> "failed";
-            default -> "completed";
+            default -> "unknown";
         };
     }
 
@@ -443,6 +477,50 @@ public class AgentRunService {
         return errorType != null || exitCode != null;
     }
 
+    private boolean isProviderTransientFailure(AgentRunRecord run) {
+        if (run == null) {
+            return false;
+        }
+        String executionStatus = metadataString(run.metadata(), "worker_execution_status");
+        if (isTransientFailureStatus(executionStatus)) {
+            return true;
+        }
+        if (isTransientFailureStatus(run.status())) {
+            return true;
+        }
+        String text = firstNonBlank(
+            metadataString(run.metadata(), "failure_summary_readable"),
+            run.summary(),
+            metadataString(run.metadata(), "provider_readiness_reason"),
+            metadataString(run.metadata(), "error_type")
+        );
+        return looksLikeTransientProviderFailure(text);
+    }
+
+    private boolean isTransientFailureStatus(String status) {
+        String normalized = normalizeStatus(status);
+        return Objects.equals(normalized, "failed")
+            || Objects.equals(normalized, "timeout")
+            || Objects.equals(normalized, "empty")
+            || Objects.equals(normalized, "blocked");
+    }
+
+    private boolean looksLikeTransientProviderFailure(String text) {
+        String normalized = trimFilter(text);
+        if (normalized == null) {
+            return false;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        return lower.contains("thread not found")
+            || lower.contains("provider unavailable")
+            || lower.contains("session expired")
+            || lower.contains("failed to start")
+            || lower.contains("connection reset")
+            || lower.contains("timeout")
+            || normalized.contains("没找到线程")
+            || normalized.contains("未找到线程");
+    }
+
     private Map<String, Double> providerFailureRate(List<AgentRunRecord> runs) {
         if (runs == null || runs.isEmpty()) {
             return Map.of();
@@ -452,7 +530,7 @@ public class AgentRunService {
             String providerId = firstNonBlank(run.providerId(), "unknown");
             int[] pair = counts.computeIfAbsent(providerId, ignored -> new int[2]);
             pair[0]++;
-            if ("failed".equals(normalizeStatus(run.status()))) {
+            if (countsAsProviderFailure(run)) {
                 pair[1]++;
             }
         }
@@ -472,10 +550,15 @@ public class AgentRunService {
         for (AgentRunRecord run : runs) {
             String providerId = firstNonBlank(run.providerId(), "unknown");
             ProviderStatsAccumulator accumulator = stats.computeIfAbsent(providerId, ProviderStatsAccumulator::new);
-            accumulator.record(run, normalizeStatus(run.status()), isCrashedRun(run));
+            accumulator.record(
+                run,
+                normalizeStatus(run.status()),
+                isCrashedRun(run),
+                countsAsProviderFailure(run)
+            );
         }
         return stats.values().stream()
-            .map(ProviderStatsAccumulator::toView)
+            .map(accumulator -> accumulator.toView(shouldDeprioritizeProvider(accumulator.providerId)))
             .sorted((left, right) -> {
                 int failedCompare = Integer.compare(right.failedRuns(), left.failedRuns());
                 if (failedCompare != 0) {
@@ -511,7 +594,7 @@ public class AgentRunService {
             this.providerId = providerId;
         }
 
-        private void record(AgentRunRecord run, String status, boolean crashed) {
+        private void record(AgentRunRecord run, String status, boolean crashed, boolean countsAsFailure) {
             if (run == null) {
                 return;
             }
@@ -519,7 +602,7 @@ public class AgentRunService {
             switch (status) {
                 case "queued", "starting", "running" -> activeRuns++;
                 case "completed" -> completedRuns++;
-                case "failed" -> failedRuns++;
+                case "failed", "timeout", "blocked", "empty", "unknown" -> failedRuns++;
                 case "cancelled" -> cancelledRuns++;
                 default -> {
                     // 未知状态只计入总量，避免误导成功率。
@@ -536,18 +619,26 @@ public class AgentRunService {
             if (reference != null && (lastRunAt == null || reference.isAfter(lastRunAt))) {
                 lastRunAt = reference;
             }
-            if ("failed".equals(status) && reference != null && (lastFailureAt == null || reference.isAfter(lastFailureAt))) {
+            if (countsAsFailure
+                && reference != null
+                && (lastFailureAt == null || reference.isAfter(lastFailureAt))) {
                 lastFailureAt = reference;
                 lastFailureSummary = run.summary();
             }
         }
 
-        private ProviderRuntimeStats toView() {
+        private ProviderRuntimeStats toView(boolean providerDeprioritized) {
             Long averageDurationMs = durationCount == 0
                 ? null
                 : Math.round((double) durationTotalMs / durationCount);
             double rawFailureRate = totalRuns == 0 ? 0 : (double) failedRuns / totalRuns;
             double failureRate = Math.round(rawFailureRate * 1000.0) / 1000.0;
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("stats_window", "24h");
+            if (providerDeprioritized) {
+                metadata.put("provider_deprioritized", true);
+                metadata.put("deprioritization_reason", "recent transient provider failures");
+            }
             return new ProviderRuntimeStats(
                 providerId,
                 totalRuns,
@@ -561,13 +652,26 @@ public class AgentRunService {
                 lastRunAt,
                 lastFailureAt,
                 lastFailureSummary,
-                Map.of("stats_window", "24h")
+                metadata
             );
         }
     }
 
     private String normalizeStatus(String status) {
         return status == null || status.isBlank() ? "unknown" : status.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean countsAsProviderFailure(AgentRunRecord run) {
+        String status = normalizeStatus(run != null ? run.status() : null);
+        return countsAsProviderFailureStatus(status);
+    }
+
+    private boolean countsAsProviderFailureStatus(String status) {
+        String normalized = normalizeStatus(status);
+        return switch (normalized) {
+            case "failed", "timeout", "blocked", "empty", "unknown" -> true;
+            default -> false;
+        };
     }
 
     private String normalizeEnumFilter(String value) {
@@ -592,6 +696,19 @@ public class AgentRunService {
             providerIds.add(selectedProvider);
         }
         return List.copyOf(providerIds);
+    }
+
+    private void appendProviderDeprioritizationMetadata(WorkerRouter.RouteResult route, Map<String, Object> metadata) {
+        if (route == null || metadata == null || route.recoveryUnpinnedRecommendation() == null) {
+            return;
+        }
+        WorkerRouter.RouteDiagnostic diagnostic = route.recoveryUnpinnedRecommendation();
+        if (!Boolean.TRUE.equals(diagnostic.providerDeprioritized())) {
+            return;
+        }
+        metadata.put("provider_deprioritized", true);
+        putIfNotBlank(metadata, "deprioritized_provider", diagnostic.deprioritizedProvider());
+        putIfNotBlank(metadata, "deprioritization_reason", diagnostic.deprioritizationReason());
     }
 
     private String firstNonBlank(String... values) {

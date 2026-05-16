@@ -28,7 +28,7 @@ test("task selection plan keeps sticky selection from recent facade reply in sam
     assert.equal(plan.keepLiveFlow, false);
 });
 
-test("task selection plan falls back to latest visible task when selection is stale", () => {
+test("task selection plan clears stale selection when no sticky evidence remains", () => {
     const plan = reconcileTaskSelection({
         tasks: [{ id: "task_1" }, { id: "task_2" }],
         selectedTaskId: "task_missing",
@@ -37,7 +37,7 @@ test("task selection plan falls back to latest visible task when selection is st
         liveFlowSessionId: "session_old"
     });
 
-    assert.equal(plan.selectedTaskId, "task_2");
+    assert.equal(plan.selectedTaskId, null);
     assert.equal(plan.keepLiveFlow, false);
 });
 
@@ -51,5 +51,31 @@ test("task selection plan clears selection when nothing remains and no sticky ev
     });
 
     assert.equal(plan.selectedTaskId, null);
+    assert.equal(plan.keepLiveFlow, false);
+});
+
+test("task selection plan keeps session-only view when no task is explicitly selected", () => {
+    const plan = reconcileTaskSelection({
+        tasks: [{ id: "task_1" }, { id: "task_2" }],
+        selectedTaskId: null,
+        currentSessionId: "session_1"
+    });
+
+    assert.equal(plan.selectedTaskId, null);
+    assert.equal(plan.keepLiveFlow, false);
+});
+
+test("task selection plan does not let older sticky evidence steal an existing explicit selection", () => {
+    const plan = reconcileTaskSelection({
+        tasks: [{ id: "task_auto_old" }, { id: "task_manual_new" }],
+        selectedTaskId: "task_manual_new",
+        currentSessionId: "session_1",
+        liveFlowTaskId: "task_auto_old",
+        liveFlowSessionId: "session_1",
+        facadeReplyTaskId: "task_auto_old",
+        facadeReplySessionId: "session_1"
+    });
+
+    assert.equal(plan.selectedTaskId, "task_manual_new");
     assert.equal(plan.keepLiveFlow, false);
 });

@@ -139,13 +139,7 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult);
         var t = context.task();
         StringBuilder sb = new StringBuilder();
-        sb.append("Task Title: ").append(t.title()).append("\n");
-        if (t.goal() != null && !t.goal().isBlank()) {
-            sb.append("Goal: ").append(t.goal()).append("\n");
-        }
-        if (t.metadata() != null && t.metadata().get("intent") != null) {
-            sb.append("Intent: ").append(t.metadata().get("intent")).append("\n");
-        }
+        WorkerPromptHeaderBuilder.appendTaskHeader(sb, t, false);
         String modelMode = metadataString(t.metadata(), "model_mode");
         String orchestrationStage = metadataString(t.metadata(), "orchestration_stage");
         if (modelMode != null) {
@@ -384,9 +378,8 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             );
         } catch (Exception e) {
             log.warn("Failed to parse worker JSON output, falling back to raw text: {}", e.getMessage());
-            String fallbackSummary = safeRaw.length() > 280 ? safeRaw.substring(0, 280) + "..." : safeRaw;
             return new WorkerExecutionResult(
-                fallbackSummary,
+                safeRaw,
                 safeRaw,
                 false,
                 "",

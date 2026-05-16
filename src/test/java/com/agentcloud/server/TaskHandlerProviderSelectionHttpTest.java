@@ -16,6 +16,7 @@ import com.agentcloud.model.Event;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
 import com.agentcloud.model.ToolInvocationRecord;
+import com.agentcloud.model.Worker;
 import com.agentcloud.store.AgentRunDao;
 import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.CheckpointDao;
@@ -28,6 +29,7 @@ import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.TaskDao;
 import com.agentcloud.store.ToolInvocationDao;
+import com.agentcloud.worker.WorkerExecutionResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -41,11 +43,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class TaskHandlerProviderSelectionHttpTest {
 
@@ -89,6 +93,83 @@ class TaskHandlerProviderSelectionHttpTest {
             assertEquals("codex", data.path("candidate_providers").get(0).asText());
             assertEquals("capability_match", data.path("metadata").path("route_source").asText());
             assertEquals("coding", data.path("metadata").path("task_type").asText());
+        }
+    }
+
+    @Test
+    void providerSelectionProjectsProviderDeprioritizationMetadataFromRecoveryDiagnostics() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("provider-selection-deprioritized.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "provider selection deprioritized",
+                "coding",
+                "user",
+                "high",
+                "verify provider deprioritization metadata",
+                "project recovery diagnostics to provider selection view",
+                null,
+                null,
+                Map.of("model_mode", "strong_only"),
+                false
+            ));
+            Task pinnedTask = task.withAssignedWorker("claude").withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "assigned_worker", "claude"
+            )));
+            fixture.db.jdbi().onDemand(TaskDao.class).updateState(pinnedTask);
+
+            Instant base = Instant.parse("2026-04-29T14:10:00Z");
+            fixture.agentRunDao.insert(new AgentRunRecord(
+                "arun_claude_hot_1",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "failed",
+                base.minusSeconds(20),
+                base.minusSeconds(18),
+                200L,
+                "worker claude failed: thread not found (15252)",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "failed")
+            ));
+            fixture.agentRunDao.insert(new AgentRunRecord(
+                "arun_claude_hot_2",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "timeout",
+                base.minusSeconds(10),
+                base.minusSeconds(8),
+                150L,
+                "worker claude failed: provider unavailable",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "timeout")
+            ));
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/provider_selection"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode body = NioHttpServer.SHARED_MAPPER.readTree(response.body());
+            JsonNode data = body.path("data");
+            JsonNode metadata = data.path("metadata");
+            assertEquals(200, response.statusCode());
+            assertEquals("claude", data.path("selected_provider").asText());
+            assertEquals(true, metadata.path("provider_deprioritized").asBoolean());
+            assertEquals("claude", metadata.path("deprioritized_provider").asText());
+            assertEquals("recent transient provider failures", metadata.path("deprioritization_reason").asText());
         }
     }
 
@@ -610,6 +691,24 @@ class TaskHandlerProviderSelectionHttpTest {
                 0,
                 Map.of("error_type", "IllegalStateException")
             ));
+            fixture.agentRunDao.insert(new AgentRunRecord(
+                "arun_timeout",
+                task.id(),
+                task.sessionId(),
+                "codex",
+                "Codex",
+                "planner_executor",
+                "codex",
+                "strong",
+                "timeout",
+                now.minusMillis(700),
+                now.minusMillis(600),
+                100L,
+                "Provider run timed out",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "timeout")
+            ));
 
             HttpResponse<String> response = fixture.client.send(
                 HttpRequest.newBuilder(fixture.uri("/api/v1/runtime_health"))
@@ -621,26 +720,130 @@ class TaskHandlerProviderSelectionHttpTest {
             JsonNode data = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data");
             assertEquals(200, response.statusCode());
             assertEquals(1, data.path("active_run_count").asInt());
-            assertEquals(1, data.path("failed_run_count_24h").asInt());
+            assertEquals(2, data.path("failed_run_count_24h").asInt());
             assertEquals(1, data.path("crashed_run_count_24h").asInt());
             assertEquals(1, data.path("unavailable_provider_count").asInt());
             assertEquals("arun_running", data.path("active_runs").get(0).path("run_id").asText());
-            assertEquals("arun_failed", data.path("recent_failures").get(0).path("run_id").asText());
-            assertEquals(0.5d, data.path("provider_failure_rate").path("codex").asDouble());
+            assertEquals("arun_timeout", data.path("recent_failures").get(0).path("run_id").asText());
+            assertEquals(0.667d, data.path("provider_failure_rate").path("codex").asDouble());
             JsonNode providerStats = data.path("provider_stats");
             assertEquals(1, providerStats.size());
             JsonNode codexStats = providerStats.get(0);
             assertEquals("codex", codexStats.path("provider_id").asText());
-            assertEquals(2, codexStats.path("total_runs").asInt());
+            assertEquals(3, codexStats.path("total_runs").asInt());
             assertEquals(1, codexStats.path("active_runs").asInt());
-            assertEquals(1, codexStats.path("failed_runs").asInt());
+            assertEquals(2, codexStats.path("failed_runs").asInt());
             assertEquals(1, codexStats.path("crashed_runs").asInt());
-            assertEquals(200L, codexStats.path("average_duration_ms").asLong());
-            assertEquals(0.5d, codexStats.path("failure_rate").asDouble());
-            assertEquals("Provider run failed", codexStats.path("last_failure_summary").asText());
+            assertEquals(150L, codexStats.path("average_duration_ms").asLong());
+            assertEquals(0.667d, codexStats.path("failure_rate").asDouble());
+            assertEquals("Provider run timed out", codexStats.path("last_failure_summary").asText());
             assertEquals("24h", codexStats.path("metadata").path("stats_window").asText());
+            assertEquals(true, codexStats.path("metadata").path("provider_deprioritized").asBoolean());
+            assertEquals("recent transient provider failures", codexStats.path("metadata").path("deprioritization_reason").asText());
+            assertEquals("codex", data.path("metadata").path("deprioritized_providers").get(0).asText());
             assertFalse(codexStats.path("last_run_at").asText().isBlank());
         }
+    }
+
+    @Test
+    void agentRunServicePreservesFailureLikeExecutionStatusesWhenRecordingCompletedRun() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run-status-normalization.db"))) {
+            AgentRunService agentRunService = new AgentRunService(fixture.agentRunDao, new AgentProviderRegistry());
+            Worker selectedWorker = new Worker(
+                "codex",
+                "codex",
+                List.of("coding"),
+                List.of(),
+                List.of(),
+                Map.of(),
+                Map.of("model_tier", "strong", "primary_role", "planner_executor"),
+                false,
+                true
+            );
+
+            assertRecordedWorkerRunStatus(fixture, agentRunService, selectedWorker, "timeout", "run.failed");
+            assertRecordedWorkerRunStatus(fixture, agentRunService, selectedWorker, "blocked", "run.failed");
+            assertRecordedWorkerRunStatus(fixture, agentRunService, selectedWorker, "empty", "run.failed");
+            assertRecordedWorkerRunStatus(fixture, agentRunService, selectedWorker, "completed", "run.completed");
+        }
+    }
+
+    private void assertRecordedWorkerRunStatus(HttpFixture fixture,
+                                               AgentRunService agentRunService,
+                                               Worker selectedWorker,
+                                               String executionStatus,
+                                               String expectedLastEventType) {
+        Task task = fixture.service.createTask(new TaskCreateRequest(
+            "status contract " + executionStatus,
+            "coding",
+            "user",
+            "high",
+            "verify agent run status normalization",
+            "record execution status " + executionStatus,
+            null,
+            null,
+            Map.of("model_mode", "strong_only"),
+            false
+        ));
+        Instant startedAt = Instant.parse("2026-04-29T13:10:00Z");
+        Instant endedAt = startedAt.plusMillis(25);
+        WorkerRouter.RouteResult route = new WorkerRouter.RouteResult(
+            task.id(),
+            "codex",
+            List.of(),
+            "selected by capability match",
+            "capability_match",
+            "coding",
+            null,
+            false,
+            List.of("codex"),
+            "codex",
+            "strong",
+            "planner_executor",
+            "candidate",
+            "selected by capability match",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+        WorkerExecutionResult result = new WorkerExecutionResult(
+            "Status " + executionStatus,
+            "Provider execution " + executionStatus,
+            false,
+            null,
+            null,
+            null,
+            "medium",
+            executionStatus,
+            List.of(),
+            List.of(),
+            0,
+            25L,
+            Map.of("probe", "status-normalization")
+        );
+
+        AgentRunRecord record = agentRunService.recordCompletedWorkerRun(
+            task,
+            route,
+            selectedWorker,
+            result,
+            startedAt,
+            endedAt
+        );
+
+        assertNotNull(record);
+        assertEquals(executionStatus, record.status());
+        assertEquals(expectedLastEventType, record.lastEventType());
+        assertEquals(executionStatus, record.metadata().get("worker_execution_status"));
+
+        AgentRunRecord persisted = fixture.agentRunDao.findById(record.runId()).orElse(null);
+        assertNotNull(persisted);
+        assertEquals(executionStatus, persisted.status());
+        assertEquals(expectedLastEventType, persisted.lastEventType());
+        assertEquals(executionStatus, persisted.metadata().get("worker_execution_status"));
     }
 
     private static final class HttpFixture implements AutoCloseable {

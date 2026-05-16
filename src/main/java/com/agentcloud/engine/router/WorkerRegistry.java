@@ -15,11 +15,15 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 public class WorkerRegistry {
     private static final Logger log = LoggerFactory.getLogger(WorkerRegistry.class);
+    private static final long DEFAULT_TEMPORARY_UNAVAILABLE_MS = 10 * 60 * 1000L;
     private final Map<String, Worker> workers = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final Map<String, TemporaryUnavailability> temporarilyUnavailableWorkers =
+        Collections.synchronizedMap(new LinkedHashMap<>());
     private final AgentProviderRegistry agentProviderRegistry;
 
     public WorkerRegistry() {
@@ -179,6 +183,30 @@ public class WorkerRegistry {
                 "execution_backend", "provider_native_cli"
             ),
             true, true));
+        register(new Worker("codebuddy", "codebuddy",
+            List.of("coding", "reading", "writing"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 86,
+                "execution_backend", "provider_native_cli"
+            ),
+            false, true));
+        register(new Worker("trae", "trae",
+            List.of("coding", "reading", "session"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 85,
+                "execution_backend", "provider_native_cli"
+            ),
+            false, true));
     }
 
     public Worker register(Worker worker) {
@@ -221,6 +249,40 @@ public class WorkerRegistry {
             .collect(Collectors.toList());
     }
 
+    public void markTemporarilyUnavailable(String workerId, String reason) {
+        markTemporarilyUnavailable(workerId, DEFAULT_TEMPORARY_UNAVAILABLE_MS, reason);
+    }
+
+    public void markTemporarilyUnavailable(String workerId, long durationMs, String reason) {
+        String normalizedWorkerId = blankToNull(workerId);
+        if (normalizedWorkerId == null) {
+            return;
+        }
+        long safeDurationMs = durationMs > 0 ? durationMs : DEFAULT_TEMPORARY_UNAVAILABLE_MS;
+        long unavailableUntilEpochMs = System.currentTimeMillis() + safeDurationMs;
+        String normalizedReason = blankToNull(reason);
+        temporarilyUnavailableWorkers.put(
+            normalizedWorkerId,
+            new TemporaryUnavailability(unavailableUntilEpochMs, normalizedReason)
+        );
+        log.warn(
+            "Worker marked temporarily unavailable: worker={} durationMs={} reason={}",
+            normalizedWorkerId,
+            safeDurationMs,
+            firstNonBlank(normalizedReason, "unspecified")
+        );
+    }
+
+    public boolean isTemporarilyUnavailable(String workerId) {
+        return currentTemporaryUnavailability(workerId).isPresent();
+    }
+
+    public String temporaryUnavailableReason(String workerId) {
+        return currentTemporaryUnavailability(workerId)
+            .map(TemporaryUnavailability::reason)
+            .orElse(null);
+    }
+
     public ReadinessCheck checkReadiness(String workerId) {
         Worker w = workers.get(workerId);
         if (w == null) return new ReadinessCheck(workerId, false, Map.of(), "worker not found");
@@ -242,12 +304,14 @@ public class WorkerRegistry {
             providerStatus = agentProviderRegistry.status(providerId);
             checks.put("provider:" + providerId, providerStatus != null && providerStatus.ready());
         }
+        TemporaryUnavailability temporaryUnavailability = currentTemporaryUnavailability(workerId).orElse(null);
+        checks.put("runtime_available", temporaryUnavailability == null);
         boolean allOk = checks.values().stream().allMatch(Boolean::booleanValue);
         return new ReadinessCheck(
             workerId,
             allOk && w.ready(),
             Map.copyOf(checks),
-            readinessReason(w, checks, providerId, providerStatus)
+            readinessReason(w, checks, providerId, providerStatus, temporaryUnavailability)
         );
     }
 
@@ -288,8 +352,15 @@ public class WorkerRegistry {
     private String readinessReason(Worker worker,
                                    Map<String, Boolean> checks,
                                    String providerId,
-                                   AgentProviderStatus providerStatus) {
+                                   AgentProviderStatus providerStatus,
+                                   TemporaryUnavailability temporaryUnavailability) {
         String executionBackend = metadataString(worker != null ? worker.metadata() : null, "execution_backend");
+        if (temporaryUnavailability != null) {
+            String reason = blankToNull(temporaryUnavailability.reason());
+            return reason != null
+                ? "temporarily unavailable: " + reason
+                : "temporarily unavailable due to recent worker failure";
+        }
         if (providerStatus != null && !providerStatus.ready()) {
             String providerReason = blankToNull(providerStatus.readinessReason());
             return providerReason != null ? providerReason : "provider not ready: " + providerId;
@@ -311,9 +382,32 @@ public class WorkerRegistry {
             if (entry.getKey().startsWith("executor_backend:")) {
                 return ProviderExecutionSupport.unsupportedReason(providerId, executionBackend);
             }
+            if ("runtime_available".equals(entry.getKey())) {
+                String reason = temporaryUnavailability != null ? blankToNull(temporaryUnavailability.reason()) : null;
+                return reason != null
+                    ? "temporarily unavailable: " + reason
+                    : "temporarily unavailable due to recent worker failure";
+            }
             return "dependency not satisfied: " + entry.getKey();
         }
         return worker.ready() ? "ready" : "worker marked not ready";
+    }
+
+    private Optional<TemporaryUnavailability> currentTemporaryUnavailability(String workerId) {
+        String normalizedWorkerId = blankToNull(workerId);
+        if (normalizedWorkerId == null) {
+            return Optional.empty();
+        }
+        TemporaryUnavailability status = temporarilyUnavailableWorkers.get(normalizedWorkerId);
+        if (status == null) {
+            return Optional.empty();
+        }
+        if (status.unavailableUntilEpochMs() <= System.currentTimeMillis()) {
+            temporarilyUnavailableWorkers.remove(normalizedWorkerId);
+            log.info("Worker temporary unavailability expired: worker={}", normalizedWorkerId);
+            return Optional.empty();
+        }
+        return Optional.of(status);
     }
 
     private String providerId(Worker worker) {
@@ -343,5 +437,19 @@ public class WorkerRegistry {
         return value == null || value.isBlank() ? null : value;
     }
 
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
     public record ReadinessCheck(String workerId, boolean ready, Map<String, Boolean> checks, String reason) {}
+
+    private record TemporaryUnavailability(long unavailableUntilEpochMs, String reason) {}
 }

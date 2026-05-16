@@ -68,12 +68,19 @@ public class ActiveContextBuilder {
             riskHints = exclusionPolicy.apply(retentionPolicy.apply(riskHints, 2));
             retainedHints = exclusionPolicy.apply(retentionPolicy.apply(retainedHints, 2));
 
-            String taskFocus = firstNonBlank(task.goal(), task.nextStep(), task.title());
+            String taskTitle = task == null ? null : task.title();
+            String taskGoal = task == null ? null : task.goal();
+            String taskIntent = task != null && task.metadata() != null && task.metadata().get("intent") != null
+                ? task.metadata().get("intent").toString()
+                : null;
+            String taskFocus = firstDistinctFocus(task.nextStep(), taskGoal, taskTitle, taskIntent);
             String continuitySummary = resolveContinuitySummary(task, packet, checkpoint, terminalTask);
             String continuitySource = resolveContinuitySource(task, packet, checkpoint, terminalTask);
 
             List<String> lines = new ArrayList<>();
-            addLine(lines, "Task Focus", taskFocus);
+            if (taskFocus != null && !taskFocus.isBlank()) {
+                addLine(lines, "Task Focus", taskFocus);
+            }
             addLines(lines, "Constraints", constraints);
             addLines(lines, "Key Decisions", keyDecisions);
             addLines(lines, "Key Artifacts", keyArtifacts);
@@ -149,6 +156,17 @@ public class ActiveContextBuilder {
                 trace.add("event summaries retained from recent event trace");
             }
             return trace;
+        }
+
+        private String firstDistinctFocus(String preferred, String goal, String title, String intent) {
+            String normalizedPreferred = PromptFieldDeduper.normalizePromptField(preferred);
+            if (!normalizedPreferred.isBlank()
+                && !PromptFieldDeduper.isPromptFieldDuplicate(normalizedPreferred, goal)
+                && !PromptFieldDeduper.isPromptFieldDuplicate(normalizedPreferred, title)
+                && !PromptFieldDeduper.isPromptFieldDuplicate(normalizedPreferred, intent)) {
+                return normalizedPreferred;
+            }
+            return "";
         }
 
         private List<String> collectConstraints(Task task, ResumePacket packet, Checkpoint checkpoint, boolean terminalTask) {

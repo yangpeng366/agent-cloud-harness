@@ -224,7 +224,8 @@ class ProviderCliWorkerExecutorTest {
             "task_type", "coding",
             "intent", "用 kimi 非交互执行单轮任务。",
             "provider_model", "kimi-k2-turbo-preview",
-            "workspace", "D:\\gitAll\\agent-cloud-harness"
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "provider_session_id", "kimi-session-001"
         )));
 
         Method method = ProviderCliWorkerExecutor.class.getDeclaredMethod(
@@ -256,10 +257,47 @@ class ProviderCliWorkerExecutorTest {
         assertTrue(command.contains("--work-dir"));
         assertTrue(command.contains("D:\\gitAll\\agent-cloud-harness"));
         assertTrue(command.contains("--session"));
-        assertTrue(command.contains("session_provider_cli"));
+        assertTrue(command.contains("kimi-session-001"));
         assertTrue(command.contains("--model"));
         assertTrue(command.contains("kimi-k2-turbo-preview"));
         assertTrue(command.contains("--prompt"));
+    }
+
+    @Test
+    void resumeIdUsesContinuationMetadataInsteadOfSessionIdAndSkipsRecoveryColdStart() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+        Method method = ProviderCliWorkerExecutor.class.getDeclaredMethod("resumeId", TaskRuntimeContext.class);
+        method.setAccessible(true);
+
+        TaskRuntimeContext normal = runtimeContext("claude", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "Verify provider-native resume metadata precedence.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "provider_session_id", "provider-session-001",
+            "provider_thread_id", "provider-thread-001"
+        )));
+        TaskRuntimeContext sameWorkerRetry = runtimeContext("claude", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "Verify same-worker retry skips provider resume.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "recovery_stage", "same_worker_retry_scheduled",
+            "provider_session_id", "provider-session-001",
+            "provider_thread_id", "provider-thread-001"
+        )));
+        TaskRuntimeContext autoHandoff = runtimeContext("claude", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "Verify auto handoff skips provider resume.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "recovery_stage", "auto_handoff_scheduled",
+            "provider_session_id", "provider-session-001",
+            "provider_thread_id", "provider-thread-001"
+        )));
+
+        assertEquals("provider-session-001", method.invoke(executor, normal));
+        assertEquals(null, method.invoke(executor, sameWorkerRetry));
+        assertEquals(null, method.invoke(executor, autoHandoff));
     }
 
     @Test

@@ -26,10 +26,9 @@ class WebConsoleHandlerHttpTest {
             assertEquals(200, response.statusCode());
             assertEquals("text/html; charset=UTF-8", response.headers().firstValue("Content-Type").orElse(null));
             assertTrue(response.body().contains("Session Transcript"));
-            assertTrue(response.body().contains("任务链"));
-            assertTrue(response.body().contains("查看任务面板"));
+            assertTrue(response.body().contains("任务轨迹"));
+            assertTrue(response.body().contains("id=\"detailsToggleButton\""));
             assertTrue(response.body().contains("data-composer-mode=\"auto\""));
-            assertTrue(response.body().contains("data-composer-mode=\"message\""));
             assertTrue(response.body().contains("data-composer-mode=\"task\""));
             assertFalse(response.body().contains("data-composer-mode=\"followup\""));
         }

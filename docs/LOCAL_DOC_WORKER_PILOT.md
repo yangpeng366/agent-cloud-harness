@@ -201,3 +201,41 @@ Invoke-RestMethod -Uri "http://localhost:18080/api/v1/tasks/{taskId}/judgment_tr
 但单轮内已经支持最多 3 步工具链，也支持 `patch_file` 级别的局部写回。
 
 这个试点的目标是先验证“受控工具能力层 + 可观测性”本身已经打通。
+
+## 9. 一个真实调研样例
+
+最近这轮已经有一条真实“本地调研 + 文档落地”样例：
+
+- 真实 task：
+  - `session_2b11c93d9dcd439c`
+  - `task_24cbb3678c684d60`
+- 目标：
+  - 对照 `ArticleThirdService.java`
+  - 对照 `D:\项目对接-大文件\data\cnml\input` 下的新华社 CNML 样例
+  - 对照 `新华全媒新闻服务平台RSS用户手册v1.4.docx`
+  - 判断三者能否对上
+
+这条任务的自动执行链没有完整收敛到最终结果，原因是：
+
+- `codex` 轮次先失败：`thread not found`
+- fallback worker 也没有给出可直接发布的最终调研结论
+
+但证据链并没有丢，后续已经人工收口为两份文档：
+
+- [XINHUA_CNML_RSS_ARTICLETHIRDSERVICE_ALIGNMENT_2026-05-15.md](./XINHUA_CNML_RSS_ARTICLETHIRDSERVICE_ALIGNMENT_2026-05-15.md)
+- [XINHUA_CNML_ADAPTER_IMPLEMENTATION_PLAN_2026-05-15.md](./XINHUA_CNML_ADAPTER_IMPLEMENTATION_PLAN_2026-05-15.md)
+
+同时，RSS 手册也被转换成了本地可检索 Markdown：
+
+- `.tmp\xinhua-rss-user-manual-v1.4.md`
+
+这个样例说明一件事：
+
+- 对于“真实外部文档 + 本地代码 + 外部样例文件”的调研任务，当前 harness 已经足够支撑**证据收集与中间分析**
+- 但如果 worker round 中途失败，最终结论仍可能需要人工按证据链补写回 `docs/`
+
+因此，这类任务的更现实成功标准应理解为：
+
+1. `tool_trace` / `live_flow` 能证明材料已被拉齐
+2. 关键路径、样例文件、转换产物都能在本机复现
+3. 最终结论落回仓库文档，而不是只停留在 task summary

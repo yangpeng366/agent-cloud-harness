@@ -76,6 +76,9 @@
 - default `task_auto`
 - manual-start task
 - continue-current note
+- default `task_auto` 后的第一页结果可见性
+  - 当前选中 task 时，顶部应能看到 pinned `latest round output` 或等价的 `messageSummary` 短结果
+  - 推荐优先抓稳定 selector：`[data-testid="pinned-latest-round-output"]`
 
 不负责：
 
@@ -108,10 +111,10 @@
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
   -Background `
-  -Port 18328 `
-  -StdOutPath .tmp\server-18328.out.log `
-  -StdErrPath .tmp\server-18328.err.log `
-  -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\dialogue-smoke-18328.db")
+  -Port 18386 `
+  -StdOutPath .tmp\server-18386.out.log `
+  -StdErrPath .tmp\server-18386.err.log `
+  -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\dialogue-smoke-18386.db")
 ```
 
 说明：
@@ -124,6 +127,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 - 如果你改的是 `scripts/screenshot.js`、`scripts/dialogue-business-smoke.js` 这类本地验证脚本，下次直接运行脚本就会生效
 - 即使你已经重新构建，只要还是在看旧的后台实例，它也仍然在使用启动时复制出来的 `.tmp/runtime-jars\...` 运行 JAR；要看新的 `/dialogue/` 资源，必须起 fresh 实例
 - 如果工作区源码和真实 `8080` 页面行为明显不一致，优先按“旧 runtime / stale build”排障，不要先把问题归因为前端逻辑本身
+- 如果真实 `8080` 页面仍显示 `01/21 22:04` 这类明显错误时间，或 `task_progress` 还只有旧摘要/乱码，优先判断当前实例是否仍在跑旧/坏的运行 JAR；不要在未 fresh restart 的前提下直接判定“代码没生效”
 - 如果本机构建链直接报 `mvn` 找不到，要先修构建环境；否则你后面看到的所有 `/dialogue/` 页面行为，都可能只是旧构建的假象
 
 ---
@@ -133,7 +137,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 ### Step A：先确认服务健康
 
 ```powershell
-curl.exe http://localhost:18328/api/v1/health
+curl.exe http://localhost:18386/api/v1/health
 ```
 
 预期：
@@ -143,7 +147,7 @@ curl.exe http://localhost:18328/api/v1/health
 ### Step B：先跑 shell / layout
 
 ```powershell
-node .\scripts\screenshot.js --base-url http://localhost:18328 --report .tmp\dialogue-shell-report-18328.json
+node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dialogue-shell-report-18386.json
 ```
 
 当前 shell 验证关心的是：
@@ -160,11 +164,48 @@ node .\scripts\screenshot.js --base-url http://localhost:18328 --report .tmp\dia
 - `responses` profile 能正确保留 `#facade=responses`
 - 默认 `/dialogue/` shell 不应自动带出 `task=` hash
 - session-scoped shell 下，composer 的 task-only 次级动作与上下文块默认隐藏
+- 用户手工点开的“展开完整结果 / 展开详细内容”在轮询刷新后必须保持展开；几秒后自动收回应直接判定为前端展开状态丢失 bug
+- 展开状态必须绑定到同一 `message id`；轮询、`live_flow` 刷新、重新渲染 message list 都不能把用户手工展开覆盖掉，除非用户主动收起或该消息已不在当前列表里
+- 下方 active task thread 的 `最近输出 -> 展开完整结果` 也必须守住同样的 contract，但它不应继续复用“只认 message id 的展开键”；thread output 展开态应绑定到同一 `task id` 或当前 selected task identity，不能在 related/session message 轮询后被 `message id` 清理逻辑误删
+- 选中 active task 时，如果 `live_flow.route_preview` / `provider_selection` 已经给出当前 route worker，第一页就必须能直接看见 `正在执行: <worker>`；不能只在 route drawer 或 modal 深处才能找到
+- 如果 `live_flow.route_preview.recovery_unpinned_recommendation.provider_deprioritized=true`，第一页 route box 也必须直接解释“恢复阶段会优先避开 <provider>`；不能要求用户只看 raw JSON 或 live_flow 才知道恢复避让原因
+- task thread 里的 `Harness` bubble 应优先显示最近一条 `task_progress / task_result` 的叙述性内容与结果预览；如果后端已经有这类消息而 bubble 仍只剩 `failed / done` 这类单词，应直接判定为 **task-thread outcome preview seam**
+- 对当前选中的 active task，如果 `live_flow.related_messages` 或 `session messages` 里已经存在更完整的最近一轮 `task_progress / task_result.content`，主气泡正文必须优先消费这条 outcome message；`runtime_context.active_context.continuity_summary` 只能作为次级兜底，不能用一个 terse `failed / done` 覆盖真实结果正文
+- 对失败态 task，如果最新 worker artifact 的 `output_text / artifact_content` 为空，但 `failure_summary_readable` 已存在，`task_progress / task_result.full_content` 必须回退到这条可读失败摘要；展开结果不应只剩 `failed / Worker Output / Artifact Content` 这种空壳
+- 同样地，如果当前消息本身还没有显式 `full_content / output_text / artifact_content`，但已经有 `failure_summary_readable`，前端也应把它视为“可展开结果”；`展开完整结果` 至少要能展开出一段 `Failure Summary`，而不是因为缺少 worker/artifact 字段就完全不给展开入口
+- 如果历史 `task_progress / task_result.full_content` 自己就是旧的 `Worker Output / Artifact Content` 空壳，但同一条 message metadata 已经带了更可读的 `failure_summary_readable`，主聊天流的展开态也不应继续盲信旧壳；应优先展开成 `Failure Summary (+ 下一步)`，而不是把空壳正文重新暴露给用户
+- 同样地，如果 `output_text / artifact_content` 虽然不为空，但本身明显是旧的长噪声或 mojibake，而 `failure_summary_readable` 已经更干净，`task_progress / task_result.full_content` 也不应把这两段原样拼回去；展开态仍应优先保留短可读 `Failure Summary`，把脏原文继续留在 details / live_flow / artifact
+- 如果 `session messages` 里的最新 `task_progress.full_content` 仍是历史空壳，但当前 `live_flow.task.metadata.failure_summary_readable` 与恢复状态已经更完整，选中 task 的 thread output 仍必须优先展示这条更新后的失败摘要与 `failure_class / retry / handoff / human_gate`，不能被旧消息壳子压回去
+- 如果历史 `failure_summary_readable` 本身仍是旧的长噪声（例如 prompt echo、目录 listing、provider 原始 trace 或 mojibake 段），第一页 thread output 也不能原样整段铺开；主视图必须先压成短可读失败摘要，把原始长文本继续留在 details / live_flow / artifact 路径
+- 同样地，如果当前 focused task 的 `failure_summary_readable` 已经更干净，而 `task.summary` / `continuity_summary` 仍是历史脏摘要，第一页 `Harness` bubble、continuity 区和详情 modal 也必须优先显示这条干净失败摘要；不能继续把旧 `task.summary` 顶在最前面
+- 对当前选中的 active task，第一页还应有更强的运行态条带：至少把 `执行中/最近执行 worker` 与当前 `status / control node` 放在结果气泡上沿，而不是只混在普通 badge 里
+- 这条运行态条带最好显式分成两层：第一层是 `执行中/最近执行 worker + status/control node`，第二层是 `最近输出 + short failure/result`；不能退化成只有一段普通正文或一串 badge
+- 这两层条带还应继续接近真正的执行面：`worker` 与 `status/control node` 最好拆成独立 headline/detail，而不是全挤在同一行长句里；`最近输出` 也应优先展示短结果 headline，避免用户先扫到一大段自然语言正文
+- 移动端也要守住同一条 transcript-first contract：即使新增了更明显的 worker/output 条带，`430px` 左右窄屏下也不应让 header 或 composer 重新长到压过 transcript；否则应直接判定为 **narrow transcript dominance regression**
+- transcript 主聊天流里的 `task_progress / task_result` 卡也应遵守同一条原则：在默认折叠态下就露出 `worker + 短结果预览`，而不是只剩 `failed / done` 一词；点击 `>` 只负责展开完整正文，不负责补回“这是谁跑出来的”这种第一屏关键信息
+- 如果历史 `task_progress` 自己的 `metadata` 仍是旧壳，但当前已选中 task 的 `live_flow.task.metadata.failure_summary_readable` 更完整，transcript 主卡也应允许借用这份当前 task metadata，先把默认折叠态和展开态补成可读失败摘要，而不是机械继续显示 `failed`
+- 这条 transcript 主卡纠偏规则不应只依赖 URL/hash 里的 `selectedTaskId`；只要当前页面已经聚焦到同一条 `live_flow.task`，主卡就应允许借用这条 focused task 的最新 outcome projection，避免因为前端选择态短暂漂移而继续显示旧 `failed`
+- transcript 主卡的默认折叠态还应保持“短摘要优先”：`worker + short failure/result` 留在正文和 outcome strip；`failure_class / retry / handoff / human_gate / next step` 这类恢复细节继续留在 hint 或展开正文，不要重新把第一屏压成长句
+- 多轮任务第一页的 worker 可见性还应再前置一层：不论是上半区 transcript 主卡，还是下半区 active task thread，都应形成稳定的 `worker / status / short output` 执行条带；用户不该先读一段自然语言后，才推断出“是谁在跑、跑到了哪一轮”
+- 对当前选中的 active task，`task_progress / task_result` 默认折叠态最好接近 `codex/openclaw` 的 round output block：第一眼先看到 `执行中/最近执行 worker`、当前 `status / control node`、以及最近一轮短输出；展开 `>` 只负责补完整正文，不负责补第一屏关键信息
+- 如果当前页面已经选中 task，transcript 顶部还应额外有一块 pinned `latest round output` 摘要，直接钉住该 task 最近一轮 worker 结果；不应要求用户先在 message list 里向下找那张 `task_progress / task_result` 卡
+- 为了让 richer browser acceptance / 真实页探针更稳定，这块 pinned `latest round output` 最好提供稳定 selector，例如 `data-testid="pinned-latest-round-output"`；避免探针只能依赖样式类或文案猜节点
+- 这块 pinned `latest round output` 不应严格依赖 `live_flow.task` 已完全挂好；只要当前 selected task 已确定、且 `session messages / related messages` 里已有对应 `task_progress / task_result`，顶部摘要也应能先渲染出来
+- pinned `latest round output` 自身也应遵守“短摘要优先”：正文只保留 `worker + short failure/result`，`failure_class / retry / handoff / next step` 继续留在 foot 或展开区，不要把顶部摘要重新拉成长段状态播报
+- 当 transcript 消息较少时，`message summary + message list` 这一组默认也应整体贴近底部 composer，而不是让消息卡停在上半区、把大块空白留在消息下方；若仍有剩余空白，也应优先上移到消息组之上
+- 如果 transcript 下方还保留折叠态 `任务轨迹` summary，这个 summary 也应按同一条原则收成薄 footer strip；不能因为它本身像第二块 header，就重新制造“消息组和 composer 之间断一层”的错觉
+- 如果 pinned `latest round output` 已经有独立的 `最近输出` 条带，正文应进一步退成可选 fallback，而不是和 output strip 重复同一句短结果
+- 下半区 active task thread 也应显式有一块 `最近输出` panel；如果第一页只能看到 `Harness` 正文，却没有独立的 output label / short result block，应直接判定为 **thread round-output visibility regression**
+- 如果后端已经把失败细分成 `worker_runtime_transient / task_environment_blocked / worker_backend_deterministic / partial_result_or_quality_risk`，第一页至少要直接露出这条 `failure_class`；否则用户只能看到“auto handoff / human_gate”，但看不出为什么系统会做这个决定
+- 但第一页也不该直接把这些恢复信号按原始枚举串裸露出来；像 `worker_runtime_transient / human_gate_required` 这种 token 只适合留在 API / live_flow / details，主视图更合理的行为是显示成短的人话标签，例如“临时运行失败 / 等待人工确认”
+- 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
+- richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；像 `/favicon.ico` 这种非功能性噪声也应收掉，避免污染验收信号
+- 真实页首屏还应避免“先闪旧态再收敛”：如果 hash 已经带了 `task=...`，第一页不应先短暂显示 `selectedStatus=idle`、主卡正文=`failed`，几秒后才回到正确 worker/result；首轮加载应尽量先拿到 selected task 的 `live_flow` 再渲染主聊天流
 
 ### Step C：再跑 light business smoke
 
 ```powershell
-node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --report .tmp\dialogue-business-smoke-18328.json
+node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18386 --report .tmp\dialogue-business-smoke-18386.json
 ```
 
 注意：
@@ -173,13 +214,14 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --re
 - 但它仍只是 light business smoke，不等于 richer continuity / acceptance 全覆盖
 - 如果后续再失败，仍需要结合 report、browser console、requestfailed 和后端 API 证据一起判断
 - 如果失败点是“default `task_auto` 后 session 已写入 `task_brief`、session tasks 也已出现新 task，但页面还停在 session-only shell”，应优先归类为 **pending auto-task catch-up seam**，而不是“后端没触发任务”
+- 如果失败点是“点开完整结果后，过几秒又自动收回”，应优先归类为 **message-card expanded state lost on polling seam**，而不是“后端没返回完整结果”
 
 ### Step D：最后再跑 richer acceptance
 
 只有在 Step B 稳定、Step C 至少没有明显退化后，再继续跑：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18328
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18386
 ```
 
 ---
@@ -197,20 +239,74 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - default `task_auto`
   - manual-start task
   - continue-current note
+- 真实 `8080` 上新增的 pinned `latest round output` gate 已经能通过
+- fresh `18386` 隔离样本里，`continue-current note` 也已经重新回到绿色：
+  - `task_note`
+  - `已记录到当前任务上下文，等待手动继续。`
+- 之前那条 `#taskContinueCurrent` 偶发等待超时，应视为**已收口的旧 smoke-driver seam**，除非后续在 fresh 样本里再次复现
 
 现有产物示例：
 
-- `.tmp/dialogue-shell-report-18328.json`
+- `.tmp/dialogue-shell-report-18386.json`
 - `.tmp/dialogue-shell-screens/dialogue-shell-desktop.png`
 - `.tmp/dialogue-shell-screens/dialogue-shell-narrow.png`
 - `.tmp/dialogue-shell-screens/dialogue-shell-responses.png`
-- `.tmp/dialogue-business-smoke-18328.json`
+- `.tmp/dialogue-business-smoke-18386.json`
 
 当前最新的 fresh 壳层收口与验证样本是：
 
-- `http://localhost:18328`
-- `.tmp/dialogue-shell-report-18328.json`
-- `.tmp/dialogue-business-smoke-18328.json`
+- `http://localhost:18386`
+- `.tmp/dialogue-shell-report-18386.json`
+- `.tmp/dialogue-business-smoke-18386.json`
+
+补充一条更贴近真实项目页的新证据：
+
+- 在真实 `8080` 上，`scripts/dialogue-business-smoke.js` 现在已经能额外验证：
+  - default `task_auto` 成功后
+  - 第一屏顶部可稳定看到 pinned `latest round output`
+  - 当前 smoke 输出里已抓到：
+    - `selectedStatus = active / scheduler / worker codex`
+    - pinned `latest round output`
+    - `执行中 / worker codex · active / scheduler`
+- 这说明“default task_auto 后第一页要直接看见 worker + 最近一轮 output summary”这条 contract 已经有真实浏览器 smoke 证据
+
+最近一轮更贴近真实页面断层排查的新证据来自 fresh `18390`：
+
+- `Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18390 -Surface chat`
+- 截图目录：`.tmp/dialogue-browser-screens-18390-chat-layout-v3`
+- `chat_surface.task_note_attach` 现在还会附带一组 `layout_metrics`，用于约束“消息少时 transcript 中段不要再断一大块”：
+  - `gapBetweenLastCardAndDrawer`
+  - `gapBetweenDrawerAndComposer`
+  - `drawerHeight`
+  - `drawerSummaryHeight`
+- 当前 gate 写实成：
+  - `gapBetweenDrawerAndComposer <= 28`
+  - `drawerSummaryHeight <= 28`
+- fresh `18390` 的真实值当前为：
+  - `gapBetweenLastCardAndDrawer = 10`
+  - `gapBetweenDrawerAndComposer = 17`
+  - `drawerHeight = 23`
+  - `drawerSummaryHeight = 23`
+- 这说明“消息组 + collapsed thread drawer”已经基本被收成贴近 composer 的同一组底部栈；后续若再退化成中段断层，应优先检查这组布局阈值，而不是先怀疑消息数据没回来
+
+紧接着下一轮又收了一条和“完整结果展开”直接相关的前端 seam：
+
+- 下半区 active task thread 的 `展开完整结果` 现在不再和主聊天流共用“只认 message id”的展开键
+- 当前展开态已经拆成：
+  - `expandedMessageIds`
+  - `expandedThreadOutputTaskIds`
+- 这样在 related/session message 轮询刷新后，task thread 的展开态不会再被 `message id` 清理逻辑误删
+- 当前最小回归已补进：
+  - `src/test/js/dialogue-expanded-state-plan.test.mjs`
+  - 重点锁住：
+    - task 仍可见时，thread output 展开态不能因为 message id 变化而丢失
+    - task 自己消失时，展开态才允许被清掉
+- 这条修复当前还有 fresh `18392` 的最小运行时证据：
+  - `Build-WithJava21.ps1 -QuietMaven -SkipTests`
+  - `Run-HarnessWithJava21.ps1 -Background -Port 18392`
+  - `Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18392 -Surface chat`
+  - `screenshot.js --base-url http://localhost:18392 --report .tmp/dialogue-shell-report-18392.json`
+  - 结果保持绿色，没有把现有 `task_note_attach / manual_start_continuity / thread output` 链打坏
 
 这轮不只是“还能打开页面”，而是已经包含第二轮壳层收口后的真实 green run：
 
@@ -246,7 +342,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 
 这轮之后，单独顺序运行的 shell screenshot 和 light business smoke 仍保持绿色。
 
-当前 `18328` 的 shell report 已经不只证明“页面能打开”，还明确覆盖了：
+当前 unified fresh `18386` 的 shell report 已经不只证明“页面能打开”，还明确覆盖了：
 
 - `rail stays secondary`
 - `header stays lighter than transcript`
@@ -262,7 +358,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 同时这轮 green run 也确认了 light business smoke 仍然保持通过：
 
 - create session
-- `message_only`
+- default `task_auto`
+- default `task_auto pinned latest round output`
 - manual-start task
 - continue-current note
 
@@ -304,11 +401,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - Puppeteer 打开 `/dialogue/` 改为先等 `/api/v1/health`，再显式等 shell，而不是依赖脆弱的 `networkidle2`
   - 后台 harness 启动时改为复制 runtime jar，避免本机重建 `target\*.jar` 时把静态资源链打坏（此前曾实打实出现 `ZipFile invalid LOC header`）
   - 后台 harness 启动时如果端口已被占用，会直接失败，避免验证误打到旧实例
-- 当前 fresh 绿灯应以 `18328` 隔离实例为准；`18264` 不是当前成功样本，它正是这类启动时序性故障的一个真实例子
-- `18328` 这轮还额外确认了更窄的 `thread rail + details` 列宽已经在 fresh 运行时真实生效：desktop / responses 下当前是 `196px / 292px`，而不是旧的 `220px / 360px`
-- 同一轮里，desktop shell 的 transcript / composer 高度当前是 `575px / 284px`，说明这轮 composer 再减重后 transcript-first 仍然成立
+- 当前 fresh 绿灯应以 `18386` 隔离实例为准；`18264` 不是当前成功样本，它正是这类启动时序性故障的一个真实例子
+- `18386` 这轮再次确认了更窄的 `thread rail + details` 列宽已经在 fresh 运行时真实生效：desktop / responses 下当前是 `196px / 292px`，而不是旧的 `220px / 360px`
+- 同一轮里，`desktop / narrow / responses` 三个 profile 都为绿；其中 `narrow` 下当前 `header / transcript / composer` 是 `83px / 462px / 213px`，说明这轮移动端减重后 transcript-first 仍然成立
 - 右侧 details 的 header/empty/overview/action/card 默认高度也继续被压低，但现有 shell contract 没有被打坏
 - 当前仍不能把这两条本地 smoke 视为最终产品 gate；richer continuity / acceptance 仍要靠独立 acceptance 工具链
+- 对真实项目页还要额外检查一条当前 seam：
+  - 如果 `/api/v1/sessions/{id}/messages?task_id=...` 里最新 `task_progress / task_result` 已经带了 `metadata.full_content`
+  - 但主聊天流里仍只看到短摘要，或要靠用户手点刷新才出现新结果
+  - 当前应优先归类为 **前端结果可见性 / 活跃任务轮询 seam**，而不是“后端没拿到 agent 返回结果”
+- 更合理的当前 contract 应该是：
+  1. 选中 active task 时，`/dialogue/` 对该 task 采用更短周期的结果轮询
+  2. 最新 `task_progress / task_result` 回到主聊天流后，默认仍可先显示摘要
+  3. 但若后端已提供 `full_content / output_text / artifact_content`，页面必须明确提供“展开完整结果”入口，且对最新结果卡给予更强的默认可见性
 - 最新这轮 fresh `18344` 还暴露了一个更具体的真实缺口：
   - 后端已经按 `task_auto` 成功 materialize 新 task
   - `POST /v1/chat/completions` 写入的是 `task_brief`
@@ -328,10 +433,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - 这类问题应继续归类为“前端实现残缺”，而不是再回退怀疑 `task_auto` 语义
 - fresh `18350` 这轮又把状态再收窄了一层：
   - `delay()` helper 已补齐，default `task_auto` 仍能稳定切进新 task
-  - 但 `continue-current note` 这一步现在暴露出新的真实业务问题：
+  - 但当时 `continue-current note` 这一步又暴露出新的真实业务问题：
     - 页面看起来像继续当前任务
     - 实际上却又 materialize 了一条新 task
-  - 因此这一步当前更应归类为 **continue-current binding seam**，而不是 smoke 本身 flaky
+  - 因此当时更应归类为 **continue-current binding seam**，而不是 smoke 本身 flaky
   - 这条 seam 的目标 contract 也应明确写死：
     - 当前已选中 task + 勾选“继续当前任务”时
     - 前端请求必须绑定当前 task continuity
@@ -341,6 +446,47 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - `continue-current note` 现在会继续当前 task，而不是再新建 task
   - `scripts/dialogue-business-smoke.js` 在 `18352` 上已完整通过四条主路径
   - 当前 console 里剩余的一条 headless `404` 资源报错没有阻断页面功能，可先视为低优先级静态资源尾项
+- fresh `18362` 这轮又把边界收得更细了一层：
+  - `/dialogue/` 第一屏的 pinned `latest round output` 与 active task thread 现在已经能直接显示：
+    - 当前/最近执行 worker
+    - 当前 status / control node
+    - 最近输出短摘要
+  - 但同一轮也暴露出一个新的真实业务 seam：
+    - manual-start task 提交后
+    - 页面 hash 已切到新 task
+    - 但 detail title 仍可能停在旧 task
+    - 紧接着再点 `continue-current` 时，这轮输入会被当成新的 manual-start task 创建
+  - 当前 `18362` 的真实落库证据是：
+    - `sessions/{id}/tasks` 里新增了 `task_e4eab63214c841c3`
+    - `sessions/{id}/messages` 里落的是：
+      - user `task_brief`
+      - assistant `task_receipt`
+    - 而不是预期的：
+      - user `task_note`
+      - assistant `已记录到当前任务上下文，等待手动继续。`
+  - 因此这一步当时更准确的归类应是 **continue-current selection drift seam**
+  - 也就是：第一页 worker/output 可见性已经收住，但 manual-start 之后的 selected task / detail context 仍可能漂移，导致下一轮 continuity 绑错目标
+- fresh `18366` 这轮又把这条 seam 收住了：
+  - `submit manual-start task` 不再只等 hash 变化
+  - 当前更稳的 browser smoke contract 是：
+    - hash task 已切到新 task
+    - thread 中 active card 的 `data-task-id` 已对齐
+    - details title / selectedStatus 已对齐这条新 task
+  - 在这个 settle 前提下，`continue-current note` 重新回到正确合同：
+    - `sessions/{id}/messages?task_id=...` 里会新增：
+      - user `task_note`
+      - assistant `chat_reply`
+    - assistant 内容为：`已记录到当前任务上下文，等待手动继续。`
+  - 当前更稳的 smoke gate 也应以这条 task-scoped 回执为主，`composerInlineState` 只作辅助信号；不要再因为单条 inline 文案短暂漂移，就把已经正确的 continuity note 误判成失败
+  - fresh `18366` 的 `scripts/dialogue-business-smoke.js` 已重新通过：
+    - create session
+    - default `task_auto`
+    - default `task_auto pinned latest round output`
+    - manual-start task
+    - continue-current note
+  - 后续真实 `8080` 长寿实例里又进一步收口了另一条晚到刷新 seam：
+    - 旧 `auto-start` task 的晚到 progress/result 不应再把刚显式选中的 `manual-start` task 抢回去
+    - 当前这条 selected-task late-refresh drift 已通过短时 stickiness 收口，并已在 fresh-restart `8080` richer probe 上复验通过
 
 因此当前更准确的结论是：
 
@@ -357,6 +503,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   2. 再单独跑 `scripts/dialogue-business-smoke.js`
   3. 如果要再次确认 shell report，不要在 smoke 还跑着时重开 screenshot
   4. 若并发执行后只有 narrow profile 红灯，而单独重跑 narrow 立即恢复绿色，优先视为验证串行规约被破坏，而不是先判定 `/dialogue/` CSS 回归
+  5. 若 narrow profile 在 shell-only fresh 实例上仍持续红灯，优先检查移动端下是否仍有“视觉上隐藏但仍占布局”的 composer/context 块，以及 `lede / modeHint / inline state / textarea` 是否一起把 transcript 挤瘦
 
 ---
 

@@ -19,3 +19,19 @@ test("task overview plan keeps focus line separate and reduces cards to stable e
     assert.equal(plan.cards[2].value, "orchestrated");
     assert.equal(plan.cards[3].value, "2 calls");
 });
+
+test("task overview plan accepts caller-provided focus line base for queued recovery states", () => {
+    const plan = buildTaskOverviewPlan({
+        id: "task_456",
+        status: "active",
+        control_node: "scheduler",
+        assigned_worker: "openclaw-native"
+    }, {
+        focusWorker: "openclaw-native",
+        focusLineBase: "active / scheduler / handoff queued",
+        experimentMode: "orchestrated",
+        toolLabel: "none"
+    });
+
+    assert.equal(plan.focusLine, "active / scheduler / handoff queued / worker openclaw-native");
+});

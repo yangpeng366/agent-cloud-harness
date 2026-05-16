@@ -24,10 +24,16 @@
 - 先运行 `Start-DialogueChatFacadeManualAcceptance.ps1`
 - 直接使用返回 JSON 里的 `manual_acceptance.recommended_order`
 - 优先按 `chat -> responses` 顺序点验
-- `BrowserProbeSurface=both` 当前不应视为稳定 green gate；scripted browser evidence 请按 surface 分开跑
-- starter 当前不会自动写记录草稿
-  - 请直接使用返回 JSON 里的 `record_suggestion` 作为当天记录文件名建议
-  - 再基于本模板手动创建 / 回填
+- raw `Run-DialogueBrowserAcceptanceProbe.ps1 -Surface both` 当前不应视为稳定 green gate
+- starter-level `BrowserProbeSurface=both` 现在可以用来产出统一 prep bundle
+  - 它的真实行为是内部串行跑 `chat` / `responses` 再聚合结果
+- scripted browser evidence 的解释仍建议按 surface 分开看
+- starter 当前不会自动写**正式** acceptance record 到 `docs/`
+  - `record_suggestion` 仍只作为当天正式记录文件名建议
+  - 但 starter 现在会在 `.tmp` 下尝试自动生成：
+    - 一份未勾选的 A-H seed：`manual_acceptance.record_seed_output_path`
+    - 一份可继续回填的 record draft：`manual_acceptance.record_draft_output_path`
+  - 即便生成成功，它们也只是辅助草稿，不等于正式记录，更不等于真实人工验收已完成
   - 未实际执行的 Java/Node 测试和 A-H 手工路径仍应保持未勾选
 - starter 的 `manual_acceptance` 现在还会直接给出：
   - `result_json_path`
@@ -36,14 +42,21 @@
   - `record_seed_generated`
   - `record_seed_error`
   - 若骨架已自动生成，还会直接带一份 `record_seed_probe`
+  - 若 starter 跑的是 unified both-surface prep bundle，还会直接带一份 `starter_probe`
+  - 每条 A-H 路径的最小操作提示 / 前置条件
   - 每条 A-H 路径对应的 `candidate_pngs`
   - `command_examples`
   - `record_seed`
   - 其中 `command_examples.render_record_seed` 可直接生成一段可复制的 A-H markdown 骨架
     - 当前骨架顶部还会带出 `base_url / dialogue_url / responses_dialogue_url / result_json_path / record_seed_output_path / recommended_screenshot_dir / completion_gate`
-    - 同时会把 `keep_running / chat_browser_probe / responses_browser_probe / probe_record_seed_output` 收进同一份 markdown 头部
+    - 同时会把 `keep_running / chat_browser_probe / responses_browser_probe / probe_record_seed_output / probe_starter_output` 收进同一份 markdown 头部
   - `command_examples.render_record_seed_to_file` 可把这段骨架落到 `record_seed_output_path`
   - `command_examples.probe_record_seed_output` 可直接验证这条半自动骨架链
+  - `command_examples.probe_starter_output` 可直接验证 unified both-surface prep bundle 聚合结果
+  - `command_examples.render_manual_backfill_template_to_file` 可生成 A-H 手工回填模板 JSON
+  - `command_examples.apply_manual_backfill_to_record` 可把已填写的回填模板 merge 回正式 acceptance record
+  - `command_examples.probe_manual_backfill_output` 可验证这条回填 helper 链本身
+  - 按最新 contract，这三条 backfill helper 命令也应直接进入 seed / draft 头部，避免人工回填时还要回头翻 starter JSON
   - 建议优先按这些路径收集或核对 PNG，再回填到第 3 节
 - starter 当前会把完整返回 JSON 自动落到 `manual_acceptance.result_json_path`
   - 因此后续执行 `render_record_seed*` / `probe_record_seed_output` 时，不再需要调用方先手动把 stdout 重定向到 `.tmp\dialogue-manual-<port>.json`
@@ -51,6 +64,36 @@
   - 若 `record_seed_generated=true`，可直接打开这份 `.md` 继续人工回填
   - 若同时返回 `record_seed_probe`，可把其中的 `preview` 当作“骨架首段已生成”的直接辅助证据
   - 即便如此，它仍只是“骨架准备”，不是正式 acceptance record，更不等于真实人工验收已完成
+- starter 当前还会尝试把一份更完整的 acceptance record draft 自动落到 `manual_acceptance.record_draft_output_path`
+  - 若 `record_draft_generated=true`，可直接在这份 `.md` 上继续补 A-H 手工结果
+  - 若同时返回 `record_draft_probe`，可把其中的 header / section 检查结果当作“草稿已落盘”的辅助证据
+  - 这份 draft 仍默认保留未完成 gate，不会自动把 A-H 勾成已通过
+- 若需要把真实手工结果结构化回填，而不是直接手改 markdown
+  - 可先生成一份 backfill template JSON：
+    `command_examples.render_manual_backfill_template_to_file`
+  - 当前最小稳定字段应包括：
+    - `paths[].passed`
+    - `paths[].input`
+    - `paths[].observed_result`
+    - `paths[].notes`
+  - 填完后再用：
+    `command_examples.apply_manual_backfill_to_record`
+  - 当前 helper 只会 merge 第 3 节 A-H 各路径的 `Passed / Input / Observed result / Notes`
+  - 它不会自动改最终 gate，也不会把“本轮真实页面验收已完成”直接勾成通过
+- 若需要验证 backfill helper 链本身是否可用
+  - 可运行：
+    `command_examples.probe_manual_backfill_output`
+  - 这只证明 markdown merge helper 可用，不等于真实 A-H 人工验收已完成
+- 若 starter 同时带了 `-RunBrowserProbes -BrowserProbeSurface both`
+  - 若同时返回 `starter_probe`，可把其中的聚合检查结果当作“unified both-surface prep bundle 已真实落盘”的辅助证据
+  - 当前最小稳定字段应包括：
+    - `allow_both_in_one_run = true`
+    - `browser_probe_surface = both`
+    - `chat_surface_property_count`
+    - `responses_surface_property_count`
+    - `chat_png_count`
+    - `responses_png_count`
+  - 它只证明 starter 侧 both 聚合 bundle 完整，不等于 A-H 人工验收已完成
 - 若 starter 同时带了 `-RunBrowserProbes`
   - 返回 JSON 里的 `manual_acceptance.browser_probe_screenshot_dir`
     通常会和 `recommended_screenshot_dir` 一致
@@ -71,7 +114,7 @@
     - `chat`：`.tmp/dialogue-browser-screens-<port>/chat-*.png`
     - `responses`：`.tmp/dialogue-browser-screens-<port>/responses-*.png`
   - 例如：
-    - A `message_only` 可回填 `chat-message-only.png` 或 `responses-message-only.png`
+    - A `default task_auto` 可回填 `chat-default-task-auto.png`
     - F `stream fallback` 可回填 `chat-stream-fallback.png` 或 `responses-stream-fallback.png`
     - H `#facade=responses + task_required` 可回填 `responses-auto-start-task.png`
 
@@ -146,11 +189,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 > - 观察到的 UI 反馈
 > - 若失败，失败点在哪一层：shell / request / response / affordance / continuity
 > - 至少一条最小取证：截图、task id、network 观察说明，三者至少其一
+> - 每条路径只保留一行 `Path Note`；若同一路径出现重复 `Path Note`，应先修 starter / renderer 再回填正式记录
 >
 > 若先使用 scripted browser 取证，再做人工手点，可优先按下面的“现成 PNG 对照”回填：
-> - A `message_only`
->   - `chat-message-only.png`
->   - `responses-message-only.png`
+> - A `default task_auto`
+>   - `chat-default-task-auto.png`
 > - B `message_only + task_id`
 >   - `chat-task-note-attach.png`
 >   - `responses-task-note-attach.png`
@@ -167,11 +210,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 >   - `chat-stream-fallback.png`
 >   - `responses-stream-fallback.png`
 > - G `#facade=responses + message_only`
->   - `responses-message-only.png`
+>   - `responses-task-note-attach.png`
 > - H `#facade=responses + task_required`
 >   - `responses-auto-start-task.png`
 >
-> 注意：这些 PNG 只是“最小取证”候选，不等于对应路径已通过；仍需要真实人工手点后再勾选。
+> 注意：这些 PNG 只是“最小取证”候选；若正式记录直接采用 scripted browser evidence，也应在备注里写明来源。
+>
+> 当前更实的 gate 拆分是：
+> - A-H 都可接受 scripted browser evidence，只要它们对应当前真实可达 seam
+> - 其中旧路径标签仍保留，但当前真实 seam 更接近 `task_note_attach`：
+>   - B / G
+> - 若使用 starter / browser probe 自动回填 A-H，仍应在备注中保留“来源于 scripted browser evidence”
+> - 当前可先生成一份 scripted backfill JSON：
+>   `powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceScriptedBackfillTemplate.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json > .\.tmp\dialogue-scripted-backfill-18276.json`
+>   - A-H 会预填为 `passed=true`
+>   - 这份 JSON 仍不等于 final gate 关闭
 >
 > 若 starter JSON 已落在 `.tmp/dialogue-manual-<port>.json`，也可先用下面的 helper 生成一段可复制的 A-H markdown 骨架，再粘贴回本模板：
 > ```powershell
@@ -186,13 +239,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 > 当前 helper 的稳定 contract 是“输出 markdown 到控制台”；若需要写入文件，请由外层命令或编辑器自行保存。
 > 现在输出不只包含 A-H 条目，还会先给出一段 run metadata 和关键命令，便于直接拿去做人工回填。
 
-### A. `message_only`
+### A. `default task_auto`
 
 - [ ] 通过
 - 页面入口：`/dialogue/`
 - 输入：
 - 观察结果：
-- 备注：可优先参考 `chat-message-only.png`；若在 Responses surface 手点，可改挂 `responses-message-only.png`
+- 备注：当前 A 路径优先参考 `chat-default-task-auto.png`；`responses-task-note-attach.png` 属于 G 路径，不再混挂到 A。
 
 ### B. `message_only + task_id`
 
@@ -240,7 +293,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 - 页面入口：`/dialogue/#facade=responses`
 - 输入：
 - 观察结果：
-- 备注：可优先参考 `responses-message-only.png`
+- 备注：当前真实产品态下，这条更接近 `responses_surface.task_note_attach` seam；可优先参考 `responses-task-note-attach.png`
 
 ### H. `#facade=responses + task_required`
 

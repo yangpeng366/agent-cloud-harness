@@ -1,5 +1,6 @@
 package com.agentcloud.runtime;
 
+import com.agentcloud.engine.TaskTypeHeuristics;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
@@ -484,7 +485,7 @@ public class RuntimeFactSetAssembler {
                     List.of(),
                     routeReason,
                     firstNonBlank(routeSource, "current_task_assignment"),
-                    task != null && task.metadata() != null ? stringValue(task.metadata().get("task_type")) : null,
+                    task != null ? TaskTypeHeuristics.effectiveTaskType(task, null) : null,
                     preferredWorkerHint,
                     learningHintApplied,
                     candidateWorkers,
@@ -493,7 +494,13 @@ public class RuntimeFactSetAssembler {
                     selectedExecutionRole,
                     selectionScope,
                     routeReason,
-                    fallbackReason
+                    fallbackReason,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
                 );
             }
             return routerPreview;
@@ -504,7 +511,7 @@ public class RuntimeFactSetAssembler {
             routerPreview != null ? routerPreview.fallbackWorkers() : List.of(),
             routeReason,
             routeSource,
-            task != null && task.metadata() != null ? stringValue(task.metadata().get("task_type")) : null,
+            task != null ? TaskTypeHeuristics.effectiveTaskType(task, null) : null,
             preferredWorkerHint,
             learningHintApplied,
             candidateWorkers,
@@ -513,7 +520,13 @@ public class RuntimeFactSetAssembler {
             selectedExecutionRole,
             selectionScope,
             routeReason,
-            fallbackReason
+            fallbackReason,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 

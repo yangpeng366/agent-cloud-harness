@@ -18,7 +18,7 @@ export function reconcileTaskSelection(input) {
     });
     const nextSelectedTaskId = hasSelectedTask
         ? selectedTaskId
-        : (stickyTaskId || normalizeText(tasks[tasks.length - 1]?.id));
+        : (stickyTaskId || null);
     const keepLiveFlow = Boolean(liveFlowTaskId) && nextSelectedTaskId === liveFlowTaskId;
 
     return {

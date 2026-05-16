@@ -59,7 +59,11 @@
 当前还有一轮 index audit 证据：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
-- baseline 当前为 `staged_only`
+- 但最新结果显示，baseline 当前只剩 `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md` 仍在 staged
+
+当前更强的真实状态是：
+
+- `Repository Baseline` 已本地提交为 `8350a8c chore: prepare repository baseline for public first release`
 
 ## Commit 2: chat-first / facade product line
 
@@ -91,7 +95,11 @@
 当前还有一轮 index audit 证据：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
-- product 当前为 `staged_only`
+- 但最新结果显示，product 当前为 `staged_only = 0`
+
+当前更强的真实状态是：
+
+- `chat-first / facade product line` 已本地提交为 `d7fefea feat: ship chat-first dialogue facade and related UI flows`
 
 ## Commit 3: acceptance harness and operator docs
 
@@ -129,7 +137,11 @@
 当前还有一轮 index audit 证据：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
-- harness 当前为 `staged_only`
+- 但最新结果显示，harness 当前为 `staged_only = 0`
+
+当前更强的真实状态是：
+
+- `acceptance harness and operator docs` 已本地提交为 `4f559c2 chore: add acceptance harness and operator release tooling`
 
 ## Working logs
 
@@ -202,6 +214,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseCommitD
 - `GITHUB_FIRST_RELEASE_STAGE_PREVIEW_*_2026-05-11.md` 已进入 `evidence_only`
 - 当前 `unmatched = none`
 - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md` 已纳入 baseline 文档组，不再悬挂在未分类区
+
+同时按最新一轮 index audit：
+
+- 当前真实 index 已不再保持 earlier staged slice
+- 这意味着 `Execution Guide` / `Commit Sequence` 现在更适合作为 replay / 复核入口
+- 而不是把“重新 stage 三段主 slice”误写成项目当前最主要的下一步
 
 ## Execution Guide
 

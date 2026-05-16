@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Locale;
 
 public class ChatFacadeService {
     private static final String DEFAULT_MODEL = "agentcloud-default";
@@ -27,7 +28,6 @@ public class ChatFacadeService {
     );
     private static final String CHAT_COMPLETION_PATH = "/v1/chat/completions";
     private static final String RESPONSES_PATH = "/v1/responses";
-
     private final SessionService sessionService;
     private final TaskService taskService;
 
@@ -122,9 +122,10 @@ public class ChatFacadeService {
             );
         }
 
+        String resolvedTaskType = resolveTaskType(metadata, lastUserTurn);
         TaskCreateRequest taskRequest = new TaskCreateRequest(
             firstNonBlank(blankToNull(stringValue(metadata.get("title"))), deriveTaskTitle(lastUserTurn)),
-            firstNonBlank(blankToNull(stringValue(metadata.get("task_type"))), "continuation"),
+            resolvedTaskType,
             "user",
             firstNonBlank(blankToNull(stringValue(metadata.get("priority"))), "high"),
             lastUserTurn,
@@ -291,26 +292,69 @@ public class ChatFacadeService {
         if (message == null) {
             return null;
         }
-        String summaryPreview = metadataString(message.metadata(), "summary_preview");
+        String summaryPreview = sanitizeReadableFacadeSummary(
+            metadataString(message.metadata(), "summary_preview"),
+            message.metadata(),
+            null
+        );
         String nextStep = metadataString(message.metadata(), "next_step");
         if (summaryPreview != null) {
             return nextStep == null
                 ? summaryPreview
                 : summaryPreview + "\n\n下一步：" + nextStep;
         }
-        return firstNonBlank(blankToNull(message.content()), "任务已进入 harness。");
+        return firstNonBlank(
+            sanitizeReadableFacadeSummary(blankToNull(message.content()), message.metadata(), null),
+            "任务已进入 harness。"
+        );
     }
 
     private String fallbackTaskContent(Task task) {
         if (task == null) {
             return "当前会话已记录最新输入。";
         }
-        String summary = blankToNull(task.summary());
+        String summary = sanitizeReadableFacadeSummary(blankToNull(task.summary()), task.metadata(), task.assignedWorker());
         String nextStep = blankToNull(task.nextStep());
         if (summary != null && nextStep != null) {
             return summary + "\n\n下一步：" + nextStep;
         }
         return firstNonBlank(summary, nextStep, "任务已进入 harness。");
+    }
+
+    private String sanitizeReadableFacadeSummary(String text, Map<String, Object> metadata, String assignedWorker) {
+        String normalized = blankToNull(text);
+        if (normalized == null || !looksLikeUnreadableWorkerOutput(normalized) || !isFailureMetadata(metadata)) {
+            return normalized;
+        }
+        String worker = firstNonBlank(
+            metadataString(metadata, "selected_worker"),
+            metadataString(metadata, "assigned_worker"),
+            assignedWorker
+        );
+        return worker == null
+            ? "当前 worker 返回了不可读错误输出；请查看 details / live_flow。"
+            : "worker " + worker + " 返回了不可读错误输出；请查看 details / live_flow。";
+    }
+
+    private boolean isFailureMetadata(Map<String, Object> metadata) {
+        String status = firstNonBlank(
+            metadataString(metadata, "execution_status"),
+            metadataString(metadata, "worker_execution_status"),
+            metadataString(metadata, "completion_status")
+        );
+        if (status == null) {
+            return false;
+        }
+        return List.of("failed", "error", "timeout", "cancelled").contains(status.toLowerCase());
+    }
+
+    private boolean looksLikeUnreadableWorkerOutput(String value) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return false;
+        }
+        long replacementCount = normalized.chars().filter(ch -> ch == '\uFFFD').count();
+        return replacementCount >= 2 || normalized.contains("����") || (normalized.contains("û") && normalized.contains("��"));
     }
 
     private String replyType(SessionMessage message, Task task) {
@@ -412,6 +456,7 @@ public class ChatFacadeService {
         metadata.put("created_via", "chat_facade");
         metadata.put("chat_completion_model", facadeModel);
         metadata.put("model_mode", resolveModelMode(facadeModel, requestMetadata));
+        putIfNotBlank(metadata, "task_type", blankToNull(stringValue(requestMetadata.get("task_type"))));
         copyIfPresent(requestMetadata, metadata, "assigned_worker");
         copyIfPresent(requestMetadata, metadata, "target_worker");
         copyIfPresent(requestMetadata, metadata, "preferred_worker");
@@ -419,6 +464,10 @@ public class ChatFacadeService {
         copyIfPresent(requestMetadata, metadata, "task_length_bucket");
         copyIfPresent(requestMetadata, metadata, "experiment_name");
         return metadata;
+    }
+
+    private String resolveTaskType(Map<String, Object> metadata, String lastUserTurn) {
+        return TaskTypeHeuristics.effectiveTaskType(metadata, "continuation", lastUserTurn);
     }
 
     private String resolveModelMode(String facadeModel, Map<String, Object> metadata) {
@@ -580,6 +629,13 @@ public class ChatFacadeService {
 
     private String stringValue(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    private void putIfNotBlank(Map<String, Object> metadata, String key, String value) {
+        if (metadata == null || blankToNull(key) == null || blankToNull(value) == null) {
+            return;
+        }
+        metadata.put(key, value);
     }
 
     private boolean booleanValue(Object value, boolean fallback) {

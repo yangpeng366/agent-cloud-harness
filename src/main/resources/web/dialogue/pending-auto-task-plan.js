@@ -5,10 +5,11 @@ export function buildPendingAutoTaskTracker(input) {
     const currentTaskIds = Array.isArray(input?.currentTaskIds)
         ? input.currentTaskIds.map((value) => normalizeText(value)).filter(Boolean)
         : [];
-    const shouldTrack = resolvedMode === "task" && !existingTaskId;
+    const shouldTrack = (resolvedMode === "task" || resolvedMode === "message") && !existingTaskId;
     return {
         shouldTrack,
         sessionId,
+        resolvedMode,
         knownTaskIds: currentTaskIds
     };
 }

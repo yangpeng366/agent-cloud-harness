@@ -94,14 +94,23 @@ git add -n scripts/Start-DialogueChatFacadeManualAcceptance.ps1 scripts/Run-Chat
 
 这层 stage preview 使用临时 `GIT_INDEX_FILE` 做 simulated staged diff，并且不会污染真实 index。
 
+而当前更强的真实状态已经是：
+
+- `8350a8c chore: prepare repository baseline for public first release`
+- `d7fefea feat: ship chat-first dialogue facade and related UI flows`
+- `4f559c2 chore: add acceptance harness and operator release tooling`
+
+也就是说，这三组命令块不只是可预演，它们对应的三段主 slice 也已经真实进入本地 Git 历史。
+
 但这仍然不代表：
 
-- 首发 commit 已真正收出
 - `README.md` 已填入真实公开仓库地址
 - `/dialogue/` A-H 八条人工验收已完成
+- GitHub Actions 已在真实远端仓库跑绿
 
 ## 5. 相关当前态参考
 
-如果你在真正执行这些命令块之前，想先看一份按 **当前 worktree** 已经翻译好的 staged slice 清单，参考：
+如果你想 replay / 复核这三段主 slice，而不是假设它们当前仍在 index 里，先看这两份：
 
 - `docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`
+- `docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`

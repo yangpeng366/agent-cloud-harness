@@ -41,6 +41,7 @@ class WebConsoleHandler implements HttpHandler {
         try {
             String method = exchange.getRequestMethod();
             boolean headOnly = "HEAD".equals(method);
+            String requestPath = exchange.getRequestURI().getPath();
             if (!"GET".equals(method) && !headOnly) {
                 NioHttpServer.sendJson(exchange, 405, Map.of(
                     "success", false,
@@ -50,7 +51,7 @@ class WebConsoleHandler implements HttpHandler {
                 return;
             }
 
-            String resourcePath = resolveResourcePath(exchange.getRequestURI().getPath());
+            String resourcePath = resolveResourcePath(requestPath);
             if (resourcePath == null) {
                 NioHttpServer.sendJson(exchange, 404, Map.of(
                     "success", false,
@@ -68,7 +69,9 @@ class WebConsoleHandler implements HttpHandler {
             }
             exchange.close();
         } catch (Exception e) {
-            log.error("WebConsoleHandler error", e);
+            // 这里避免把 throwable 直接交给 logback，某些本机/打包异常链下会触发
+            // ThrowableProxy 类加载失败，进而把原始静态资源问题放大成连接中断。
+            log.error("WebConsoleHandler error: routePrefix={} detail={}", routePrefix, e.toString());
             NioHttpServer.sendJson(exchange, 500, Map.of(
                 "success", false,
                 "code", "500",

@@ -20,9 +20,15 @@ $seedItems = @($manual.record_seed)
 if ($seedItems.Count -eq 0) {
     throw "manual_acceptance.record_seed is empty"
 }
+$recommendedOrderById = @{}
+foreach ($entry in @($manual.recommended_order)) {
+    if ($null -ne $entry -and -not [string]::IsNullOrWhiteSpace([string]$entry.id)) {
+        $recommendedOrderById[[string]$entry.id] = $entry
+    }
+}
 
 $lines = New-Object System.Collections.Generic.List[string]
-$lines.Add('> Prefilled A-H record skeleton from starter JSON. Keep all items unchecked until a real manual browser check is done.')
+$lines.Add('> Prefilled A-H record skeleton from starter JSON. Current browser-probe evidence can prefill the A-H seam coverage, but regenerate or hand-edit the final record whenever the evidence bundle changes.')
 $lines.Add('')
 $lines.Add('## Run Metadata')
 $lines.Add('')
@@ -67,6 +73,34 @@ if ($null -ne $commandExamples) {
         $lines.Add('```')
         $lines.Add('')
     }
+    if ($commandExamples.probe_starter_output) {
+        $lines.Add('- Starter aggregate probe:')
+        $lines.Add('```powershell')
+        $lines.Add($commandExamples.probe_starter_output)
+        $lines.Add('```')
+        $lines.Add('')
+    }
+    if ($commandExamples.render_manual_backfill_template_to_file) {
+        $lines.Add('- Manual backfill template:')
+        $lines.Add('```powershell')
+        $lines.Add($commandExamples.render_manual_backfill_template_to_file)
+        $lines.Add('```')
+        $lines.Add('')
+    }
+    if ($commandExamples.apply_manual_backfill_to_record) {
+        $lines.Add('- Apply manual backfill:')
+        $lines.Add('```powershell')
+        $lines.Add($commandExamples.apply_manual_backfill_to_record)
+        $lines.Add('```')
+        $lines.Add('')
+    }
+    if ($commandExamples.probe_manual_backfill_output) {
+        $lines.Add('- Manual backfill probe:')
+        $lines.Add('```powershell')
+        $lines.Add($commandExamples.probe_manual_backfill_output)
+        $lines.Add('```')
+        $lines.Add('')
+    }
 }
 
 $recordSeedProbe = $manual.record_seed_probe
@@ -105,6 +139,14 @@ foreach ($item in $seedItems) {
     $lines.Add('')
     $lines.Add('- [ ] Passed')
     $lines.Add(("- Entry URL: {0}" -f $item.entry_url))
+    $noteEntry = $null
+    if ($recommendedOrderById.ContainsKey([string]$item.id)) {
+        $noteEntry = $recommendedOrderById[[string]$item.id]
+    }
+    if ($null -ne $noteEntry -and -not [string]::IsNullOrWhiteSpace([string]$noteEntry.note)) {
+        $lines.Add(("- Path Note: {0}" -f [string]$noteEntry.note))
+    }
+    $lines.Add('- Evidence Mode: scripted_browser_evidence_available')
     $lines.Add('- Input:')
     $lines.Add('- Observed result:')
     $lines.Add('- Notes:')

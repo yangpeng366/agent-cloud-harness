@@ -57,7 +57,7 @@
 | P1 | 强模型调小模型最小闭环 | 有基础但未闭环 | 20%-30% | 没有真实 strong planner -> small executor -> strong evaluator 路径 | 先固定一个单场景闭环，并把 model tier / selection reason 写进 trace |
 | P2 | Baseline experiment matrix | 有 eval 意识但缺执行框架 | 10%-20% | 无三模式固定对比、无统一指标落盘 | 先建立 strong_only / small_only / orchestrated 三模式 run skeleton |
 | P3 | Checkpoint / handoff packet spec | 概念最成熟但协议未封板 | 45%-60% | schema 边界不够正式，machine-readable first 不够稳定 | 冻结最小字段集，并让 runtime 输出与 schema 对齐 |
-| P4 | Tool-aware 最小多步执行 | 已有真实执行雏形 | 45%-60% | 已有多步工具链与 trace，但 execution contract / runtime fact aggregation / continuation 对齐仍不够硬 | 先把 `WorkerExecutionResult`、`ToolInvocationRecord`、checkpoint / judgment / live flow 聚合进一步收束成统一 hardness contract |
+| P4 | Tool-aware 最小多步执行 | 已有真实执行雏形 | 55%-70% | 已有多步工具链、failure recovery、自动续跑与 trace，但“长任务如何自动收口成可信最终结果”仍不够硬 | 先把 `WorkerExecutionResult`、`ToolInvocationRecord`、checkpoint / judgment / live flow 聚合进一步收束成统一 hardness contract，并继续强化 long-task closure contract |
 | P5 | 状态变更接口 + 消息投影 | 有用户面雏形但产品收口未完成 | 35%-50% | runtime / message layer 仍未完全统一，控制接口过渡态明显 | 把关键控制动作改成 POST/PATCH，并固定生命周期消息投影 |
 
 ---
@@ -265,39 +265,43 @@
 
 ### 当前状态
 
-项目已经不是纯文本执行结构，tool-aware executor 的雏形已经在了，这点很重要。
+项目已经不是“只会 plan 一下、打一把 tool 就结束”的阶段。当前真实落地能力已经包括：
 
-说明执行层已经开始向“可操作系统”移动。
+- 多步 tool chain 执行
+- `tool_chain_termination_reason`、`unfinished_items`、`execution_status` 等结构化 trace
+- failure recovery：same-worker retry / auto handoff / human gate
+- runtime fact aggregation、live flow、message projection
+- `declared rounds` / `auto_multi_round` / grounded write 等续跑信号
+
+说明执行层已经开始向“可操作系统”移动，而且已经能支持真实长任务的证据收集与多轮推进。
 
 ### 估计完成度
 
-**25% - 35%**
+**55% - 70%**
 
 ### 为什么还不高
 
-因为当前能力更接近：
+因为当前 weakest point 已经不再是“不会多步执行”，而是“长任务如何自动收口”：
 
-- planning
-- invoke one tool
-- finalization
-
-而不是稳定多步工具链。
-
-同时也缺少关键 guard：
-
-- round guard
-- repeated tool guard
-- no progress guard
-
-trace 粒度也不足以支撑复杂排障。
+- 可以收证据，但不总能自然收成可信的最终结果
+- completion / continuation / human gate 三者边界仍在持续收硬
+- task result / final artifact / human gate 的终态合同还不够稳定
+- 对长任务来说，自动推进与最终收口之间仍有灰区
 
 ### 最大缺口
 
 最大的缺口不是“工具数量不够”，而是：
 
-> 缺少最小但可控的多步执行路径。
+> long-task closure contract 还不够硬。
 
 ### 下一步最具体动作
+
+优先继续收硬长任务收口合同：
+
+- `continue` 什么时候应该自动续跑
+- `done` 什么时候可以被可信宣告
+- `waiting_human` 什么时候必须被显式触发
+- 这些边界如何稳定投影到 artifact / decision / task_result / live flow
 
 不要一开始做成全开放 autonomous loop。
 先做：

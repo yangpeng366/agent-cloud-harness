@@ -249,6 +249,12 @@ class TaskHandler implements HttpHandler {
         if (route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
             metadata.put("fallback_workers", route.fallbackWorkers());
         }
+        if (route.recoveryUnpinnedRecommendation() != null
+            && Boolean.TRUE.equals(route.recoveryUnpinnedRecommendation().providerDeprioritized())) {
+            metadata.put("provider_deprioritized", true);
+            putIfNotBlank(metadata, "deprioritized_provider", route.recoveryUnpinnedRecommendation().deprioritizedProvider());
+            putIfNotBlank(metadata, "deprioritization_reason", route.recoveryUnpinnedRecommendation().deprioritizationReason());
+        }
         metadata.put("provider_registered", provider != null);
         if (status != null) {
             putIfNotBlank(metadata, "provider_readiness_reason", status.readinessReason());

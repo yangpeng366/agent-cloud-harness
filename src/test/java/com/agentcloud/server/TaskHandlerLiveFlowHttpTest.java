@@ -13,6 +13,7 @@ import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.model.Artifact;
+import com.agentcloud.model.AgentRunRecord;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
@@ -739,6 +740,141 @@ class TaskHandlerLiveFlowHttpTest {
                     && "user_note".equals(String.valueOf(item.get("message_type")))
                     && "session".equals(String.valueOf(metadata.get("continuity_scope")));
             }));
+        }
+    }
+
+    @Test
+    void liveFlowRoutePreviewIncludesPinnedAndRecoveryRouteDiagnostics() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-route-diagnostics.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "route diagnostics task", "coding", "user", "high",
+                "确认 live_flow route_preview 会带 pinned 与 unpinned 诊断",
+                "route diagnostics should be visible", null, null, Map.of(), false
+            ));
+            Task pinnedTask = task.withAssignedWorker("claude").withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "assigned_worker", "claude"
+            )));
+            harness.db.jdbi().onDemand(TaskDao.class).updateState(pinnedTask);
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+            Map<String, Object> currentPinned = harness.map(routePreview.get("current_pinned_route"));
+            Map<String, Object> recoveryUnpinned = harness.map(routePreview.get("recovery_unpinned_recommendation"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("claude", routePreview.get("selected_worker"));
+            assertEquals("task_pinned", routePreview.get("route_source"));
+            assertEquals("claude", currentPinned.get("selected_worker"));
+            assertEquals("task_pinned", currentPinned.get("route_source"));
+            assertEquals("codex", recoveryUnpinned.get("selected_worker"));
+            assertEquals("capability_match", recoveryUnpinned.get("route_source"));
+        }
+    }
+
+    @Test
+    void liveFlowRoutePreviewExplainsProviderDeprioritizationForRecoveryRecommendation() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-provider-deprioritized.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider deprioritization route preview", "coding", "user", "high",
+                "确认 live_flow 会解释 provider 热失败后的恢复建议",
+                "route diagnostics should show provider deprioritization", null, null, Map.of(), false
+            ));
+            Task pinnedTask = task.withAssignedWorker("claude").withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "assigned_worker", "claude"
+            )));
+            harness.db.jdbi().onDemand(TaskDao.class).updateState(pinnedTask);
+
+            Instant base = Instant.parse("2026-04-29T14:00:00Z");
+            harness.db.jdbi().onDemand(AgentRunDao.class).insert(new AgentRunRecord(
+                "arun_claude_fail_1",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "failed",
+                base.minusSeconds(20),
+                base.minusSeconds(18),
+                200L,
+                "worker claude failed: thread not found (15252)",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "failed")
+            ));
+            harness.db.jdbi().onDemand(AgentRunDao.class).insert(new AgentRunRecord(
+                "arun_claude_fail_2",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "timeout",
+                base.minusSeconds(10),
+                base.minusSeconds(8),
+                150L,
+                "worker claude failed: provider unavailable",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "timeout")
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+            Map<String, Object> recoveryUnpinned = harness.map(routePreview.get("recovery_unpinned_recommendation"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("codex", recoveryUnpinned.get("selected_worker"));
+            assertEquals(Boolean.TRUE, recoveryUnpinned.get("provider_deprioritized"));
+            assertEquals("claude", recoveryUnpinned.get("deprioritized_provider"));
+            assertEquals("recent transient provider failures", recoveryUnpinned.get("deprioritization_reason"));
+        }
+    }
+
+    @Test
+    void liveFlowRoutePreviewPromotesContinuationRepoModificationTaskToEffectiveCodingType() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-effective-task-type.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "route preview effective type", "continuation", "user", "high",
+                "根据文档修改 D:\\gitAll\\articleeditor\\src\\main\\java\\ArticleThirdService.java，并补测试。",
+                "确认 live_flow route_preview 会使用有效 coding 语义", null, null, Map.of(), false
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("coding", routePreview.get("task_type"));
+            assertEquals("codex", routePreview.get("selected_worker"));
         }
     }
 

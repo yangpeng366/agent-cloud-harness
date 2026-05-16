@@ -1,5 +1,6 @@
 package com.agentcloud.engine.router;
 
+import com.agentcloud.engine.TaskTypeHeuristics;
 import com.agentcloud.engine.LearningMemoryService;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
@@ -28,9 +29,21 @@ public class WorkerRouter {
         return registry.get(workerId);
     }
 
+    public void markWorkerTemporarilyUnavailable(String workerId, String reason) {
+        registry.markTemporarilyUnavailable(workerId, reason);
+    }
+
+    public boolean isWorkerReady(String workerId) {
+        return registry.checkReadiness(workerId).ready();
+    }
+
+    public String workerReadinessReason(String workerId) {
+        WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness(workerId);
+        return readiness != null ? readiness.reason() : null;
+    }
+
     public RouteResult selectWorker(Task task) {
-        String taskType = task.metadata() != null && task.metadata().get("task_type") instanceof String
-            ? (String) task.metadata().get("task_type") : "general";
+        String taskType = TaskTypeHeuristics.effectiveTaskType(task, "general");
         String preferredModelTier = resolvePreferredModelTier(task);
         String pinnedWorker = resolvePinnedWorker(task);
 
@@ -65,7 +78,13 @@ public class WorkerRouter {
                 fallback.selectedExecutionRole(),
                 fallback.selectionScope(),
                 fallback.whySelected(),
-                mergeReasons(fallbackReason, fallback.fallbackReason())
+                mergeReasons(fallbackReason, fallback.fallbackReason()),
+                fallback.recoveryProviderDeprioritized(),
+                fallback.recoveryDeprioritizedProvider(),
+                fallback.recoveryDeprioritizationReason(),
+                fallback.recoveryExecutionMode(),
+                fallback.currentPinnedRoute(),
+                fallback.recoveryUnpinnedRecommendation()
             );
         }
 
@@ -193,7 +212,8 @@ public class WorkerRouter {
                                     String preferredWorkerHint,
                                     boolean learningHintApplied,
                                     List<String> candidateWorkers,
-                                    String fallbackReason) {
+                                    String fallbackReason,
+                                    String recoveryExecutionMode) {
         return new RouteResult(
             taskId,
             selected != null ? selected.workerId() : null,
@@ -209,7 +229,13 @@ public class WorkerRouter {
             metadataString(selected != null ? selected.metadata() : null, "primary_role"),
             null,
             routeReason,
-            blankToNull(fallbackReason)
+            blankToNull(fallbackReason),
+            null,
+            null,
+            null,
+            blankToNull(recoveryExecutionMode),
+            null,
+            null
         );
     }
 
@@ -326,6 +352,32 @@ public class WorkerRouter {
         String selectedExecutionRole,
         String selectionScope,
         String whySelected,
-        String fallbackReason
+        String fallbackReason,
+        Boolean recoveryProviderDeprioritized,
+        String recoveryDeprioritizedProvider,
+        String recoveryDeprioritizationReason,
+        String recoveryExecutionMode,
+        RouteDiagnostic currentPinnedRoute,
+        RouteDiagnostic recoveryUnpinnedRecommendation
+    ) {}
+
+    public record RouteDiagnostic(
+        String selectedWorker,
+        String routeSource,
+        String taskType,
+        String selectedWorkerType,
+        String selectedModelTier,
+        String selectedExecutionRole,
+        String selectionScope,
+        String whySelected,
+        String fallbackReason,
+        String preferredWorkerHint,
+        boolean learningHintApplied,
+        String recoveryExecutionMode,
+        Boolean providerDeprioritized,
+        String deprioritizedProvider,
+        String deprioritizationReason,
+        List<String> candidateWorkers,
+        List<String> fallbackWorkers
     ) {}
 }

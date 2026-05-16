@@ -135,6 +135,23 @@ class AgentProviderSupportTest {
     }
 
     @Test
+    void workerRegistryTemporaryUnavailabilityOverridesProviderReadiness() throws Exception {
+        Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"));
+        Path cmdShim = Files.writeString(tempDir.resolve("codex.cmd"), "@echo off\r\necho codex 0.0.1\r\n");
+        AgentProviderRegistry providers = new AgentProviderRegistry()
+            .register(new CodexProvider(cmdShim.toString()));
+        WorkerRegistry registry = new WorkerRegistry(providers);
+
+        registry.markTemporarilyUnavailable("codex", 60_000L, "thread not found");
+        WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness("codex");
+
+        assertFalse(readiness.ready());
+        assertFalse(readiness.checks().getOrDefault("runtime_available", true));
+        assertTrue(readiness.reason().contains("temporarily unavailable"));
+        assertTrue(readiness.reason().contains("thread not found"));
+    }
+
+    @Test
     void workerRegistryProviderReadinessRejectsUnsupportedBuiltinProviderBackendEvenWhenProviderIsReady() {
         AgentProviderRegistry providers = new AgentProviderRegistry()
             .register(new StaticProvider("hermes", true, true, "ready"));

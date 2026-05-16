@@ -430,6 +430,215 @@ class TaskServiceMessageReceiptTest {
         }
     }
 
+    @Test
+    void continueWritesAssistantProgressMessageWithRecoveryMetadata() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-progress-recovery-message.db"))) {
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, null, null, null, null, null, null,
+                null, null, null, null, null, null
+            ) {
+                @Override
+                public Task enter(Task task) {
+                    Task updated = new Task(
+                        task.id(),
+                        task.sessionId(),
+                        task.parentTaskId(),
+                        task.title(),
+                        "active",
+                        task.priority(),
+                        task.createdAt(),
+                        Instant.now(),
+                        task.startedAt(),
+                        task.completedAt(),
+                        task.ownerRole(),
+                        "worker 失联后已安排自动切换。",
+                        task.goal(),
+                        "等待新 worker 继续推进。",
+                        "kimi",
+                        "scheduler",
+                        task.waitingReason(),
+                        new java.util.LinkedHashMap<>(Map.of(
+                            "model_mode", "orchestrated",
+                            "failure_class", "worker_runtime_transient",
+                            "failure_summary_readable", "worker codex failed: thread not found",
+                            "recovery_policy", "same_worker_retry_then_auto_handoff",
+                            "recovery_stage", "auto_handoff_scheduled",
+                            "recovery_execution_mode", "fresh_session",
+                            "auto_same_worker_retry_count", 1,
+                            "auto_handoff_count", 1,
+                            "auto_handoff_target", "kimi",
+                            "previous_worker", "codex"
+                        ))
+                    );
+                    taskDao.updateState(updated);
+                    return updated;
+                }
+            };
+
+            TaskService service = service(db, graph, true);
+            Task task = service.createTask(new TaskCreateRequest(
+                "recovery progress", "coding", "user", "high",
+                "先创建一个需要恢复的任务", "完成恢复链可见性", null, null,
+                Map.of("model_mode", "orchestrated"),
+                false
+            ));
+
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_output",
+                "Failed worker round",
+                null,
+                null,
+                "worker codex failed: thread not found",
+                Map.ofEntries(
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("route_source", "capability_match"),
+                    Map.entry("output_text", "worker codex failed: thread not found"),
+                    Map.entry("execution_status", "failed"),
+                    Map.entry("failure_class", "worker_runtime_transient"),
+                    Map.entry("failure_summary_readable", "worker codex failed: thread not found"),
+                    Map.entry("recovery_policy", "same_worker_retry_then_auto_handoff"),
+                    Map.entry("recovery_stage", "auto_handoff_scheduled"),
+                    Map.entry("recovery_execution_mode", "fresh_session"),
+                    Map.entry("auto_same_worker_retry_count", 1),
+                    Map.entry("auto_handoff_count", 1),
+                    Map.entry("auto_handoff_target", "kimi"),
+                    Map.entry("previous_worker", "codex")
+                )
+            ));
+
+            service.continueTask(task.id());
+
+            List<SessionMessage> messages = messageDao.listBySession(task.sessionId(), 20);
+            SessionMessage progress = messages.get(messages.size() - 1);
+            assertEquals("assistant", progress.role());
+            assertEquals("task_progress", progress.messageType());
+            assertEquals("worker_runtime_transient", progress.metadata().get("failure_class"));
+            assertEquals("auto_handoff_scheduled", progress.metadata().get("recovery_stage"));
+            assertEquals("same_worker_retry_then_auto_handoff", progress.metadata().get("recovery_policy"));
+            assertEquals("fresh_session", progress.metadata().get("recovery_execution_mode"));
+            assertEquals(1, ((Number) progress.metadata().get("auto_same_worker_retry_count")).intValue());
+            assertEquals(1, ((Number) progress.metadata().get("auto_handoff_count")).intValue());
+            assertEquals("kimi", progress.metadata().get("auto_handoff_target"));
+            assertEquals("codex", progress.metadata().get("previous_worker"));
+            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("Failure Summary"));
+            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("Recovery Mode"));
+            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("fresh session"));
+            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("worker codex failed: thread not found"));
+        }
+    }
+
+    @Test
+    void continueSuppressesUnreadableWorkerOutputFromExpandedFailureContent() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-progress-recovery-sanitized-message.db"))) {
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, null, null, null, null, null, null,
+                null, null, null, null, null, null
+            ) {
+                @Override
+                public Task enter(Task task) {
+                    Task updated = new Task(
+                        task.id(),
+                        task.sessionId(),
+                        task.parentTaskId(),
+                        task.title(),
+                        "active",
+                        task.priority(),
+                        task.createdAt(),
+                        Instant.now(),
+                        task.startedAt(),
+                        task.completedAt(),
+                        task.ownerRole(),
+                        "worker 失联后已安排自动切换。",
+                        task.goal(),
+                        "等待新 worker 继续推进。",
+                        "kimi",
+                        "scheduler",
+                        task.waitingReason(),
+                        new java.util.LinkedHashMap<>(Map.of(
+                            "model_mode", "orchestrated",
+                            "failure_class", "worker_runtime_transient",
+                            "failure_summary_readable", "worker codex failed: thread not found (19120)",
+                            "recovery_policy", "same_worker_retry_then_auto_handoff",
+                            "recovery_stage", "auto_handoff_scheduled",
+                            "auto_same_worker_retry_count", 1,
+                            "auto_handoff_count", 1,
+                            "auto_handoff_target", "kimi",
+                            "previous_worker", "codex"
+                        ))
+                    );
+                    taskDao.updateState(updated);
+                    return updated;
+                }
+            };
+
+            TaskService service = service(db, graph, true);
+            Task task = service.createTask(new TaskCreateRequest(
+                "recovery progress noisy output", "coding", "user", "high",
+                "先创建一个带旧噪声结果的恢复任务", "展开态也应该只保留短失败摘要", null, null,
+                Map.of("model_mode", "orchestrated"),
+                false
+            ));
+
+            String noisy = "����: û���ҵ����� \"19120\"��\n"
+                + "我会先把和“下一步规划”最相关的文档与路线图过一遍。\n"
+                + ".github\n"
+                + "docs\\ARCHITECTURE.md\n"
+                + "---";
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_output",
+                "Failed worker round",
+                null,
+                null,
+                "worker codex failed: thread not found (19120)",
+                Map.ofEntries(
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("route_source", "capability_match"),
+                    Map.entry("output_text", noisy),
+                    Map.entry("artifact_content", noisy),
+                    Map.entry("execution_status", "failed"),
+                    Map.entry("failure_class", "worker_runtime_transient"),
+                    Map.entry("failure_summary_readable", "worker codex failed: thread not found (19120)"),
+                    Map.entry("recovery_policy", "same_worker_retry_then_auto_handoff"),
+                    Map.entry("recovery_stage", "auto_handoff_scheduled"),
+                    Map.entry("auto_same_worker_retry_count", 1),
+                    Map.entry("auto_handoff_count", 1),
+                    Map.entry("auto_handoff_target", "kimi"),
+                    Map.entry("previous_worker", "codex")
+                )
+            ));
+
+            service.continueTask(task.id());
+
+            List<SessionMessage> messages = messageDao.listBySession(task.sessionId(), 20);
+            SessionMessage progress = messages.get(messages.size() - 1);
+            String fullContent = String.valueOf(progress.metadata().get("full_content"));
+            assertTrue(fullContent.contains("Failure Summary"));
+            assertTrue(fullContent.contains("worker codex failed: thread not found (19120)"));
+            assertFalse(fullContent.contains("Worker Output\n" + noisy));
+            assertFalse(fullContent.contains("Artifact Content\n" + noisy));
+            assertFalse(fullContent.contains(".github"));
+            assertFalse(fullContent.contains("我会先把"));
+        }
+    }
+
     private TaskService service(DatabaseManager db, ControlNodeGraph graph) {
         return service(db, graph, false);
     }

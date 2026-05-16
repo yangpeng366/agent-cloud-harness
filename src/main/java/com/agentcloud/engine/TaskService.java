@@ -239,7 +239,7 @@ public class TaskService {
 
     public WorkerRouter.RouteResult selectWorker(String taskId) {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
-        return router.selectWorker(t);
+        return enrichRouteDiagnostics(t, router.selectWorker(t));
     }
 
     public TaskRuntimeContext getRuntimeContext(String taskId) {
@@ -267,7 +267,7 @@ public class TaskService {
         int boundedLimit = boundedLimit(limit);
         RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, boundedLimit);
         ResumePacket latestPacket = facts.latestPacket();
-        var routePreview = facts.routePreview();
+        var routePreview = enrichRouteDiagnostics(task, facts.routePreview());
         TaskRuntimeContext runtimeContext = facts.runtimeContext();
         JudgmentTraceView judgmentTrace = buildJudgmentTraceView(task, facts);
         List<Checkpoint> checkpoints = consolidationService.listByTask(taskId, boundedLimit);
@@ -315,6 +315,163 @@ public class TaskService {
             agentRunEvents,
             agentArtifacts
         );
+    }
+
+    private WorkerRouter.RouteResult enrichRouteDiagnostics(Task task, WorkerRouter.RouteResult route) {
+        if (task == null || route == null) {
+            return route;
+        }
+        WorkerRouter.RouteDiagnostic currentPinnedRoute = buildCurrentPinnedRoute(task, route);
+        WorkerRouter.RouteDiagnostic recoveryUnpinnedRecommendation = buildRecoveryUnpinnedRecommendation(task, route);
+        return new WorkerRouter.RouteResult(
+            route.taskId(),
+            route.selectedWorker(),
+            route.fallbackWorkers(),
+            route.routeReason(),
+            route.routeSource(),
+            route.taskType(),
+            route.preferredWorkerHint(),
+            route.learningHintApplied(),
+            route.candidateWorkers(),
+            route.selectedWorkerType(),
+            route.selectedModelTier(),
+            route.selectedExecutionRole(),
+            route.selectionScope(),
+            route.whySelected(),
+            route.fallbackReason(),
+            recoveryProviderDeprioritized(recoveryUnpinnedRecommendation),
+            recoveryDeprioritizedProvider(recoveryUnpinnedRecommendation),
+            recoveryDeprioritizationReason(recoveryUnpinnedRecommendation),
+            recoveryExecutionMode(task),
+            currentPinnedRoute,
+            recoveryUnpinnedRecommendation
+        );
+    }
+
+    private WorkerRouter.RouteDiagnostic buildCurrentPinnedRoute(Task task, WorkerRouter.RouteResult route) {
+        if (task == null || route == null || blankToNull(task.assignedWorker()) == null) {
+            return null;
+        }
+        return buildRouteDiagnostic(route);
+    }
+
+    private WorkerRouter.RouteDiagnostic buildRecoveryUnpinnedRecommendation(Task task, WorkerRouter.RouteResult currentRoute) {
+        if (task == null || router == null) {
+            return null;
+        }
+        Task unpinnedTask = task.withAssignedWorker(null).withMetadata(withMetadataMapEntries(
+            task.metadata(),
+            "assigned_worker", null,
+            "target_worker", null,
+            "preassigned_selection_reason", null
+        ));
+        WorkerRouter.RouteResult unpinned = router.selectWorker(unpinnedTask);
+        if (unpinned == null) {
+            return null;
+        }
+        if (currentRoute != null
+            && java.util.Objects.equals(currentRoute.selectedWorker(), unpinned.selectedWorker())
+            && java.util.Objects.equals(currentRoute.routeSource(), unpinned.routeSource())
+            && blankToNull(task.assignedWorker()) == null) {
+            return null;
+        }
+        return buildRecoveryRouteDiagnostic(task, currentRoute, unpinned);
+    }
+
+    private WorkerRouter.RouteDiagnostic buildRouteDiagnostic(WorkerRouter.RouteResult route) {
+        if (route == null) {
+            return null;
+        }
+        return new WorkerRouter.RouteDiagnostic(
+            route.selectedWorker(),
+            route.routeSource(),
+            route.taskType(),
+            route.selectedWorkerType(),
+            route.selectedModelTier(),
+            route.selectedExecutionRole(),
+            route.selectionScope(),
+            route.whySelected(),
+            route.fallbackReason(),
+            route.preferredWorkerHint(),
+            route.learningHintApplied(),
+            recoveryExecutionMode(task),
+            null,
+            null,
+            null,
+            route.candidateWorkers(),
+            route.fallbackWorkers()
+        );
+    }
+
+    private Boolean recoveryProviderDeprioritized(WorkerRouter.RouteDiagnostic diagnostic) {
+        return diagnostic != null && Boolean.TRUE.equals(diagnostic.providerDeprioritized()) ? Boolean.TRUE : null;
+    }
+
+    private String recoveryDeprioritizedProvider(WorkerRouter.RouteDiagnostic diagnostic) {
+        return diagnostic != null ? diagnostic.deprioritizedProvider() : null;
+    }
+
+    private String recoveryDeprioritizationReason(WorkerRouter.RouteDiagnostic diagnostic) {
+        return diagnostic != null ? diagnostic.deprioritizationReason() : null;
+    }
+
+    private WorkerRouter.RouteDiagnostic buildRecoveryRouteDiagnostic(Task task,
+                                                                     WorkerRouter.RouteResult currentRoute,
+                                                                     WorkerRouter.RouteResult recoveryRoute) {
+        if (recoveryRoute == null) {
+            return null;
+        }
+        String currentWorker = firstNonBlank(
+            currentRoute != null ? currentRoute.selectedWorker() : null,
+            task != null ? task.assignedWorker() : null
+        );
+        String currentProvider = resolveProviderId(currentWorker, currentRoute != null ? currentRoute.selectedWorkerType() : null);
+        boolean providerDeprioritized = currentProvider != null
+            && agentRunService != null
+            && agentRunService.shouldDeprioritizeProvider(currentProvider);
+        return new WorkerRouter.RouteDiagnostic(
+            recoveryRoute.selectedWorker(),
+            recoveryRoute.routeSource(),
+            recoveryRoute.taskType(),
+            recoveryRoute.selectedWorkerType(),
+            recoveryRoute.selectedModelTier(),
+            recoveryRoute.selectedExecutionRole(),
+            recoveryRoute.selectionScope(),
+            recoveryRoute.whySelected(),
+            recoveryRoute.fallbackReason(),
+            recoveryRoute.preferredWorkerHint(),
+            recoveryRoute.learningHintApplied(),
+            recoveryExecutionMode(task),
+            providerDeprioritized ? Boolean.TRUE : null,
+            providerDeprioritized ? currentProvider : null,
+            providerDeprioritized ? "recent transient provider failures" : null,
+            recoveryRoute.candidateWorkers(),
+            recoveryRoute.fallbackWorkers()
+        );
+    }
+
+    private String recoveryExecutionMode(Task task) {
+        return firstNonBlank(task != null ? metadataString(task.metadata(), "recovery_execution_mode") : null);
+    }
+
+    private Map<String, Object> withMetadataMapEntries(Map<String, Object> source, Object... entries) {
+        Map<String, Object> metadata = source == null ? new LinkedHashMap<>() : new LinkedHashMap<>(source);
+        if (entries == null || entries.length == 0) {
+            return metadata;
+        }
+        for (int i = 0; i + 1 < entries.length; i += 2) {
+            Object key = entries[i];
+            if (key == null) {
+                continue;
+            }
+            Object value = entries[i + 1];
+            if (value == null) {
+                metadata.remove(key.toString());
+            } else {
+                metadata.put(key.toString(), value);
+            }
+        }
+        return metadata;
     }
 
     private JudgmentTraceView buildJudgmentTraceView(Task task, RuntimeFactSet facts) {
@@ -1662,6 +1819,22 @@ public class TaskService {
         return value == null || value.isBlank() ? null : value;
     }
 
+    private String resolveProviderId(String workerId, String workerType) {
+        if (blankToNull(workerId) == null) {
+            return null;
+        }
+        String resolvedWorkerType = firstNonBlank(workerType, routerWorkerType(workerId), workerId);
+        return com.agentcloud.agent.AgentProviderResolver.providerIdForWorker(workerId, resolvedWorkerType);
+    }
+
+    private String routerWorkerType(String workerId) {
+        if (router == null || blankToNull(workerId) == null) {
+            return null;
+        }
+        Worker worker = router.getWorker(workerId);
+        return worker != null ? worker.workerType() : null;
+    }
+
     private boolean shouldAutoStart(TaskCreateRequest req) {
         return req == null || req.autoStart() == null || req.autoStart();
     }
@@ -1851,6 +2024,10 @@ public class TaskService {
             if (nextStep != null) {
                 metadata.put("next_step", nextStep);
             }
+            String fullContent = buildAssistantExpandedContent(task, facts, latestArtifact, progressSummary, nextStep);
+            if (fullContent != null) {
+                metadata.put("full_content", fullContent);
+            }
             if (facts.recommendedAction() != null) {
                 metadata.put("judgment_action", facts.recommendedAction());
             }
@@ -2032,7 +2209,10 @@ public class TaskService {
         TaskRuntimeContext runtimeContext = facts != null ? facts.runtimeContext() : null;
         Decision executionJudgment = facts != null ? facts.executionJudgment() : null;
         Decision completionJudgment = facts != null ? facts.completionJudgment() : null;
-        return shorten(
+        return sanitizeReadableProgressSummary(
+            task,
+            facts,
+            latestArtifact,
             firstNonBlank(
                 task.summary(),
                 facts != null ? facts.latestOutput() : null,
@@ -2047,6 +2227,45 @@ public class TaskService {
             ),
             260
         );
+    }
+
+    private String sanitizeReadableProgressSummary(Task task,
+                                                   RuntimeFactSet facts,
+                                                   Artifact latestArtifact,
+                                                   String summary,
+                                                   int maxLength) {
+        String shortened = shorten(summary, maxLength);
+        if (!looksLikeUnreadableWorkerOutput(shortened) || !isFailedExecutionBoundary(facts, latestArtifact)) {
+            return shortened;
+        }
+        String worker = firstNonBlank(
+            metadataString(latestArtifact != null ? latestArtifact.metadata() : null, "selected_worker"),
+            metadataString(latestArtifact != null ? latestArtifact.metadata() : null, "worker_id"),
+            task != null ? task.assignedWorker() : null
+        );
+        return worker == null
+            ? "当前 worker 返回了不可读错误输出；请检查 details / live_flow。"
+            : "worker " + worker + " 返回了不可读错误输出；请检查 details / live_flow。";
+    }
+
+    private boolean isFailedExecutionBoundary(RuntimeFactSet facts, Artifact latestArtifact) {
+        String executionStatus = firstNonBlank(
+            facts != null && facts.executionBoundary() != null ? facts.executionBoundary().executionStatus() : null,
+            metadataString(latestArtifact != null ? latestArtifact.metadata() : null, "execution_status")
+        );
+        if (executionStatus == null) {
+            return false;
+        }
+        return List.of("failed", "error", "timeout", "cancelled").contains(executionStatus.toLowerCase());
+    }
+
+    private boolean looksLikeUnreadableWorkerOutput(String value) {
+        String text = blankToNull(value);
+        if (text == null) {
+            return false;
+        }
+        long replacementCount = text.chars().filter(ch -> ch == '\uFFFD').count();
+        return replacementCount >= 2 || text.contains("����") || (text.contains("û") && text.contains("��"));
     }
 
     private String summarizeNextStep(Task task, RuntimeFactSet facts, Artifact latestArtifact) {
@@ -2111,6 +2330,15 @@ public class TaskService {
         if (task != null && task.metadata() != null) {
             copyMetadataKey(task.metadata(), target, "model_mode");
             copyMetadataKey(task.metadata(), target, "task_type");
+            copyMetadataKey(task.metadata(), target, "failure_class");
+            copyMetadataKey(task.metadata(), target, "failure_summary_readable");
+            copyMetadataKey(task.metadata(), target, "recovery_policy");
+            copyMetadataKey(task.metadata(), target, "recovery_stage");
+            copyMetadataKey(task.metadata(), target, "recovery_execution_mode");
+            copyMetadataKey(task.metadata(), target, "auto_same_worker_retry_count");
+            copyMetadataKey(task.metadata(), target, "auto_handoff_count");
+            copyMetadataKey(task.metadata(), target, "auto_handoff_target");
+            copyMetadataKey(task.metadata(), target, "previous_worker");
         }
         if (facts == null) {
             return;
@@ -2166,7 +2394,87 @@ public class TaskService {
         if (latestArtifact != null && latestArtifact.metadata() != null) {
             copyMetadataKey(latestArtifact.metadata(), target, "suggested_next_step");
             copyMetadataKey(latestArtifact.metadata(), target, "proof_summary");
+            copyMetadataKey(latestArtifact.metadata(), target, "output_text");
+            copyMetadataKey(latestArtifact.metadata(), target, "artifact_content");
+            copyMetadataKey(latestArtifact.metadata(), target, "failure_class");
+            copyMetadataKey(latestArtifact.metadata(), target, "failure_summary_readable");
+            copyMetadataKey(latestArtifact.metadata(), target, "recovery_policy");
+            copyMetadataKey(latestArtifact.metadata(), target, "recovery_stage");
+            copyMetadataKey(latestArtifact.metadata(), target, "recovery_execution_mode");
+            copyMetadataKey(latestArtifact.metadata(), target, "auto_same_worker_retry_count");
+            copyMetadataKey(latestArtifact.metadata(), target, "auto_handoff_count");
+            copyMetadataKey(latestArtifact.metadata(), target, "auto_handoff_target");
         }
+    }
+
+    private String buildAssistantExpandedContent(Task task,
+                                                RuntimeFactSet facts,
+                                                Artifact latestArtifact,
+                                                String progressSummary,
+                                                String nextStep) {
+        List<String> parts = new ArrayList<>();
+        String summary = blankToNull(progressSummary);
+        if (summary != null) {
+            parts.add(summary);
+        }
+        Map<String, Object> latestArtifactMetadata = latestArtifact != null ? latestArtifact.metadata() : null;
+        Map<String, Object> taskMetadata = task != null ? task.metadata() : null;
+        if (latestArtifactMetadata != null || taskMetadata != null) {
+            String outputText = firstNonBlank(
+                blankToNull(metadataString(latestArtifactMetadata, "output_text")),
+                blankToNull(metadataString(taskMetadata, "output_text"))
+            );
+            String artifactContent = firstNonBlank(
+                blankToNull(metadataString(latestArtifactMetadata, "artifact_content")),
+                blankToNull(metadataString(taskMetadata, "artifact_content"))
+            );
+            String readableFailure = firstNonBlank(
+                blankToNull(metadataString(latestArtifactMetadata, "failure_summary_readable")),
+                blankToNull(metadataString(taskMetadata, "failure_summary_readable"))
+            );
+            boolean failedExecutionBoundary = isFailedExecutionBoundary(facts, latestArtifact);
+            boolean suppressUnreadableOutput = failedExecutionBoundary
+                && readableFailure != null
+                && (looksLikeUnreadableWorkerOutput(outputText) || looksLikeUnreadableWorkerOutput(artifactContent));
+            String recoveryExecutionMode = firstNonBlank(
+                metadataString(latestArtifactMetadata, "recovery_execution_mode"),
+                metadataString(taskMetadata, "recovery_execution_mode")
+            );
+            if (outputText != null && !suppressUnreadableOutput) {
+                parts.add("Worker Output\n" + outputText);
+            }
+            if (artifactContent != null && !suppressUnreadableOutput) {
+                parts.add("Artifact Content\n" + artifactContent);
+            }
+            if (outputText == null && artifactContent == null && readableFailure != null) {
+                parts.add("Failure Summary\n" + readableFailure);
+            }
+            if (readableFailure != null) {
+                putIfAbsent(parts, "Failure Summary\n" + readableFailure);
+            }
+            if ("fresh_session".equalsIgnoreCase(recoveryExecutionMode)) {
+                parts.add("Recovery Mode\nfresh session");
+            }
+        }
+        if (facts != null && facts.executionBoundary() != null && facts.executionBoundary().traceSummary() != null) {
+            parts.add("Execution Trace\n" + facts.executionBoundary().traceSummary());
+        }
+        String normalizedNextStep = blankToNull(nextStep);
+        if (normalizedNextStep != null) {
+            parts.add("下一步\n" + normalizedNextStep);
+        }
+        if (parts.isEmpty()) {
+            return null;
+        }
+        return String.join("\n\n", parts);
+    }
+
+    private void putIfAbsent(List<String> parts, String value) {
+        String normalized = blankToNull(value);
+        if (normalized == null || parts.contains(normalized)) {
+            return;
+        }
+        parts.add(normalized);
     }
 
     private String shorten(String value, int maxLength) {

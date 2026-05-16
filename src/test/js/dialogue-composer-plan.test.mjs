@@ -6,7 +6,7 @@ import {
     taskIntentOverrideReason
 } from "../../main/resources/web/dialogue/composer-plan.js";
 
-test("auto mode defaults to message when no task-only overrides exist", () => {
+test("auto mode defaults to chat-first task continuity when no task-only overrides exist", () => {
     const plan = buildComposerSubmissionPlan({
         composerMode: "auto",
         taskType: "continuation",
@@ -15,7 +15,7 @@ test("auto mode defaults to message when no task-only overrides exist", () => {
     });
 
     assert.equal(plan.resolvedMode, "message");
-    assert.equal(plan.reasonLabel, "默认聊天发送");
+    assert.equal(plan.reasonLabel, "默认聊天推进");
     assert.equal(hasTaskIntentOverrides({ composerMode: "auto" }), false);
 });
 
@@ -66,6 +66,7 @@ test("follow-up parent always upgrades auto mode to followup", () => {
 test("explicit modes still win over auto inference", () => {
     assert.equal(buildComposerSubmissionPlan({ composerMode: "message", advancedOpen: true }).resolvedMode, "message");
     assert.equal(buildComposerSubmissionPlan({ composerMode: "task" }).resolvedMode, "task");
+    assert.equal(buildComposerSubmissionPlan({ composerMode: "message" }).reasonLabel, "显式聊天推进");
 });
 
 test("follow-up is inferred from parent binding instead of explicit mode", () => {

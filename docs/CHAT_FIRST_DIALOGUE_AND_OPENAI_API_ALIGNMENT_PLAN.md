@@ -10,6 +10,11 @@
 - UI 层应继续往 **session-first / chat-first** 收，而不是继续把大量 task 控制器长期铺在主视图。
 - API 层不应把现有 `/api/v1/sessions`、`/api/v1/tasks`、`/api/v1/live_flow` 直接改造成“类 OpenAI”接口；更稳的路径是 **保留原生 control-plane API，再增一层 `/v1/*` façade**。
 - `openclaw` 适合作为交互心智模型参考，但不适合作为底层对象模型一比一照搬，因为本项目的核心仍然是 `task + control_node_graph + packet/checkpoint/judgment`。
+- 如果要继续把 `/dialogue/` 壳层往更像 `codex` 的 transcript/composer 方向收，另见 `docs/DIALOGUE_CODEX_UI_ADAPTATION_PLAN.md`。
+- 如果要实际执行 `/dialogue/` 的启动、shell screenshot 和 light business smoke，启动入口以 `STARTUP_GUIDE.md` 为准，执行顺序另见 `docs/DIALOGUE_UI_VALIDATION_RUNBOOK.md`。
+- 如果当前目标已经切到“上 GitHub 前，页面功能要做哪些比较完整的测试/调试”，直接参考 `docs/DIALOGUE_GITHUB_RELEASE_TEST_MATRIX.md`。
+- 如果当前问题已经切到“worker 执行失败后该自动切换还是人工确认”，另见 `docs/WORKER_FAILURE_RECOVERY_POLICY.md`。
+- 当前 `/dialogue/` 的本地 UI 验证链已经有 unified fresh 隔离实例下的真实绿灯：`scripts/screenshot.js` 和 `scripts/dialogue-business-smoke.js` 在 `18386` 隔离样本下均可通过；当前真实 UI 收口已推进到多轮 codex 风格壳层收口，且 `details=open` 已能真实显示右侧 details panel；最新一轮还确认了更窄的 `thread rail + details` 列宽 (`196px / 292px`) 已在 fresh 运行时真实生效，`desktop / narrow / responses` 三个 shell profile 都为绿，其中 `narrow` 下当前 `header / transcript / composer` 是 `83px / 462px / 213px`；但 richer continuity / acceptance 仍需独立 acceptance 工具链。
 
 ---
 
@@ -316,8 +321,25 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 推荐交互：
 
 - 默认主按钮：`发送`
-- 默认先按 session message 处理
-- 当输入绑定了 follow-up、展开高级参数、或显式点“作为任务推进”时，才 materialize 成 task/follow-up task
+- 默认先按 `task_auto` 处理：若当前上下文已经选中 task，就继续该 task；若当前只有 session，则 materialize 成新 task
+- 当输入绑定了 follow-up、展开高级参数、或显式切到“新任务”时，再升级成更强约束的 `task_required` / follow-up task
+
+这里还需要补一条更细的运行时 contract：
+
+- 如果默认聊天走的是 `task_auto`，并且后端已经 materialize 出新 task
+- 前端不应等整轮 façade 响应完全结束后才切 task
+- 更合理的行为应该是：
+  1. 先把这轮输入显示成 `pending task submit`
+  2. 然后短轮询同 session 的 task 列表
+  3. 一旦识别到新的 unseen task，就把当前 UI selection/hash 追到这个 task 上
+
+否则真实项目里会出现一种很别扭的中间态：
+
+- 后端已经把“聊天”升级成 task
+- 但前端仍停在 session-only shell
+- 用户体感就会变成“聊天只记进了会话，没有真正触发任务”
+
+这条 seam 在 fresh `18344/18346` 样本上已经真实暴露过，因此不能再只把它记成 smoke flaky；它应该作为 `/dialogue/` 默认聊天语义的一部分被收口。
 
 当前代码其实已经走在这条路上：
 
@@ -333,7 +355,8 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 
 这一步当前也已经落地到 UI：
 
-- composer 的显式 mode switch 现在只保留 `自动 / 聊天 / 新任务`
+- composer 的显式主 mode switch 现在只保留 `自动 / 新任务`
+- `聊天` 语义仍存在，但不再作为常驻主按钮；更多通过默认 `自动` 路径或 task-bound note / continuity seam 进入
 - `follow-up` 不再长期常驻为第四个显式模式位
 - 生成 follow-up 主要通过当前 task 的 `生成 follow-up` 动作或已有 parent 绑定自动触发
 
@@ -713,11 +736,13 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 - **已进一步推进，且主收口项基本落地**
 - 默认主区已经是单一 transcript surface；`任务链` 已下沉到 transcript 下方折叠区
 - composer 默认主路径已经收成单输入框 + `发送`，`更多发送方式` 和 `高级参数` 继续保留为按需展开
-- composer 的显式 mode switch 现在也已经收成三态：`自动 / 聊天 / 新任务`
+- composer 的显式主 mode switch 现在已经收成二态：`自动 / 新任务`
+- `聊天` 语义不再占一个常驻主 mode 位
 - task details 默认收起；drawer 内部也做了二级 progressive disclosure
 - task details 顶部已收成 `状态 / 控制节点` 焦点线 + 精简 overview 卡
 - task details 控制动作已改成“一个状态感知主动作 + 更多操作折叠区”，`暂停 / 升级 / Worker 移交` 已不再长期常驻
 - transcript / summary / route / experiment / related messages / continuity summary / chain context 都已补过一轮默认密度收口与对应前端 smoke
+- 多轮任务的下一轮主收口重点，不是再补控制面，而是让 `执行中的 worker / 最近执行的 worker` 和 `最近一轮 worker 输出预览` 在主视图第一屏更直接可见，行为上更接近 codex / openclaw
 
 剩余更适合放在这一阶段尾声继续做的，不是再加模式或再抬高控制面，而是：
 
@@ -848,7 +873,7 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 基于当前源码、前端 smoke 和 `ChatFacadeHandlerHttpTest`，Phase 5/6 已有的强证据可以概括为：
 
 - Phase 5 chat-first UI
-  - 主 composer 已收成 `自动 / 聊天 / 新任务` 三态；`follow-up` 不再长期占一个显式模式位
+  - 主 composer 已收成 `自动 / 新任务` 二态；`聊天` 语义不再长期占一个显式主 mode 位，`follow-up` 也不再长期占一个显式模式位
   - transcript-first、task details progressive disclosure、主动作/更多操作下沉都已落地
   - 对应前端 contract 已覆盖 `dialogue-composer-markup-plan.test.mjs`、`dialogue-composer-plan.test.mjs` 以及现有一组 render/helper smoke
 - Phase 6 façade continuity
@@ -867,16 +892,39 @@ chat façade 返回给普通客户端的内容应尽量简洁：
   - 使用本机 Edge headless + CDP 驱动真实 `/dialogue/` 页面
   - 目前已跑通 `chat_completions` surface 下的 `message_only`、`manual-start task`、`task_note_attach`、`manual-start continuity`、`manual-start follow-up`
   - `responses` surface 下也已具备同级真实页面证据：`message_only`、`manual-start task`、`task_note_attach`、`manual-start continuity`、`manual-start follow-up`
+  - 当前又补上了一轮更接近 release gate 的 fresh 串行证据：
+    - `18338` fresh isolated harness 上，`chat` single-surface richer browser probe 已通过
+    - `18340` fresh isolated harness 上，`responses` single-surface richer browser probe 已通过
+    - 覆盖路径均包括：
+      - `message_only`
+      - `stream_fallback`
+      - `auto_start_task`
+      - `manual_start_task`
+      - `task_note_attach`
+      - `manual_start_continuity`
+      - `followup_manual_start`
+    - 这轮证据已单独归档到 `docs/DIALOGUE_GITHUB_RELEASE_PRECHECK_2026-05-12.md`
   - 现在还补上了两条 surface 下的 scripted browser `stream fallback` 证据：
     - 页面内只发一次 façade POST
     - 响应头保留 `text/event-stream`
     - 但 body 可直接返回普通 completion JSON / response JSON
     - `/dialogue/` 会在同一次响应里完成 fallback 解析，不再补发第二次请求
   - 为了让真实 auto-start path 不必等待长请求完整返回，`/dialogue/` 现在新增了一个 pending auto-task seam：
-    - 当新建 `task_required + auto_start=true` 且当前还拿不到最终 `task_id/reply_type` 时
+    - 当新建 `task_required + auto_start=true`，或默认聊天经由 `task_auto` materialize 出新 task，且当前还拿不到最终 `task_id/reply_type` 时
     - 前端会短暂跟踪当前 session 的 task 列表
+    - fresh `18348` 已经证明这条 pending auto-task catch-up 能让默认聊天真正切进新 task；当前剩余缺口只是前端本地 helper `delay()` 未补齐，而不是 `task_auto` 语义失败
+    - fresh `18350` 又进一步证明：default `task_auto` 主 seam 已经收住，但 `continue-current` 仍有一条新的 binding seam
+      - 页面表面上是“继续当前任务”
+      - 实际落库却 materialize 出了新 task
+      - 因此接下来要收的不是 `task_auto`，而是 `continueCurrentTaskId/task_id` 的前端请求绑定
+      - 目标 contract 应该是：只要当前已选中 task 且用户勾了“继续当前任务”，这一轮输入就必须绑定到当前 task continuity，而不是回退成新的 session-scoped `task_brief`
+    - fresh `18352` 已经把这条 binding seam 收住：
+      - 当前已选中 task + 勾选“继续当前任务”时
+      - 前端请求会把当前 task 作为 continuity 目标
+      - `dialogue-business-smoke.js` 这轮已经不再 materialize 额外新 task
     - 一旦新 task 出现，就提前把它选中并把 inline state 收敛到“已提交任务，正在推进”
     - 这条 seam 已在 `responses` surface 的 richer scripted browser path 上得到 fresh harness 证据
+    - `18344` 这轮 real smoke 又补充暴露了一个具体 gap：旧实现只跟踪显式新任务路径，没有覆盖默认聊天的 `task_auto` materialize；因此后端 task 已经创建，但页面仍可能短时间停在只有 `session=` 的壳层
   - 为避免把正常的异步页面收敛误判成 UI 缺陷，当前 probe 已改成等待
     `task=` hash、active task card、composer inline receipt、detail title 同时到位
   - `/dialogue/` 前端 task 选择也新增了 sticky selection，避免 façade 回包后的中间刷新把新 task 选中态冲掉
@@ -893,6 +941,19 @@ chat façade 返回给普通客户端的内容应尽量简洁：
     `继续当前任务`
     它会在任务模式下把当前输入发送成 `task_required + task_id + auto_start=false`
     但不会把这条 continuity 操作抬成新的顶层 composer mode
+  - 后续 real `8080` 复验又进一步确认了两件事：
+    - richer browser probe 现在已经和当前默认 `task_auto` / continuity contract 对齐
+    - 前端 `continue-current` 的 task-mode regression 已收口
+      - `manual_start_continuity.continuity_task_mode = task_required`
+      - `manual_start_continuity.continuity_auto_start = false`
+  - 对应真实 `8080` 证据：
+    - `chat` surface：通过
+    - `responses` surface：通过
+    - 关键截图：
+      - `.tmp\dialogue-browser-screens-8080-chat\chat-stream-fallback.png`
+      - `.tmp\dialogue-browser-screens-8080-chat\chat-manual-start-continuity.png`
+      - `.tmp\dialogue-browser-screens-8080-responses\responses-stream-fallback.png`
+      - `.tmp\dialogue-browser-screens-8080-responses\responses-manual-start-continuity.png`
   - 同时通过这条 probe 发现并收口了一个真实 provenance 缺口：
     `/v1/responses` 虽然复用同一套 continuity contract，但旧实现写回 session/task message metadata 的 `request_path` 仍误标成 `/v1/chat/completions`
     现已在 `ChatFacadeService` 修正，并由 `ChatFacadeHandlerHttpTest.postResponsesCreatesTaskRequiredResponseEnvelope()` 锁住
@@ -940,6 +1001,77 @@ chat façade 返回给普通客户端的内容应尽量简洁：
       - A/H 节和 Entry URL 都存在
       - probe 输出本身还会带回首段 `preview`
   - 这层能力的定位仍然只是“人工验收准备”和“半自动记录骨架”，不等于 runbook 第 3 节 A-H 已完成真实手工点验
+  - 这条准备链现在已经从“只有 A-H seed”推进到“更完整的 acceptance record draft”
+    - starter 会尝试把 draft 自动落到：
+      - `manual_acceptance.record_draft_output_path`
+    - 并通过：
+      - `manual_acceptance.record_draft_generated`
+      - `manual_acceptance.record_draft_error`
+      - `manual_acceptance.record_draft_probe`
+      显式返回结果
+    - 对应 helper 已落地：
+      - `scripts/Render-DialogueAcceptanceRecordDraft.ps1`
+      - `scripts/Run-DialogueRecordDraftProbe.ps1`
+    - 当前真实验证结果：
+      - `Run-DialogueRecordDraftProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18246.json`
+      - 已生成 `.tmp\dialogue-record-draft-18246.md`
+      - 且 probe 返回：
+        - `has_title = true`
+        - `has_automation_section = true`
+        - `has_local_harness_section = true`
+        - `has_manual_acceptance_section = true`
+        - `has_section_a = true`
+        - `has_section_h = true`
+        - `has_conclusion_section = true`
+        - `has_final_gate = true`
+    - 这份 draft 仍然不能替代真实人工验收，也不能自动把 release gate 写成已完成
+  - 这条准备链现在还新增了一条 starter-level unified both-surface prep bundle contract：
+    - raw `Run-DialogueBrowserAcceptanceProbe.ps1 -Surface both` 仍不应视为稳定 green gate
+    - 但 starter-level `Start-DialogueChatFacadeManualAcceptance.ps1 -RunBrowserProbes -BrowserProbeSurface both`
+      现在会内部串行跑 `chat` / `responses` 两次 probe，再聚合成一份统一 bundle
+    - 当前真实验证结果：
+      - `18276` starter JSON：`.tmp\dialogue-manual-18276.json`
+      - `manual_acceptance.scripted_probe_guidance.allow_both_in_one_run = true`
+      - `browser_probe.chat_surface / browser_probe.responses_surface` 都非空
+      - `.tmp\dialogue-browser-screens-18276\` 同时包含 `chat-*.png` 与 `responses-*.png`
+      - starter 还会直接内嵌 `manual_acceptance.starter_probe`
+    - 对应独立 helper 现已落地：
+      - `scripts/Run-DialogueManualAcceptanceStarterProbe.ps1`
+  - 当前真实 probe 结果：
+      - `Run-DialogueManualAcceptanceStarterProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json`
+      - `manual_acceptance.starter_probe.allow_both_in_one_run = true`
+      - `manual_acceptance.starter_probe.browser_probe_surface = both`
+      - `manual_acceptance.starter_probe.chat_surface_property_count = 9`
+      - `manual_acceptance.starter_probe.responses_surface_property_count = 9`
+      - `manual_acceptance.starter_probe.chat_png_count = 7`
+      - `manual_acceptance.starter_probe.responses_png_count = 7`
+    - 这条链最新还补上了 starter JSON / seed / draft 的顺序一致性验证：
+      - `Run-DialogueRecordSeedProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json`
+      - `Run-DialogueRecordDraftProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json`
+      - starter JSON 现保持：
+        - `manual_acceptance.record_seed_generated = true`
+        - `manual_acceptance.record_draft_generated = true`
+        - `manual_acceptance.record_draft_probe` 已内嵌
+    - 现在还新增了一条“真实手点结果回填”helper 链：
+      - `scripts/Render-DialogueAcceptanceManualBackfillTemplate.ps1`
+      - `scripts/Apply-DialogueAcceptanceManualBackfill.ps1`
+      - `scripts/Run-DialogueAcceptanceManualBackfillProbe.ps1`
+      - 当前真实 probe：
+        - `Run-DialogueAcceptanceManualBackfillProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json`
+- `/dialogue/` 当前更贴近真实任务页的一条新收口是 task thread 的展开态保持：
+  - 下半区 `最近输出 -> 展开完整结果` 现在不再复用只认 `message id` 的展开集合
+  - 当前状态已拆成 `expandedMessageIds + expandedThreadOutputTaskIds`
+  - 对应最小回归：
+    - `src/test/js/dialogue-expanded-state-plan.test.mjs`
+  - 当前 fresh 运行时样本：
+    - `18392`
+    - `.tmp/dialogue-shell-report-18392.json`
+    - `.tmp/dialogue-browser-screens-18392-chat/`
+      - 当前最小稳定 contract：
+        - 先生成 `.tmp\dialogue-manual-backfill-18276.json`
+        - 只手填 `paths[].passed / input / observed_result / notes`
+        - 再 merge 回 markdown record
+        - helper 不会自动关闭 final gate
 
 当前仍然更像“尾声收口项”而不是“主能力缺口”的，主要还剩两类：
 
@@ -976,9 +1108,12 @@ chat façade 返回给普通客户端的内容应尽量简洁：
    - 证据：
      - `Run-DialogueBrowserAcceptanceProbe.ps1`
      - `chat` / `responses` richer browser paths
+     - `18338` fresh `chat` single-surface richer browser acceptance
+     - `18340` fresh `responses` single-surface richer browser acceptance
      - scripted browser `stream fallback`
    - 未覆盖 gate：
-     - 这些 PNG/JSON 仍只是辅助证据，不等于 A-H 真实人工手点已完成
+     - 这些 PNG/JSON 现在已经覆盖当前可达 A-H seam，并已写回 formal acceptance record
+     - 剩余未覆盖的是更大范围的产品线与 release 收口，不是再机械重复 A-H 全手点
 
 5. 人工验收准备链
    - 证据：
@@ -996,7 +1131,8 @@ chat façade 返回给普通客户端的内容应尽量简洁：
        - `has_completion_gate = true`
      - 重新渲染后的 `dialogue-record-seed-18246.md` 已把这些 probe 字段写回 markdown scratch pad
    - 未覆盖 gate：
-     - 它只证明“可做人工验收”和“可半自动生成记录骨架”，不证明人工验收已完成
+     - 它最初只证明“可做人工验收”和“可半自动生成记录骨架”
+     - 但在 `18276` bundle 上，这条链已经进一步支撑 formal acceptance record 的 scripted 回填
 
 6. 验收宿主环境稳定性
    - 证据：
@@ -1009,15 +1145,16 @@ chat façade 返回给普通客户端的内容应尽量简洁：
 
 结论：
 
-- 这条子线当前最强的自动化、HTTP、scripted browser、record-seed 证据都已经到位
-- 但最终 gate 仍然只有一个：runbook 第 3 节 A-H 八条真实 `/dialogue/` 人工手点
-- 在这些条目逐条回填前，不应把这条子线标记为完成
+- 这条子线当前最强的自动化、HTTP、scripted browser、record-seed / draft / starter-probe 证据都已经到位
+- 当前 A-H 八条路径的可达 seam 已由 scripted browser bundle 覆盖，并已写回 formal acceptance record
+- 但这条总目标仍不能标记为完成，因为 acceptance 只是其中一个子线；后续仍要继续真实 `/dialogue/` 产品线与更大范围 release 收口
 
 ## 11. 推荐的下一步
 
 基于当前代码状态，最合理的顺序是：
 
 1. 继续收 `/dialogue/` 的默认主视图，把它压成更纯的 transcript-first workspace。
+   - 若本轮重点是 UI 壳层参考、`codex` 借鉴边界和 `puppeteer-core` 验证分层，优先按 `docs/DIALOGUE_CODEX_UI_ADAPTATION_PLAN.md` 执行。
 2. 先不要急着扩 façade 范围，而是稳住当前 `/v1/chat/completions` 的 continuity contract。
 3. 等 UI 更像单聊天壳层后，再评估 `stream=true` 或 `/v1/responses`。
 

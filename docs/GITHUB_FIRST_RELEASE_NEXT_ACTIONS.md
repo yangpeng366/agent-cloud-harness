@@ -17,14 +17,17 @@
   - `docs/GITHUB_FIRST_RELEASE_DRY_RUN_2026-05-11.md`
 - 首发 commit slice dry-run 已稳定，且 `unmatched = none`：
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
-- `Repository Baseline` 已真实进入暂存区，且未混入 evidence-only 文件：
-  - `git diff --cached --stat`
-  - `git diff --cached --name-only`
-- `chat-first / facade product line` 与 `acceptance harness and operator docs` 也已真实进入暂存区：
+- 首发 commit slice 的 dry-run / stage preview / stage file list 仍然有效：
+  - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
   - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
-- 当前三段主 slice 还已通过一次 index audit：
+- 当前已新增一轮 index audit：
   - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
-  - 当前 `baseline / product / harness` 都是 `staged_only`
+  - 最新结果显示：当前真实 index 已不再保持之前的三段 staged 状态
+  - 当前只剩 `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md` 仍在 staged，其他主 slice 文件都不再停留在 index 中
+- 三段首发主提交已经真实进入本地 Git 历史：
+  - `8350a8c` `chore: prepare repository baseline for public first release`
+  - `d7fefea` `feat: ship chat-first dialogue facade and related UI flows`
+  - `4f559c2` `chore: add acceptance harness and operator release tooling`
 
 ## 现在不要优先做的事
 
@@ -33,39 +36,13 @@
 - 再补一层 release helper
 - 再加一份平行 checklist
 - 再解释一次哪些文件属于首发 / 证据 / defer
+- 再把已经完成的三段主 slice 重新 stage 一遍当成进展
 
 这些信息当前都已经有脚本和文档承载。
 
 ## 现在最值得做的 3 件事
 
-### 1. 核对并决定是否直接提交当前三段主 slice
-
-按这个顺序执行：
-
-1. `Repository Baseline`
-2. `chat-first / facade product line`
-3. `acceptance harness and operator docs`
-
-参考入口：
-
-- `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
-- `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
-- `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
-- `docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`
-
-当前前三段主 slice 已不再只是 dry-run：
-
-- 三批主提交范围都已真实进入 index
-- staged diff 仍未混入 acceptance records / dry-run snapshots / stage preview working logs
-
-真正未进入 index 的仍然主要是：
-
-- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-10.md`
-- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
-- `docs/GITHUB_FIRST_RELEASE_*_2026-05-11.md` working snapshots
-- `docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md`
-
-### 2. 替换真实 GitHub 仓库 URL
+### 1. 填真实 GitHub 仓库 URL 并准备真实远端 push
 
 当前 `README.md` 里仍是发布占位地址：
 
@@ -73,12 +50,13 @@
 <your-published-repo-url>
 ```
 
-这一步虽然小，但它仍然属于当前最明确的未完成首发 gate：
+这一步虽然小，但现在已经是最直接的公开发布 gate：
 
 - 对外正式发布时，要把它替换成真实公开仓库地址
-- 在正式发布前，不要把示例写成伪造的 GitHub 占位 URL
+- 然后把当前三段本地首发 commit push 到真实远端
+- 并观察 GitHub Actions 在真实仓库里跑一轮
 
-### 3. 进行 `/dialogue/` A-H 真实人工验收
+### 2. 进行 `/dialogue/` A-H 真实人工验收
 
 这是当前仍然没有被任何自动化代理掉的 gate。
 
@@ -87,11 +65,26 @@
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md`
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
 
+### 3. 决定 evidence-only working logs 是否进入公开历史
+
+当前主三段首发 commit 已经落地，但这批文件仍是 working logs / evidence-only：
+
+- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-10.md`
+- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
+- `docs/GITHUB_FIRST_RELEASE_*_2026-05-11.md`
+- `docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md`
+
+现在应明确决定：
+
+- 哪些保留在公开历史里
+- 哪些只作为本地/内部记录
+- 不要让它们和“产品已完成所有 gate”混淆
+
 ## 当前“可公开但未完结”的准确说法
 
 如果现在就要对外描述当前状态，更准确的说法是：
 
-> The repository is close to a public first release: release slicing, local precheck, CI baseline, and acceptance tooling are in place, but the real `/dialogue/` manual acceptance pass and final public repo wiring are still outstanding.
+> The repository is close to a public first release: the three local first-release commits already exist, release slicing and local precheck are in place, and the remaining gates are the real public repo wiring, the `/dialogue/` manual acceptance pass, and the remote CI run.
 
 ## 发布完成前仍不能越界宣称的事项
 

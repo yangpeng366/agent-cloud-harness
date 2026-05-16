@@ -10,7 +10,8 @@ export function buildChatFacadeRequest(input) {
         title: normalized.title || normalized.derivedTitle,
         task_type: normalized.taskType,
         priority: normalized.taskPriority,
-        auto_start: normalized.autoStart
+        auto_start: normalized.autoStart,
+        auto_multi_round: normalized.autoMultiRound
     };
     if (normalized.goal) {
         metadata.goal = normalized.goal;
@@ -53,7 +54,8 @@ export function buildResponsesFacadeRequest(input) {
         title: normalized.title || normalized.derivedTitle,
         task_type: normalized.taskType,
         priority: normalized.taskPriority,
-        auto_start: normalized.autoStart
+        auto_start: normalized.autoStart,
+        auto_multi_round: normalized.autoMultiRound
     };
     if (normalized.goal) {
         metadata.goal = normalized.goal;
@@ -97,7 +99,7 @@ function normalizeRequestInput(input) {
         sessionId: requiredText(source.sessionId, "sessionId"),
         facadeModel: normalizeText(source.facadeModel) || "agentcloud-default",
         facadeSurface: normalizeFacadeSurface(source.facadeSurface),
-        taskMode: normalizeText(source.taskMode) || "message_only",
+        taskMode: normalizeText(source.taskMode) || "task_auto",
         title: normalizeText(source.title),
         derivedTitle: normalizeText(source.derivedTitle) || "untitled",
         goal: normalizeText(source.goal),
@@ -108,7 +110,8 @@ function normalizeRequestInput(input) {
         continueCurrentTaskId: normalizeText(source.continueCurrentTaskId),
         taskType: normalizeText(source.taskType) || "continuation",
         taskPriority: normalizeText(source.taskPriority) || "high",
-        autoStart: source.autoStart !== false
+        autoStart: source.autoStart !== false,
+        autoMultiRound: source.autoMultiRound === true
     };
 }
 

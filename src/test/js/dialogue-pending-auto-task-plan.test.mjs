@@ -15,6 +15,7 @@ test('buildPendingAutoTaskTracker only tracks new task auto-start flow', () => {
   });
   assert.equal(tracker.shouldTrack, true);
   assert.equal(tracker.sessionId, 'session_1');
+  assert.equal(tracker.resolvedMode, 'task');
   assert.deepEqual(tracker.knownTaskIds, ['task_a']);
 
   const noTrack = buildPendingAutoTaskTracker({
@@ -24,6 +25,20 @@ test('buildPendingAutoTaskTracker only tracks new task auto-start flow', () => {
     currentTaskIds: ['task_a']
   });
   assert.equal(noTrack.shouldTrack, false);
+});
+
+test('buildPendingAutoTaskTracker also tracks default message path when it materializes a new task', () => {
+  const tracker = buildPendingAutoTaskTracker({
+    sessionId: 'session_2',
+    resolvedMode: 'message',
+    existingTaskId: '',
+    currentTaskIds: ['task_seed']
+  });
+
+  assert.equal(tracker.shouldTrack, true);
+  assert.equal(tracker.sessionId, 'session_2');
+  assert.equal(tracker.resolvedMode, 'message');
+  assert.deepEqual(tracker.knownTaskIds, ['task_seed']);
 });
 
 test('resolvePendingAutoTaskCandidate picks first unseen task in same session', () => {

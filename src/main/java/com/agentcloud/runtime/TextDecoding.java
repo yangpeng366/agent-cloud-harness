@@ -37,7 +37,11 @@ public final class TextDecoding {
 
         String utf8 = decodeUtf8Strict(bytes);
         if (utf8 != null) {
-            return utf8;
+            // 如果 UTF-8 解码成功但结果看起来像乱码（包含大量替换字符），
+            // 继续尝试 fallback 字符集，因为可能是 GBK 等编码被错误解码
+            if (!looksLikeGarbage(utf8)) {
+                return utf8;
+            }
         }
 
         for (Charset candidate : fallbackCharsets(bytes)) {
@@ -45,13 +49,82 @@ public final class TextDecoding {
                 continue;
             }
             try {
-                return new String(bytes, candidate);
+                String result = new String(bytes, candidate);
+                // 如果解码结果不像乱码，使用它
+                if (!looksLikeGarbage(result)) {
+                    return result;
+                }
             } catch (Exception ignored) {
                 // 继续尝试下一个候选。
             }
         }
 
-        return new String(bytes, Charset.defaultCharset());
+        // 如果所有 fallback 都失败或结果都是乱码，返回原始 UTF-8 结果（即使可能是乱码）
+        return utf8 != null ? utf8 : new String(bytes, Charset.defaultCharset());
+    }
+
+    /**
+     * 检测字符串是否看起来像乱码。
+     * 如果字符串包含大量的 Unicode 替换字符 U+FFFD 或其他异常字符模式，
+     * 则认为是乱码。
+     */
+    private static boolean looksLikeGarbage(String str) {
+        if (str == null || str.isEmpty()) {
+            return false;
+        }
+
+        int replacementCharCount = 0;
+        int asciiPrintableCount = 0;
+
+        for (int i = 0; i < str.length(); i++) {
+            char c = str.charAt(i);
+            if (c == '\uFFFD') {
+                replacementCharCount++;
+            } else if (c >= 0x20 && c <= 0x7E) {
+                asciiPrintableCount++;
+            }
+        }
+
+        int length = str.length();
+        
+        // 如果替换字符占比超过 10%，认为是乱码
+        if (length > 0 && replacementCharCount > length * 0.1) {
+            return true;
+        }
+
+        // 如果大部分字符都不是可打印 ASCII（且字符串较长），可能是乱码
+        // 对于中文字符串，可打印 ASCII 比例通常不会特别低，但如果是乱码，
+        // 可能包含大量非 ASCII 控制字符或奇怪的 Unicode 字符
+        if (length > 10 && asciiPrintableCount < length * 0.2) {
+            // 检查是否包含典型的 GBK 乱码模式
+            if (containsGbkGarbagePattern(str)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 检查字符串是否包含典型的 GBK 乱码模式。
+     * GBK 双字节字符被当作 UTF-8 解码时会产生特定的乱码模式。
+     */
+    private static boolean containsGbkGarbagePattern(String str) {
+        // 典型的 GBK 乱码模式：包含多个连续的 Latin-1 补充字符或其他异常字符
+        // 例如："û" (U+00FB), "�" (U+FFFD), 以及各种组合字符
+
+        int weirdCharCount = 0;
+        for (int i = 0; i < str.length(); i++) {
+            char c = str.charAt(i);
+            // 检查是否在 Latin-1 补充区域（通常是 GBK 乱码的特征）
+            if ((c >= 0x80 && c <= 0xFF) || 
+                (c >= 0x100 && c <= 0x17F) ||  // Latin Extended-A
+                (c >= 0x180 && c <= 0x24F)) {   // Latin Extended-B
+                weirdCharCount++;
+            }
+        }
+
+        return weirdCharCount > str.length() * 0.3;
     }
 
     private static String decodeUtf8Strict(byte[] bytes) {

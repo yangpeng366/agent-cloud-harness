@@ -12,3 +12,4 @@ test-results/
 hs_err_pid*
 replay_pid*
 target/
+node_modules/

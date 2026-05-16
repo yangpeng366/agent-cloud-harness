@@ -1,6 +1,6 @@
 # GitHub First Release Execution Guide
 
-> 本文档把 `docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md` 和 `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md` 收成一套可直接执行的首发收口步骤。它不是要求立刻提交，而是给出当前 worktree 下最接近真实发布的执行顺序、`git add` 边界和核对方法。
+> 本文档把 `docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md` 和 `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md` 收成一套可直接执行的首发收口步骤。当前它更准确的定位是：给出 replay / 复核三段主提交边界的执行顺序、`git add` 边界和核对方法，而不是假设三段主提交还未落地。
 
 ## 0. 前提
 
@@ -9,6 +9,10 @@
 - 当前 worktree 与 `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_*_2026-05-11.md` 对齐
 - `test-results/`、`.tmp/`、`hs_err_pid*`、`replay_pid*`、`*.db` 已由 `.gitignore` 或首发边界排除
 - 不要使用 `git add .`
+- 三段主提交已真实存在于本地 Git 历史：
+  - `8350a8c`
+  - `d7fefea`
+  - `4f559c2`
 
 先做最小核对：
 
@@ -27,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseCommitD
 
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md`
 
-如需直接看三批提交各自当前命中的 **真实 staged file list**，见：
+如需直接看三批提交各自的目标 staged file list，见：
 
 - `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 
@@ -70,9 +74,11 @@ git add docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md
 git add docs/GITHUB_FIRST_RELEASE_FILESET.md
 git add docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md
 git add docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md
+git add docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md
 git add docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md
 git add docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md
 git add docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md
+git add docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md
 git add docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md
 ```
 
@@ -91,8 +97,10 @@ git add docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md
 - `docs/GITHUB_FIRST_RELEASE_FILESET.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md`
+- `docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md`
+- `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`
 
 ### 1.3 核对命令
@@ -113,7 +121,7 @@ git diff --cached
 - `docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md`
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_*`
 
-### 1.5 对应 dry-run
+### 1.5 对应 dry-run / replay 参考
 
 当前参考：
 
@@ -170,7 +178,7 @@ node --test src/test/js/*.test.mjs
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md`
 - acceptance record working logs
 
-### 2.5 对应 dry-run
+### 2.5 对应 dry-run / replay 参考
 
 当前参考：
 
@@ -192,6 +200,7 @@ git add scripts/Run-DialogueRecordSeedProbe.ps1
 git add scripts/Run-GitHubFirstReleaseDryRun.ps1
 git add scripts/Run-GitHubFirstReleaseCommitDryRun.ps1
 git add scripts/Run-GitHubFirstReleaseStagePreview.ps1
+git add scripts/Run-GitHubFirstReleaseIndexAudit.ps1
 git add scripts/Run-GitHubFirstReleasePrecheck.ps1
 git add docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md
 git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md
@@ -204,6 +213,7 @@ git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md
 
 - acceptance harness 脚本链
 - `scripts/Run-GitHubFirstReleaseStagePreview.ps1`
+- `scripts/Run-GitHubFirstReleaseIndexAudit.ps1`
 - `scripts/Run-GitHubFirstReleasePrecheck.ps1`
 - `docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md`
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md`
@@ -240,7 +250,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueRecordSeedProbe.p
 - `docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_all_2026-05-11.md`
 - `docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md`
 
-### 3.5 对应 dry-run
+### 3.5 对应 dry-run / replay 参考
 
 当前参考：
 
@@ -278,6 +288,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueRecordSeedProbe.p
 
 ## 6. Next Actions
 
-如果此时不直接开始 `git add`，而是先想清楚“下一步最值钱的动作”，参考：
+如果此时不做 replay，而是先想清楚“当前最值钱的动作”，参考：
 
 - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`

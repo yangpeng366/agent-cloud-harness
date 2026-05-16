@@ -39,10 +39,45 @@
 ## 5. 产品级 gate
 
 - [x] `/dialogue/` 页面发布前测试矩阵至少完整串行跑过一轮
+  - latest unified fresh shell + light-smoke sample:
+    - `18386`
+    - `.tmp/dialogue-shell-report-18386.json`
+    - `.tmp/dialogue-business-smoke-18386.json`
 - [x] Windows 宿主下的外部进程输出编码兼容已收口为“UTF-8 优先 + 本地编码兜底”
-- [ ] `/dialogue/` A-H 八条真实人工验收至少完成一轮
-- [ ] 验收记录已回填
-- [ ] 公开说明中没有把当前状态夸大成 production-ready distributed platform
+- [x] `/dialogue/` richer browser acceptance 现已具备 fresh 真实证据
+  - isolated fresh samples:
+    - `18338` `chat`
+    - `18340` `responses`
+  - real long-lived instance recheck:
+    - `8080` `chat` fresh-restart rerun: `.tmp/dialogue-browser-screens-8080-chat-rerun7`
+    - `8080` `responses` fresh-restart rerun: `.tmp/dialogue-browser-screens-8080-responses-rerun4`
+  - manual-acceptance starter prep bundle:
+    - `.tmp/dialogue-manual-18276.json`
+    - `Run-DialogueManualAcceptanceStarterProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json`
+- [x] `/dialogue/` richer browser acceptance 已覆盖当前可达 A-H seam
+  - current coverage:
+    - A `default task_auto`
+    - B `message_only + task_id` -> current `task_note_attach` seam
+    - C `task_required`
+    - D `follow-up + manual-start`
+    - E `manual-start continuity`
+    - F `stream fallback`
+    - G `#facade=responses + message_only` -> current `responses_surface.task_note_attach` seam
+    - H `#facade=responses + task_required`
+  - current rationale:
+    - B / G no longer rely on nonexistent `*message-only.png` artifacts
+    - both now use real browser-probe evidence from `task_note_attach` on chat / responses surfaces
+- [x] 验收记录已回填
+  - current evidence:
+    - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
+    - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-14.md`
+  - current status:
+    - current formal record now rewrites B/G to the current `task_note_attach` evidence and latest `18276` prep bundle
+- [x] 公开说明中没有把当前状态夸大成 production-ready distributed platform
+  - current public-facing wording audit:
+    - `README.md` 将项目定位为“本地原型与单机 harness”
+    - `SECURITY.md` 明确写明当前不建议直接暴露到公网
+    - `docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md` 现已用“推荐首发叙述 + 避免夸大表述”表达边界，不再保留夸大 slogan 原文作为对外描述样例
 
 ## 当前判断
 
@@ -52,7 +87,7 @@
 
 如果看“作为首发项目对外站得住”：
 
-- 仍需完成人工验收与发布范围收口
+- 仍需完成发布范围收口与更大范围产品线收尾
 
 ## 证据说明
 

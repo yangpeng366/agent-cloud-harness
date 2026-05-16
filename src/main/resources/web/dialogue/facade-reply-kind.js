@@ -1,6 +1,8 @@
 export function classifyFacadeReply(input) {
     const normalized = normalizeFacadeReplyInput(input);
-    if (normalized.resolvedMode === "message" || normalized.replyType === "chat_reply" || normalized.replySource === "session_ack") {
+    const sessionAck = normalized.replyType === "chat_reply" || normalized.replySource === "session_ack";
+    const fallbackMessageMode = normalized.resolvedMode === "message" && !normalized.replyType && !normalized.replySource;
+    if (sessionAck || fallbackMessageMode) {
         return {
             category: "message",
             toneClass: "signal--active",

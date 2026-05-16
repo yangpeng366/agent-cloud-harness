@@ -1,10 +1,13 @@
 package com.agentcloud.server;
 
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.engine.AgentRunService;
 import com.agentcloud.engine.ControlNodeGraph;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.memory.PacketBuilder;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.model.AgentRunRecord;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
@@ -22,6 +25,7 @@ import com.agentcloud.runtime.context.MountedContextPanel;
 import com.agentcloud.runtime.context.MountedContextPanelName;
 import com.agentcloud.runtime.context.MountedContextView;
 import com.agentcloud.store.ArtifactDao;
+import com.agentcloud.store.AgentRunDao;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
@@ -224,6 +228,131 @@ class TaskHandlerControlActionHttpTest {
     }
 
     @Test
+    void selectWorkerIncludesPinnedAndUnpinnedRecoveryDiagnostics() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-select-worker-diagnostics.db"))) {
+            Task task = harness.createManualTask("pinned coding task", "coding");
+            Task pinned = task.withAssignedWorker("claude").withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "assigned_worker", "claude"
+            )));
+            harness.saveTask(pinned);
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + pinned.id() + "/select_worker"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> currentPinned = harness.map(data.get("current_pinned_route"));
+            Map<String, Object> recoveryUnpinned = harness.map(data.get("recovery_unpinned_recommendation"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("claude", data.get("selected_worker"));
+            assertEquals("task_pinned", data.get("route_source"));
+            assertEquals("claude", currentPinned.get("selected_worker"));
+            assertEquals("task_pinned", currentPinned.get("route_source"));
+            assertEquals("codex", recoveryUnpinned.get("selected_worker"));
+            assertEquals("capability_match", recoveryUnpinned.get("route_source"));
+            assertEquals("coding", recoveryUnpinned.get("task_type"));
+        }
+    }
+
+    @Test
+    void selectWorkerProjectsTopLevelRecoveryProviderDeprioritizationHints() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-select-worker-provider-deprioritized.db"))) {
+            Task task = harness.createManualTask("pinned coding task", "coding");
+            Task pinned = task.withAssignedWorker("claude").withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "assigned_worker", "claude"
+            )));
+            harness.saveTask(pinned);
+
+            Instant base = Instant.parse("2026-04-29T14:20:00Z");
+            harness.agentRunDao.insert(new AgentRunRecord(
+                "arun_claude_select_hot_1",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "failed",
+                base.minusSeconds(20),
+                base.minusSeconds(18),
+                200L,
+                "worker claude failed: thread not found (15252)",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "failed")
+            ));
+            harness.agentRunDao.insert(new AgentRunRecord(
+                "arun_claude_select_hot_2",
+                task.id(),
+                task.sessionId(),
+                "claude",
+                "Claude",
+                "planner_executor",
+                "claude",
+                "strong",
+                "timeout",
+                base.minusSeconds(10),
+                base.minusSeconds(8),
+                150L,
+                "worker claude failed: provider unavailable",
+                "run.failed",
+                0,
+                Map.of("worker_execution_status", "timeout")
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + pinned.id() + "/select_worker"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("claude", data.get("selected_worker"));
+            assertEquals(Boolean.TRUE, data.get("recovery_provider_deprioritized"));
+            assertEquals("claude", data.get("recovery_deprioritized_provider"));
+            assertEquals("recent transient provider failures", data.get("recovery_deprioritization_reason"));
+        }
+    }
+
+    @Test
+    void selectWorkerPromotesContinuationRepoModificationTaskToEffectiveCodingType() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-select-worker-effective-task-type.db"))) {
+            Task task = harness.createManualTask("repo modification task", "continuation");
+            Task updated = task.withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "continuation",
+                "goal", "根据文档修改 D:\\gitAll\\articleeditor\\src\\main\\java\\ArticleThirdService.java，并补测试。"
+            )));
+            harness.saveTask(updated);
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/select_worker"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("coding", data.get("task_type"));
+            assertEquals("codex", data.get("selected_worker"));
+        }
+    }
+
+    @Test
     void postCreateTaskRejectsClosedSession() throws Exception {
         try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-closed-session.db"))) {
             Session closedSession = harness.createClosedSession("closed session");
@@ -350,6 +479,7 @@ class TaskHandlerControlActionHttpTest {
         private final SessionDao sessionDao;
         private final SessionMessageDao messageDao;
         private final EventDao eventDao;
+        private final AgentRunDao agentRunDao;
         private final HttpServer server;
         private final ExecutorService executor;
         private final HttpClient client;
@@ -361,6 +491,8 @@ class TaskHandlerControlActionHttpTest {
             this.sessionDao = db.jdbi().onDemand(SessionDao.class);
             this.eventDao = db.jdbi().onDemand(EventDao.class);
             this.messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            this.agentRunDao = db.jdbi().onDemand(AgentRunDao.class);
+            WorkerRouter workerRouter = new WorkerRouter(new WorkerRegistry());
 
             ControlNodeGraph graph = new ControlNodeGraph(
                 taskDao, this.eventDao, this.sessionDao, null, null, null, null,
@@ -378,8 +510,9 @@ class TaskHandlerControlActionHttpTest {
             };
 
             this.service = new TaskService(
-                taskDao, this.sessionDao, this.eventDao, null, null, null, graph,
-                null, null, null, null, null, messageDao
+                taskDao, this.sessionDao, this.eventDao, null, workerRouter, null, graph,
+                null, null, null, null, null, messageDao, null,
+                new AgentRunService(agentRunDao, new AgentProviderRegistry())
             );
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = Executors.newCachedThreadPool();
@@ -580,7 +713,7 @@ class TaskHandlerControlActionHttpTest {
             );
 
             TaskService service = new TaskService(
-                taskDao, sessionDao, eventDao, null, null, null, null,
+                taskDao, sessionDao, eventDao, null, new WorkerRouter(new WorkerRegistry()), null, null,
                 null, null, null, null, null
             ) {
                 @Override

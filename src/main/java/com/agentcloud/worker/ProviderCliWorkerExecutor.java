@@ -960,11 +960,18 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
 
     private String resumeId(TaskRuntimeContext context) {
         if (context == null || context.task() == null) {
-            return "agentcloud-session";
+            return null;
         }
-        return context.task().sessionId() != null && !context.task().sessionId().isBlank()
-            ? context.task().sessionId()
-            : context.task().id();
+        String recoveryStage = metadataString(context.task().metadata(), "recovery_stage");
+        if ("same_worker_retry_scheduled".equalsIgnoreCase(recoveryStage)
+            || "auto_handoff_scheduled".equalsIgnoreCase(recoveryStage)) {
+            return null;
+        }
+        return firstNonBlank(
+            metadataString(context.task().metadata(), "provider_session_id"),
+            metadataString(context.task().metadata(), "provider_thread_id"),
+            metadataString(context.task().metadata(), "resume_provider_session_id")
+        );
     }
 
     private String normalizeCursorLine(String raw) {

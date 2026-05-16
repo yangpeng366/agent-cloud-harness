@@ -26,6 +26,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Runtime Control Node Graph
@@ -34,6 +36,26 @@ import java.util.Objects;
 public class ControlNodeGraph {
     private static final Logger log = LoggerFactory.getLogger(ControlNodeGraph.class);
     private static final MountedContextPromptRenderer JUDGMENT_PROMPT_RENDERER = new MountedContextPromptRenderer();
+    private static final int FAILURE_SUMMARY_LIMIT = 220;
+    private static final int PLANNER_DELEGATION_OUTPUT_LIMIT = 12_000;
+    private static final Pattern THREAD_NOT_FOUND_EN_WITH_PARENS = Pattern.compile("thread not found\\s*\\(([\\w-]+)\\)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern THREAD_NOT_FOUND_EN = Pattern.compile("thread not found\\s*[:：]?\\s*([\\w-]+)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern THREAD_NOT_FOUND_ZH = Pattern.compile("(没找到线程|未找到线程)\\s*[\"“]?([\\w-]+)[\"”]?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern QUOTED_THREAD_ID = Pattern.compile("[\"“]([\\w-]+)[\"”]");
+    private static final Pattern PROVIDER_UNAVAILABLE = Pattern.compile("provider unavailable", Pattern.CASE_INSENSITIVE);
+    private static final Pattern SESSION_EXPIRED = Pattern.compile("session expired", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CONNECTION_RESET = Pattern.compile("connection reset", Pattern.CASE_INSENSITIVE);
+    private static final Pattern FAILED_TO_START = Pattern.compile("failed to start(?:\\s+[\\w-]+)?", Pattern.CASE_INSENSITIVE);
+    private static final Pattern TIMEOUT = Pattern.compile("\\btimeout\\b|timed out", Pattern.CASE_INSENSITIVE);
+    private static final Pattern FILE_NOT_FOUND = Pattern.compile(
+        "\\b(no such file|file not found|directory not found|path not found|enoent|not recognized as an internal or external command|command not found|permission denied|access is denied|access denied|权限不足|拒绝访问|文件不存在|目录不存在|命令不存在)\\b",
+        Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern BACKEND_UNSUPPORTED = Pattern.compile(
+        "\\b(unsupported|not supported|capability missing|missing capability|tool unsupported|does not support|provider does not support|backend does not support|model does not support|工具不支持|能力不足|不支持当前模式|不支持该工具)\\b",
+        Pattern.CASE_INSENSITIVE
+    );
+
     private final TaskDao taskDao;
     private final EventDao eventDao;
     private final SessionDao sessionDao;
@@ -113,6 +135,18 @@ public class ControlNodeGraph {
 
     // === Scheduler Node ===
     private Task schedulerNode(Task task) {
+        Task normalizedTask = normalizeWorkerAssignmentMetadata(task);
+        if (!sameState(task, normalizedTask)) {
+            log.info(
+                "[Scheduler] task={} normalized worker metadata assignedWorker={} metadataAssignedWorker={} metadataTargetWorker={}",
+                task != null ? task.id() : null,
+                normalizedTask != null ? normalizedTask.assignedWorker() : null,
+                metadataString(normalizedTask != null ? normalizedTask.metadata() : null, "assigned_worker"),
+                metadataString(normalizedTask != null ? normalizedTask.metadata() : null, "target_worker")
+            );
+            taskDao.updateState(normalizedTask);
+            task = normalizedTask;
+        }
         log.info("[Scheduler] task={}", task.id());
         emitEvent(task, "node_scheduler", "Scheduling task");
         WorkerExecutionResult executionResult = null;
@@ -122,7 +156,7 @@ public class ControlNodeGraph {
         if (task.assignedWorker() == null || task.assignedWorker().isBlank()) {
             route = router.selectWorker(task);
             if (route.selectedWorker() != null) {
-                task = task.withAssignedWorker(route.selectedWorker());
+                task = syncAssignedWorkerMetadata(task.withAssignedWorker(route.selectedWorker()));
                 log.info("[Scheduler] task={} routed to worker={}", task.id(), route.selectedWorker());
             }
         }
@@ -173,7 +207,17 @@ public class ControlNodeGraph {
                         "selected_worker", task.assignedWorker(),
                         "error_type", e.getClass().getSimpleName()
                     ));
-                throw e;
+                executionResult = synthesizeFailedExecutionResult(
+                    task,
+                    route,
+                    selectedWorker,
+                    selectedWorkerType,
+                    selectedModelTier,
+                    executionRole,
+                    whySelected,
+                    fallbackReason,
+                    e
+                );
             }
 
             emitEvent(task, "worker_round",
@@ -194,9 +238,6 @@ public class ControlNodeGraph {
                     executionResult.outputText(),
                     executionResult.artifactContent()
                 );
-                if (summary != null && summary.length() > 500) {
-                    summary = summary.substring(0, 500) + "...";
-                }
                 Artifact artifact = new Artifact(
                     IdGenerator.newId("art"), task.sessionId(), task.id(), Instant.now(),
                     executionResult.producedArtifact() ? "worker_artifact" : "worker_output",
@@ -266,6 +307,14 @@ public class ControlNodeGraph {
         TaskRuntimeContext ctx = runtimeContextBuilder.build(task);
         String latestOutput = resolveLatestOutput(ctx, executionResult);
         Map<String, Object> latestWorkerMetadata = resolveLatestWorkerMetadata(ctx, executionResult);
+        String plannerRecoveryReason = plannerOutputRecoveryReason(task, latestWorkerMetadata, latestOutput);
+        if (plannerRecoveryReason != null) {
+            task = withMetadataEntries(task,
+                "planner_delegation_gate", "rejected",
+                "planner_delegation_gate_reason", plannerRecoveryReason
+            );
+        }
+        RecoveryDirective recoveryDirective = maybePlanFailureRecovery(task, latestWorkerMetadata, latestOutput);
         Worker selectedWorker = router != null ? router.getWorker(task.assignedWorker()) : null;
         String selectedWorkerId = firstNonBlank(task.assignedWorker(), stringValue(latestWorkerMetadata.get("selected_worker")));
         String selectedModelTier = firstNonBlank(
@@ -286,15 +335,70 @@ public class ControlNodeGraph {
         JudgmentContext jctx = new JudgmentContext(task, ctx, latestOutput, null, latestWorkerMetadata, factSet);
         MountedContextPromptMetrics judgmentPromptMetrics = buildJudgmentPromptMetrics(task, ctx);
 
-        // Execution Judgment
-        var execDecision = judgmentService.judgeExecution(jctx);
-        var completionDecision = judgmentService.judgeCompletion(jctx);
-        OrchestrationJudgment orchestrationJudgment = applyOrchestrationJudgment(
-            task, latestWorkerMetadata, executionResult, execDecision, completionDecision
-        );
-        task = orchestrationJudgment.task();
-        execDecision = orchestrationJudgment.executionDecision();
-        completionDecision = orchestrationJudgment.completionDecision();
+        // Execution Judgment / Failure Recovery
+        com.agentcloud.judgment.model.ExecutionDecision execDecision;
+        com.agentcloud.judgment.model.CompletionDecision completionDecision;
+        if (recoveryDirective != null) {
+            if (recoveryDirective.sameWorkerRetry()) {
+                execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                    "continue",
+                    "Auto recovery scheduled same-worker cold retry after transient worker failure.",
+                    "Retry current worker with a fresh execution session.",
+                    false,
+                    false,
+                    false,
+                    null
+                );
+                completionDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                    "partially_done",
+                    "low",
+                    "Worker round failed with transient runtime/provider error; same-worker retry scheduled.",
+                    "Retry current worker once with fresh provider continuity."
+                );
+            } else if (recoveryDirective.autoHandoff()) {
+                execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                    "handoff",
+                    "Auto recovery scheduled worker handoff after transient worker failure.",
+                    "Handoff to fallback worker " + firstNonBlank(recoveryDirective.handoffTarget(), "candidate") + ".",
+                    false,
+                    false,
+                    false,
+                    recoveryDirective.handoffTarget()
+                );
+                completionDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                    "partially_done",
+                    "low",
+                    "Worker round failed with transient runtime/provider error; auto handoff scheduled.",
+                    "Continue on fallback worker."
+                );
+            } else {
+                execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                    "wait",
+                    "Automatic recovery budget exhausted; require human intervention.",
+                    "Inspect failure trace and decide whether to retry or handoff manually.",
+                    false,
+                    false,
+                    true,
+                    null
+                );
+                completionDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                    "incomplete",
+                    "low",
+                    "Worker round failed and automatic recovery budget is exhausted.",
+                    "Open human gate and inspect failure trace."
+                );
+            }
+            task = applyRecoveryDirective(task, recoveryDirective);
+        } else {
+            execDecision = judgmentService.judgeExecution(jctx);
+            completionDecision = judgmentService.judgeCompletion(jctx);
+            OrchestrationJudgment orchestrationJudgment = applyOrchestrationJudgment(
+                task, latestWorkerMetadata, executionResult, execDecision, completionDecision
+            );
+            task = orchestrationJudgment.task();
+            execDecision = orchestrationJudgment.executionDecision();
+            completionDecision = orchestrationJudgment.completionDecision();
+        }
         String evaluatorRole = resolveEvaluatorRole(task);
         String evaluatorModelTier = resolveEvaluatorModelTier(task);
         String evaluatorReason = resolveEvaluatorReason(task, completionDecision.reason());
@@ -428,6 +532,9 @@ public class ControlNodeGraph {
                 Task moved = task.withAssignedWorker(target != null ? target : task.assignedWorker())
                     .withControlNode("handoff");
                 taskDao.updateState(moved);
+                if (recoveryDirective != null && recoveryDirective.autoHandoff()) {
+                    yield handoffNode(moved, true);
+                }
                 if (shouldAutoContinueHandoff(moved)) {
                     yield handoffNode(moved, true);
                 }
@@ -441,6 +548,9 @@ public class ControlNodeGraph {
             case "continue" -> {
                 Task moved = task.withControlNode("scheduler");
                 taskDao.updateState(moved);
+                if (recoveryDirective != null && recoveryDirective.sameWorkerRetry()) {
+                    yield schedulerNode(moved);
+                }
                 if (shouldAutoContinueTask(moved, latestWorkerMetadata, executionResult, resolvedAction)) {
                     yield schedulerNode(incrementAutoContinueBurst(moved));
                 }
@@ -512,12 +622,20 @@ public class ControlNodeGraph {
                                         String executionNextStep, String completionNextAction) {
         Task updated = task;
         String summarySource = firstNonBlank(
+            metadataString(executionResult != null ? executionResult.metadata() : null, "failure_summary_readable"),
             executionResult != null ? executionResult.summary() : null,
             latestOutput
         );
         if (summarySource != null && !summarySource.isBlank()) {
-            String summary = summarySource.length() > 280 ? summarySource.substring(0, 280) + "..." : summarySource;
-            updated = updated.withSummary(summary);
+            String sanitizedSummary = sanitizeReadableFailureSummary(
+                firstNonBlank(
+                    task != null ? task.assignedWorker() : null,
+                    metadataString(executionResult != null ? executionResult.metadata() : null, "selected_worker"),
+                    metadataString(executionResult != null ? executionResult.metadata() : null, "worker_id")
+                ),
+                summarySource
+            );
+            updated = updated.withSummary(sanitizedSummary);
         }
 
         String nextStep = firstNonBlank(
@@ -557,6 +675,35 @@ public class ControlNodeGraph {
         );
 
         if (isPlannerStage(stage)) {
+            if (!plannerOutputValidForDelegation(task, latestWorkerMetadata, executionResult, completionDecision)) {
+                String invalidReason = plannerDelegationInvalidReason(task, latestWorkerMetadata, executionResult, completionDecision);
+                log.warn(
+                    "[Orchestration] task={} stage={} planner delegation rejected reason={} worker={} executionStatus={}",
+                    task != null ? task.id() : null,
+                    stage,
+                    invalidReason,
+                    selectedWorkerId,
+                    metadataString(latestWorkerMetadata, "execution_status")
+                );
+                return new OrchestrationJudgment(
+                    withMetadataEntries(task,
+                        "planner_delegation_gate", "rejected",
+                        "planner_delegation_gate_reason", invalidReason
+                    ),
+                    executionDecision,
+                    new com.agentcloud.judgment.model.CompletionDecision(
+                        firstNonBlank(completionDecision.status(), "incomplete"),
+                        normalizeAlignment(completionDecision.alignmentLevel()),
+                        mergeReasons("planner output rejected as delegation brief: " + invalidReason, completionDecision.reason()),
+                        firstNonBlank(
+                            completionDecision.suggestedNextAction(),
+                            executionDecision.nextStep(),
+                            executionResult != null ? executionResult.suggestedNextStep() : null,
+                            task.nextStep()
+                        )
+                    )
+                );
+            }
             WorkerRouter.RouteResult executionRoute = selectExecutionWorker(task);
             String targetWorker = firstNonBlank(
                 executionRoute != null ? executionRoute.selectedWorker() : null,
@@ -568,6 +715,8 @@ public class ControlNodeGraph {
                 "planner_worker", selectedWorkerId,
                 "planner_model_tier", selectedModelTier,
                 "orchestration_stage", "execution_pending",
+                "planner_delegation_gate", "accepted",
+                "planner_delegation_gate_reason", "planner brief accepted",
                 "target_worker", targetWorker,
                 "preassigned_selection_reason", firstNonBlank(
                     executionRoute != null ? executionRoute.whySelected() : null,
@@ -608,6 +757,124 @@ public class ControlNodeGraph {
         }
 
         return new OrchestrationJudgment(task, executionDecision, completionDecision);
+    }
+
+    private boolean plannerOutputValidForDelegation(Task task,
+                                                    Map<String, Object> latestWorkerMetadata,
+                                                    WorkerExecutionResult executionResult,
+                                                    com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+        return plannerDelegationInvalidReason(task, latestWorkerMetadata, executionResult, completionDecision) == null;
+    }
+
+    private String plannerOutputRecoveryReason(Task task,
+                                               Map<String, Object> latestWorkerMetadata,
+                                               String latestOutput) {
+        if (task == null || !isOrchestrated(task) || !isPlannerStage(orchestrationStage(task))) {
+            return null;
+        }
+        String failureSummary = firstNonBlank(
+            metadataString(latestWorkerMetadata, "failure_summary_readable"),
+            metadataString(latestWorkerMetadata, "output_text"),
+            metadataString(latestWorkerMetadata, "artifact_content"),
+            latestOutput
+        );
+        if (!looksLikeTransientWorkerRuntimeFailure(failureSummary)) {
+            return null;
+        }
+        String output = blankToNull(firstNonBlank(
+            metadataString(latestWorkerMetadata, "output_text"),
+            metadataString(latestWorkerMetadata, "artifact_content"),
+            latestOutput
+        ));
+        if (output != null && output.length() > PLANNER_DELEGATION_OUTPUT_LIMIT) {
+            return "oversized_runtime_failure_output";
+        }
+        return "runtime_failure_signal";
+    }
+
+    private String plannerDelegationInvalidReason(Task task,
+                                                  Map<String, Object> latestWorkerMetadata,
+                                                  WorkerExecutionResult executionResult,
+                                                  com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+        if (task == null || !isOrchestrated(task) || !isPlannerStage(orchestrationStage(task))) {
+            return null;
+        }
+        String executionStatus = firstNonBlank(
+            metadataString(latestWorkerMetadata, "execution_status"),
+            executionResult != null ? executionResult.executionStatus() : null
+        );
+        if (isFailedExecutionStatus(executionStatus)) {
+            return "failed_execution_status:" + executionStatus;
+        }
+
+        String plannerRecoveryReason = plannerOutputRecoveryReason(
+            task,
+            latestWorkerMetadata,
+            firstNonBlank(
+                executionResult != null ? executionResult.outputText() : null,
+                metadataString(latestWorkerMetadata, "output_text"),
+                executionResult != null ? executionResult.artifactContent() : null,
+                metadataString(latestWorkerMetadata, "artifact_content"),
+                executionResult != null ? executionResult.summary() : null
+            )
+        );
+        if (plannerRecoveryReason != null) {
+            return plannerRecoveryReason;
+        }
+
+        String outputText = firstNonBlank(
+            executionResult != null ? executionResult.outputText() : null,
+            metadataString(latestWorkerMetadata, "output_text"),
+            executionResult != null ? executionResult.artifactContent() : null,
+            metadataString(latestWorkerMetadata, "artifact_content"),
+            executionResult != null ? executionResult.summary() : null
+        );
+        String compactOutput = blankToNull(outputText);
+        if (compactOutput == null) {
+            return "missing_delegation_output";
+        }
+        if (compactOutput.length() > PLANNER_DELEGATION_OUTPUT_LIMIT
+            && looksLikeTransientWorkerRuntimeFailure(compactOutput)) {
+            return "oversized_runtime_failure_output";
+        }
+        if (compactOutput.length() > PLANNER_DELEGATION_OUTPUT_LIMIT
+            && !looksLikeCompactPlannerBrief(executionResult, latestWorkerMetadata, completionDecision)) {
+            return "oversized_non_brief_output";
+        }
+        if (!looksLikeCompactPlannerBrief(executionResult, latestWorkerMetadata, completionDecision)) {
+            return "missing_compact_brief";
+        }
+        return null;
+    }
+
+    private boolean looksLikeCompactPlannerBrief(WorkerExecutionResult executionResult,
+                                                 Map<String, Object> latestWorkerMetadata,
+                                                 com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+        String summary = firstNonBlank(
+            executionResult != null ? executionResult.summary() : null,
+            metadataString(latestWorkerMetadata, "summary")
+        );
+        String nextStep = firstNonBlank(
+            executionResult != null ? executionResult.suggestedNextStep() : null,
+            completionDecision != null ? completionDecision.suggestedNextAction() : null,
+            metadataString(latestWorkerMetadata, "suggested_next_step"),
+            metadataString(latestWorkerMetadata, "next_step")
+        );
+        String toolReason = firstNonBlank(
+            metadataString(latestWorkerMetadata, "tool_chain_termination_reason"),
+            metadataString(latestWorkerMetadata, "tool_plan_reason")
+        );
+        String artifactContent = firstNonBlank(
+            executionResult != null ? executionResult.artifactContent() : null,
+            metadataString(latestWorkerMetadata, "artifact_content")
+        );
+        boolean hasCompactSummary = blankToNull(summary) != null && summary.trim().length() <= 500;
+        boolean hasActionableNextStep = blankToNull(nextStep) != null;
+        boolean hasPlannerSignal = "planner_brief_ready".equalsIgnoreCase(blankToNull(toolReason))
+            || "planner_no_additional_tool".equalsIgnoreCase(blankToNull(toolReason))
+            || metadataStringList(latestWorkerMetadata, "tool_invocation_ids").size() > 0;
+        boolean hasCompactArtifact = blankToNull(artifactContent) != null && artifactContent.length() <= PLANNER_DELEGATION_OUTPUT_LIMIT;
+        return (hasCompactSummary || hasCompactArtifact) && hasActionableNextStep && hasPlannerSignal;
     }
 
     private String resolveLatestOutput(TaskRuntimeContext ctx, WorkerExecutionResult executionResult) {
@@ -656,6 +923,14 @@ public class ControlNodeGraph {
         if (executionResult.unfinishedItems() != null && !executionResult.unfinishedItems().isEmpty()) {
             enriched.putIfAbsent("unfinished_items", executionResult.unfinishedItems());
         }
+        copyMetadataKey(executionResult.metadata(), enriched, "failure_class");
+        copyMetadataKey(executionResult.metadata(), enriched, "failure_summary_readable");
+        copyMetadataKey(executionResult.metadata(), enriched, "recovery_policy");
+        copyMetadataKey(executionResult.metadata(), enriched, "recovery_stage");
+        copyMetadataKey(executionResult.metadata(), enriched, "auto_same_worker_retry_count");
+        copyMetadataKey(executionResult.metadata(), enriched, "auto_handoff_count");
+        copyMetadataKey(executionResult.metadata(), enriched, "auto_handoff_target");
+        copyMetadataKey(executionResult.metadata(), enriched, "previous_worker");
         return enriched.isEmpty() ? Map.of() : enriched;
     }
 
@@ -842,7 +1117,12 @@ public class ControlNodeGraph {
             selectedExecutionRole,
             selectionScope,
             routeReason,
-            metadataString(latestWorkerMetadata, "fallback_reason")
+            metadataString(latestWorkerMetadata, "fallback_reason"),
+            null,
+            null,
+            null,
+            null,
+            null
         );
     }
 
@@ -1043,14 +1323,14 @@ public class ControlNodeGraph {
     public Task triggerHandoff(Task task, String targetWorker) {
         log.info("[Trigger] handoff task={} to worker={}", task.id(), targetWorker);
         persistTransitionPacket(task.withAssignedWorker(targetWorker), "handoff_before");
-        Task t = task.withAssignedWorker(targetWorker).withControlNode("handoff");
+        Task t = clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff");
         taskDao.updateState(t);
         return handoffNode(t);
     }
 
     public Task triggerResume(Task task) {
         log.info("[Trigger] resume task={}", task.id());
-        Task t = task.withStatus("active").withControlNode("scheduler").withWaitingReason(null);
+        Task t = clearAutoContinueBurst(task.withStatus("active").withControlNode("scheduler").withWaitingReason(null));
         taskDao.updateState(t);
         return schedulerNode(t);
     }
@@ -1085,7 +1365,13 @@ public class ControlNodeGraph {
         }
         // 规划阶段当前的 assignedWorker 是 planner，本轮为 executor 选型时不能把它当成显式 pin。
         Task executionSelectionTask = task.withAssignedWorker(null);
-        return router.selectWorker(withMetadataEntries(executionSelectionTask, "orchestration_stage", "execution_pending"));
+        return router.selectWorker(withMetadataEntries(
+            executionSelectionTask,
+            "orchestration_stage", "execution_pending",
+            "assigned_worker", null,
+            "target_worker", null,
+            "preassigned_selection_reason", null
+        ));
     }
 
     private Task markOrchestrationCompleted(Task task) {
@@ -1104,6 +1390,27 @@ public class ControlNodeGraph {
         }
         Map<String, Object> metadata = new LinkedHashMap<>(task.metadata());
         metadata.remove("auto_continue_handoff");
+        return task.withMetadata(metadata);
+    }
+
+    private Task clearAutoContinueBurst(Task task) {
+        if (task == null || task.metadata() == null || !task.metadata().containsKey("auto_continue_burst_count")) {
+            return task;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(task.metadata());
+        metadata.remove("auto_continue_burst_count");
+        return task.withMetadata(metadata);
+    }
+
+    private Task clearProviderContinuationMetadata(Task task) {
+        if (task == null || task.metadata() == null || task.metadata().isEmpty()) {
+            return task;
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>(task.metadata());
+        metadata.remove("provider_session_id");
+        metadata.remove("provider_thread_id");
+        metadata.remove("codex_thread_id");
+        metadata.remove("resume_provider_session_id");
         return task.withMetadata(metadata);
     }
 
@@ -1155,21 +1462,67 @@ public class ControlNodeGraph {
         String terminationReason = stringValue(latestWorkerMetadata.get("tool_chain_termination_reason"));
         if ("repeated_tool_guard".equalsIgnoreCase(terminationReason)
             || "no_progress_guard".equalsIgnoreCase(terminationReason)) {
-            return false;
-        }
-        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("more_declared_rounds_remain")))) {
+            log.info("[AutoContinue] task={} rejected: tool chain terminated by guard, reason={}", task.id(), terminationReason);
             return false;
         }
         if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("missing_required_current_round_write")))) {
+            log.info("[AutoContinue] task={} rejected: missing required current round write", task.id());
             return false;
         }
-        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("grounded_output_present")))) {
+        boolean moreDeclaredRoundsRemain = Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("more_declared_rounds_remain")));
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("grounded_output_present"))) && !moreDeclaredRoundsRemain) {
+            log.info("[AutoContinue] task={} rejected: grounded output already present", task.id());
             return false;
         }
-        if (!isGroundedOutputRequired(latestWorkerMetadata)) {
+        
+        // 获取 LLM 返回的下一步想法
+        String nextStep = firstNonBlank(
+            stringValue(latestWorkerMetadata.get("suggested_next_action")),
+            stringValue(latestWorkerMetadata.get("next_step")),
+            executionResult != null ? executionResult.suggestedNextStep() : null,
+            task.nextStep()
+        );
+        boolean hasNextStep = nextStep != null && !nextStep.isBlank();
+        
+        // 检查是否有显式的 goal（目标）
+        String goal = firstNonBlank(task.goal(), metadataString(task.metadata(), "goal"));
+        boolean hasGoal = goal != null && !goal.isBlank();
+
+        // 检查是否启用了自动多轮模式
+        boolean autoMultiRoundEnabled = Boolean.parseBoolean(metadataString(task.metadata(), "auto_multi_round"));
+        List<String> unfinishedItems = metadataStringList(latestWorkerMetadata, "unfinished_items");
+        boolean hasUnfinishedItems = unfinishedItems != null && !unfinishedItems.isEmpty();
+
+        // 记录任务类型信息用于调试
+        String orchestrationStage = orchestrationStage(task);
+        String modelMode = metadataString(task.metadata(), "model_mode");
+        boolean isPlanningStage = isPlannerStage(orchestrationStage);
+        boolean hasOutputRequirement = isGroundedOutputRequired(latestWorkerMetadata);
+        log.info("[AutoContinue] task={} orchestration_stage={} model_mode={} is_planning_stage={} has_output_requirement={} has_next_step={} has_goal={} auto_multi_round={} more_declared_rounds_remain={} has_unfinished_items={}",
+            task.id(), orchestrationStage, modelMode, isPlanningStage, hasOutputRequirement, hasNextStep, hasGoal, autoMultiRoundEnabled, moreDeclaredRoundsRemain, hasUnfinishedItems);
+
+        // 判断是否继续：
+        // 1. 如果后面还有声明的轮次，继续
+        // 2. 如果有明确的 next_step，继续
+        // 3. 如果有 unfinished_items，继续
+        // 4. 如果没有 next_step，但有显式 goal 或启用了 auto_multi_round，也继续（更积极的策略）
+        boolean shouldContinue = moreDeclaredRoundsRemain || hasNextStep || hasUnfinishedItems;
+        if (!shouldContinue && (hasGoal || autoMultiRoundEnabled)) {
+            log.info("[AutoContinue] task={} continuing despite no explicit next step: has_goal={} auto_multi_round={}", task.id(), hasGoal, autoMultiRoundEnabled);
+            shouldContinue = true;
+        }
+
+        if (!shouldContinue) {
+            log.info("[AutoContinue] task={} rejected: no declared next round, next step, unfinished items, goal, or auto_multi_round enabled", task.id());
             return false;
         }
-        return autoContinueBurstCount(task) < autoContinueBurstLimit(task, executionResult, latestWorkerMetadata);
+        
+        // 允许所有任务类型自动继续到下一轮
+        // 仅保留突发计数限制，防止无限循环
+        boolean canContinue = autoContinueBurstCount(task) < autoContinueBurstLimit(task, executionResult, latestWorkerMetadata);
+        log.info("[AutoContinue] task={} can_continue={} burst_count={} burst_limit={}",
+            task.id(), canContinue, autoContinueBurstCount(task), autoContinueBurstLimit(task, executionResult, latestWorkerMetadata));
+        return canContinue;
     }
 
     private boolean isOrchestrated(Task task) {
@@ -1211,8 +1564,21 @@ public class ControlNodeGraph {
     private int autoContinueBurstLimit(Task task,
                                        WorkerExecutionResult executionResult,
                                        Map<String, Object> latestWorkerMetadata) {
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("more_declared_rounds_remain")))) {
+            Integer declaredRoundCount = metadataInt(latestWorkerMetadata, "declared_round_count");
+            if (declaredRoundCount != null && declaredRoundCount > 1) {
+                return Math.min(Math.max(declaredRoundCount, 2), 6);
+            }
+            return 3;
+        }
+        if (Boolean.parseBoolean(metadataString(task != null ? task.metadata() : null, "auto_multi_round"))) {
+            return 3;
+        }
         if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("output_dir_required")))) {
             return Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("image_input_used"))) ? 3 : 2;
+        }
+        if (Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("output_file_required")))) {
+            return 2;
         }
         return 1;
     }
@@ -1315,6 +1681,26 @@ public class ControlNodeGraph {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private boolean metadataBoolean(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return false;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof Number number) {
+            return number.intValue() != 0;
+        }
+        if (value instanceof String text) {
+            String normalized = text.trim().toLowerCase();
+            return "true".equals(normalized)
+                || "1".equals(normalized)
+                || "yes".equals(normalized);
+        }
+        return false;
     }
 
     private Long metadataLong(Map<String, Object> metadata, String key) {
@@ -1644,8 +2030,26 @@ public class ControlNodeGraph {
         putIfNonBlank(metadata, "planner_worker", metadataString(task != null ? task.metadata() : null, "planner_worker"));
         putIfNonBlank(metadata, "executor_worker", metadataString(task != null ? task.metadata() : null, "executor_worker"));
         putIfNonBlank(metadata, "target_worker", metadataString(task != null ? task.metadata() : null, "target_worker"));
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_class");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_summary_readable");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_policy");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_execution_mode");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_same_worker_retry_count");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_count");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_target");
+        copyMetadataKey(task != null ? task.metadata() : null, metadata, "previous_worker");
+        String taskRecoveryStage = metadataString(task != null ? task.metadata() : null, "recovery_stage");
+        if (!isFailedExecutionStatus(executionResult.executionStatus()) && taskRecoveryStage != null) {
+            metadata.put("recovery_stage", taskRecoveryStage + "_succeeded");
+            metadata.remove("recovery_execution_mode");
+        } else {
+            putIfNonBlank(metadata, "recovery_stage", taskRecoveryStage);
+        }
         if (route != null && route.candidateWorkers() != null && !route.candidateWorkers().isEmpty()) {
             metadata.putIfAbsent("candidate_workers", route.candidateWorkers());
+        }
+        if (route != null && route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
+            metadata.putIfAbsent("fallback_workers", route.fallbackWorkers());
         }
         return new WorkerExecutionResult(
             executionResult.summary(),
@@ -1718,6 +2122,7 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "execution_role");
         copyMetadataKey(source, selected, "why_selected");
         copyMetadataKey(source, selected, "candidate_workers");
+        copyMetadataKey(source, selected, "fallback_workers");
         copyMetadataKey(source, selected, "preferred_worker_hint");
         copyMetadataKey(source, selected, "learning_hint_applied");
         copyMetadataKey(source, selected, "fallback_reason");
@@ -1771,6 +2176,14 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "tool_chain_step_count");
         copyMetadataKey(source, selected, "tool_chain_termination_reason");
         copyMetadataKey(source, selected, "tool_chain_trace");
+        copyMetadataKey(source, selected, "failure_class");
+        copyMetadataKey(source, selected, "failure_summary_readable");
+        copyMetadataKey(source, selected, "recovery_policy");
+        copyMetadataKey(source, selected, "recovery_stage");
+        copyMetadataKey(source, selected, "auto_same_worker_retry_count");
+        copyMetadataKey(source, selected, "auto_handoff_count");
+        copyMetadataKey(source, selected, "auto_handoff_target");
+        copyMetadataKey(source, selected, "previous_worker");
         return selected;
     }
 
@@ -1794,6 +2207,762 @@ public class ControlNodeGraph {
                 ? firstNonBlank(providerThreadId, providerSessionId)
                 : null
         );
+    }
+
+    private WorkerExecutionResult synthesizeFailedExecutionResult(Task task,
+                                                                  WorkerRouter.RouteResult route,
+                                                                  Worker selectedWorker,
+                                                                  String selectedWorkerType,
+                                                                  String selectedModelTier,
+                                                                  String executionRole,
+                                                                  String whySelected,
+                                                                  String fallbackReason,
+                                                                  RuntimeException error) {
+        String readable = buildReadableFailureSummary(task, error);
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("parser", "runtime_exception");
+        metadata.put("failure_summary_readable", readable);
+        metadata.put("output_text", readable);
+        metadata.put("artifact_content", readable);
+        WorkerExecutionResult failed = new WorkerExecutionResult(
+            readable,
+            readable,
+            false,
+            "",
+            readable,
+            "Inspect failure, retry, or handoff.",
+            "low",
+            "failed",
+            List.of(),
+            List.of("worker round failed"),
+            0,
+            0L,
+            metadata
+        );
+        return enrichCurrentRoundWorkerMetadata(
+            task,
+            route,
+            selectedWorker,
+            selectedWorkerType,
+            selectedModelTier,
+            executionRole,
+            whySelected,
+            fallbackReason,
+            failed
+        );
+    }
+
+    private String buildReadableFailureSummary(Task task, RuntimeException error) {
+        String worker = firstNonBlank(task != null ? task.assignedWorker() : null, "worker");
+        String message = firstNonBlank(
+            error != null ? error.getMessage() : null,
+            error != null ? error.getClass().getSimpleName() : null,
+            "unknown error"
+        );
+        return sanitizeReadableFailureSummary(worker, "worker " + worker + " failed: " + message);
+    }
+
+    private RecoveryDirective maybePlanFailureRecovery(Task task,
+                                                       Map<String, Object> latestWorkerMetadata,
+                                                       String latestOutput) {
+        if (!isFailedExecutionStatus(metadataString(latestWorkerMetadata, "execution_status"))
+            && plannerOutputRecoveryReason(task, latestWorkerMetadata, latestOutput) == null) {
+            return null;
+        }
+        String failureSummary = resolveRecoveryFailureText(latestWorkerMetadata, latestOutput);
+        String failureClass = classifyFailureClass(latestWorkerMetadata, failureSummary);
+        String recoveryPolicy = "same_worker_retry_then_auto_handoff";
+        String previousWorker = firstNonBlank(
+            task != null ? task.assignedWorker() : null,
+            metadataString(latestWorkerMetadata, "selected_worker")
+        );
+        int sameWorkerRetryCount = java.util.Optional.ofNullable(
+            metadataInt(task != null ? task.metadata() : null, "auto_same_worker_retry_count")
+        ).orElse(0);
+        int autoHandoffCount = java.util.Optional.ofNullable(
+            metadataInt(task != null ? task.metadata() : null, "auto_handoff_count")
+        ).orElse(0);
+        log.info(
+            "[Recovery] task={} previousWorker={} failureClass={} sameWorkerRetryCount={} autoHandoffCount={} failureSummary={}",
+            task != null ? task.id() : null,
+            previousWorker,
+            failureClass,
+            sameWorkerRetryCount,
+            autoHandoffCount,
+            failureSummary
+        );
+
+        if ("worker_runtime_transient".equals(failureClass) && sameWorkerRetryCount < 1) {
+            log.info(
+                "[Recovery] task={} action=same_worker_retry worker={} reason={}",
+                task != null ? task.id() : null,
+                previousWorker,
+                failureSummary
+            );
+            com.agentcloud.judgment.model.ExecutionDecision execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                "retry", "same_worker_retry", "", false, false, ""
+            );
+            com.agentcloud.judgment.model.CompletionDecision compDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                "incomplete", "low", "Transient failure, task incomplete", ""
+            );
+            return RecoveryDirective.sameWorkerRetry(
+                failureClass,
+                failureSummary,
+                recoveryPolicy,
+                previousWorker,
+                sameWorkerRetryCount + 1,
+                autoHandoffCount,
+                execDecision,
+                compDecision
+            );
+        }
+
+        String handoffTarget = selectRecoveryHandoffTarget(task, latestWorkerMetadata, previousWorker);
+        if ("worker_backend_deterministic".equals(failureClass) && autoHandoffCount < 1 && handoffTarget != null) {
+            markWorkerTemporarilyUnavailable(task, previousWorker, failureSummary);
+            com.agentcloud.judgment.model.ExecutionDecision execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                "handoff", "auto_handoff", "", false, false, handoffTarget
+            );
+            com.agentcloud.judgment.model.CompletionDecision compDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                "incomplete", "low", "Backend or capability limitation detected; fallback worker scheduled.", ""
+            );
+            log.info(
+                "[Recovery] task={} action=auto_handoff previousWorker={} targetWorker={} reason={}",
+                task != null ? task.id() : null,
+                previousWorker,
+                handoffTarget,
+                failureSummary
+            );
+            return RecoveryDirective.autoHandoff(
+                failureClass,
+                failureSummary,
+                recoveryPolicy,
+                previousWorker,
+                sameWorkerRetryCount,
+                autoHandoffCount + 1,
+                handoffTarget,
+                execDecision,
+                compDecision
+            );
+        }
+        if ("worker_runtime_transient".equals(failureClass) && autoHandoffCount < 1 && handoffTarget != null) {
+            markWorkerTemporarilyUnavailable(task, previousWorker, failureSummary);
+            com.agentcloud.judgment.model.ExecutionDecision execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+                "handoff", "auto_handoff", "", false, false, handoffTarget
+            );
+            com.agentcloud.judgment.model.CompletionDecision compDecision = new com.agentcloud.judgment.model.CompletionDecision(
+                "incomplete", "low", "Transient failure, task incomplete", ""
+            );
+            log.info(
+                "[Recovery] task={} action=auto_handoff previousWorker={} targetWorker={} reason={}",
+                task != null ? task.id() : null,
+                previousWorker,
+                handoffTarget,
+                failureSummary
+            );
+            return RecoveryDirective.autoHandoff(
+                failureClass,
+                failureSummary,
+                recoveryPolicy,
+                previousWorker,
+                sameWorkerRetryCount,
+                autoHandoffCount + 1,
+                handoffTarget,
+                execDecision,
+                compDecision
+            );
+        }
+
+        log.warn(
+            "[Recovery] task={} action=human_gate previousWorker={} failureClass={} handoffTarget={} reason={}",
+            task != null ? task.id() : null,
+            previousWorker,
+            failureClass,
+            handoffTarget,
+            failureSummary
+        );
+
+        com.agentcloud.judgment.model.ExecutionDecision execDecision = new com.agentcloud.judgment.model.ExecutionDecision(
+            "human_gate", "escalate", "", false, true, ""
+        );
+        com.agentcloud.judgment.model.CompletionDecision compDecision = new com.agentcloud.judgment.model.CompletionDecision(
+            "incomplete", "low", "Failure requires human intervention", ""
+        );
+        return RecoveryDirective.humanGate(
+            firstNonBlank(failureClass, "worker_execution_failed"),
+            failureSummary,
+            recoveryPolicy,
+            previousWorker,
+            sameWorkerRetryCount,
+            autoHandoffCount,
+            handoffTarget,
+            execDecision,
+            compDecision
+        );
+    }
+
+    private Task applyRecoveryDirective(Task task, RecoveryDirective directive) {
+        if (task == null || directive == null) {
+            return task;
+        }
+        Task updated = clearProviderContinuationMetadata(task);
+        String currentAssignedWorker = task.assignedWorker();
+        String nextAssignedWorker = directive.autoHandoff() && directive.handoffTarget() != null
+            ? directive.handoffTarget()
+            : currentAssignedWorker;
+        updated = withMetadataEntries(updated,
+            "failure_class", directive.failureClass(),
+            "failure_summary_readable", directive.failureSummaryReadable(),
+            "recovery_policy", directive.recoveryPolicy(),
+            "recovery_stage", directive.recoveryStage(),
+            "recovery_execution_mode", directive.recoveryExecutionMode(),
+            "auto_same_worker_retry_count", directive.sameWorkerRetryCount(),
+            "auto_handoff_count", directive.autoHandoffCount(),
+            "auto_handoff_target", directive.handoffTarget(),
+            "previous_worker", directive.previousWorker(),
+            "assigned_worker", nextAssignedWorker,
+            "target_worker", directive.autoHandoff() ? directive.handoffTarget() : metadataString(task.metadata(), "target_worker")
+        );
+        if (directive.autoHandoff() && directive.handoffTarget() != null) {
+            updated = updated.withAssignedWorker(directive.handoffTarget());
+        }
+        return syncAssignedWorkerMetadata(updated);
+    }
+
+    private String resolveRecoveryFailureText(Map<String, Object> latestWorkerMetadata, String latestOutput) {
+        String raw = firstNonBlank(
+            metadataString(latestWorkerMetadata, "failure_summary_readable"),
+            metadataString(latestWorkerMetadata, "output_text"),
+            metadataString(latestWorkerMetadata, "artifact_content"),
+            latestOutput,
+            metadataString(latestWorkerMetadata, "tool_summary"),
+            metadataString(latestWorkerMetadata, "tool_plan_reason"),
+            "worker execution failed"
+        );
+        String worker = firstNonBlank(
+            metadataString(latestWorkerMetadata, "selected_worker"),
+            metadataString(latestWorkerMetadata, "assigned_worker"),
+            metadataString(latestWorkerMetadata, "provider_id"),
+            "worker"
+        );
+        return sanitizeReadableFailureSummary(worker, raw);
+    }
+
+    private String classifyFailureClass(Map<String, Object> latestWorkerMetadata, String failureSummary) {
+        if (looksLikeEmptyOutputFailure(latestWorkerMetadata)) {
+            return "worker_runtime_transient";
+        }
+        if (looksLikeTransientWorkerRuntimeFailure(failureSummary)) {
+            return "worker_runtime_transient";
+        }
+        if (looksLikePartialResultOrQualityRisk(latestWorkerMetadata)) {
+            return "partial_result_or_quality_risk";
+        }
+        if (looksLikeTaskEnvironmentBlocked(latestWorkerMetadata, failureSummary)) {
+            return "task_environment_blocked";
+        }
+        if (looksLikeWorkerBackendDeterministic(latestWorkerMetadata, failureSummary)) {
+            return "worker_backend_deterministic";
+        }
+        return "worker_execution_failed";
+    }
+
+    private boolean looksLikeEmptyOutputFailure(Map<String, Object> latestWorkerMetadata) {
+        String outputText = metadataString(latestWorkerMetadata, "output_text");
+        String artifactContent = metadataString(latestWorkerMetadata, "artifact_content");
+        String toolSummary = metadataString(latestWorkerMetadata, "tool_summary");
+        
+        return blankToNull(outputText) == null && blankToNull(artifactContent) == null && blankToNull(toolSummary) == null;
+    }
+
+    private boolean looksLikeTransientWorkerRuntimeFailure(String failureSummary) {
+        String normalized = blankToNull(failureSummary);
+        if (normalized == null) {
+            return false;
+        }
+        String text = normalized.toLowerCase();
+        return text.contains("thread not found")
+            || text.contains("session expired")
+            || text.contains("provider unavailable")
+            || text.contains("failed to start")
+            || text.contains("connection reset")
+            || text.contains("timeout")
+            || text.contains("failed to start codex app-server")
+            || text.contains("没找到线程")
+            || text.contains("未找到线程");
+    }
+
+    private boolean looksLikeTaskEnvironmentBlocked(Map<String, Object> latestWorkerMetadata, String failureSummary) {
+        String normalized = blankToNull(failureSummary);
+        if (normalized == null) {
+            normalized = firstNonBlank(
+                metadataString(latestWorkerMetadata, "output_text"),
+                metadataString(latestWorkerMetadata, "artifact_content"),
+                metadataString(latestWorkerMetadata, "tool_summary"),
+                metadataString(latestWorkerMetadata, "tool_plan_reason")
+            );
+        }
+        if (normalized == null) {
+            return false;
+        }
+        if (FILE_NOT_FOUND.matcher(normalized).find()) {
+            return true;
+        }
+        String lower = normalized.toLowerCase();
+        return lower.contains("no such file")
+            || lower.contains("file not found")
+            || lower.contains("directory not found")
+            || lower.contains("path not found")
+            || lower.contains("permission denied")
+            || lower.contains("access is denied")
+            || lower.contains("command not found")
+            || lower.contains("not recognized as an internal or external command")
+            || normalized.contains("文件不存在")
+            || normalized.contains("目录不存在")
+            || normalized.contains("命令不存在")
+            || normalized.contains("权限不足")
+            || normalized.contains("拒绝访问");
+    }
+
+    private boolean looksLikeWorkerBackendDeterministic(Map<String, Object> latestWorkerMetadata, String failureSummary) {
+        String normalized = blankToNull(failureSummary);
+        if (normalized == null) {
+            normalized = firstNonBlank(
+                metadataString(latestWorkerMetadata, "output_text"),
+                metadataString(latestWorkerMetadata, "artifact_content"),
+                metadataString(latestWorkerMetadata, "tool_summary"),
+                metadataString(latestWorkerMetadata, "tool_plan_reason")
+            );
+        }
+        if (normalized == null) {
+            return false;
+        }
+        if (BACKEND_UNSUPPORTED.matcher(normalized).find()) {
+            return true;
+        }
+        String lower = normalized.toLowerCase();
+        return lower.contains("unsupported")
+            || lower.contains("not supported")
+            || lower.contains("missing capability")
+            || lower.contains("capability missing")
+            || lower.contains("tool unsupported")
+            || lower.contains("does not support")
+            || lower.contains("401")
+            || lower.contains("invalid token")
+            || lower.contains("authentication failed")
+            || lower.contains("failed to authenticate")
+            || lower.contains("unauthorized")
+            || normalized.contains("工具不支持")
+            || normalized.contains("能力不足")
+            || normalized.contains("认证失败")
+            || normalized.contains("不支持当前模式")
+            || normalized.contains("不支持该工具");
+    }
+
+    private boolean looksLikePartialResultOrQualityRisk(Map<String, Object> latestWorkerMetadata) {
+        if (latestWorkerMetadata == null || latestWorkerMetadata.isEmpty()) {
+            return false;
+        }
+        if (metadataBoolean(latestWorkerMetadata, "grounded_output_present")
+            || metadataBoolean(latestWorkerMetadata, "file_backed_artifact")
+            || metadataBoolean(latestWorkerMetadata, "directory_backed_artifact")
+            || metadataBoolean(latestWorkerMetadata, "produced_artifact")) {
+            return true;
+        }
+        if (!metadataStringList(latestWorkerMetadata, "unfinished_items").isEmpty()) {
+            return true;
+        }
+        return !metadataStringList(latestWorkerMetadata, "tool_invocation_ids").isEmpty();
+    }
+
+    private boolean isFailedExecutionStatus(String status) {
+        String normalized = blankToNull(status);
+        if (normalized == null) {
+            return false;
+        }
+        return List.of("failed", "error", "timeout", "cancelled", "blocked", "empty").contains(normalized.toLowerCase());
+    }
+
+    private String sanitizeReadableFailureSummary(String worker, String raw) {
+        String normalized = blankToNull(raw);
+        if (normalized == null) {
+            return "worker " + firstNonBlank(worker, "worker") + " failed";
+        }
+        String compact = normalized
+            .replace('\r', '\n')
+            .replace('\u0000', ' ')
+            .trim();
+        String core = firstFailureLine(compact);
+        core = summarizeKnownFailure(firstNonBlank(worker, "worker"), core);
+        core = stripNoise(core);
+        core = compressWhitespace(core);
+        if (core.length() > FAILURE_SUMMARY_LIMIT) {
+            core = core.substring(0, FAILURE_SUMMARY_LIMIT).trim() + "...";
+        }
+        return core.isBlank() ? "worker " + firstNonBlank(worker, "worker") + " failed" : core;
+    }
+
+    private String firstFailureLine(String raw) {
+        for (String line : raw.split("\\R")) {
+            String trimmed = blankToNull(line);
+            if (trimmed == null) {
+                continue;
+            }
+            if (looksLikeNoiseLine(trimmed)) {
+                continue;
+            }
+            return trimmed;
+        }
+        return raw;
+    }
+
+    private boolean looksLikeNoiseLine(String line) {
+        String trimmed = blankToNull(line);
+        if (trimmed == null) {
+            return true;
+        }
+        if (trimmed.startsWith("---")
+            || trimmed.startsWith("name:")
+            || trimmed.startsWith("description:")
+            || trimmed.startsWith("#")
+            || trimmed.startsWith(".")
+            || trimmed.matches("^[\\w.-]+\\\\[\\w .-]+$")) {
+            return true;
+        }
+        return trimmed.endsWith(".md")
+            || trimmed.endsWith(".png")
+            || trimmed.endsWith(".log")
+            || trimmed.endsWith(".json")
+            || trimmed.endsWith(".java")
+            || trimmed.endsWith(".js");
+    }
+
+    private String summarizeKnownFailure(String worker, String text) {
+        String normalizedWorker = firstNonBlank(worker, "worker");
+        Matcher enThreadWithParens = THREAD_NOT_FOUND_EN_WITH_PARENS.matcher(text);
+        if (enThreadWithParens.find()) {
+            String threadId = blankToNull(enThreadWithParens.group(1));
+            return threadId == null
+                ? "worker " + normalizedWorker + " failed: thread not found"
+                : "worker " + normalizedWorker + " failed: thread not found (" + threadId + ")";
+        }
+        Matcher zhThread = THREAD_NOT_FOUND_ZH.matcher(text);
+        if (zhThread.find()) {
+            String threadId = blankToNull(zhThread.group(2));
+            return threadId == null
+                ? "worker " + normalizedWorker + " failed: thread not found"
+                : "worker " + normalizedWorker + " failed: thread not found (" + threadId + ")";
+        }
+        if (looksLikeGarbledThreadNotFound(text)) {
+            String threadId = extractQuotedThreadId(text);
+            return threadId == null
+                ? "worker " + normalizedWorker + " failed: thread not found"
+                : "worker " + normalizedWorker + " failed: thread not found (" + threadId + ")";
+        }
+        Matcher enThread = THREAD_NOT_FOUND_EN.matcher(text);
+        if (enThread.find()) {
+            String threadId = blankToNull(enThread.group(1));
+            return threadId == null
+                ? "worker " + normalizedWorker + " failed: thread not found"
+                : "worker " + normalizedWorker + " failed: thread not found (" + threadId + ")";
+        }
+        if (PROVIDER_UNAVAILABLE.matcher(text).find()) {
+            return "worker " + normalizedWorker + " failed: provider unavailable";
+        }
+        if (SESSION_EXPIRED.matcher(text).find()) {
+            return "worker " + normalizedWorker + " failed: session expired";
+        }
+        if (CONNECTION_RESET.matcher(text).find()) {
+            return "worker " + normalizedWorker + " failed: connection reset";
+        }
+        if (FAILED_TO_START.matcher(text).find()) {
+            return "worker " + normalizedWorker + " failed: backend failed to start";
+        }
+        if (TIMEOUT.matcher(text).find()) {
+            return "worker " + normalizedWorker + " failed: timeout";
+        }
+        return text;
+    }
+
+    private boolean looksLikeGarbledThreadNotFound(String text) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        String normalized = text.toLowerCase();
+        int replacementCount = (int) text.chars().filter(ch -> ch == '\uFFFD').count();
+        boolean hasGarbledChineseMarker = normalized.contains("û") || normalized.contains("ҵ") || replacementCount >= 4;
+        return hasGarbledChineseMarker && extractQuotedThreadId(text) != null;
+    }
+
+    private String extractQuotedThreadId(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        Matcher matcher = QUOTED_THREAD_ID.matcher(text);
+        return matcher.find() ? blankToNull(matcher.group(1)) : null;
+    }
+
+    private String stripNoise(String text) {
+        String sanitized = text;
+        int fenceIndex = sanitized.indexOf("---");
+        if (fenceIndex > 0) {
+            sanitized = sanitized.substring(0, fenceIndex);
+        }
+        int docsIndex = sanitized.indexOf("docs\\");
+        if (docsIndex > 0) {
+            sanitized = sanitized.substring(0, docsIndex);
+        }
+        int rootListingIndex = sanitized.indexOf(".github");
+        if (rootListingIndex > 0) {
+            sanitized = sanitized.substring(0, rootListingIndex);
+        }
+        return sanitized.trim();
+    }
+
+    private String compressWhitespace(String text) {
+        return text
+            .replaceAll("[\\t\\x0B\\f]+", " ")
+            .replaceAll(" {2,}", " ")
+            .replaceAll("\\s*\\n\\s*", " ")
+            .trim();
+    }
+
+    private String selectRecoveryHandoffTarget(Task task,
+                                               Map<String, Object> latestWorkerMetadata,
+                                               String currentWorker) {
+        String currentProvider = firstNonBlank(
+            metadataString(latestWorkerMetadata, "provider_id"),
+            metadataString(task != null ? task.metadata() : null, "provider_id"),
+            resolveProviderId(currentWorker)
+        );
+        boolean avoidCurrentProvider = shouldAvoidCurrentProvider(task, latestWorkerMetadata, currentProvider);
+        String preferred = findRecoveryHandoffTarget(task, latestWorkerMetadata, currentWorker, currentProvider, avoidCurrentProvider);
+        if (preferred != null) {
+            return preferred;
+        }
+        if (avoidCurrentProvider) {
+            log.info(
+                "[Recovery] task={} no alternate provider candidate available currentProvider={}, falling back to same-provider candidates",
+                task != null ? task.id() : null,
+                currentProvider
+            );
+            return findRecoveryHandoffTarget(task, latestWorkerMetadata, currentWorker, currentProvider, false);
+        }
+        return null;
+    }
+
+    private String findRecoveryHandoffTarget(Task task,
+                                             Map<String, Object> latestWorkerMetadata,
+                                             String currentWorker,
+                                             String currentProvider,
+                                             boolean avoidCurrentProvider) {
+        List<String> preferredCandidates = preferredRecoveryCandidates(task, latestWorkerMetadata, currentWorker);
+        for (String candidate : preferredCandidates) {
+            if (!candidate.equals(currentWorker)
+                && isWorkerAvailable(candidate, "preferred_recovery_candidates")
+                && acceptsRecoveryCandidate(candidate, currentProvider, avoidCurrentProvider, "preferred_recovery_candidates")) {
+                return candidate;
+            }
+        }
+        for (String candidate : metadataStringList(latestWorkerMetadata, "fallback_workers")) {
+            if (!candidate.equals(currentWorker)
+                && isWorkerAvailable(candidate, "latest_fallback_workers")
+                && acceptsRecoveryCandidate(candidate, currentProvider, avoidCurrentProvider, "latest_fallback_workers")) {
+                return candidate;
+            }
+        }
+        for (String candidate : metadataStringList(latestWorkerMetadata, "candidate_workers")) {
+            if (!candidate.equals(currentWorker)
+                && isWorkerAvailable(candidate, "latest_candidate_workers")
+                && acceptsRecoveryCandidate(candidate, currentProvider, avoidCurrentProvider, "latest_candidate_workers")) {
+                return candidate;
+            }
+        }
+        if (router == null || task == null) {
+            return null;
+        }
+        Task unpinnedTask = withMetadataEntries(task.withAssignedWorker(null), "assigned_worker", null);
+        WorkerRouter.RouteResult route = router.selectWorker(unpinnedTask);
+        if (route == null) {
+            return null;
+        }
+        for (String candidate : route.fallbackWorkers()) {
+            if (!candidate.equals(currentWorker)
+                && isWorkerAvailable(candidate, "router_fallback_workers")
+                && acceptsRecoveryCandidate(candidate, currentProvider, avoidCurrentProvider, "router_fallback_workers")) {
+                return candidate;
+            }
+        }
+        for (String candidate : route.candidateWorkers()) {
+            if (!candidate.equals(currentWorker)
+                && isWorkerAvailable(candidate, "router_candidate_workers")
+                && acceptsRecoveryCandidate(candidate, currentProvider, avoidCurrentProvider, "router_candidate_workers")) {
+                return candidate;
+            }
+        }
+        String selected = route.selectedWorker();
+        if (selected != null
+            && !selected.equals(currentWorker)
+            && isWorkerAvailable(selected, "router_selected_worker")
+            && acceptsRecoveryCandidate(selected, currentProvider, avoidCurrentProvider, "router_selected_worker")) {
+            return selected;
+        }
+        return null;
+    }
+
+    private boolean shouldAvoidCurrentProvider(Task task,
+                                               Map<String, Object> latestWorkerMetadata,
+                                               String currentProvider) {
+        if (blankToNull(currentProvider) == null || agentRunService == null) {
+            return false;
+        }
+        String failureSummary = resolveRecoveryFailureText(latestWorkerMetadata, null);
+        String failureClass = classifyFailureClass(latestWorkerMetadata, failureSummary);
+        if (!"worker_runtime_transient".equals(failureClass)) {
+            return false;
+        }
+        boolean avoid = agentRunService.shouldDeprioritizeProvider(currentProvider);
+        if (avoid) {
+            log.info(
+                "[Recovery] task={} deprioritizing provider={} for transient failure recovery",
+                task != null ? task.id() : null,
+                currentProvider
+            );
+        }
+        return avoid;
+    }
+
+    private boolean acceptsRecoveryCandidate(String candidateWorker,
+                                             String currentProvider,
+                                             boolean avoidCurrentProvider,
+                                             String candidateSource) {
+        if (!avoidCurrentProvider) {
+            return true;
+        }
+        String candidateProvider = resolveProviderId(candidateWorker);
+        if (candidateProvider == null || !candidateProvider.equalsIgnoreCase(currentProvider)) {
+            return true;
+        }
+        log.info(
+            "[Recovery] skip candidate worker={} source={} provider={} because current provider is temporarily deprioritized",
+            candidateWorker,
+            candidateSource,
+            candidateProvider
+        );
+        return false;
+    }
+
+    private String resolveProviderId(String workerId) {
+        Worker worker = blankToNull(workerId) == null || router == null ? null : router.getWorker(workerId);
+        return com.agentcloud.agent.AgentProviderResolver.providerIdForWorker(
+            workerId,
+            worker != null ? worker.workerType() : workerId
+        );
+    }
+
+    private List<String> preferredRecoveryCandidates(Task task,
+                                                     Map<String, Object> latestWorkerMetadata,
+                                                     String currentWorker) {
+        if (!prefersCodingRecovery(task, latestWorkerMetadata)) {
+            return List.of();
+        }
+        List<String> ordered = new java.util.ArrayList<>();
+        appendCodingRecoveryCandidates(ordered, task, latestWorkerMetadata, currentWorker);
+        return ordered;
+    }
+
+    private boolean prefersCodingRecovery(Task task, Map<String, Object> latestWorkerMetadata) {
+        String taskType = firstNonBlank(
+            metadataString(task != null ? task.metadata() : null, "task_type"),
+            metadataString(latestWorkerMetadata, "task_type")
+        );
+        if ("coding".equalsIgnoreCase(blankToNull(taskType))) {
+            return true;
+        }
+        String failureSummary = firstNonBlank(
+            metadataString(latestWorkerMetadata, "failure_summary_readable"),
+            metadataString(latestWorkerMetadata, "output_text"),
+            task != null ? task.goal() : null,
+            task != null ? task.title() : null
+        );
+        return looksLikeCodingRecoveryContext(task, latestWorkerMetadata, failureSummary);
+    }
+
+    private boolean looksLikeCodingRecoveryContext(Task task,
+                                                   Map<String, Object> latestWorkerMetadata,
+                                                   String text) {
+        String normalized = blankToNull(text);
+        if (normalized == null) {
+            normalized = firstNonBlank(
+                task != null ? task.goal() : null,
+                task != null ? task.title() : null,
+                metadataString(task != null ? task.metadata() : null, "goal"),
+                metadataString(task != null ? task.metadata() : null, "workspace"),
+                metadataString(task != null ? task.metadata() : null, "repo_path")
+            );
+        }
+        if (normalized == null) {
+            return false;
+        }
+        String lower = normalized.toLowerCase();
+        return lower.contains("\\gitall\\")
+            || lower.contains("\\src\\main\\")
+            || lower.contains("/src/main/")
+            || lower.contains(".java")
+            || lower.contains(".js")
+            || lower.contains(".ts")
+            || lower.contains("articleeditor")
+            || lower.contains("pom.xml")
+            || lower.contains("package.json")
+            || normalized.contains("修改")
+            || normalized.contains("改代码")
+            || normalized.contains("修复")
+            || normalized.contains("实现")
+            || normalized.contains("仓库")
+            || normalized.contains("代码");
+    }
+
+    private void appendCodingRecoveryCandidates(List<String> ordered,
+                                                Task task,
+                                                Map<String, Object> latestWorkerMetadata,
+                                                String currentWorker) {
+        addRecoveryCandidate(ordered, metadataString(task != null ? task.metadata() : null, "preferred_worker"), currentWorker);
+        addRecoveryCandidate(ordered, "codex", currentWorker);
+        addRecoveryCandidate(ordered, "cursor", currentWorker);
+        addRecoveryCandidate(ordered, "copilot", currentWorker);
+        addRecoveryCandidate(ordered, "opencode", currentWorker);
+        addRecoveryCandidate(ordered, "codebuddy", currentWorker);
+        addRecoveryCandidate(ordered, "trae", currentWorker);
+        addRecoveryCandidate(ordered, "deepseek", currentWorker);
+        addRecoveryCandidate(ordered, "claude", currentWorker);
+        for (String candidate : metadataStringList(latestWorkerMetadata, "candidate_workers")) {
+            if (isCodingCapableWorker(candidate) && !"openclaw-native".equals(candidate)) {
+                addRecoveryCandidate(ordered, candidate, currentWorker);
+            }
+        }
+        for (String candidate : metadataStringList(latestWorkerMetadata, "fallback_workers")) {
+            if (isCodingCapableWorker(candidate) && !"openclaw-native".equals(candidate)) {
+                addRecoveryCandidate(ordered, candidate, currentWorker);
+            }
+        }
+    }
+
+    private void addRecoveryCandidate(List<String> ordered, String candidate, String currentWorker) {
+        String normalized = blankToNull(candidate);
+        if (normalized == null || normalized.equals(currentWorker) || ordered.contains(normalized)) {
+            return;
+        }
+        ordered.add(normalized);
+    }
+
+    private boolean isCodingCapableWorker(String workerId) {
+        if (blankToNull(workerId) == null || router == null) {
+            return false;
+        }
+        Worker worker = router.getWorker(workerId);
+        return worker != null
+            && worker.capabilities() != null
+            && worker.capabilities().contains("coding");
     }
 
     private void copyMetadataKey(Map<String, Object> source, Map<String, Object> target, String key) {
@@ -1845,6 +3014,43 @@ public class ControlNodeGraph {
         emitEvent(task, eventType, summary, Map.of("control_node", eventType));
     }
 
+    private void markWorkerTemporarilyUnavailable(Task task, String workerId, String failureSummary) {
+        if (router == null || blankToNull(workerId) == null) {
+            return;
+        }
+        router.markWorkerTemporarilyUnavailable(workerId, failureSummary);
+        log.warn(
+            "[Recovery] task={} worker={} marked temporarily unavailable reason={}",
+            task != null ? task.id() : null,
+            workerId,
+            failureSummary
+        );
+    }
+
+    private boolean isWorkerAvailable(String workerId, String candidateSource) {
+        if (blankToNull(workerId) == null) {
+            return false;
+        }
+        if (router == null) {
+            log.info(
+                "[Recovery] candidate worker={} source={} assumed available because router is not configured",
+                workerId,
+                candidateSource
+            );
+            return true;
+        }
+        boolean ready = router.isWorkerReady(workerId);
+        if (!ready) {
+            log.info(
+                "[Recovery] skip candidate worker={} source={} readinessReason={}",
+                workerId,
+                candidateSource,
+                router.workerReadinessReason(workerId)
+            );
+        }
+        return ready;
+    }
+
     private void emitEvent(Task task, String eventType, String summary, Map<String, Object> payload) {
         eventDao.insert(new Event(IdGenerator.newId("evt"), task.sessionId(), task.id(), Instant.now(),
             eventType, "control_node", null, summary, payload != null ? payload : Map.of("control_node", eventType)));
@@ -1867,6 +3073,136 @@ public class ControlNodeGraph {
             return;
         }
         target.put(key, value);
+    }
+
+    private Task syncAssignedWorkerMetadata(Task task) {
+        if (task == null) {
+            return null;
+        }
+        String assignedWorker = blankToNull(task.assignedWorker());
+        String metadataAssignedWorker = blankToNull(metadataString(task.metadata(), "assigned_worker"));
+        if (Objects.equals(assignedWorker, metadataAssignedWorker)) {
+            return task;
+        }
+        return withMetadataEntries(task, "assigned_worker", assignedWorker);
+    }
+
+    private Task normalizeWorkerAssignmentMetadata(Task task) {
+        Task normalized = syncAssignedWorkerMetadata(task);
+        if (normalized == null) {
+            return null;
+        }
+        String assignedWorker = blankToNull(normalized.assignedWorker());
+        String targetWorker = blankToNull(metadataString(normalized.metadata(), "target_worker"));
+        String preassignedReason = blankToNull(metadataString(normalized.metadata(), "preassigned_selection_reason"));
+        String previousWorker = blankToNull(metadataString(normalized.metadata(), "previous_worker"));
+        boolean staleTargetWorker = assignedWorker != null
+            && targetWorker != null
+            && !assignedWorker.equals(targetWorker)
+            && !assignedWorker.equals(previousWorker);
+        if (!staleTargetWorker) {
+            return normalized;
+        }
+        return withMetadataEntries(
+            normalized,
+            "target_worker", assignedWorker,
+            "preassigned_selection_reason", preassignedReason != null && preassignedReason.contains(previousWorker != null ? previousWorker : "")
+                ? "task already assigned to worker=" + assignedWorker
+                : preassignedReason
+        );
+    }
+
+    private record RecoveryDirective(
+        String failureClass,
+        String failureSummaryReadable,
+        String recoveryPolicy,
+        String recoveryStage,
+        String recoveryExecutionMode,
+        int sameWorkerRetryCount,
+        int autoHandoffCount,
+        String handoffTarget,
+        String previousWorker,
+        boolean sameWorkerRetry,
+        boolean autoHandoff,
+        com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+        com.agentcloud.judgment.model.CompletionDecision completionDecision
+    ) {
+        private static RecoveryDirective sameWorkerRetry(String failureClass,
+                                                         String failureSummaryReadable,
+                                                         String recoveryPolicy,
+                                                         String previousWorker,
+                                                         int sameWorkerRetryCount,
+                                                         int autoHandoffCount,
+                                                         com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+                                                         com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+            return new RecoveryDirective(
+                failureClass,
+                failureSummaryReadable,
+                recoveryPolicy,
+                "same_worker_retry_scheduled",
+                "fresh_session",
+                sameWorkerRetryCount,
+                autoHandoffCount,
+                null,
+                previousWorker,
+                true,
+                false,
+                executionDecision,
+                completionDecision
+            );
+        }
+
+        private static RecoveryDirective autoHandoff(String failureClass,
+                                                     String failureSummaryReadable,
+                                                     String recoveryPolicy,
+                                                     String previousWorker,
+                                                     int sameWorkerRetryCount,
+                                                     int autoHandoffCount,
+                                                     String handoffTarget,
+                                                     com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+                                                     com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+            return new RecoveryDirective(
+                failureClass,
+                failureSummaryReadable,
+                recoveryPolicy,
+                "auto_handoff_scheduled",
+                "fresh_session",
+                sameWorkerRetryCount,
+                autoHandoffCount,
+                handoffTarget,
+                previousWorker,
+                false,
+                true,
+                executionDecision,
+                completionDecision
+            );
+        }
+
+        private static RecoveryDirective humanGate(String failureClass,
+                                                   String failureSummaryReadable,
+                                                   String recoveryPolicy,
+                                                   String previousWorker,
+                                                   int sameWorkerRetryCount,
+                                                   int autoHandoffCount,
+                                                   String handoffTarget,
+                                                   com.agentcloud.judgment.model.ExecutionDecision executionDecision,
+                                                   com.agentcloud.judgment.model.CompletionDecision completionDecision) {
+            return new RecoveryDirective(
+                failureClass,
+                failureSummaryReadable,
+                recoveryPolicy,
+                "human_gate_required",
+                null,
+                sameWorkerRetryCount,
+                autoHandoffCount,
+                handoffTarget,
+                previousWorker,
+                false,
+                false,
+                executionDecision,
+                completionDecision
+            );
+        }
     }
 
     private record OrchestrationJudgment(

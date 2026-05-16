@@ -262,10 +262,13 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             grounded.artifactContent(),
             grounded.suggestedNextStep(),
             grounded.confidence(),
+            grounded.executionStatus(),
+            grounded.evidenceRefs(),
+            grounded.unfinishedItems(),
             grounded.tokenUsage(),
-                totalDurationMs,
-                metadata
-            );
+            totalDurationMs,
+            metadata
+        );
     }
 
     private WorkerExecutionResult executeMultiToolRound(TaskRuntimeContext context,
@@ -654,6 +657,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 groundedArtifact ? resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter, 1600) : finalized.artifactContent(),
                 suggestedNextStep,
                 "medium",
+                finalized.executionStatus(),
+                finalized.evidenceRefs(),
+                finalized.unfinishedItems(),
                 finalized.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -675,6 +681,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 "",
                 suggestedNextStep,
                 "medium",
+                finalized.executionStatus(),
+                finalized.evidenceRefs(),
+                finalized.unfinishedItems(),
                 finalized.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -698,6 +707,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 finalized.artifactContent(),
                 suggestedNextStep,
                 outcome.result().success() ? "medium" : "low",
+                finalized.executionStatus(),
+                finalized.evidenceRefs(),
+                finalized.unfinishedItems(),
                 finalized.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -716,6 +728,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 resolvedGroundedArtifactContent(finalized.artifactContent(), plan, outcome, toolStateAfter, 1600),
                 suggestedNextStep,
                 finalized.confidence(),
+                finalized.executionStatus(),
+                finalized.evidenceRefs(),
+                finalized.unfinishedItems(),
                 finalized.tokenUsage(),
                 totalDurationMs,
                 metadata
@@ -731,6 +746,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             finalized.artifactContent(),
             suggestedNextStep,
             finalized.confidence(),
+            finalized.executionStatus(),
+            finalized.evidenceRefs(),
+            finalized.unfinishedItems(),
             finalized.tokenUsage(),
             totalDurationMs,
             metadata
@@ -761,6 +779,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             artifactContent,
             outcome.result().success() ? "" : "Inspect tool failure and adjust path or arguments.",
             outcome.result().success() ? "medium" : "low",
+            outcome.result().success() ? "completed" : "failed",
+            List.of(),
+            outcome.result().success() ? List.of() : List.of("tool invocation failed"),
             0,
             totalDurationMs,
             metadata
@@ -793,6 +814,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             delegated.artifactContent(),
             delegated.suggestedNextStep(),
             delegated.confidence(),
+            delegated.executionStatus(),
+            delegated.evidenceRefs(),
+            delegated.unfinishedItems(),
             delegated.tokenUsage(),
             delegated.durationMs(),
             metadata
@@ -1281,6 +1305,9 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             "",
             requiredNextStep,
             "medium",
+            "blocked",
+            List.of(),
+            List.of("missing required grounded write"),
             0,
             totalDurationMs,
             metadata
@@ -1647,7 +1674,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
     private WorkerExecutionResult parseExecutionResult(String raw, long durationMs) {
         String safeRaw = raw == null ? "" : raw.trim();
         if (safeRaw.isBlank()) {
-            return new WorkerExecutionResult("", "", false, "", "", "", "low", 0, durationMs, Map.of("parser", "empty"));
+            return new WorkerExecutionResult("", "", false, "", "", "", "low", "empty", List.of(), List.of(), 0, durationMs, Map.of("parser", "empty"));
         }
 
         try {
@@ -1671,15 +1698,17 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             );
         } catch (Exception e) {
             log.warn("Failed to parse final worker JSON output, falling back to raw text: {}", e.getMessage());
-            String fallbackSummary = safeRaw.length() > 280 ? safeRaw.substring(0, 280) + "..." : safeRaw;
             return new WorkerExecutionResult(
-                fallbackSummary,
+                safeRaw,
                 safeRaw,
                 false,
                 "",
                 "",
                 "",
                 "medium",
+                "unknown",
+                List.of(),
+                List.of(),
                 0,
                 durationMs,
                 Map.of("parser", "raw_text")
@@ -2675,17 +2704,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(context, renderingMode, mountedRenderResult);
         var task = context.task();
         StringBuilder sb = new StringBuilder();
-        sb.append("Task Title: ").append(task.title()).append("\n");
-        String taskType = metadataString(task.metadata(), "task_type");
-        if (!taskType.isBlank()) {
-            sb.append("Task Type: ").append(taskType).append("\n");
-        }
-        if (task.goal() != null && !task.goal().isBlank()) {
-            sb.append("Goal: ").append(task.goal()).append("\n");
-        }
-        if (task.metadata() != null && task.metadata().get("intent") != null) {
-            sb.append("Intent: ").append(task.metadata().get("intent")).append("\n");
-        }
+        WorkerPromptHeaderBuilder.appendTaskHeader(sb, task, true);
         appendTaskContractPrompt(sb, task.metadata());
         if (task.nextStep() != null && !task.nextStep().isBlank()) {
             sb.append("Next Step: ").append(task.nextStep()).append("\n");
@@ -3109,13 +3128,29 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         );
         TaskToolState groundedOutputState = buildGroundedOutputState(outputFilePath, outputDirPath);
 
-        int declaredRoundCount = countDeclaredRounds(context.task());
-        int currentRoundIndex = successfulToolCount + 1;
-        String currentRoundInstruction = resolveRoundInstruction(context.task(), currentRoundIndex);
-        String nextRoundInstruction = resolveRoundInstruction(context.task(), currentRoundIndex + 1);
+        int declaredRoundCount = metadataInt(context.task().metadata(), "declared_round_count");
+        if (declaredRoundCount <= 0) {
+            declaredRoundCount = countDeclaredRounds(context.task());
+        }
+        int currentRoundIndex = metadataInt(context.task().metadata(), "current_round_index");
+        if (currentRoundIndex <= 0) {
+            currentRoundIndex = successfulToolCount + 1;
+        }
+        String currentRoundInstruction = firstNonBlank(
+            metadataString(context.task().metadata(), "current_round_instruction"),
+            resolveRoundInstruction(context.task(), currentRoundIndex)
+        );
+        String nextRoundInstruction = firstNonBlank(
+            metadataString(context.task().metadata(), "next_round_instruction"),
+            resolveRoundInstruction(context.task(), currentRoundIndex + 1)
+        );
         if (invocations.isEmpty()) {
-            currentRoundIndex = 1;
-            nextRoundInstruction = resolveRoundInstruction(context.task(), 2);
+            currentRoundIndex = currentRoundIndex > 0 ? currentRoundIndex : 1;
+            nextRoundInstruction = firstNonBlank(
+                nextRoundInstruction,
+                metadataString(context.task().metadata(), "next_round_instruction"),
+                resolveRoundInstruction(context.task(), currentRoundIndex + 1)
+            );
         }
 
         PendingRoundState pendingRound = resolvePendingRoundState(context);
@@ -3542,6 +3577,24 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
         }
         Object value = metadata.get(key);
         return value == null ? "" : value.toString();
+    }
+
+    private int metadataInt(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return 0;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.toString().trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private boolean isGroundedWriteTool(String toolName) {

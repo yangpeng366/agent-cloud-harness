@@ -17,6 +17,17 @@ test("facade reply kind classifies task progress consistently across surfaces", 
     assert.equal(kind.toastVerb, "任务已推进");
 });
 
+test("facade reply kind does not downgrade task progress when chat mode uses task_auto", () => {
+    const kind = classifyFacadeReply({
+        resolvedMode: "message",
+        replyType: "task_progress",
+        replySource: "task_progress"
+    });
+
+    assert.equal(kind.category, "progress");
+    assert.equal(kind.badgeText, "latest progress");
+});
+
 test("facade reply kind keeps manual receipt semantics separate from plain message ack", () => {
     const receipt = classifyFacadeReply({
         resolvedMode: "task",

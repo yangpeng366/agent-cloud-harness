@@ -1393,6 +1393,188 @@ class ToolAwareWorkerExecutorMultiStepTest {
         }
     }
 
+    @Test
+    void noToolDelegatePreservesEmptyExecutionStatusFromFallbackExecutor() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("planning-empty-delegate-workspace"));
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("planning-empty-delegate.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-empty-delegate",
+                "codex",
+                List.of("coding"),
+                List.of("search_text"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new SearchTextTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No tool required for this round.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "",
+                    "",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    "empty",
+                    List.of("runtime:no_output"),
+                    List.of("worker returned no content"),
+                    0,
+                    0L,
+                    Map.of("parser", "empty")
+                )
+            );
+
+            Task task = new Task(
+                "task_multi_empty_delegate",
+                "session_multi_empty_delegate",
+                null,
+                "planning prompt no-tool empty delegate",
+                "active",
+                "high",
+                Instant.parse("2026-05-15T08:10:00Z"),
+                Instant.parse("2026-05-15T08:10:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "Preserve empty execution status when tool-aware planning delegates to the fallback executor.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "No tool is required and fallback returns an empty round.",
+                    "prompt_rendering_mode", "mounted_context_primary"
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "primary empty delegate planning", "active"));
+            taskDao.insert(task);
+
+            WorkerExecutionResult result = executor.executeOneRound(emptyMountedRuntimeContext(task), worker.workerId());
+
+            assertEquals("empty", result.executionStatus());
+            assertEquals(List.of("runtime:no_output"), result.evidenceRefs());
+            assertEquals(List.of("worker returned no content"), result.unfinishedItems());
+            assertEquals("planner_no_additional_tool", result.metadata().get("tool_chain_termination_reason"));
+            assertEquals("multi_tool_round", result.metadata().get("tool_execution_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("tool_aware_executor"));
+        }
+    }
+
+    @Test
+    void requiredWriteWithoutToolIsExplicitlyBlockedInsteadOfUnknown() throws Exception {
+        Path workspace = Files.createDirectories(tempDir.resolve("required-write-blocked-workspace"));
+        Path outputFile = workspace.resolve("required-output.md");
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("required-write-blocked.db"))) {
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            Worker worker = new Worker(
+                "tool-required-write-blocked",
+                "codex",
+                List.of("coding"),
+                List.of("read_file", "write_file"),
+                List.of(workspace.toString()),
+                Map.of("api_key", true),
+                Map.of("model_tier", "strong"),
+                false,
+                true
+            );
+            workerRegistry.register(worker);
+
+            ToolPolicy toolPolicy = new ToolPolicy();
+            ToolRegistry toolRegistry = new ToolRegistry()
+                .register(new ReadFileTool(workerRegistry, toolPolicy))
+                .register(new WriteFileTool(workerRegistry, toolPolicy));
+
+            CapturingSequencedLlmClient llmClient = new CapturingSequencedLlmClient(List.of(
+                "{\"needs_tool\":false,\"tool_name\":\"\",\"tool_arguments\":{},\"reason\":\"No write tool is needed.\"}"
+            ));
+
+            ToolAwareWorkerExecutor executor = new ToolAwareWorkerExecutor(
+                workerRegistry,
+                toolRegistry,
+                toolPolicy,
+                toolInvocationDao,
+                llmClient,
+                (context, workerId) -> new WorkerExecutionResult(
+                    "fallback",
+                    "fallback",
+                    false,
+                    "",
+                    "",
+                    "",
+                    "low",
+                    0,
+                    0L,
+                    Map.of("executor", "fallback")
+                )
+            );
+
+            Task task = new Task(
+                "task_required_write_blocked",
+                "session_required_write_blocked",
+                null,
+                "required write blocked",
+                "active",
+                "high",
+                Instant.parse("2026-05-15T08:40:00Z"),
+                Instant.parse("2026-05-15T08:40:00Z"),
+                null,
+                null,
+                null,
+                null,
+                "A grounded write is required for the current round.",
+                null,
+                worker.workerId(),
+                "scheduler",
+                null,
+                Map.of(
+                    "intent", "The current round must write the required grounded output file.",
+                    "output_file", outputFile.toString(),
+                    "declared_round_count", 1,
+                    "current_round_index", 1,
+                    "current_round_instruction", "Write the required grounded output file."
+                )
+            );
+            sessionDao.insert(Session.create(task.sessionId(), "required write blocked", "active"));
+            taskDao.insert(task);
+
+            WorkerExecutionResult result = executor.executeOneRound(new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), null), worker.workerId());
+
+            assertEquals("blocked", result.executionStatus());
+            assertEquals(List.of("missing required grounded write"), result.unfinishedItems());
+            assertEquals("missing_required_current_round_write", result.metadata().get("grounding_mode"));
+            assertEquals(Boolean.TRUE, result.metadata().get("missing_required_current_round_write"));
+            assertEquals(Boolean.TRUE, result.metadata().get("current_round_requires_write"));
+            assertEquals("auto_grounded_required_write_failed", result.metadata().get("tool_execution_mode"));
+        }
+    }
+
     private TaskRuntimeContext mountedRuntimeContext(Task task) {
         ActiveContext activeContext = new ActiveContext(
             "Mounted planning",

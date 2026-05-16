@@ -30,3 +30,33 @@ test("route box plan omits drawer when no secondary route details exist", () => 
     assert.equal(plan.hasDrawer, false);
     assert.equal(plan.drawerSummary, "");
 });
+
+test("route box plan counts recovery provider deprioritization as drawer detail", () => {
+    const plan = buildRouteBoxPlan({
+        selectedWorker: "codex",
+        routeSource: "task_pinned",
+        routeReason: "pinned route",
+        providerDeprioritization: {
+            providerDeprioritized: true,
+            deprioritizedProvider: "claude",
+            chip: "recovery避开 claude",
+            headline: "恢复阶段会优先避开 claude",
+            detail: "最近窗口内出现了临时 provider 失败，恢复建议会先尝试其他 provider。"
+        }
+    });
+
+    assert.equal(plan.hasDrawer, false);
+    assert.equal(plan.drawerSummary, "");
+});
+
+test("route box plan keeps recovery fresh-session chip as drawer detail", () => {
+    const plan = buildRouteBoxPlan({
+        selectedWorker: "codex",
+        routeSource: "task_pinned",
+        routeReason: "pinned route",
+        routeChips: ["recovery: fresh session"]
+    });
+
+    assert.equal(plan.hasDrawer, true);
+    assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
+});

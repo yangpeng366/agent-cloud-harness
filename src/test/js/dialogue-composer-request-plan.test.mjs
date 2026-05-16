@@ -6,7 +6,19 @@ import {
     buildResponsesFacadeRequest
 } from "../../main/resources/web/dialogue/composer-request-plan.js";
 
-test("composer request plan builds message_only request for plain chat path", () => {
+test("composer request plan defaults plain chat path to task_auto", () => {
+    const request = buildChatFacadeRequest({
+        intent: "继续推进当前主题",
+        sessionId: "session_auto_1",
+        facadeModel: "agentcloud-default",
+        derivedTitle: "继续推进当前主题"
+    });
+
+    assert.equal(request.metadata.task_mode, "task_auto");
+    assert.equal(request.metadata.session_id, "session_auto_1");
+});
+
+test("composer request plan still preserves explicit message_only request when asked", () => {
     const request = buildChatFacadeRequest({
         intent: "先记一条草稿",
         sessionId: "session_1",
@@ -149,6 +161,8 @@ test("composer request plan routes buildFacadeRequest by facadeSurface", () => {
 
     assert.equal(Array.isArray(chat.messages), true);
     assert.equal(chat.input, undefined);
+    assert.equal(chat.metadata.task_mode, "task_auto");
     assert.equal(responses.messages, undefined);
     assert.equal(responses.input, "生成一个 response");
+    assert.equal(responses.metadata.task_mode, "task_auto");
 });

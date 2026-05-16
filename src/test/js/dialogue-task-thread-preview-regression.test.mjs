@@ -1,0 +1,895 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+function firstNonBlank(...values) {
+    for (const value of values) {
+        if (typeof value === "string" && value.trim()) {
+            return value.trim();
+        }
+    }
+    return "";
+}
+
+function preview(value, max = 320) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (!text) {
+        return "";
+    }
+    return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function humanizeToken(value) {
+    const text = firstNonBlank(value);
+    return text ? text.replace(/_/g, " ") : null;
+}
+
+function humanizeFailureClass(value) {
+    switch (firstNonBlank(value)) {
+        case "worker_runtime_transient":
+            return "临时运行失败";
+        case "task_environment_blocked":
+            return "环境阻塞";
+        case "worker_backend_deterministic":
+            return "能力不匹配";
+        case "partial_result_or_quality_risk":
+            return "部分结果待确认";
+        case "worker_execution_failed":
+            return "执行失败";
+        default:
+            return humanizeToken(value);
+    }
+}
+
+function humanizeRecoveryStage(value) {
+    switch (firstNonBlank(value)) {
+        case "same_worker_retry_scheduled":
+            return "同 worker 重试";
+        case "auto_handoff_scheduled":
+            return "自动切换 worker";
+        case "human_gate_required":
+            return "等待人工确认";
+        default:
+            return humanizeToken(value);
+    }
+}
+
+function recoveryActionHint(failureClass, recoveryStage) {
+    if (firstNonBlank(recoveryStage) !== "等待人工确认") {
+        return "";
+    }
+    switch (firstNonBlank(failureClass)) {
+        case "环境阻塞":
+            return "先修环境后继续";
+        case "部分结果待确认":
+            return "先复核已有结果";
+        default:
+            return "";
+    }
+}
+
+function latestTaskOutcomeNarrative(task, flow, max = 320) {
+    const taskId = task?.id;
+    const messages = Array.isArray(flow?.related_messages) ? flow.related_messages : [];
+    const matched = messages
+        .filter((message) => message?.task_id === taskId && ["task_progress", "task_result"].includes((message?.message_type || "").toLowerCase()))
+        .sort((left, right) => Number(left?.created_at || 0) - Number(right?.created_at || 0));
+    const latestOutcome = matched.at(-1) || null;
+    const metadata = latestOutcome?.metadata || {};
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const narrative = firstNonBlank(
+        latestOutcome?.content,
+        metadata.content,
+        metadata.summary_text,
+        metadata.summaryText,
+        metadata.summary_preview,
+        metadata.summaryPreview,
+        failureNarrativeFallback(taskMetadata)
+    );
+    return narrative ? preview(narrative, max) : "";
+}
+
+function activeWorkerLabel(task, flow) {
+    const flowTask = flow?.task || {};
+    const taskMetadata = flowTask.metadata || task?.metadata || {};
+    const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const providerSelection = flow?.provider_selection || flow?.providerSelection || {};
+    const routeSurface = flow?.runtime_cognition_surface?.route || flow?.runtimeCognitionSurface?.route || {};
+    return firstNonBlank(
+        flowTask.assigned_worker,
+        flowTask.assignedWorker,
+        providerSelection.selected_worker_id,
+        providerSelection.selectedWorkerId,
+        routeSurface.selected_worker,
+        routeSurface.selectedWorker,
+        routePreview.selected_worker,
+        routePreview.selectedWorker,
+        taskMetadata.assigned_worker,
+        taskMetadata.assignedWorker,
+        task?.assigned_worker,
+        task?.assignedWorker,
+        providerSelection.selected_provider,
+        providerSelection.selectedProvider
+    );
+}
+
+function buildThreadExecutionStrip(task, flow, workerLabel) {
+    const taskStatus = firstNonBlank(task?.status, "active");
+    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
+    if (!workerLabel && !taskStatus && !controlNode) {
+        return null;
+    }
+    const statusLower = taskStatus.toLowerCase();
+    const schedulerPending = statusLower === "active" && controlNode === "scheduler";
+    const label = schedulerPending
+        ? "待继续"
+        : ["active", "running"].includes(statusLower) ? "执行中" : "最近执行";
+    const title = workerLabel ? `worker ${workerLabel}` : `${taskStatus} / ${controlNode}`;
+    const detail = workerLabel ? `${taskStatus} / ${controlNode}` : "";
+    return title || detail
+        ? { label, title, detail, summary: [title, detail].filter(Boolean).join(" · ") }
+        : null;
+}
+
+function taskOutcomeNextStep(task, outcomeMetadata) {
+    return firstNonBlank(
+        outcomeMetadata.next_step,
+        outcomeMetadata.nextStep,
+        outcomeMetadata.suggested_next_step,
+        outcomeMetadata.suggestedNextStep,
+        task?.next_step,
+        task?.nextStep
+    );
+}
+
+function isStaleTaskOutcomeShell(value) {
+    const text = firstNonBlank(value, "");
+    if (!text) {
+        return false;
+    }
+    const workerSectionEmpty = /Worker Output\s*(Artifact Content|Failure Summary|下一步|$)/s.test(text);
+    const artifactSectionEmpty = /Artifact Content\s*(Failure Summary|下一步|$)/s.test(text);
+    return workerSectionEmpty && artifactSectionEmpty;
+}
+
+function joinExpandedSections(parts) {
+    return parts
+        .map((part) => firstNonBlank(part, ""))
+        .filter(Boolean)
+        .join("\n\n");
+}
+
+function numericValue(...values) {
+    for (const value of values) {
+        const number = Number(value);
+        if (Number.isFinite(number)) {
+            return number;
+        }
+    }
+    return null;
+}
+
+function messageCardRecoveryDetail(metadata, compact = false) {
+    const failureClass = humanizeFailureClass(firstNonBlank(
+        metadata.failure_class,
+        metadata.failureClass
+    ));
+    const recoveryStage = humanizeRecoveryStage(firstNonBlank(
+        metadata.recovery_stage,
+        metadata.recoveryStage
+    ));
+    const handoffTarget = firstNonBlank(
+        metadata.auto_handoff_target,
+        metadata.autoHandoffTarget
+    );
+    const sameWorkerRetryCount = numericValue(
+        metadata.auto_same_worker_retry_count,
+        metadata.autoSameWorkerRetryCount
+    );
+    const autoHandoffCount = numericValue(
+        metadata.auto_handoff_count,
+        metadata.autoHandoffCount
+    );
+    const recoveryExecutionMode = firstNonBlank(
+        metadata.recovery_execution_mode,
+        metadata.recoveryExecutionMode
+    );
+    const recoveryParts = [];
+    if (failureClass) {
+        recoveryParts.push(`failure · ${failureClass}`);
+    }
+    if (recoveryStage) {
+        recoveryParts.push(`recovery · ${recoveryStage}`);
+    }
+    const actionHint = recoveryActionHint(failureClass, recoveryStage);
+    if (actionHint) {
+        recoveryParts.push(`hint · ${actionHint}`);
+    }
+    if (sameWorkerRetryCount && sameWorkerRetryCount > 0) {
+        recoveryParts.push(`retry ${sameWorkerRetryCount}`);
+    }
+    if (autoHandoffCount && autoHandoffCount > 0) {
+        recoveryParts.push(
+            handoffTarget
+                ? `handoff ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
+                : `handoff ${autoHandoffCount}`
+        );
+    }
+    if (recoveryExecutionMode === "fresh_session") {
+        recoveryParts.push("recovery · fresh session");
+    }
+    return recoveryParts.length > 0 ? recoveryParts.join("  ") : "";
+}
+
+function compressWhitespace(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function stripFailureNoise(value) {
+    const text = String(value || "");
+    const trimmed = text.trim();
+    if (!trimmed) {
+        return "";
+    }
+    const stopPatterns = [
+        /\n---+\n/,
+        /\n`{3,}/,
+        /\ndocs[\\/]/i,
+        /\n\.github[\\/]/i,
+        /\nREADME/i,
+        /\nARCHITECTURE/i,
+        /\nSPEC\.md/i,
+        /\n我会先把/
+    ];
+    let cutoff = trimmed.length;
+    for (const pattern of stopPatterns) {
+        const match = pattern.exec(trimmed);
+        if (match && typeof match.index === "number") {
+            cutoff = Math.min(cutoff, match.index);
+        }
+    }
+    return compressWhitespace(trimmed.slice(0, cutoff));
+}
+
+function looksLikeFailureNoiseLine(line) {
+    const text = String(line || "").trim();
+    if (!text) {
+        return true;
+    }
+    return /^(Worker Output|Artifact Content|Failure Summary|下一步)$/i.test(text)
+        || /^\[[0-9;]*m/.test(text)
+        || /^docs[\\/]/i.test(text)
+        || /^\.github[\\/]/i.test(text)
+        || /^(README|ARCHITECTURE|SPEC\.md)\b/i.test(text)
+        || /^我会先把/.test(text)
+        || /^([A-Z]:)?[\\/].+/.test(text)
+        || /^(dir|total)\b/i.test(text);
+}
+
+function firstFailureLine(value) {
+    const lines = String(value || "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const useful = lines.find((line) => !looksLikeFailureNoiseLine(line));
+    return useful || compressWhitespace(value);
+}
+
+function extractQuotedThreadId(text) {
+    const match = /["'](\d{3,})["']/.exec(String(text || ""));
+    return match?.[1] || "";
+}
+
+function looksLikeGarbledThreadNotFound(text) {
+    const raw = String(text || "");
+    const replacementCount = (raw.match(/\uFFFD/g) || []).length;
+    return replacementCount >= 2 && /["']\d{3,}["']/.test(raw) && /[ûҵ]/i.test(raw);
+}
+
+function summarizeFailureText(text, workerHint = "") {
+    const normalized = String(text || "");
+    const compact = compressWhitespace(normalized);
+    if (!compact) {
+        return "";
+    }
+    const threadId = extractQuotedThreadId(normalized);
+    const workerPrefix = firstNonBlank(workerHint) ? `worker ${workerHint} failed:` : "worker failed:";
+    if (threadId && (/(thread\s+not\s+found|not\s+found)/i.test(normalized)
+        || /没.*找到|未.*找到/.test(normalized)
+        || looksLikeGarbledThreadNotFound(normalized))) {
+        return `${workerPrefix} thread not found (${threadId})`;
+    }
+    if (/authentication required/i.test(normalized)) {
+        return `${workerPrefix} authentication required`;
+    }
+    if (/connection reset/i.test(normalized)) {
+        return `${workerPrefix} connection reset`;
+    }
+    if (/timed?\s*out|timeout/i.test(normalized)) {
+        return `${workerPrefix} timeout`;
+    }
+    if (/failed to start/i.test(normalized)) {
+        return `${workerPrefix} failed to start`;
+    }
+    if (/startup remote plugin sync failed/i.test(normalized)) {
+        return `${workerPrefix} startup remote plugin sync failed`;
+    }
+    return "";
+}
+
+function sanitizeFailureSummaryForDisplay(rawValue, workerHint = "") {
+    const raw = firstNonBlank(rawValue, "");
+    if (!raw) {
+        return "";
+    }
+    const firstLine = firstFailureLine(raw);
+    const knownSummary = summarizeFailureText(firstLine, workerHint) || summarizeFailureText(raw, workerHint);
+    const compact = knownSummary || stripFailureNoise(firstLine) || stripFailureNoise(raw);
+    return preview(compact, 220);
+}
+
+function failureNarrativeFallback(metadata) {
+    if (!metadata || typeof metadata !== "object") {
+        return "";
+    }
+    const workerHint = firstNonBlank(
+        metadata.worker,
+        metadata.worker_id,
+        metadata.workerId,
+        metadata.previous_worker,
+        metadata.previousWorker,
+        metadata.assigned_worker,
+        metadata.assignedWorker
+    );
+    const failureSummaryRaw = firstNonBlank(
+        metadata.failure_summary_readable,
+        metadata.failureSummaryReadable
+    );
+    const failureSummary = sanitizeFailureSummaryForDisplay(failureSummaryRaw, workerHint);
+    if (!failureSummary) {
+        return "";
+    }
+    const recoveryDetail = messageCardRecoveryDetail(metadata, true);
+    return recoveryDetail
+        ? `${failureSummary}\n\n恢复状态：${recoveryDetail}`
+        : failureSummary;
+}
+
+function effectiveTaskOutcomeFullContent(task, flow) {
+    const taskId = task?.id;
+    const messages = Array.isArray(flow?.related_messages) ? flow.related_messages : [];
+    const matched = messages
+        .filter((message) => message?.task_id === taskId && ["task_progress", "task_result"].includes((message?.message_type || "").toLowerCase()))
+        .sort((left, right) => Number(left?.created_at || 0) - Number(right?.created_at || 0));
+    const latestOutcome = matched.at(-1) || null;
+    const outcomeMetadata = latestOutcome?.metadata || {};
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const explicitFullContent = firstNonBlank(
+        outcomeMetadata.full_content,
+        outcomeMetadata.fullContent
+    );
+    const failureFallback = firstNonBlank(
+        outcomeMetadata.failure_summary_readable,
+        outcomeMetadata.failureSummaryReadable,
+        failureNarrativeFallback(taskMetadata)
+    );
+    const nextStep = taskOutcomeNextStep(task, outcomeMetadata);
+
+    if (explicitFullContent && !(failureFallback && isStaleTaskOutcomeShell(explicitFullContent))) {
+        return explicitFullContent;
+    }
+    if (failureFallback) {
+        return joinExpandedSections([
+            failureFallback,
+            nextStep ? `下一步\n${nextStep}` : ""
+        ]);
+    }
+    return firstNonBlank(
+        explicitFullContent,
+        outcomeMetadata.output_text,
+        outcomeMetadata.outputText,
+        outcomeMetadata.artifact_content,
+        outcomeMetadata.artifactContent,
+        latestOutcome?.content
+    );
+}
+
+function assistantOutputPreview(task, flow, max = 220) {
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const latest = firstNonBlank(
+        effectiveTaskOutcomeFullContent(task, flow),
+        failureNarrativeFallback(taskMetadata),
+        task?.summary,
+        task?.next_step,
+        task?.nextStep
+    );
+    return latest ? preview(latest, max) : "";
+}
+
+function renderPinnedTaskOutcomeSummary(task, flow) {
+    if (!task || !flow || firstNonBlank(flow?.task?.id) !== firstNonBlank(task?.id)) {
+        return null;
+    }
+    const workerLabel = activeWorkerLabel(task, flow);
+    const executionStrip = buildThreadExecutionStrip(task, flow, workerLabel);
+    const outputPreview = assistantOutputPreview(task, flow, 280);
+    if (!executionStrip && !outputPreview) {
+        return null;
+    }
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const detail = messageCardRecoveryDetail(taskMetadata, true);
+    return {
+        workerLabel,
+        executionStrip,
+        outputPreview,
+        detail
+    };
+}
+
+function looksLikeTerseOutcomeToken(value) {
+    const text = firstNonBlank(value, "");
+    if (!text) {
+        return false;
+    }
+    return /^(failed|done|ok|success|succeeded|completed?)$/i.test(text);
+}
+
+function pinnedTaskOutcomePreview(task, flow, max = 240) {
+    const latestOutcome = (Array.isArray(flow?.related_messages) ? flow.related_messages : [])
+        .filter((message) => message?.task_id === task?.id && ["task_progress", "task_result"].includes((message?.message_type || "").toLowerCase()))
+        .sort((left, right) => Number(left?.created_at || 0) - Number(right?.created_at || 0))
+        .at(-1) || null;
+    const outcomeMetadata = latestOutcome?.metadata || {};
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const outcomeMessagePreviewRaw = latestOutcome
+        ? messageCardWorkerOutcomePreview(latestOutcome, max)
+        : "";
+    const outcomeMessagePreview = looksLikeTerseOutcomeToken(outcomeMessagePreviewRaw)
+        ? ""
+        : outcomeMessagePreviewRaw;
+    const directFailure = sanitizeFailureSummaryForDisplay(
+        firstNonBlank(
+            outcomeMetadata.failure_summary_readable,
+            outcomeMetadata.failureSummaryReadable,
+            taskMetadata.failure_summary_readable,
+            taskMetadata.failureSummaryReadable
+        ),
+        firstNonBlank(
+            outcomeMetadata.selected_worker,
+            outcomeMetadata.selectedWorker,
+            outcomeMetadata.assigned_worker,
+            outcomeMetadata.assignedWorker,
+            taskMetadata.previous_worker,
+            taskMetadata.previousWorker,
+            taskMetadata.assigned_worker,
+            taskMetadata.assignedWorker,
+            activeWorkerLabel(task, flow)
+        )
+    );
+    const narrative = latestTaskOutcomeNarrative(task, flow, max);
+    return preview(firstNonBlank(outcomeMessagePreview, directFailure, narrative, assistantOutputPreview(task, flow, max)), max);
+}
+
+function messageCardWorkerLabel(metadata) {
+    return firstNonBlank(
+        metadata.selected_worker,
+        metadata.selectedWorker,
+        metadata.assigned_worker,
+        metadata.assignedWorker,
+        metadata.previous_worker,
+        metadata.previousWorker,
+        metadata.worker_id,
+        metadata.workerId
+    );
+}
+
+function messageCardCurrentState(metadata) {
+    return firstNonBlank(
+        metadata.task_status && metadata.control_node
+            ? `${metadata.task_status} / ${metadata.control_node}`
+            : null,
+        metadata.taskStatus && metadata.controlNode
+            ? `${metadata.taskStatus} / ${metadata.controlNode}`
+            : null,
+        metadata.current_state,
+        metadata.currentState,
+        metadata.completion_status,
+        metadata.completionStatus
+    );
+}
+
+function messageCardWorkerOutcomePreview(message, max = 220) {
+    const type = (message?.message_type || "").toLowerCase();
+    if (type !== "task_progress" && type !== "task_result") {
+        return "";
+    }
+    const metadata = message?.metadata || {};
+    const candidate = firstNonBlank(
+        failureNarrativeFallback(metadata),
+        metadata.summary_preview,
+        metadata.summaryPreview,
+        message?.content
+    );
+    return candidate ? preview(candidate, max) : "";
+}
+
+function messageCardOutcomeStrip(message, compact = false) {
+    const type = (message?.message_type || "").toLowerCase();
+    if (type !== "task_progress" && type !== "task_result") {
+        return null;
+    }
+    const metadata = message?.metadata || {};
+    const stateLine = messageCardCurrentState(metadata);
+    const previewText = messageCardWorkerOutcomePreview(message, compact ? 120 : 180);
+    const label = "最近输出";
+    return previewText || stateLine
+        ? {
+            label,
+            title: previewText,
+            detail: stateLine
+        }
+        : null;
+}
+
+function messageCardExecutionStrip(message, compact = false) {
+    const type = (message?.message_type || "").toLowerCase();
+    if (type !== "task_progress" && type !== "task_result") {
+        return null;
+    }
+    const metadata = message?.metadata || {};
+    const worker = messageCardWorkerLabel(metadata);
+    const stateLine = messageCardCurrentState(metadata);
+    if (!worker && !stateLine) {
+        return null;
+    }
+    const executionStatus = firstNonBlank(
+        metadata.execution_status,
+        metadata.executionStatus,
+        metadata.worker_execution_status,
+        metadata.workerExecutionStatus,
+        metadata.task_status,
+        metadata.taskStatus
+    ).toLowerCase();
+    const label = ["active", "running", "in_progress"].includes(executionStatus) ? "执行中" : "最近执行";
+    const previewText = messageCardWorkerOutcomePreview(message, compact ? 100 : 140);
+    const title = worker ? `worker ${worker}` : stateLine;
+    const detail = [
+        worker && stateLine ? stateLine : "",
+        compact ? "" : previewText
+    ].filter(Boolean).join(" · ");
+    return title || detail
+        ? { label, title, detail, summary: [title, detail].filter(Boolean).join(" · ") }
+        : null;
+}
+
+function buildAssistantMessage(task, flow) {
+    const activeContext = flow?.runtime_context?.active_context || {};
+    return preview(
+        firstNonBlank(
+            latestTaskOutcomeNarrative(task, flow, 320),
+            activeContext.continuity_summary,
+            activeContext.continuitySummary,
+            task?.summary,
+            task?.next_step,
+            task?.nextStep,
+            "任务已进入 harness，等待继续推进。"
+        ),
+        320
+    );
+}
+
+test("selected task thread bubble prefers latest task outcome narrative over terse continuity summary", () => {
+    const task = {
+        id: "task_demo",
+        summary: "failed",
+        next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+    };
+    const flow = {
+        runtime_context: {
+            active_context: {
+                continuity_summary: "failed"
+            }
+        },
+        related_messages: [
+            {
+                id: "msg_1",
+                task_id: "task_demo",
+                message_type: "task_progress",
+                created_at: 1778680176.4381566,
+                content: "任务《继续看看 文档，规划下一步》已完成一轮推进。进展：failed。下一步：Inspect failure trace and decide whether to retry or handoff manually.。当前：waiting_human / human_gate · worker claude。",
+                metadata: {
+                    full_content: "failed\n\nWorker Output\n\n\nArtifact Content\n\n\n下一步\nInspect failure trace and decide whether to retry or handoff manually.",
+                    next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+                }
+            }
+        ]
+    };
+
+    const message = buildAssistantMessage(task, flow);
+    assert.equal(message.includes("已完成一轮推进"), true);
+    assert.notEqual(message, "failed");
+});
+
+test("selected task thread bubble prefers focused task failure fallback over stale noisy task summary", () => {
+    const task = {
+        id: "task_demo",
+        summary: "����: û���ҵ����� \"19120\"�� docs\\ARCHITECTURE.md 我会先把失败链梳理出来",
+        next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md\n我会先把失败链梳理出来"
+            }
+        },
+        runtime_context: {
+            active_context: {
+                continuity_summary: "failed"
+            }
+        },
+        related_messages: []
+    };
+
+    const message = buildAssistantMessage(task, flow);
+    assert.equal(message.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(message.includes("ARCHITECTURE"), false);
+    assert.equal(message.includes("我会先把"), false);
+});
+
+test("selected task thread preview falls back to live flow failure summary when latest outcome full content is a stale shell", () => {
+    const task = {
+        id: "task_demo",
+        summary: "failed",
+        next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+    };
+    const flow = {
+        task: {
+            metadata: {
+                failure_summary_readable: "worker claude 返回了可读失败摘要",
+                failure_class: "worker_runtime_transient",
+                recovery_stage: "human_gate_required",
+                auto_same_worker_retry_count: 1,
+                auto_handoff_count: 1,
+                auto_handoff_target: "deepseek"
+            }
+        },
+        related_messages: [
+            {
+                id: "msg_1",
+                task_id: "task_demo",
+                message_type: "task_progress",
+                created_at: 1778680176.4381566,
+                content: "任务《继续看看 文档，规划下一步》已完成一轮推进。进展：failed。下一步：Inspect failure trace and decide whether to retry or handoff manually.。当前：waiting_human / human_gate · worker claude。",
+                metadata: {
+                    full_content: "failed\n\nWorker Output\n\n\nArtifact Content\n\n\n下一步\nInspect failure trace and decide whether to retry or handoff manually.",
+                    next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+                }
+            }
+        ]
+    };
+
+    const narrative = latestTaskOutcomeNarrative(task, flow);
+    assert.equal(narrative.includes("已完成一轮推进"), true);
+    assert.equal(narrative.includes("worker claude 返回了可读失败摘要"), false);
+
+    const fallback = failureNarrativeFallback(flow.task.metadata);
+    assert.equal(fallback.includes("worker claude 返回了可读失败摘要"), true);
+    assert.equal(fallback.includes("等待人工确认"), true);
+
+    const fullContent = effectiveTaskOutcomeFullContent(task, flow);
+    assert.equal(fullContent.includes("worker claude 返回了可读失败摘要"), true);
+    assert.equal(fullContent.includes("下一步"), true);
+    assert.equal(fullContent.includes("Worker Output"), false);
+});
+
+test("historical noisy failure summary is compressed into a readable short failure summary", () => {
+    const task = {
+        id: "task_demo"
+    };
+    const flow = {
+        task: {
+            metadata: {
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md\n我会先把失败链梳理出来\nstartup remote plugin sync failed; will retry on next app-server start error=chatgpt authentication required to sync"
+            }
+        }
+    };
+
+    const fallback = failureNarrativeFallback(flow.task.metadata);
+    assert.equal(fallback.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(fallback.includes("ARCHITECTURE"), false);
+    assert.equal(fallback.includes("我会先把"), false);
+    assert.equal(fallback.includes("authentication required"), false);
+
+    const previewText = assistantOutputPreview(task, flow, 260);
+    assert.equal(previewText.includes("worker claude failed: thread not found (19120)"), true);
+});
+
+test("task progress transcript card exposes worker and short outcome preview before expansion", () => {
+    const message = {
+        message_type: "task_progress",
+        content: "failed",
+        metadata: {
+            assigned_worker: "claude",
+            task_status: "waiting_human",
+            control_node: "human_gate",
+            failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md"
+        }
+    };
+
+    const executionStrip = messageCardExecutionStrip(message, false);
+    assert.equal(executionStrip.label, "最近执行");
+    assert.equal(executionStrip.title.includes("worker claude"), true);
+    assert.equal(executionStrip.detail.includes("waiting_human / human_gate"), true);
+    assert.equal(executionStrip.detail.includes("thread not found (19120)"), true);
+    assert.equal(executionStrip.detail.includes("ARCHITECTURE"), false);
+
+    const outcomeStrip = messageCardOutcomeStrip(message, false);
+    assert.equal(outcomeStrip.label, "最近输出");
+    assert.equal(outcomeStrip.title.includes("thread not found (19120)"), true);
+    assert.equal(outcomeStrip.detail.includes("waiting_human / human_gate"), true);
+});
+
+test("focused task transcript card prefers projected outcome preview over stale failed summary", () => {
+    const message = {
+        message_type: "task_progress",
+        task_id: "task_demo",
+        content: "任务《demo》已完成一轮推进。进展：failed。",
+        metadata: {
+            assigned_worker: "claude",
+            selected_worker: "claude",
+            task_status: "waiting_human",
+            control_node: "human_gate",
+            summary_preview: "failed",
+            full_content: "failed\n\nWorker Output\n\n\nArtifact Content\n\n\n下一步\nInspect failure trace.",
+            next_step: "Inspect failure trace."
+        }
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                assigned_worker: "claude",
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md",
+                failure_class: "worker_runtime_transient",
+                recovery_stage: "human_gate_required",
+                auto_same_worker_retry_count: 1,
+                auto_handoff_count: 1,
+                auto_handoff_target: "deepseek"
+            }
+        },
+        related_messages: [message]
+    };
+
+    const preview = assistantOutputPreview(flow.task, flow, 260);
+    assert.equal(preview.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(preview.includes("ARCHITECTURE"), false);
+
+    const projectedFullContent = effectiveTaskOutcomeFullContent(flow.task, flow);
+    assert.equal(projectedFullContent.includes("thread not found (19120)"), true);
+    assert.equal(projectedFullContent.includes("下一步"), true);
+    assert.equal(projectedFullContent.includes("Worker Output"), false);
+});
+
+test("selected task gets a pinned latest-round output summary before message list history", () => {
+    const task = {
+        id: "task_demo",
+        title: "继续看看 文档，规划下一步",
+        status: "waiting_human",
+        control_node: "human_gate",
+        assigned_worker: "claude"
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                assigned_worker: "claude",
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��",
+                failure_class: "worker_runtime_transient",
+                recovery_stage: "human_gate_required",
+                auto_same_worker_retry_count: 1,
+                auto_handoff_count: 1,
+                auto_handoff_target: "deepseek"
+            }
+        },
+        related_messages: [
+            {
+                id: "msg_progress",
+                task_id: "task_demo",
+                message_type: "task_progress",
+                created_at: 1778680176.4381566,
+                content: "failed",
+                metadata: {
+                    summary_preview: "failed"
+                }
+            }
+        ]
+    };
+
+    const pinned = renderPinnedTaskOutcomeSummary(task, flow);
+    assert.ok(pinned);
+    assert.equal(pinned.executionStrip.label, "最近执行");
+    assert.equal(pinned.executionStrip.title.includes("worker claude"), true);
+    assert.equal(pinned.executionStrip.detail.includes("waiting_human / human_gate"), true);
+    assert.equal(flow.task.metadata.failure_class, "worker_runtime_transient");
+    const compactPreview = pinnedTaskOutcomePreview(task, flow, 240);
+    assert.equal(compactPreview.includes("thread not found (19120)"), true);
+    assert.equal(compactPreview.includes("human_gate_required"), false);
+    assert.equal(compactPreview.includes("下一步"), false);
+    assert.equal(compactPreview.includes("恢复状态"), false);
+    assert.equal(pinned.detail.includes("等待人工确认"), true);
+    assert.equal(pinned.detail.includes("临时运行失败"), true);
+});
+
+test("active worker label prefers current assigned worker over provider name after auto handoff", () => {
+    const task = {
+        id: "task_demo",
+        assigned_worker: "openclaw-native",
+        status: "active",
+        control_node: "scheduler"
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            assigned_worker: "openclaw-native",
+            metadata: {
+                assigned_worker: "openclaw-native",
+                previous_worker: "codex",
+                failure_class: "worker_runtime_transient",
+                recovery_stage: "auto_handoff_scheduled",
+                auto_handoff_target: "openclaw-native"
+            }
+        },
+        provider_selection: {
+            selected_provider: "openclaw",
+            selected_worker_id: "openclaw-native"
+        },
+        route_preview: {
+            selected_worker: "openclaw-native"
+        }
+    };
+
+    const workerLabel = activeWorkerLabel(task, flow);
+    assert.equal(workerLabel, "openclaw-native");
+
+    const executionStrip = buildThreadExecutionStrip(task, flow, workerLabel);
+    assert.equal(executionStrip.label, "待继续");
+    assert.equal(executionStrip.title, "worker openclaw-native");
+});
+
+test("human gate recovery detail explains next action for partial-result risk", () => {
+    const detail = messageCardRecoveryDetail({
+        failure_class: "partial_result_or_quality_risk",
+        recovery_stage: "human_gate_required"
+    }, true);
+
+    assert.equal(detail.includes("部分结果待确认"), true);
+    assert.equal(detail.includes("等待人工确认"), true);
+    assert.equal(detail.includes("先复核已有结果"), true);
+});
+
+
+test("human gate recovery detail explains environment fix path for environment-blocked failures", () => {
+    const detail = messageCardRecoveryDetail({
+        failure_class: "task_environment_blocked",
+        recovery_stage: "human_gate_required"
+    }, true);
+
+    assert.equal(detail.includes("环境阻塞"), true);
+    assert.equal(detail.includes("等待人工确认"), true);
+    assert.equal(detail.includes("先修环境后继续"), true);
+});
+
+test("cold-start recovery detail shows fresh session hint", () => {
+    const detail = messageCardRecoveryDetail({
+        failure_class: "worker_runtime_transient",
+        recovery_stage: "auto_handoff_scheduled",
+        recovery_execution_mode: "fresh_session"
+    }, true);
+
+    assert.equal(detail.includes("自动切换 worker"), true);
+    assert.equal(detail.includes("fresh session"), true);
+});

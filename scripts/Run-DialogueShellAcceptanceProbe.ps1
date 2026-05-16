@@ -102,7 +102,6 @@ Assert-True -Condition ($dialogueContentType -like "text/html*") -Message "/dial
 Assert-True -Condition ($dialogueBody.Contains("Session Transcript")) -Message "/dialogue/ shell is missing Session Transcript"
 Assert-True -Condition ($dialogueBody.Contains('id="detailsToggleButton"')) -Message ("/dialogue/ shell is missing task details toggle. snippet=" + (Snippet-Around -Content $dialogueBody -Anchor "Session Transcript"))
 Assert-True -Condition ($dialogueBody.Contains('data-composer-mode="auto"')) -Message "/dialogue/ shell is missing auto composer mode"
-Assert-True -Condition ($dialogueBody.Contains('data-composer-mode="message"')) -Message "/dialogue/ shell is missing message composer mode"
 Assert-True -Condition ($dialogueBody.Contains('data-composer-mode="task"')) -Message "/dialogue/ shell is missing task composer mode"
 Assert-True -Condition (-not $dialogueBody.Contains('data-composer-mode="followup"')) -Message "/dialogue/ shell still exposes followup as a primary mode"
 
@@ -122,6 +121,6 @@ Assert-True -Condition ($appJsBody.Contains("messageHint")) -Message "/dialogue/
     js_status = $appJsResponse.StatusCode
     transcript_first = $true
     details_toggle_present = $true
-    primary_composer_modes = @("auto", "message", "task")
+    primary_composer_modes = @("auto", "task")
     followup_mode_hidden = $true
 } | ConvertTo-Json -Depth 5

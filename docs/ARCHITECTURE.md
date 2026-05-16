@@ -1,7 +1,7 @@
 # Architecture
 
-<!-- 更新时间：2026-05-07 -->
-<!-- 分析依据：当前工作区源码、测试、运行时 contract 与最新 roadmap 文档 -->
+<!-- 更新时间：2026-05-15 -->
+<!-- 分析依据：当前工作区源码、测试、运行时 contract、Goal runtime 对照文档，以及本轮外部研究启发的架构抽象 -->
 
 ## 1. 项目简介
 
@@ -31,6 +31,7 @@ Agent Cloud Harness 是一个面向多轮、长时程、可恢复任务执行的
 - `docs/PHASE2_ROADMAP.md`
 - `docs/HARDNESS_PHASE1_ALIGNMENT.md`
 - `docs/CURRENT_CAPABILITY_GAP_ASSESSMENT.md`
+- `docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md`
 - `C:\Users\47037\.openclaw\workspace\docs\AGENT_CLOUD_HARNESS_POSITIONING_DRAFT_2026-05.md`
 - `C:\Users\47037\.openclaw\workspace\docs\AGENT_CLOUD_HARNESS_ROADMAP_V1_2026-05.md`
 
@@ -165,7 +166,17 @@ All runtime traces / packets / decisions / artifacts / tool calls
 
 这条链条里的每个环节都正在从“隐式文本拼接”收敛到“更显式的 runtime contract”。
 
-### 4.3 分层结构
+### 4.3 一个新的压缩原则：rich world, compact loop
+
+结合当前代码状态与外部研究启发，项目总架构上应明确坚持这条原则：
+
+- **world state 可以丰富**：events、artifacts、messages、tool traces、resume packet、checkpoint、learning hints 都可以保留
+- **execution loop 必须紧凑**：真正进入 worker execution、continuation judgment、operator live flow 的状态面应尽量小、稳定、非退化
+- **压缩不能压掉证据**：working set 变小，不等于把约束、证据、未决问题、下一步信号一起删掉
+
+这条原则不是论文口号，而是本项目下一阶段的工程约束。它要求系统把“高维世界状态”与“低维执行工作面”清晰分开。
+
+### 4.4 分层结构
 
 | 层级 | 目录/命名空间 | 职责 | 典型类/文件 |
 |------|-------------|------|------------|
@@ -250,6 +261,22 @@ All runtime traces / packets / decisions / artifacts / tool calls
 - structured handoff
 - lifecycle semantics
 
+### 5.5 下一层抽象应是 execution working set，而不是更多原始拼接
+
+如果说 mounted context 是当前的 working-memory spine，那么下一层更具体的工程目标应该是形成一个更明确的执行工作面，例如 `ExecutionWorkingSet` 一类的抽象。
+
+它应负责承载：
+
+- 当前 objective / active goal
+- 当前约束
+- 最近有效证据
+- 未决问题
+- 下一步候选动作
+- execution boundary facts
+- continuation risk / reopen signal
+
+它的作用不是替代 `TaskRuntimeContext`，而是从后者中投影出一个更紧凑、更可复用、更适合 execution 与 judgment 共享消费的结构化工作面。
+
 ## 6. 运行时主链路
 
 ### 6.1 最小闭环
@@ -286,6 +313,13 @@ create task
 - execution 与 judgment 不再只依赖 task title + raw text
 - continuity artifacts 开始以结构化方式进入运行面
 - mounted context 能成为行为路径的一部分，而不是附属说明
+
+但它不应长期直接承担所有运行时消费职责。
+更合理的长期方向是：
+
+- `TaskRuntimeContext` 负责汇聚世界状态
+- mounted context 负责形成 working-memory view
+- execution/judgment specific working set 负责形成紧凑执行面
 
 ### 6.3 Worker execution
 
@@ -339,6 +373,29 @@ create task
 - continuity packet
 
 从而让 continue / checkpoint / handoff / done 不只是基于自由文本印象做决定。
+
+### 6.6 Goal runtime 应包住 task runtime，而不是把 task runtime 打散重写
+
+根据当前代码状态与 `docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md` 的结论，项目现阶段最重要的结构判断之一是：
+
+- 当前已经有较完整的 task continuity runtime
+- 当前还没有独立的 persisted goal continuity runtime
+- 因此 Goal 层应该作为更高生命周期层包住 Task 层，而不是把 Task runtime 直接替换掉
+
+更准确的方向应是：
+
+```text
+goal lifecycle
+  -> owns long-horizon intent, progress, completion, budget, audit
+  -> spawns / reconciles tasks as concrete executions
+  -> reuses task continuity runtime as execution substrate
+```
+
+而不应是：
+
+```text
+force task runtime to absorb goal semantics until it becomes ambiguous
+```
 
 ## 7. Evidence 与 memory 方向
 
@@ -486,17 +543,74 @@ mounted context 的长期方向应该支撑热温冷分层：
 ### Priority 2. 收紧 execution/judgment shared cognition surface
 - 减少 execution 与 judgment 读不同事实面的情况
 - 更明确地让结构化 metadata、artifact、tool evidence 进入 judgment
+- 开始为明确的 execution working set 抽象收口
 
 ### Priority 3. 生命周期加固
 - pause / resume / checkpoint / handoff / reopen 语义继续收硬
+- 为 Goal runtime 上层接入保留干净边界
 
 ### Priority 4. evidence reopen 与 memory discipline
 - 不是先做更大 retrieval，而是先做 reopen policy 和 evidence hierarchy
 
-### Priority 5. adaptive harness evolution
+### Priority 5. goal runtime landing
+- 先上 schema / model / dao / service scaffolding
+- 明确 goal owns lifecycle、task owns execution
+- 避免把 Goal 语义继续零散塞进 `TaskService` 与 `ControlNodeGraph`
+
+### Priority 6. adaptive harness evolution
 - 在 trace、eval、contract 稳定后，再推进 harness policy 自演化
 
-## 10. 非目标与边界
+## 10. 当前最需要控制复杂度的代码面
+
+结合当前 repo 现状，复杂度最容易继续膨胀的地方有三个：
+
+### 10.1 `ControlNodeGraph`
+
+它当前同时承担：
+
+- node transition
+- worker round orchestration
+- recovery policy
+- execution / completion judgment dispatch
+- orchestration-stage branching
+- event / decision persistence glue
+- auto continue / auto handoff 行为
+
+这意味着它已经开始从“graph coordinator”滑向“总调度器 + 策略中心 + 状态拼装器”。
+
+长期应把它收回到：
+
+- graph-level transition coordinator
+- 不直接吃下所有恢复、继续、委派、编排细节
+
+优先可拆方向：
+
+- `TaskRecoveryPolicy`
+- `TaskContinuationDecider`
+- `ExecutionLoopCoordinator`
+
+### 10.2 `TaskService`
+
+`TaskService` 当前仍是 task-first 入口，这本身没问题。
+但它不应继续吸收越来越多的 goal lifecycle 语义。
+
+长期更合理的边界是：
+
+- `TaskService`: task lifecycle / task views / task continuity API
+- `GoalService`: goal lifecycle / progress reconciliation / completion audit
+- `GoalRuntime`: goal-to-task execution bridge
+
+### 10.3 `TaskRuntimeContextBuilder`
+
+它现在做的是必要的，但长期应明确拆成三层：
+
+- world-state gather
+- working-memory projection
+- execution/judgment compact projection
+
+否则它会越来越像“所有上下文需求都来这里拼”的大汇聚器。
+
+## 11. 非目标与边界
 
 当前阶段不应让这些方向抢走主线：
 
@@ -505,9 +619,10 @@ mounted context 的长期方向应该支撑热温冷分层：
 - 仅以 agent 数量为卖点的多 agent demo
 - 在 continuity semantics 未稳前就激进做 retrieval-first memory 平台
 - 在 trace/eval 不稳前就推进高风险自改系统
+- 在 Goal runtime 未成型前，把 task runtime 改成边界模糊的万能生命周期容器
 
-## 11. 一句话总结
+## 12. 一句话总结
 
 Agent Cloud Harness 当前最准确的架构理解，不是“一个能跑 agent 的小控制平面”，而是：
 
-**一个正在从最小 runtime loop 收敛为 continuity-first runtime substrate 的 agent harness，其核心主线是 working memory、shared runtime cognition、lifecycle semantics、evidence discipline 与可演化的 harness contract。**
+**一个正在从最小 runtime loop 收敛为 continuity-first runtime substrate 的 agent harness，其核心主线是 working memory、shared runtime cognition、lifecycle semantics、evidence discipline、goal/task 分层，以及可演化的 harness contract。**

@@ -1,6 +1,6 @@
 # GitHub First Release Stage File List
 
-> 本文档把当前 worktree 下 **三段首发提交** 的真实命中项收成一份可直接执行的 staged file list。它不是新的分层规则，而是把现有 `commit dry-run` / `stage preview` 结果压缩成更接近实际 `git add` 的清单。
+> 本文档把当前 worktree 下 **三段首发提交** 的目标命中项收成一份可直接执行的 staged file list。它不是新的分层规则，而是把现有 `commit dry-run` / `stage preview` 结果压缩成更接近实际 `git add` 的清单。
 
 ## 1. 证据来源
 
@@ -17,7 +17,7 @@
 
 ## 2. Commit 1: Repository Baseline
 
-### 2.1 当前真实 staged file list
+### 2.1 目标 staged file list
 
 - `.github/ISSUE_TEMPLATE/bug_report.yml`
 - `.github/ISSUE_TEMPLATE/config.yml`
@@ -31,9 +31,11 @@
 - `SECURITY.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md`
 - `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md`
+- `docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
 - `docs/GITHUB_FIRST_RELEASE_FILESET.md`
 - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`
+- `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`
 - `docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md`
 - `docs/GITHUB_RELEASE_CHECKLIST.md`
@@ -49,15 +51,17 @@ git add docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md
 git add docs/GITHUB_FIRST_RELEASE_FILESET.md
 git add docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md
 git add docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md
+git add docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md
 git add docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md
 git add docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md
 git add docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md
+git add docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md
 git add docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md
 ```
 
 ## 3. Commit 2: chat-first / facade product line
 
-### 3.1 当前真实 staged file list
+### 3.1 目标 staged file list
 
 - `src/main/java/com/agentcloud/engine/ChatFacadeService.java`
 - `src/main/java/com/agentcloud/server/WebConsoleHandler.java`
@@ -98,7 +102,7 @@ git add src/test/js
 
 ## 4. Commit 3: acceptance harness and operator docs
 
-### 4.1 当前真实 staged file list
+### 4.1 目标 staged file list
 
 - `docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md`
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md`
@@ -110,6 +114,7 @@ git add src/test/js
 - `scripts/Run-DialogueRecordSeedProbe.ps1`
 - `scripts/Run-GitHubFirstReleaseCommitDryRun.ps1`
 - `scripts/Run-GitHubFirstReleaseDryRun.ps1`
+- `scripts/Run-GitHubFirstReleaseIndexAudit.ps1`
 - `scripts/Run-GitHubFirstReleasePrecheck.ps1`
 - `scripts/Run-GitHubFirstReleaseStagePreview.ps1`
 - `scripts/Start-DialogueChatFacadeManualAcceptance.ps1`
@@ -165,9 +170,10 @@ git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md
 
 按最新一轮 `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`：
 
-- `baseline` 当前是 `staged_only = 21`
-- `product` 当前是 `staged_only = 24`
-- `harness` 当前是 `staged_only = 15`
-- 三段主 slice 当前都没有 `staged_and_unstaged` 漂移
+- 早前一轮 index audit 曾证明这份 file list 能和真实 index 状态对上
+- 但 **最新一轮** `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md` 已显示：
+  - `baseline staged_only = 1`
+  - `product staged_only = 0`
+  - `harness staged_only = 0`
 
-这说明这份 stage file list 现在不只是“应该怎么 stage”，而是和当前真实 index 状态对得上。
+这说明当前这份 file list 仍然可作为**目标 slice 清单**使用，但已经不能被表述成“当前三段主 slice 都还在 index 里”。若要真正提交，应先按本文命令块重新 stage。

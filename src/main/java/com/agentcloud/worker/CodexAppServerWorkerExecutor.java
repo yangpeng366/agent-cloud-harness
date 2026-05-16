@@ -360,6 +360,11 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         if (context == null || context.task() == null) {
             return null;
         }
+        String recoveryStage = metadataString(context.task().metadata(), "recovery_stage");
+        if ("same_worker_retry_scheduled".equalsIgnoreCase(recoveryStage)
+            || "auto_handoff_scheduled".equalsIgnoreCase(recoveryStage)) {
+            return null;
+        }
         return firstNonBlank(
             metadataString(context.task().metadata(), "codex_thread_id"),
             metadataString(context.task().metadata(), "provider_thread_id"),

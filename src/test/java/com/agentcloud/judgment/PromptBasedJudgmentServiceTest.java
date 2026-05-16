@@ -704,6 +704,11 @@ class PromptBasedJudgmentServiceTest {
                 "executor",
                 "executor",
                 "selected by learning memory hint",
+                null,
+                null,
+                null,
+                null,
+                null,
                 null
             ),
             Map.of(

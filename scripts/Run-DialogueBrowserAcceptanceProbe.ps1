@@ -5,6 +5,7 @@ param(
     [string]$UserDataDir = '.tmp\edge-dialogue-browser-probe',
     [int]$StartupTimeoutSec = 20,
     [string]$ScreenshotDir = '',
+    [int]$NodeMaxOldSpaceMb = 768,
     [ValidateSet('both', 'chat', 'responses')]
     [string]$Surface = 'both'
 )
@@ -63,7 +64,7 @@ function Invoke-BrowserProbeRunner {
             ($Payload | ConvertTo-Json -Depth 12 -Compress),
             (New-Object System.Text.UTF8Encoding($false))
         )
-        $nodeArgs = @("--max-old-space-size=256", $ScriptPath, $resolvedPayloadPath)
+        $nodeArgs = @("--max-old-space-size=$NodeMaxOldSpaceMb", $ScriptPath, $resolvedPayloadPath)
         $output = & node @nodeArgs
     } finally {
         Remove-Item -LiteralPath $resolvedPayloadPath -Force -ErrorAction SilentlyContinue
@@ -132,6 +133,23 @@ try {
             expectedSurface = 'responses'
             mode = 'responses'
             screenshotDir = $resolvedScreenshotDir
+        }
+    }
+
+    if ($Surface -eq 'both') {
+        if ($null -eq $chatResult) {
+            throw "browser probe surface=both did not produce chat_surface"
+        }
+        if ($null -eq $responsesResult) {
+            throw "browser probe surface=both did not produce responses_surface"
+        }
+        $chatPropCount = @($chatResult.PSObject.Properties).Count
+        $responsesPropCount = @($responsesResult.PSObject.Properties).Count
+        if ($chatPropCount -eq 0) {
+            throw "browser probe surface=both produced empty chat_surface"
+        }
+        if ($responsesPropCount -eq 0) {
+            throw "browser probe surface=both produced empty responses_surface"
         }
     }
 

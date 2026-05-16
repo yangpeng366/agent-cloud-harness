@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Use-Java21.ps1") -JdkHome $JdkHome -Quiet
+$mavenExecutable = & (Join-Path $PSScriptRoot "Resolve-MavenCommand.ps1")
 
 $mavenArgs = @()
 if ($QuietMaven) {
@@ -18,9 +19,10 @@ if ($SkipTests) {
 $mavenArgs += "package"
 
 Write-Host "Using JAVA_HOME: $env:JAVA_HOME"
-Write-Host ("Running: mvn {0}" -f ($mavenArgs -join " "))
+Write-Host "Using Maven: $mavenExecutable"
+Write-Host ("Running: {0} {1}" -f $mavenExecutable, ($mavenArgs -join " "))
 
-& mvn @mavenArgs
+& $mavenExecutable @mavenArgs
 
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

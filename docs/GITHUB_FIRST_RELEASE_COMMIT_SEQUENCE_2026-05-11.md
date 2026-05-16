@@ -1,6 +1,6 @@
 # GitHub First Release Commit Sequence
 
-> 本文档把当前首发三段提交从“文件分层”推进到“真正开始提交时怎么做”：包括建议提交顺序、建议 commit subject/body、每一步提交前后最小验证点，以及仍未完成的最终发布 gate。
+> 本文档当前更准确的定位是：保留 2026-05-11 这轮首发三段主提交的建议顺序、建议 commit 文案和 replay/复核命令。它不再假设这三段提交当前仍未落地。
 
 ## 1. 建议执行顺序
 
@@ -15,6 +15,12 @@
 - 先把仓库公开基线独立出来，review 成本最低
 - 再把真正的产品主线单独落成一批，功能边界最清晰
 - 最后再补 acceptance harness / operator docs，避免和产品逻辑混成一个大提交
+
+当前更强的真实状态是，这三段建议顺序已经各自对应到真实本地 commit：
+
+1. `8350a8c` `chore: prepare repository baseline for public first release`
+2. `d7fefea` `feat: ship chat-first dialogue facade and related UI flows`
+3. `4f559c2` `chore: add acceptance harness and operator release tooling`
 
 ## 2. Commit 1: Repository Baseline
 
@@ -33,7 +39,25 @@ chore: prepare repository baseline for public first release
 - keep project positioning honest as a local/single-node harness
 ```
 
-### 2.3 提交前最小验证
+### 2.3 replay / 提交前最小验证
+
+先按目标 slice 重新 stage，再看 staged 范围：
+
+```powershell
+git add .gitignore README.md LICENSE CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md
+git add .github
+git add docs/GITHUB_RELEASE_CHECKLIST.md
+git add docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md
+git add docs/GITHUB_FIRST_RELEASE_FILESET.md
+git add docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md
+git add docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md
+git add docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md
+git add docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md
+git add docs/GITHUB_FIRST_RELEASE_COMMIT_COMMANDS.md
+git add docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md
+git add docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md
+git add docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md
+```
 
 先看 staged 范围：
 
@@ -60,7 +84,7 @@ git diff --cached --name-only
 - acceptance harness 脚本
 - acceptance records / dry-run / stage preview working logs
 
-当前可再交叉核对：
+如果要 replay / 重新收 Commit 1，可再交叉核对：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - baseline 当前应显示为 `staged_only`
@@ -93,7 +117,19 @@ feat: ship chat-first dialogue facade and related UI flows
 - keep product changes separate from release-only operator tooling
 ```
 
-### 3.3 提交前最小验证
+### 3.3 replay / 提交前最小验证
+
+先按目标 slice 重新 stage，再看 staged 范围：
+
+```powershell
+git add src/main/java/com/agentcloud/engine/ChatFacadeService.java
+git add src/main/java/com/agentcloud/server/WebConsoleHandler.java
+git add src/main/resources/web/console/app.js
+git add src/main/resources/web/dialogue
+git add src/test/java/com/agentcloud/server/ChatFacadeHandlerHttpTest.java
+git add src/test/java/com/agentcloud/server/WebConsoleHandlerHttpTest.java
+git add src/test/js
+```
 
 先看 staged 范围：
 
@@ -126,7 +162,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_*`
 - `docs/GITHUB_FIRST_RELEASE_*` working logs
 
-当前可再交叉核对：
+如果要 replay / 重新收 Commit 2，可再交叉核对：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - product 当前应显示为 `staged_only`
@@ -159,7 +195,27 @@ chore: add acceptance harness and operator release tooling
 - document operator runbooks and acceptance preparation chain
 ```
 
-### 4.3 提交前最小验证
+### 4.3 replay / 提交前最小验证
+
+先按目标 slice 重新 stage，再看 staged 范围：
+
+```powershell
+git add scripts/Start-DialogueChatFacadeManualAcceptance.ps1
+git add scripts/Run-ChatFacadeAcceptanceWithLocalHarness.ps1
+git add scripts/Run-ChatFacadePathMatrixProbe.ps1
+git add scripts/Run-DialogueBrowserAcceptanceProbe.ps1
+git add scripts/dialogue-browser-acceptance-probe-runner.cjs
+git add scripts/Render-DialogueAcceptanceRecordSeed.ps1
+git add scripts/Run-DialogueRecordSeedProbe.ps1
+git add scripts/Run-GitHubFirstReleaseDryRun.ps1
+git add scripts/Run-GitHubFirstReleaseCommitDryRun.ps1
+git add scripts/Run-GitHubFirstReleaseStagePreview.ps1
+git add scripts/Run-GitHubFirstReleaseIndexAudit.ps1
+git add scripts/Run-GitHubFirstReleasePrecheck.ps1
+git add docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md
+git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md
+git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md
+```
 
 先看 staged 范围：
 
@@ -197,7 +253,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseCommitD
 - `Needs manual review = none`
 - `Unmatched = none`
 
-当前可再交叉核对：
+如果要 replay / 重新收 Commit 3，可再交叉核对：
 
 - `docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md`
 - harness 当前应显示为 `staged_only`
@@ -242,7 +298,7 @@ git show --stat --oneline HEAD
 
 ## 7. 推荐入口
 
-如果你现在真的要开始收首发提交，建议按这个顺序打开文档：
+如果你现在要 replay 这三段主提交、或重新复核它们的边界，建议按这个顺序打开文档：
 
 1. `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`
 2. `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`

@@ -153,6 +153,13 @@ git diff --cached
 - 文档口径和代码一致
 - 未完成 gate 仍然被诚实保留
 
+> 补充说明：截至当前真实 Git 状态，三段主 slice 已经分别进入本地 Git 历史：
+> - `8350a8c chore: prepare repository baseline for public first release`
+> - `d7fefea feat: ship chat-first dialogue facade and related UI flows`
+> - `4f559c2 chore: add acceptance harness and operator release tooling`
+>
+> 因此本节现在更适合作为 replay / 复核边界，而不是声称这些 slice 仍然处于“等待首次 stage”的状态。
+
 ## 8. Dry-run 建议
 
 在真正 `git add` 前，建议先跑：

@@ -91,6 +91,8 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "current_pinned_route", exportRouteDiagnostic(route.currentPinnedRoute()));
+        putIfPresent(payload, "recovery_unpinned_recommendation", exportRouteDiagnostic(route.recoveryUnpinnedRecommendation()));
         return payload;
     }
 
@@ -108,6 +110,30 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        return payload;
+    }
+
+    private Map<String, Object> exportRouteDiagnostic(WorkerRouter.RouteDiagnostic route) {
+        if (route == null) {
+            return Map.of();
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        putIfPresent(payload, "selected_worker", blankToNull(route.selectedWorker()));
+        putIfPresent(payload, "route_source", blankToNull(route.routeSource()));
+        putIfPresent(payload, "task_type", blankToNull(route.taskType()));
+        putIfPresent(payload, "selected_worker_type", blankToNull(route.selectedWorkerType()));
+        putIfPresent(payload, "selected_model_tier", blankToNull(route.selectedModelTier()));
+        putIfPresent(payload, "selected_execution_role", blankToNull(route.selectedExecutionRole()));
+        putIfPresent(payload, "selection_scope", blankToNull(route.selectionScope()));
+        putIfPresent(payload, "why_selected", blankToNull(route.whySelected()));
+        putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
+        putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
+        putIfPresent(payload, "provider_deprioritized", route.providerDeprioritized());
+        putIfPresent(payload, "deprioritized_provider", blankToNull(route.deprioritizedProvider()));
+        putIfPresent(payload, "deprioritization_reason", blankToNull(route.deprioritizationReason()));
+        putIfPresent(payload, "candidate_workers", copyList(route.candidateWorkers()));
+        putIfPresent(payload, "fallback_workers", copyList(route.fallbackWorkers()));
         return payload;
     }
 

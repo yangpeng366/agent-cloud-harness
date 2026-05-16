@@ -28,9 +28,7 @@ final class ProviderTaskPromptBuilder {
         Task task = context.task();
         Map<String, Object> metadata = task.metadata();
         StringBuilder sb = new StringBuilder();
-        appendLine(sb, "Task Title: " + task.title());
-        appendIfPresent(sb, "Goal", firstNonBlank(task.goal(), metadataString(metadata, "goal")));
-        appendIfPresent(sb, "Intent", metadataString(metadata, "intent"));
+        WorkerPromptHeaderBuilder.appendTaskHeader(sb, task, false);
         appendIfPresent(sb, "Priority", task.priority());
         appendIfPresent(sb, "Current Summary", task.summary());
         appendIfPresent(sb, "Suggested Next Step", task.nextStep());

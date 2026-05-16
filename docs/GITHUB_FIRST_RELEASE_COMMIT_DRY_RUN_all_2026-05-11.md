@@ -1,0 +1,44 @@
+﻿# GitHub First Release Commit Dry Run
+
+> Snapshot generated from current git status.
+
+## Repository Baseline
+
+-  M docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md
+-  M docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md
+-  M docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md
+- MM docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md
+-  M docs/GITHUB_RELEASE_CHECKLIST.md
+
+## chat-first / facade product line
+
+- none
+
+## acceptance harness and operator docs
+
+- none
+
+## Keep, but do not use as release completion proof
+
+-  M docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-10.md
+- ?? docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_baseline_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_harness_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_product_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_DRY_RUN_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_all_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_baseline_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md
+- ?? docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_product_2026-05-11.md
+
+## Defer or exclude
+
+- ?? docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md
+
+## Unmatched
+
+- none
+

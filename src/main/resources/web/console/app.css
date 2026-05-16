@@ -833,6 +833,12 @@ button {
     gap: 8px;
 }
 
+.runtime-health__deprioritization {
+    margin-bottom: 10px;
+    border-color: rgba(189, 99, 21, 0.22);
+    background: linear-gradient(180deg, rgba(255, 244, 223, 0.86), rgba(255, 250, 242, 0.94));
+}
+
 .runtime-health__row {
     display: flex;
     align-items: flex-start;
@@ -844,6 +850,23 @@ button {
     margin: 4px 0 0;
     color: var(--ink-soft);
     line-height: 1.5;
+}
+
+.runtime-health__hint,
+.route-box__recovery-note {
+    margin: 8px 0 0;
+    color: var(--ink-soft);
+    line-height: 1.55;
+}
+
+.runtime-health__hint strong,
+.route-box__recovery-note strong {
+    color: var(--ink);
+}
+
+.route-box__recovery-note span {
+    display: block;
+    margin-top: 2px;
 }
 
 .runtime-health__row--clickable,

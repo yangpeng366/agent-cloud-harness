@@ -132,6 +132,31 @@ class ChatFacadeHandlerHttpTest {
     }
 
     @Test
+    void postChatCompletionInfersCodingTaskTypeForRepoModificationRequests() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("chat-facade-infer-coding.db"))) {
+            ApiCall response = fixture.postJson("/v1/chat/completions", Map.of(
+                "model", "agentcloud-default",
+                "messages", List.of(Map.of(
+                    "role", "user",
+                    "content", "根据文档修改 D:\\gitAll\\articleeditor 里的 ArticleThirdService.java，并补测试。"
+                )),
+                "stream", false,
+                "metadata", Map.of(
+                    "task_mode", "task_required"
+                )
+            ));
+
+            assertEquals(200, response.statusCode());
+            String taskId = response.body().path("agentcloud").path("task_id").asText();
+            assertFalse(taskId.isBlank());
+
+            Task task = fixture.taskDao.findById(taskId).orElseThrow();
+            assertEquals("coding", String.valueOf(task.metadata().get("task_type")));
+            assertEquals("coding", task.goal().contains("ArticleThirdService.java") ? String.valueOf(task.metadata().get("task_type")) : "coding");
+        }
+    }
+
+    @Test
     void postChatCompletionTaskRequiredCanReturnTerminalTaskResultReply() throws Exception {
         try (HttpFixture fixture = new HttpFixture(
             tempDir.resolve("chat-facade-task-result.db"),

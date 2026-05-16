@@ -943,6 +943,10 @@ function renderAgentInventory() {
 
 function renderRuntimeHealth() {
     const health = state.runtimeHealth || {};
+    const runtimeHealthPlan = buildRuntimeHealthDeprioritizationPlan({
+        metadata: health.metadata || {},
+        providerStats: health.provider_stats || health.providerStats || []
+    });
     const activeRunCount = numberValue(health.active_run_count, health.activeRunCount, 0);
     const failedRunCount = numberValue(health.failed_run_count_24h, health.failedRunCount24h, 0);
     const crashedRunCount = numberValue(health.crashed_run_count_24h, health.crashedRunCount24h, 0);
@@ -1030,6 +1034,16 @@ function renderRuntimeHealth() {
 
     dom.runtimeHealth.innerHTML = `
         <div class="runtime-health__grid">${metricCards}</div>
+        ${runtimeHealthPlan.deprioritizedProviders.length > 0 ? `
+            <div class="artifact-item runtime-health__deprioritization">
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="manual">recovery window</span>
+                    <span>${escapeHtml(String(runtimeHealthPlan.deprioritizedProviders.length))} provider</span>
+                </div>
+                <strong>${escapeHtml(runtimeHealthPlan.headline)}</strong>
+                <p>${escapeHtml(runtimeHealthPlan.detail)}</p>
+            </div>
+        ` : ""}
         <div class="agent-trace-list runtime-health__section">
             <div class="decision-item__type">provider comparison</div>
             ${providerStatsRows || emptyState("最近 24h 暂无 provider run 统计。")}
@@ -1050,6 +1064,14 @@ function renderRuntimeHealth() {
 }
 
 function renderProviderRuntimeStatsRow(stat) {
+    const providerDeprioritization = buildConsoleProviderDeprioritizationPlan({
+        provider_deprioritized: stat?.metadata?.provider_deprioritized,
+        deprioritized_provider: firstNonBlank(stat?.provider_id, stat?.providerId),
+        deprioritization_reason: firstNonBlank(
+            stat?.metadata?.deprioritization_reason,
+            stat?.metadata?.deprioritizationReason
+        )
+    });
     const providerId = providerIdOf(stat) || "unknown";
     const totalRuns = numberValue(stat.total_runs, stat.totalRuns, 0);
     const activeRuns = numberValue(stat.active_runs, stat.activeRuns, 0);
@@ -1079,6 +1101,12 @@ function renderProviderRuntimeStatsRow(stat) {
                 </div>
                 <strong>${escapeHtml(providerId)}</strong>
                 <p>${escapeHtml(summary || "no completed status yet")}${lastRunAt ? ` 路 last ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
+                ${providerDeprioritization.providerDeprioritized ? `
+                    <p class="runtime-health__hint">
+                        <strong>${escapeHtml(providerDeprioritization.headline)}</strong>
+                        ${providerDeprioritization.detail ? ` 路 ${escapeHtml(providerDeprioritization.detail)}` : ""}
+                    </p>
+                ` : ""}
                 ${lastFailureSummary ? `<p class="agent-warning">Last failure: ${escapeHtml(preview(lastFailureSummary, 140))}</p>` : ""}
             </div>
         </button>
@@ -1927,13 +1955,19 @@ function renderRouteBox(flow, task) {
         cognitionSurface?.alignment?.route_worker_matches_execution_worker,
         cognitionSurface?.alignment?.routeWorkerMatchesExecutionWorker
     );
+    const providerDeprioritization = buildConsoleProviderDeprioritizationPlan(
+        routePreview.recovery_unpinned_recommendation
+        || routePreview.recoveryUnpinnedRecommendation
+        || routePreview
+    );
     const routeChips = [
         modelMode ? `mode: ${humanizeToken(modelMode) || modelMode}` : null,
         preferredWorkerHint ? `hint: ${preferredWorkerHint}` : null,
         learningHintApplied === true ? "learning: applied" : null,
         learningHintApplied === false ? "learning: observed, not applied" : null,
         routeAlignment === true ? "route/execution aligned" : null,
-        routeAlignment === false ? "route/execution diverged" : null
+        routeAlignment === false ? "route/execution diverged" : null,
+        providerDeprioritization.chip || null
     ].filter(Boolean);
     const executionFacts = executionBoundaryFacts(flow);
     if (executionFacts.chips.length > 0) {
@@ -1950,6 +1984,12 @@ function renderRouteBox(flow, task) {
                 <span>${escapeHtml(taskType)}</span>
             </div>
             ${routeReason ? `<p>${escapeHtml(routeReason)}</p>` : ""}
+            ${providerDeprioritization.providerDeprioritized ? `
+                <p class="route-box__recovery-note">
+                    <strong>${escapeHtml(providerDeprioritization.headline)}</strong>
+                    ${providerDeprioritization.detail ? `<span>${escapeHtml(providerDeprioritization.detail)}</span>` : ""}
+                </p>
+            ` : ""}
             ${candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(candidateWorkers.join(", "))}</p>` : ""}
             ${routeChips.length > 0 ? `
                 <div class="chip-group experiment-summary__chips">
@@ -2945,6 +2985,66 @@ function normalizeTextList(...values) {
         }
     }
     return [];
+}
+
+function buildRuntimeHealthDeprioritizationPlan(input) {
+    const source = input || {};
+    const metadata = source.metadata || {};
+    const deprioritizedProviders = normalizeTextList(
+        metadata.deprioritized_providers,
+        metadata.deprioritizedProviders
+    );
+    return {
+        deprioritizedProviders,
+        headline: deprioritizedProviders.length > 0
+            ? `当前恢复降级窗口：${deprioritizedProviders.join(", ")}`
+            : "",
+        detail: deprioritizedProviders.length > 0
+            ? "最近窗口内出现临时 provider 失败，恢复建议会先尝试其他 provider。"
+            : ""
+    };
+}
+
+function buildConsoleProviderDeprioritizationPlan(input) {
+    const source = input || {};
+    const providerDeprioritized = booleanValue(
+        source.provider_deprioritized,
+        source.providerDeprioritized,
+        source.recovery_provider_deprioritized,
+        source.recoveryProviderDeprioritized
+    );
+    const deprioritizedProvider = firstNonBlank(
+        source.deprioritized_provider,
+        source.deprioritizedProvider,
+        source.recovery_deprioritized_provider,
+        source.recoveryDeprioritizedProvider
+    );
+    const reason = firstNonBlank(
+        source.deprioritization_reason,
+        source.deprioritizationReason,
+        source.recovery_deprioritization_reason,
+        source.recoveryDeprioritizationReason
+    );
+    if (providerDeprioritized !== true || !deprioritizedProvider) {
+        return {
+            providerDeprioritized: false,
+            deprioritizedProvider: "",
+            reason: "",
+            chip: "",
+            headline: "",
+            detail: ""
+        };
+    }
+    return {
+        providerDeprioritized: true,
+        deprioritizedProvider,
+        reason,
+        chip: `recovery避开 ${deprioritizedProvider}`,
+        headline: `恢复阶段会优先避开 ${deprioritizedProvider}`,
+        detail: reason === "recent transient provider failures"
+            ? "最近窗口内出现了临时 provider 失败，恢复建议会先尝试其他 provider。"
+            : (reason || "")
+    };
 }
 
 function humanizeToken(value) {

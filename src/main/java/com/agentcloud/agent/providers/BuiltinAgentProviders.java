@@ -105,6 +105,24 @@ public final class BuiltinAgentProviders {
                 "kiro-cli",
                 "MULTICA_KIRO_PATH",
                 "MULTICA_KIRO_MODEL"
+            ),
+            new LocalCliAgentProvider(
+                "codebuddy",
+                "CodeBuddy",
+                List.of("chat", "code", "patch", "session"),
+                Map.of("model_tier", "strong"),
+                "codebuddy",
+                "MULTICA_CODEBUDDY_PATH",
+                "MULTICA_CODEBUDDY_MODEL"
+            ),
+            new LocalCliAgentProvider(
+                "trae",
+                "Trae CN",
+                List.of("chat", "code", "session"),
+                Map.of("model_tier", "strong"),
+                "trae",
+                "MULTICA_TRAE_PATH",
+                "MULTICA_TRAE_MODEL"
             )
         );
     }

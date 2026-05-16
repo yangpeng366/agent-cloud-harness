@@ -1,6 +1,6 @@
 param(
     [string]$JdkHome = "C:\Program Files\Java\jdk-21.0.9+10",
-    [string]$JarPath = "target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar",
+    [string]$JarPath = "",
     [int]$Port = 18080,
     [int]$StartupTimeoutSec = 45,
     [string[]]$JavaArgs = @("-Xms128m", "-Xmx512m"),
@@ -11,6 +11,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-HarnessJar {
+    param([string]$RequestedJarPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedJarPath)) {
+        return (Resolve-Path -LiteralPath $RequestedJarPath).Path
+    }
+
+    $candidates = @(
+        "target\agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar",
+        "target\agent-cloud-harness-0.1.0-SNAPSHOT.jar"
+    )
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate) {
+            return (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+
+    throw "no runnable harness jar found. Checked: $($candidates -join ', ')"
+}
 
 function Assert-PortFree {
     param([int]$TargetPort)
@@ -105,7 +126,7 @@ $resolvedStdOutPath = [System.IO.Path]::GetFullPath((Join-Path $workingDir $effe
 $resolvedStdErrPath = [System.IO.Path]::GetFullPath((Join-Path $workingDir $effectiveStdErrPath))
 Remove-Item -LiteralPath $resolvedStdOutPath, $resolvedStdErrPath -Force -ErrorAction SilentlyContinue
 Assert-PortFree -TargetPort $Port
-$resolvedJar = (Resolve-Path -LiteralPath $JarPath).Path
+$resolvedJar = Resolve-HarnessJar -RequestedJarPath $JarPath
 . (Join-Path $PSScriptRoot "Use-Java21.ps1") -JdkHome $JdkHome -Quiet
 $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
 $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)

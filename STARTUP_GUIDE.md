@@ -78,20 +78,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
   -Background `
-  -Port 18328 `
-  -StdOutPath .tmp\server-18328.out.log `
-  -StdErrPath .tmp\server-18328.err.log `
-  -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\dialogue-smoke-18328.db")
+  -Port 18386 `
+  -StdOutPath .tmp\server-18386.out.log `
+  -StdErrPath .tmp\server-18386.err.log `
+  -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\dialogue-smoke-18386.db")
 ```
 
 启动成功后，可按职责分两层验证：
 
 ```powershell
 # 1. 壳层/布局验证
-node .\scripts\screenshot.js --base-url http://localhost:18328 --report .tmp\dialogue-shell-report-18328.json
+node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dialogue-shell-report-18386.json
 
 # 2. 轻量前端业务 smoke
-node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --report .tmp\dialogue-business-smoke-18328.json
+node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18386 --report .tmp\dialogue-business-smoke-18386.json
 ```
 
 说明：
@@ -102,8 +102,8 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --re
 - `scripts/screenshot.js` 和 `scripts/dialogue-business-smoke.js` 不要在同一实例上并发跑；后者会主动创建 session / task 并改写当前 hash，容易把前者的 shell report 污染成“带业务状态的截图”。
 - `scripts/screenshot.js` 现在会先显式等待 `/api/v1/health` 再打开 `/dialogue/`；fresh 启动时不要再把短暂的 `ERR_CONNECTION_REFUSED` 误判成页面回归。
 - 当前 fresh 绿灯样本可直接参考：
-- `.tmp/dialogue-shell-report-18328.json`
-- `.tmp/dialogue-business-smoke-18328.json`
+- `.tmp/dialogue-shell-report-18386.json`
+- `.tmp/dialogue-business-smoke-18386.json`
   - `.tmp/dialogue-shell-screens/dialogue-shell-desktop.png`
   - `.tmp/dialogue-shell-screens/dialogue-shell-narrow.png`
   - `.tmp/dialogue-shell-screens/dialogue-shell-responses.png`
@@ -111,10 +111,10 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --re
 - 当前 `/dialogue/` 的默认 shell contract 也已经进一步收紧：
   - 默认打开 `/dialogue/` 时，不应自动带出 `task=` hash
   - session-scoped shell 下，composer 的 task-only 次级动作与上下文块默认隐藏
-- 当前 fresh `18328` 还额外确认了三条真实 UI contract：
+- 当前 unified fresh `18386` 还额外确认了三条真实 UI contract：
   - `details=open` 不再只是 hash/state 变化，desktop / responses 下右侧 details panel 会真正出现
   - 更窄的 `thread rail + details` 列宽 (`196px / 292px`) 已经通过 fresh 实例真实生效，不再停留在源码层
-  - desktop shell 的 transcript / composer 高度当前是 `575px / 284px`，说明这轮 composer 再减重后 transcript-first 仍然成立
+  - `desktop / narrow / responses` 三个 profile 都为绿；其中 `narrow` 下当前 `header / transcript / composer` 是 `83px / 462px / 213px`，说明这轮移动端减重后 transcript-first 仍然成立
 
 ### 前端改动何时生效
 
@@ -212,6 +212,8 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18328 --re
 完整矩阵见：
 
 - `docs/DIALOGUE_GITHUB_RELEASE_TEST_MATRIX.md`
+
+另外，当前仓库默认约定是：**调研、排查、方案设计、验收结论整理这类任务优先先落文档，再继续代码或验证**。如果只是口头在对话里确认，而没有把结论写回最贴近主题的 `docs/*.md` / runbook / record，后续协作很容易重复劳动。
 
 ## 环境变量与系统属性
 

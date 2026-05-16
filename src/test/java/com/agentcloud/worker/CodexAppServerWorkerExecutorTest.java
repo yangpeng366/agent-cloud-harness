@@ -82,6 +82,37 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    void resumeThreadIdReturnsNullDuringRecoveryColdStartStages() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod("resumeThreadId", TaskRuntimeContext.class);
+        method.setAccessible(true);
+
+        TaskRuntimeContext sameWorkerRetry = runtimeContext("codex", new LinkedHashMap<>(java.util.Map.of(
+            "task_type", "coding",
+            "intent", "Verify codex recovery cold-start retry skips resume.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "recovery_stage", "same_worker_retry_scheduled",
+            "provider_session_id", "generic-provider-session",
+            "provider_thread_id", "generic-provider-thread",
+            "codex_thread_id", "codex-thread-specific"
+        )));
+        TaskRuntimeContext autoHandoff = runtimeContext("codex", new LinkedHashMap<>(java.util.Map.of(
+            "task_type", "coding",
+            "intent", "Verify codex recovery handoff skips resume.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness",
+            "recovery_stage", "auto_handoff_scheduled",
+            "provider_session_id", "generic-provider-session",
+            "provider_thread_id", "generic-provider-thread",
+            "codex_thread_id", "codex-thread-specific"
+        )));
+
+        assertEquals(null, method.invoke(executor, sameWorkerRetry));
+        assertEquals(null, method.invoke(executor, autoHandoff));
+    }
+
+    @Test
     void systemPromptDefaultsToThinControlPlaneAutonomyContract() throws Exception {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);

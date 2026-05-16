@@ -6,6 +6,7 @@ export function buildRouteBoxPlan(input) {
     const taskType = firstNonBlank(source.taskType, "");
     const candidateWorkers = normalizeTextList(source.candidateWorkers);
     const routeChips = normalizeTextList(source.routeChips);
+    const providerDeprioritization = source.providerDeprioritization || null;
     const timelineCount = Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline.length : 0;
     const detailGroupCount = [
         taskType ? 1 : 0,
@@ -20,6 +21,7 @@ export function buildRouteBoxPlan(input) {
         taskType,
         candidateWorkers,
         routeChips,
+        providerDeprioritization,
         cognitionTimeline: Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline : [],
         hasDrawer: detailGroupCount > 0 || timelineCount > 0,
         drawerSummary: buildDrawerSummary(detailGroupCount, timelineCount)

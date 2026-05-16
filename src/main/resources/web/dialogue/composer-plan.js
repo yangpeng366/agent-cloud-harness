@@ -1,7 +1,7 @@
 export function buildComposerSubmissionPlan(input) {
     const normalized = normalizeComposerPlanInput(input);
     if (normalized.composerMode === "message") {
-        return { requestedMode: "message", resolvedMode: "message", reason: "message", reasonLabel: "显式聊天模式" };
+        return { requestedMode: "message", resolvedMode: "message", reason: "message", reasonLabel: "显式聊天推进" };
     }
     if (normalized.composerMode === "task") {
         return { requestedMode: "task", resolvedMode: "task", reason: "task", reasonLabel: "显式新任务模式" };
@@ -17,7 +17,7 @@ export function buildComposerSubmissionPlan(input) {
             reasonLabel: taskIntentOverrideReason(normalized)
         };
     }
-    return { requestedMode: "auto", resolvedMode: "message", reason: "auto_message", reasonLabel: "默认聊天发送" };
+    return { requestedMode: "auto", resolvedMode: "message", reason: "auto_task", reasonLabel: "默认聊天推进" };
 }
 
 export function hasTaskIntentOverrides(input) {
@@ -29,6 +29,7 @@ export function hasTaskIntentOverrides(input) {
         || normalized.taskAssignedWorker
         || normalized.taskModelMode
         || normalized.taskContinueCurrent
+        || normalized.taskAutoMultiRound
         || !normalized.taskAutoStart
         || normalized.taskType !== "continuation"
         || normalized.taskPriority !== "high"
@@ -51,6 +52,9 @@ export function taskIntentOverrideReason(input) {
     }
     if (normalized.taskContinueCurrent) {
         return "已切到继续当前任务";
+    }
+    if (normalized.taskAutoMultiRound) {
+        return "已启用自动多轮推进";
     }
     if (!normalized.taskAutoStart) {
         return "已切到 manual-start";
@@ -76,6 +80,7 @@ function normalizeComposerPlanInput(input) {
         taskModelMode: normalizeText(source.taskModelMode),
         taskContinueCurrent: source.taskContinueCurrent === true,
         taskAutoStart: source.taskAutoStart !== false,
+        taskAutoMultiRound: source.taskAutoMultiRound === true,
         taskType: normalizeText(source.taskType) || "continuation",
         taskPriority: normalizeText(source.taskPriority) || "high"
     };

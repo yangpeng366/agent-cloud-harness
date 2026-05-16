@@ -1,6 +1,6 @@
 # GitHub First Release Staged Slice Ready
 
-> 本文档把 **当前 worktree** 直接收成一份可执行的 staged slice 清单。它不要求立刻 `git add`，但目标是让下一步真正开始收首发提交时，不再需要先把 dry-run 输出手工翻译一遍。
+> 本文档现在更准确的定位是：把 **2026-05-11 这轮首发切片** 收成一份目标 staged slice / replay 清单。它保留了当时的分批边界与命令，但不再声称这些 slice 当前仍然停留在真实 index 中。
 
 ## 1. 适用前提
 
@@ -22,21 +22,32 @@
 
 ### 2.0 当前状态
 
-截至当前 worktree，`Repository Baseline` 已经不再只是建议 slice，而是已真实进入暂存区。
+截至当前 worktree，`Repository Baseline` 已不再只是建议 slice；它已经以本地 commit 形式进入 Git 历史：
+
+- `8350a8c chore: prepare repository baseline for public first release`
 
 真实核对命令：
 
 ```powershell
+git log --oneline -3
 git diff --cached --stat
 git diff --cached --name-only
 git status --short
 ```
 
-当前 staged 结果与本节建议命令一致，且未混入：
+当前事实是：
 
-- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-10.md`
-- `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
-- `docs/GITHUB_FIRST_RELEASE_*_2026-05-11.md` 这类 working snapshots
+- 三段主 slice 已经分别进入本地 commit
+- 当前真实 index 不再保持当时那轮 staged 结果
+- 最新 index audit 只显示：
+  - `baseline staged_only = 1`
+  - `product staged_only = 0`
+  - `harness staged_only = 0`
+
+所以本节的命令和文件清单应理解成：
+
+- 当时 slice 的真实边界
+- 以及如果未来要 replay / 重组这些 slice 时的命令入口
 
 ### 2.1 当前命中项
 
@@ -186,21 +197,21 @@ git add docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md
   - 当前新增的首发工具链文件也应保持 `review / unmatched = none`
   - `include / evidence_only / defer` 已完整分层
 
-而按当前真实 index 状态：
+而按当前真实 Git 状态：
 
-- `Repository Baseline` 已真实 staged
-- `chat-first / facade product line` 已真实 staged
-- `acceptance harness and operator docs` 已真实 staged
-- `docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md` 已能直接作为当前 staged file list 证据
+- `Repository Baseline` 已本地提交为 `8350a8c`
+- `chat-first / facade product line` 已本地提交为 `d7fefea`
+- `acceptance harness and operator docs` 已本地提交为 `4f559c2`
+- 当前真实 index 已不再保持 earlier staged slice
 
-所以如果下一步要真正开始收首发 commit，当前最直接的入口已经不是再看原始 `git status`，而是：
+所以本文件当前最直接的作用不再是“说明 index 里现在有什么”，而是：
 
-- 先看本文件决定当前文件该进哪一批
-- 再按 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md` 的命令顺序实际 stage
+- 说明 2026-05-11 这轮首发三段 slice 的目标边界
+- 作为 replay / 复核三段主提交范围的对照清单
 
 ## 8. 仍未完成的 gate
 
-即使按本文件把 staged slice 收完，也仍然 **不能** 宣称以下事项已经完成：
+即使按本文件 replay staged slice，也仍然 **不能** 宣称以下事项已经完成：
 
 - `README.md` 已填入真实公开仓库地址
 - `/dialogue/` A-H 八条真实人工验收已完成

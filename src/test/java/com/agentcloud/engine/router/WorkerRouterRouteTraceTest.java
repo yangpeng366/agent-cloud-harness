@@ -1,6 +1,9 @@
 package com.agentcloud.engine.router;
 
 import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.AgentProvider;
+import com.agentcloud.agent.AgentProviderDescriptor;
+import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.agent.providers.CodexProvider;
 import com.agentcloud.engine.LearningMemoryService;
 import com.agentcloud.model.LearningMemory;
@@ -132,7 +135,8 @@ class WorkerRouterRouteTraceTest {
     @Test
     void orchestratedPlannerStageSkipsStrongProviderWhenCodexProviderIsNotReady() {
         AgentProviderRegistry providers = new AgentProviderRegistry()
-            .register(new CodexProvider("definitely-missing-codex-binary-for-test"));
+            .register(new CodexProvider("definitely-missing-codex-binary-for-test"))
+            .register(readyProvider("kimi"));
         WorkerRegistry registry = new WorkerRegistry(providers);
         WorkerRouter router = new WorkerRouter(registry);
 
@@ -235,6 +239,21 @@ class WorkerRouterRouteTraceTest {
         assertTrue(route.fallbackReason().contains("not registered"));
     }
 
+    @Test
+    void continuationRepoModificationTaskIsRoutedUsingEffectiveCodingType() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("continuation", Map.of(
+            "task_type", "continuation",
+            "goal", "根据文档修改 D:\\gitAll\\articleeditor\\src\\main\\java\\ArticleThirdService.java，并补测试。"
+        )));
+
+        assertEquals("coding", route.taskType());
+        assertEquals("codex", route.selectedWorker());
+        assertEquals("capability_match", route.routeSource());
+    }
+
     private Task task(String taskType) {
         return task(taskType, Map.of("task_type", taskType));
     }
@@ -312,5 +331,35 @@ class WorkerRouterRouteTraceTest {
         } else {
             assertFalse(worker.toolCapabilities().contains(toolCapability));
         }
+    }
+
+    private AgentProvider readyProvider(String providerId) {
+        return new AgentProvider() {
+            @Override
+            public AgentProviderDescriptor descriptor() {
+                return new AgentProviderDescriptor(
+                    providerId,
+                    providerId,
+                    "local_cli",
+                    "process",
+                    List.of("chat"),
+                    Map.of()
+                );
+            }
+
+            @Override
+            public AgentProviderStatus detect() {
+                return new AgentProviderStatus(
+                    providerId,
+                    true,
+                    "test",
+                    "ready",
+                    true,
+                    null,
+                    Instant.now(),
+                    Map.of()
+                );
+            }
+        };
     }
 }
