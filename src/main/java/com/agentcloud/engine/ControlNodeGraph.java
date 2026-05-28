@@ -60,6 +60,7 @@ public class ControlNodeGraph {
     private final TaskDao taskDao;
     private final EventDao eventDao;
     private final SessionDao sessionDao;
+    private final SessionMessageDao sessionMessageDao;
     private final ResumePacketDao packetDao;
     private final WorkerRouter router;
     private final PacketBuilder packetBuilder;
@@ -80,7 +81,7 @@ public class ControlNodeGraph {
                             JudgmentService judgmentService,
                             ArtifactDao artifactDao, DecisionDao decisionDao,
                             LearningMemoryService learningMemoryService) {
-        this(taskDao, eventDao, sessionDao, packetDao, router, packetBuilder, consolidation,
+        this(taskDao, eventDao, sessionDao, null, packetDao, router, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
             learningMemoryService, null, null);
     }
@@ -93,7 +94,7 @@ public class ControlNodeGraph {
                             ArtifactDao artifactDao, DecisionDao decisionDao,
                             LearningMemoryService learningMemoryService,
                             AgentRunService agentRunService) {
-        this(taskDao, eventDao, sessionDao, packetDao, router, packetBuilder, consolidation,
+        this(taskDao, eventDao, sessionDao, null, packetDao, router, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
             learningMemoryService, agentRunService, null);
     }
@@ -107,9 +108,52 @@ public class ControlNodeGraph {
                             LearningMemoryService learningMemoryService,
                             AgentRunService agentRunService,
                             AgentActionReconciler agentActionReconciler) {
+        this(taskDao, eventDao, sessionDao, null, packetDao, router, packetBuilder, consolidation,
+            workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
+            learningMemoryService, agentRunService, agentActionReconciler);
+    }
+
+    public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
+                            SessionMessageDao sessionMessageDao,
+                            ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
+                            ConsolidationService consolidation,
+                            WorkerExecutor workerExecutor, TaskRuntimeContextBuilder runtimeContextBuilder,
+                            JudgmentService judgmentService,
+                            ArtifactDao artifactDao, DecisionDao decisionDao,
+                            LearningMemoryService learningMemoryService) {
+        this(taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, packetBuilder, consolidation,
+            workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
+            learningMemoryService, null, null);
+    }
+
+    public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
+                            SessionMessageDao sessionMessageDao,
+                            ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
+                            ConsolidationService consolidation,
+                            WorkerExecutor workerExecutor, TaskRuntimeContextBuilder runtimeContextBuilder,
+                            JudgmentService judgmentService,
+                            ArtifactDao artifactDao, DecisionDao decisionDao,
+                            LearningMemoryService learningMemoryService,
+                            AgentRunService agentRunService) {
+        this(taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, packetBuilder, consolidation,
+            workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
+            learningMemoryService, agentRunService, null);
+    }
+
+    public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
+                            SessionMessageDao sessionMessageDao,
+                            ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
+                            ConsolidationService consolidation,
+                            WorkerExecutor workerExecutor, TaskRuntimeContextBuilder runtimeContextBuilder,
+                            JudgmentService judgmentService,
+                            ArtifactDao artifactDao, DecisionDao decisionDao,
+                            LearningMemoryService learningMemoryService,
+                            AgentRunService agentRunService,
+                            AgentActionReconciler agentActionReconciler) {
         this.taskDao = taskDao;
         this.eventDao = eventDao;
         this.sessionDao = sessionDao;
+        this.sessionMessageDao = sessionMessageDao;
         this.packetDao = packetDao;
         this.router = router;
         this.packetBuilder = packetBuilder;
@@ -321,6 +365,7 @@ public class ControlNodeGraph {
                     )
                 );
                 artifactDao.insert(artifact);
+                appendWorkerRoundMessage(task, artifact, agentRun, executionResult);
             }
         } else {
             log.warn("[Scheduler] task={} has no assigned worker, skipping execution", task.id());
@@ -2945,6 +2990,11 @@ public class ControlNodeGraph {
 
     private String classifyFailureClass(Task task, Map<String, Object> latestWorkerMetadata, String failureSummary) {
         String providerFailureClass = metadataString(latestWorkerMetadata, "provider_failure_class");
+        String executionStatus = metadataString(latestWorkerMetadata, "execution_status");
+        if ("partial_timeout".equalsIgnoreCase(executionStatus)
+            || "partial_timeout".equalsIgnoreCase(metadataString(latestWorkerMetadata, "provider_turn_status"))) {
+            return "partial_result_or_quality_risk";
+        }
         if (looksLikeLocalWorkspaceAccessRefusal(task, latestWorkerMetadata, failureSummary)) {
             return "worker_backend_deterministic";
         }
@@ -3126,7 +3176,139 @@ public class ControlNodeGraph {
         if (normalized == null) {
             return false;
         }
-        return List.of("failed", "error", "timeout", "cancelled", "blocked", "empty").contains(normalized.toLowerCase());
+        return List.of("failed", "error", "timeout", "partial_timeout", "cancelled", "blocked", "empty")
+            .contains(normalized.toLowerCase());
+    }
+
+    private void appendWorkerRoundMessage(Task task,
+                                          Artifact artifact,
+                                          AgentRunRecord agentRun,
+                                          WorkerExecutionResult executionResult) {
+        if (task == null || artifact == null || executionResult == null || sessionMessageDao == null) {
+            return;
+        }
+        try {
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+            metadata.put("source_surface", "control_node_graph");
+            metadata.put("created_via", "worker_round_projection");
+            metadata.put("artifact_id", artifact.id());
+            metadata.put("artifact_type", artifact.artifactType());
+            metadata.put("artifact_title", artifact.title());
+            metadata.put("worker_id", firstNonBlank(task.assignedWorker(), metadataString(artifact.metadata(), "worker_id")));
+            metadata.put("execution_status", metadataString(artifact.metadata(), "execution_status"));
+            metadata.put("duration_ms", artifact.metadata().get("duration_ms"));
+            metadata.put("output_chars", safeTextLength(metadataString(artifact.metadata(), "output_text")));
+            metadata.put("output_preview", previewText(
+                firstNonBlank(
+                    metadataString(artifact.metadata(), "summary"),
+                    metadataString(artifact.metadata(), "output_text"),
+                    artifact.summary()
+                ),
+                1_000
+            ));
+            copyIfPresent(metadata, artifact.metadata(), "provider_id");
+            copyIfPresent(metadata, artifact.metadata(), "provider_thread_id");
+            copyIfPresent(metadata, artifact.metadata(), "provider_session_id");
+            copyIfPresent(metadata, artifact.metadata(), "provider_turn_status");
+            copyIfPresent(metadata, artifact.metadata(), "provider_timeout_kind");
+            copyIfPresent(metadata, artifact.metadata(), "provider_failure_class");
+            copyIfPresent(metadata, artifact.metadata(), "provider_failure_reason");
+            copyIfPresent(metadata, artifact.metadata(), "provider_run_dir");
+            copyIfPresent(metadata, artifact.metadata(), "provider_prompt_path");
+            copyIfPresent(metadata, artifact.metadata(), "provider_event_log_path");
+            copyIfPresent(metadata, artifact.metadata(), "provider_last_message_path");
+            copyIfPresent(metadata, artifact.metadata(), "provider_run_metadata_path");
+            copyIfPresent(metadata, artifact.metadata(), "partial_output");
+            copyIfPresent(metadata, artifact.metadata(), "partial_output_chars");
+            copyIfPresent(metadata, artifact.metadata(), "unfinished_items");
+            copyIfPresent(metadata, artifact.metadata(), "suggested_next_step");
+            if (agentRun != null) {
+                metadata.put("agent_run_id", agentRun.runId());
+                metadata.put("agent_run_status", agentRun.status());
+            }
+            String content = buildWorkerRoundMessageContent(task, artifact, metadata);
+            sessionMessageDao.insert(new SessionMessage(
+                IdGenerator.newId("msg"),
+                task.sessionId(),
+                task.id(),
+                "assistant",
+                "worker_round",
+                content,
+                Instant.now(),
+                metadata
+            ));
+            sessionDao.touch(task.sessionId(), Instant.now());
+        } catch (Exception e) {
+            log.warn("Failed to append worker_round session message for task {}", task.id(), e);
+        }
+    }
+
+    private String buildWorkerRoundMessageContent(Task task, Artifact artifact, Map<String, Object> metadata) {
+        String worker = firstNonBlank(
+            stringValue(metadata.get("worker_id")),
+            task != null ? task.assignedWorker() : null,
+            "worker"
+        );
+        String executionStatus = firstNonBlank(
+            stringValue(metadata.get("execution_status")),
+            "completed"
+        );
+        String outcome = switch (executionStatus.toLowerCase()) {
+            case "partial_timeout" -> "达到时间上限，已保留部分输出";
+            case "timeout" -> "执行超时";
+            case "failed", "error" -> "执行失败";
+            case "cancelled" -> "执行中断";
+            default -> "完成一轮执行";
+        };
+        String preview = firstNonBlank(
+            stringValue(metadata.get("output_preview")),
+            artifact != null ? artifact.summary() : null
+        );
+        String nextStep = stringValue(metadata.get("suggested_next_step"));
+        String readableFailure = sanitizeReadableFailureSummary(worker, firstNonBlank(
+            metadataString(metadata, "provider_failure_reason"),
+            metadataString(artifact != null ? artifact.metadata() : null, "summary"),
+            preview
+        ));
+        if ("partial_timeout".equalsIgnoreCase(executionStatus)) {
+            return firstNonBlank(
+                previewText("Codex 执行回合已截断，保留部分输出。摘要：" + firstNonBlank(preview, readableFailure), 320),
+                "Codex 执行回合已截断，保留部分输出。"
+            );
+        }
+        String base = "worker " + worker + " " + outcome;
+        if ("failed".equalsIgnoreCase(executionStatus)
+            || "error".equalsIgnoreCase(executionStatus)
+            || "timeout".equalsIgnoreCase(executionStatus)
+            || "cancelled".equalsIgnoreCase(executionStatus)) {
+            return previewText(base + "。原因：" + readableFailure, 320);
+        }
+        if (nextStep != null) {
+            return previewText(base + "。下一步：" + nextStep, 320);
+        }
+        return previewText(base + "。摘要：" + firstNonBlank(preview, artifact != null ? artifact.summary() : null), 320);
+    }
+
+    private void copyIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {
+        if (target == null || source == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private int safeTextLength(String value) {
+        return value == null ? 0 : value.length();
+    }
+
+    private String previewText(String value, int limit) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.length() > limit ? normalized.substring(0, limit).trim() + "..." : normalized;
     }
 
     private boolean successfulCurrentRound(Task task, Map<String, Object> latestWorkerMetadata, String latestOutput) {

@@ -1827,6 +1827,8 @@ function formatMessageType(type) {
             return "task progress";
         case "task_result":
             return "task result";
+        case "worker_round":
+            return "worker round";
         case "task_receipt":
             return "task receipt";
         case "task_action":
@@ -1852,6 +1854,11 @@ function normalizeMessageRole(role) {
 
 function normalizeMessageType(type) {
     return (type || "").toLowerCase();
+}
+
+function isWorkerOutcomeMessageType(type) {
+    const normalized = normalizeMessageType(type);
+    return normalized === "task_progress" || normalized === "task_result" || normalized === "worker_round";
 }
 
 function messageRoleTone(role) {
@@ -1904,10 +1911,10 @@ function messageCardBody(message, compact = false) {
     if (readableFailureSummary) {
         return preview(readableFailureSummary, max);
     }
-    if ((type === "task_progress" || type === "task_result") && workerOutcomePreview) {
+    if (isWorkerOutcomeMessageType(type) && workerOutcomePreview) {
         return preview(workerOutcomePreview, max);
     }
-    if ((type === "task_progress" || type === "task_result") && summaryPreview) {
+    if (isWorkerOutcomeMessageType(type) && summaryPreview) {
         return preview(summaryPreview, max);
     }
     if (type === "task_action" && actionLabel) {
@@ -1923,7 +1930,7 @@ function messageCardBody(message, compact = false) {
 }
 
 function readableWorkerFailureSummary(type, metadata, summaryPreview, content) {
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return "";
     }
     const candidate = firstNonBlank(summaryPreview, content, "");
@@ -2008,7 +2015,7 @@ function focusedTaskOutcomeProjection(message) {
         return null;
     }
     const type = normalizeMessageType(message?.message_type || message?.messageType);
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return null;
     }
     const latestOutcome = latestTaskOutcomeMessage(flowTask, flow);
@@ -2044,7 +2051,8 @@ function isFailureMessageMetadata(metadata) {
     );
     if (status) {
         const normalized = status.toLowerCase();
-        if (normalized === "failed" || normalized === "error" || normalized === "timeout" || normalized === "cancelled") {
+        if (normalized === "failed" || normalized === "error" || normalized === "timeout"
+            || normalized === "partial_timeout" || normalized === "cancelled") {
             return true;
         }
     }
@@ -2095,7 +2103,7 @@ function messageCardCurrentState(metadata) {
 
 function messageCardWorkerOutcomePreview(message, max = 220) {
     const type = normalizeMessageType(message?.message_type || message?.messageType);
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return "";
     }
     const metadata = message?.metadata || {};
@@ -2132,13 +2140,13 @@ function messageCardWorkerOutcomePreview(message, max = 220) {
 
 function messageCardOutcomeStrip(message, compact = false) {
     const type = normalizeMessageType(message?.message_type || message?.messageType);
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return null;
     }
     const metadata = message?.metadata || {};
     const stateLine = messageCardCurrentState(metadata);
     const previewText = messageCardWorkerOutcomePreview(message, compact ? 120 : 180);
-    const label = "最近输出";
+    const label = type === "worker_round" ? "执行回合" : "最近输出";
     return previewText || stateLine
         ? {
             label,
@@ -2150,7 +2158,7 @@ function messageCardOutcomeStrip(message, compact = false) {
 
 function messageCardExecutionStrip(message, compact = false) {
     const type = normalizeMessageType(message?.message_type || message?.messageType);
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return null;
     }
     const metadata = effectiveMessageMetadata(message);
@@ -2167,7 +2175,9 @@ function messageCardExecutionStrip(message, compact = false) {
         metadata.task_status,
         metadata.taskStatus
     ).toLowerCase();
-    const label = ["active", "running", "in_progress"].includes(executionStatus) ? "执行中" : "最近执行";
+    const label = executionStatus === "partial_timeout"
+        ? "部分结果"
+        : (["active", "running", "in_progress"].includes(executionStatus) ? "执行中" : "最近执行");
     const previewText = messageCardWorkerOutcomePreview(message, compact ? 100 : 140);
     const title = worker ? `worker ${worker}` : stateLine;
     const detail = [
@@ -2258,13 +2268,13 @@ function messageCardDetail(message, compact = false) {
             : null
     );
     const detailParts = [];
-    if (type === "task_progress" || type === "task_result") {
+    if (isWorkerOutcomeMessageType(type)) {
         const recoveryDetail = messageCardRecoveryDetail(metadata, compact);
         if (recoveryDetail) {
             detailParts.push(recoveryDetail);
         }
     }
-    if ((type === "task_progress" || type === "task_result") && nextStep) {
+    if (isWorkerOutcomeMessageType(type) && nextStep) {
         detailParts.push(`next · ${preview(nextStep, compact ? 80 : 120)}`);
     }
     if ((type === "task_action" || type === "task_state" || type === "task_receipt") && current) {
@@ -2710,7 +2720,7 @@ function latestTaskOutcomeMessage(task, flow) {
         ...state.relatedMessages,
         ...state.messages
     ];
-    const outcomeTypes = new Set(["task_progress", "task_result"]);
+    const outcomeTypes = new Set(["task_progress", "task_result", "worker_round"]);
     const matched = candidates.filter((message) =>
         messageTaskId(message) === taskId
         && outcomeTypes.has(normalizeMessageType(message?.message_type || message?.messageType))

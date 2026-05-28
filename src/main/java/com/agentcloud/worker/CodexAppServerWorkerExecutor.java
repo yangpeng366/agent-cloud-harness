@@ -42,7 +42,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long PROCESS_TIMEOUT_MS = 180_000L;
     private static final long HANDSHAKE_TIMEOUT_MS = 30_000L;
-    private static final long TURN_COMPLETION_TIMEOUT_MS = 150_000L;
+    private static final long DEFAULT_TURN_ACTIVITY_TIMEOUT_MS = 180_000L;
+    private static final long DEFAULT_TURN_MAX_DURATION_MS = 900_000L;
+    private static final long DEFAULT_CODING_TURN_MAX_DURATION_MS = 900_000L;
+    private static final int PARTIAL_TIMEOUT_OUTPUT_THRESHOLD = 120;
 
     private final AgentProviderRegistry providerRegistry;
     private final WorkerRegistry workerRegistry;
@@ -127,12 +130,18 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         if (output.turnStatus() != null && !output.turnStatus().isBlank()) {
             metadata.put("provider_turn_status", output.turnStatus());
         }
+        if (output.timeoutKind() != null && !output.timeoutKind().isBlank()) {
+            metadata.put("provider_timeout_kind", output.timeoutKind());
+        }
         if (output.errorText() != null && !output.errorText().isBlank()) {
             metadata.put("provider_error", output.errorText());
         }
-        attachProviderFailureClassification(metadata, normalizedStatus, output.errorText());
-
         String outputText = output.outputText() == null ? "" : output.outputText().trim();
+        metadata.put("provider_turn_activity_timeout_ms", turnActivityTimeoutMs());
+        metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
+        metadata.put("partial_output", "partial_timeout".equals(normalizedStatus));
+        metadata.put("partial_output_chars", outputText.length());
+        attachProviderFailureClassification(metadata, normalizedStatus, output.errorText());
         String summary = summarize(outputText, output.errorText(), normalizedStatus);
         runFiles.writeLastMessage(outputText);
         runFiles.writeMetadata(metadata);
@@ -341,7 +350,12 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             session.notify("initialized");
             String threadId = startOrResumeThread(session, plan);
             String turnStatus = startTurn(session, threadId, plan.prompt());
-            String terminalTurnStatus = session.awaitTurnCompletion(turnStatus);
+            String terminalTurnStatus = session.awaitTurnCompletion(
+                turnStatus,
+                turnActivityTimeoutMs(),
+                turnMaxDurationMs(plan),
+                PARTIAL_TIMEOUT_OUTPUT_THRESHOLD
+            );
             return session.toOutput(threadId, terminalTurnStatus);
         }
     }
@@ -782,11 +796,60 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             return "failed";
         }
         return switch (value) {
-            case "completed", "failed", "cancelled", "timeout" -> value;
+            case "completed", "failed", "cancelled", "timeout", "partial_timeout" -> value;
             case "aborted", "canceled", "interrupted" -> "cancelled";
             case "error" -> "failed";
             default -> "completed";
         };
+    }
+
+    private long turnActivityTimeoutMs() {
+        return longProperty(
+            "agentcloud.codex.turnActivityTimeoutMs",
+            "AGENTCLOUD_CODEX_TURN_ACTIVITY_TIMEOUT_MS",
+            DEFAULT_TURN_ACTIVITY_TIMEOUT_MS
+        );
+    }
+
+    private long turnMaxDurationMs(CodexExecutionPlan plan) {
+        long defaultValue = looksLikeCodingPlan(plan)
+            ? DEFAULT_CODING_TURN_MAX_DURATION_MS
+            : DEFAULT_TURN_MAX_DURATION_MS;
+        return longProperty(
+            "agentcloud.codex.turnMaxDurationMs",
+            "AGENTCLOUD_CODEX_TURN_MAX_DURATION_MS",
+            defaultValue
+        );
+    }
+
+    private boolean looksLikeCodingPlan(CodexExecutionPlan plan) {
+        String prompt = plan == null ? null : plan.prompt();
+        if (prompt == null || prompt.isBlank()) {
+            return true;
+        }
+        String lower = prompt.toLowerCase(Locale.ROOT);
+        return lower.contains("workspace")
+            || lower.contains("代码")
+            || lower.contains("code")
+            || lower.contains("repo")
+            || lower.contains("debug")
+            || lower.contains("fix");
+    }
+
+    private long longProperty(String systemKey, String envKey, long defaultValue) {
+        String raw = firstNonBlank(
+            blankToNull(System.getProperty(systemKey)),
+            blankToNull(System.getenv(envKey))
+        );
+        if (raw == null) {
+            return defaultValue;
+        }
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed > 0 ? parsed : defaultValue;
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
     }
 
     private String truncate(String value, int limit) {
@@ -855,6 +918,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private String turnStatus = "unknown";
         private String errorText;
         private String protocol = "codex_json_rpc";
+        private String timeoutKind;
+        private long lastActivityAtMs = System.currentTimeMillis();
 
         private JsonRpcSession(Writer writer, BufferedReader reader, OutputStream events) {
             this.writer = writer;
@@ -923,6 +988,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 if (trimmed.isBlank()) {
                     continue;
                 }
+                markActivity();
                 writeEvent("provider_recv", trimmed);
                 try {
                     return MAPPER.readTree(trimmed);
@@ -1055,25 +1121,41 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             }
         }
 
-        private String awaitTurnCompletion(String requestTurnStatus) throws IOException, InterruptedException {
+        private String awaitTurnCompletion(String requestTurnStatus,
+                                           long activityTimeoutMs,
+                                           long maxDurationMs,
+                                           int partialOutputThreshold) throws IOException, InterruptedException {
             if (isTerminalStatus(requestTurnStatus)) {
                 turnStatus = requestTurnStatus;
                 return turnStatus;
             }
-            long deadline = System.currentTimeMillis() + TURN_COMPLETION_TIMEOUT_MS;
-            while (System.currentTimeMillis() < deadline) {
-                JsonNode envelope = nextEnvelope(deadline);
+            long startedAtMs = System.currentTimeMillis();
+            markActivity();
+            long hardDeadline = startedAtMs + Math.max(activityTimeoutMs, maxDurationMs);
+            while (System.currentTimeMillis() < hardDeadline) {
+                long now = System.currentTimeMillis();
+                long idleDeadline = lastActivityAtMs + activityTimeoutMs;
+                long pollDeadline = Math.min(hardDeadline, idleDeadline);
+                JsonNode envelope = nextEnvelope(pollDeadline);
                 if (envelope == null) {
-                    break;
+                    if (System.currentTimeMillis() >= hardDeadline) {
+                        applyTimeoutState("max_duration", partialOutputThreshold,
+                            "codex turn max duration reached after partial output",
+                            "codex turn max duration reached");
+                        break;
+                    }
+                    if (System.currentTimeMillis() >= idleDeadline) {
+                        applyTimeoutState("activity_timeout", partialOutputThreshold,
+                            "codex turn activity timed out after partial output",
+                            "codex turn activity timed out");
+                        break;
+                    }
+                    continue;
                 }
                 handleEnvelope(envelope);
                 if (isTerminalStatus(turnStatus)) {
                     return turnStatus;
                 }
-            }
-            if ("running".equalsIgnoreCase(turnStatus)) {
-                turnStatus = "timeout";
-                errorText = firstNonBlank(errorText, "codex turn completion timed out");
             }
             if ("unknown".equalsIgnoreCase(turnStatus)) {
                 turnStatus = firstNonBlank(requestTurnStatus, errorText == null ? "completed" : "failed");
@@ -1090,6 +1172,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 || "failed".equals(normalized)
                 || "cancelled".equals(normalized)
                 || "timeout".equals(normalized)
+                || "partial_timeout".equals(normalized)
                 || "aborted".equals(normalized)
                 || "canceled".equals(normalized)
                 || "interrupted".equals(normalized);
@@ -1104,6 +1187,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 case "task_started" -> turnStatus = "running";
                 case "agent_message" -> appendOutput(text(event, "message"));
                 case "exec_command_begin", "patch_apply_begin" -> {
+                    markActivity();
                     toolInvocationCount++;
                     String callId = text(event, "call_id");
                     if (callId != null) {
@@ -1112,7 +1196,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 }
                 case "exec_command_end" -> appendOutput(text(event, "output"));
                 case "task_complete" -> turnStatus = "completed";
-                case "turn_aborted" -> turnStatus = "cancelled";
+                case "turn_aborted" -> turnStatus = hasPartialOutput(PARTIAL_TIMEOUT_OUTPUT_THRESHOLD) ? "partial_timeout" : "cancelled";
                 default -> {
                 }
             }
@@ -1122,6 +1206,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             String itemType = text(item, "type");
             String itemId = text(item, "id");
             if ("item/started".equals(method) && ("commandExecution".equals(itemType) || "fileChange".equals(itemType))) {
+                markActivity();
                 toolInvocationCount++;
                 if (itemId != null) {
                     toolInvocationIds.add(itemId);
@@ -1145,6 +1230,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             if (text == null || text.isBlank()) {
                 return;
             }
+            markActivity();
             if (!output.isEmpty()) {
                 output.append('\n');
             }
@@ -1166,6 +1252,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 null,
                 protocol,
                 effectiveTurnStatus,
+                timeoutKind,
                 toolInvocationCount,
                 List.copyOf(toolInvocationIds),
                 List.copyOf(protocolTrace)
@@ -1181,11 +1268,36 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 ? (error == null || error.isBlank() ? "completed" : "failed")
                 : value.trim().toLowerCase(Locale.ROOT);
             return switch (normalized) {
-                case "completed", "failed", "cancelled", "timeout" -> normalized;
+                case "completed", "failed", "cancelled", "timeout", "partial_timeout" -> normalized;
                 case "running" -> error == null || error.isBlank() ? "completed" : "failed";
                 case "aborted", "canceled", "interrupted" -> "cancelled";
                 default -> error == null || error.isBlank() ? "completed" : "failed";
             };
+        }
+
+        private void markActivity() {
+            lastActivityAtMs = System.currentTimeMillis();
+        }
+
+        private boolean hasPartialOutput(int threshold) {
+            return output.toString().trim().length() >= Math.max(1, threshold);
+        }
+
+        private void applyTimeoutState(String kind,
+                                       int partialOutputThreshold,
+                                       String partialMessage,
+                                       String timeoutMessage) {
+            if (!"running".equalsIgnoreCase(turnStatus) && !"unknown".equalsIgnoreCase(turnStatus)) {
+                return;
+            }
+            timeoutKind = kind;
+            if (hasPartialOutput(partialOutputThreshold)) {
+                turnStatus = "partial_timeout";
+                errorText = firstNonBlank(errorText, partialMessage);
+                return;
+            }
+            turnStatus = "timeout";
+            errorText = firstNonBlank(errorText, timeoutMessage);
         }
     }
 
@@ -1247,6 +1359,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       Integer exitCode,
                                       String protocol,
                                       String turnStatus,
+                                      String timeoutKind,
                                       int toolInvocationCount,
                                       List<String> toolInvocationIds,
                                       List<String> protocolTrace) {
@@ -1262,7 +1375,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private CodexSessionOutput withExitCode(int value) {
             return new CodexSessionOutput(
                 status, outputText, errorText, threadId, value, protocol, turnStatus,
-                toolInvocationCount, toolInvocationIds, protocolTrace
+                timeoutKind, toolInvocationCount, toolInvocationIds, protocolTrace
             );
         }
     }

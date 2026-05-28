@@ -198,7 +198,7 @@ public class Main {
             relationDao
         );
         ControlNodeGraph controlGraph = new ControlNodeGraph(
-            taskDao, eventDao, sessionDao, packetDao, workerRouter, packetBuilder, consolidation,
+            taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, workerRouter, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService,
             artifactDao, decisionDao, learningMemoryService, agentRunService, agentActionReconciler
         );
