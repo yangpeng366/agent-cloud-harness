@@ -18,9 +18,9 @@
   - 再触发 **自动 handoff 1 次**
   - 预算耗尽后进入 `human_gate`
 - 也就是说，当前还缺的主要不是“是否自动恢复”，而是：
-  - 分类覆盖面是否够完整
-  - 文档/测试是否把“真实已落地行为”写清
-  - `/dialogue/` 可见性是否足够直观
+  - recovery 合同是否持续和 API / UI 验收证据同步
+  - provider 级失败证据是否在恢复计划、recovery job、message card 和 console 里保持同一口径
+  - 后续是否需要把更多复杂质量类失败纳入自动恢复；当前仍应保持保守
 - 另外，当前恢复链还有两个真实实现边界需要明确：
   - **temporary unavailable 是进程内 TTL 状态**，不是跨重启持久化的 worker 黑名单
   - **历史 task 的旧 worker metadata 需要在 scheduler 入口自愈**，否则旧的 `assigned_worker / target_worker / preassigned_selection_reason` 会继续污染 route trace
@@ -185,6 +185,39 @@
   - `handoff_to_worker_x`
   - `continue_after_fix`
 
+### 3.5 `partial_timeout`
+
+定义：
+
+- worker 没有在本轮时间窗口内给出 final answer / task_complete
+- 但执行过程中持续产出了有效中间结果
+- 当前更像“长任务被 harness 时间策略截断”，不是 worker runtime 完全故障
+
+典型信号：
+
+- Codex app-server 已出现 `thread/started`、`turn/started`
+- Codex JSONL / provider events 中持续出现 `agent_message`、tool call、tool output
+- `output_text` 或 provider `last_message` 已达到有效长度
+- 命中 `turn_max_duration_ms` 或收到 `turn_aborted/interrupted`
+- 没有最终 `final_answer` / `task_complete`
+
+策略：
+
+- 不归入普通 `worker_runtime_transient`
+- 不默认触发 same-worker retry / auto-handoff
+- 默认按 `partial_result_or_quality_risk` 处理
+- 主对话流必须展示部分结果摘要
+- 给出明确下一步：
+  - `continue_same_worker_thread`
+  - `handoff_to_worker_x`
+  - `human_review_partial_output`
+
+原因：
+
+- 直接自动切 worker 会丢掉当前 worker 已经形成的分析上下文
+- retry 可能重复执行已经发生的工具调用或副作用
+- 用户更需要先看到“已有部分结论是什么”，再决定继续还是移交
+
 ---
 
 ## 4. 推荐策略：混合式恢复
@@ -203,6 +236,7 @@
 | `worker_backend_deterministic` | 否 | 是，1 次 | 无候选或再次失败 |
 | `task_environment_blocked` | 否 | 否 | 是 |
 | `partial_result_or_quality_risk` | 否 | 否 | 是 |
+| `partial_timeout` | 否 | 否 | 是，或显式继续原 thread |
 
 ### 4.2 当前案例的推荐策略
 
@@ -473,7 +507,7 @@ else:
 
 ---
 
-## 9. 和 `/dialogue/` 可见性直接相关的补充约束
+## 10. 和 `/dialogue/` 可见性直接相关的补充约束
 
 自动恢复如果只发生在后端 trace 里，用户体验仍然会很差。`/dialogue/` 至少应直接露出下面这些字段：
 
@@ -504,23 +538,36 @@ else:
 
 ---
 
-## 10. 当前最小实现范围（2026-05-13）
+## 11. 当前实现合同（2026-05-19）
 
-当前代码层的最小恢复链只应承诺下面这些行为：
+当前代码层已经超过 2026-05-13 的最小恢复链，不再只是“把 worker executor 异常收成 failed round”。当前可承诺的实现合同如下：
 
 1. `scheduler` 里 worker executor 抛异常时
    - 不再直接中断整个控制图
    - 而是转成一轮 `execution_status=failed` 的标准 worker round
 
-2. `continue` 里只识别最小 `worker_runtime_transient`
-   - 命中 runtime/provider 失联关键词
-   - 且当前预算未超
+2. `continue` 里会基于失败分类执行保守恢复策略
+   - `worker_runtime_transient`：最多一次 same-worker cold retry，再最多一次 auto handoff
+   - `worker_backend_deterministic`：可直接尝试一次 auto handoff
+   - `task_environment_blocked`：直接进入 `human_gate`，不自动换 worker
+   - `partial_result_or_quality_risk`：直接进入 `human_gate`，避免重复执行副作用
 
 3. 自动恢复预算固定为：
    - `same-worker retry`: 最多 1 次
    - `auto handoff`: 最多 1 次
 
-4. transcript / details 可见字段至少包括：
+4. cold-start recovery 会清理旧 provider continuation 线索
+   - 恢复轮会移除旧 `provider_session_id / provider_thread_id / codex_thread_id / resume_provider_session_id`
+   - 恢复轮会写入 `recovery_execution_mode=fresh_session`
+   - Codex app-server 与 provider-native CLI executor 在 recovery cold-start stage 不复用旧 resume/thread/session id
+
+5. 恢复入口已形成 API 合同
+   - `GET /api/v1/tasks/recoverable` 可列出可恢复任务
+   - `POST /api/v1/tasks/{id}/recover` 可执行 auto recovery
+   - `POST /api/v1/tasks/{id}/recover?async=true` 会快速返回 `202 accepted` 风格的异步接受结果，不等待真实 worker 完成
+   - `GET /api/v1/tasks/{id}/recovery_jobs` 可通过 `request_id` 查回异步 recovery job 状态
+
+6. transcript / details / console 可见字段至少包括：
    - `failure_class`
    - `failure_summary_readable`
    - `recovery_policy`
@@ -528,9 +575,31 @@ else:
    - `auto_same_worker_retry_count`
    - `auto_handoff_count`
    - `auto_handoff_target`
+   - `recovery_execution_mode`
+   - `provider_failure_class`
+   - `failure_evidence`
 
-5. 当前实现**不承诺**：
-   - 自动修复 `task_environment_blocked`
-   - 自动清理历史 mojibake 消息
-   - 多候选 worker 的多跳轮询
-   - 基于 learning memory 的复杂恢复策略闭环
+7. provider recovery 降权已进入观测面
+   - route preview / live flow 会解释恢复阶段为什么避开某 provider
+   - `/console/` runtime health 会显示当前 provider recovery 降级窗口
+   - route box 会显示 `recovery避开 <provider>`
+
+当前实现仍然**不承诺**：
+
+- 自动修复 `task_environment_blocked`；这类问题仍要求人工修复环境或确认下一步
+- 自动清理历史 mojibake 消息；新消息与恢复摘要优先变可读，历史脏数据不做迁移
+- 多候选 worker 的多跳轮询；当前只允许一次 auto handoff，避免静默放大副作用
+- 基于 learning memory 的复杂恢复策略闭环；learning memory 可以辅助普通路由，但 recovery 预算和安全边界仍按显式策略执行
+- 对所有质量失败做自动判断；`partial_result_or_quality_risk` 当前仍采用保守 human gate
+
+### 11.1 当前验证证据
+
+2026-05-19 已用当前 shaded JAR 和隔离实例复验以下链路：
+
+- Java 回归：`powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven`
+- 前端 plan 回归：`node --test src/test/js/*.mjs`
+- 打包：`powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -QuietMaven`
+- 运行级 smoke：shaded JAR 启动后 `GET /api/v1/health` 返回 `status=up / virtual_threads=true / version=0.2.0`
+- recovery HTTP acceptance：`scripts\Run-TaskRecoveryAcceptanceProbe.ps1 -IncludeResumeExecution` 覆盖 recoverable transient、auto handoff、auth blocked rejection、fresh-session async recovery job 查询
+- recovery job UI：`scripts\recovery-job-ui-probe.js` 覆盖 `/dialogue/` 与 `/console/` 上的 `recover?async=true`、`mode=auto` body 和 recovery job 可见性
+- Console provider recovery window：`scripts\Run-ConsoleProviderWindowProbe.ps1` 覆盖 runtime health provider 降级窗口、provider row hint 和 route box hint

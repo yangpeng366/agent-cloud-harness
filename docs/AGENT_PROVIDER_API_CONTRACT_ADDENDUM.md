@@ -434,6 +434,8 @@
 ## 6.2 增补 `GET /api/v1/tasks/{id}/select_worker`
 当前这个接口返回 `RouteResult`。
 
+当前 worker readiness 已支持 `GET /api/v1/workers/{id}/readiness?mode=dispatch` 作为分发前验活入口。`mode` 只接受 `passive` 或 `dispatch`，未知取值返回 `400`，避免调用方拼写错误时绕过 provider preflight。
+
 建议扩充如下字段：
 - `selected_provider?`
 - `provider_ready?`

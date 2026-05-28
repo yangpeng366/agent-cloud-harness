@@ -46,7 +46,7 @@
 - continuity / packet / control 方向已经达到中等成熟度
 - tool-aware execution 已进入真实实现阶段
 - orchestration 主闭环仍偏早期
-- evaluation system 虽已有 matrix / run surface，但仍需要更稳定的对比闭环
+- evaluation system 已有 matrix / run surface、统一指标字段与汇总面，但仍需要把真实任务集和 acceptance gate 固化成可复跑基准
 
 ---
 
@@ -54,11 +54,11 @@
 
 | Priority | 能力项 | 当前状态 | 估计完成度 | 最大缺口 | 下一步最具体动作 |
 |---|---|---:|---:|---|---|
-| P1 | 强模型调小模型最小闭环 | 有基础但未闭环 | 20%-30% | 没有真实 strong planner -> small executor -> strong evaluator 路径 | 先固定一个单场景闭环，并把 model tier / selection reason 写进 trace |
-| P2 | Baseline experiment matrix | 有 eval 意识但缺执行框架 | 10%-20% | 无三模式固定对比、无统一指标落盘 | 先建立 strong_only / small_only / orchestrated 三模式 run skeleton |
-| P3 | Checkpoint / handoff packet spec | 概念最成熟但协议未封板 | 45%-60% | schema 边界不够正式，machine-readable first 不够稳定 | 冻结最小字段集，并让 runtime 输出与 schema 对齐 |
-| P4 | Tool-aware 最小多步执行 | 已有真实执行雏形 | 55%-70% | 已有多步工具链、failure recovery、自动续跑与 trace，但“长任务如何自动收口成可信最终结果”仍不够硬 | 先把 `WorkerExecutionResult`、`ToolInvocationRecord`、checkpoint / judgment / live flow 聚合进一步收束成统一 hardness contract，并继续强化 long-task closure contract |
-| P5 | 状态变更接口 + 消息投影 | 有用户面雏形但产品收口未完成 | 35%-50% | runtime / message layer 仍未完全统一，控制接口过渡态明显 | 把关键控制动作改成 POST/PATCH，并固定生命周期消息投影 |
+| P1 | 强模型调小模型最小闭环 | runtime trace 已有最小 strong->small->strong 闭环 | 45%-55% | 单元级闭环已有，仍缺 provider-backed 真实复跑和质量/成本对比证据 | 把 orchestration trace 接入 baseline_matrix_v1 的真实 worker 冒烟 |
+| P2 | Baseline experiment matrix | 已有三模式 run skeleton、3+3+3 case catalog、HTTP gate 探针与指标落盘 | 60%-70% | case/HTTP gate 已可复跑，仍缺真实 worker run 结果、成本口径和自动 acceptance gate | 跑一轮带真实 worker 的 baseline_matrix_v1，并把质量/成本结果纳入 release gate |
+| P3 | Checkpoint / handoff packet spec | 概念成熟，协议测试已覆盖核心字段 | 55%-70% | 最小字段集已有测试保护，但 packet spec 文档和 runtime 输出仍需最终冻结 | 把 resume/handoff packet 最小 schema 正式写成 API/contract，并补跨 worker path 验证 |
+| P4 | Tool-aware / provider execution 与 recovery | 已有多步工具链、provider 续跑、failure recovery 和 UI 验收 | 65%-75% | 长任务最终收口、质量判定和 human gate 边界仍需继续硬化 | 继续强化 long-task closure contract：done/waiting_human/auto-continue 的可证明边界 |
+| P5 | 状态变更接口 + 消息投影 | POST 控制动作与核心 lifecycle projection 已基本收口 | 60%-70% | 旧 GET 兼容入口仍在，长尾 runtime subtype 与浏览器级 lifecycle gate 仍需治理 | 制定 GET 兼容下线策略，并扩浏览器级 lifecycle acceptance |
 
 ---
 
@@ -81,37 +81,43 @@
 
 ### 估计完成度
 
-**20% - 30%**
+**45% - 55%**
 
 ### 为什么不是更高
 
-因为真正的主价值链条仍未闭环：
+因为真正的主价值链条已经有 runtime 骨架，但还没有被真实 provider run 稳定证明：
 
-- 没有稳定的 strong planner -> small executor -> strong evaluator 执行路径
-- 没有明确的 model tier trace
-- 没有稳定的 fallback / escalation 原因可解释链
-- 无法证明当前系统确实在按“强模型负责规划判断，小模型负责执行”这个主叙事运行
+- `ControlNodeGraph` 已在 planner 阶段写入 `planner_worker / planner_model_tier`
+- execution 阶段已写入 `executor_worker / executor_model_tier`
+- completion judgment 已写入 `evaluator_role / evaluator_model_tier / evaluation_result`
+- `ExperimentRunService` 已把 `orchestration_closed_loop_observed`、planner/executor/evaluator 证据聚合进 experiment run metadata
+- `ExperimentMatrixService` summary 已能统计 strong planner / small executor / strong evaluator / strong-small-strong loop
+
+但仍不能评为更高，因为：
+
+- 这些证据主要由 runtime 单元测试和可构造 run 证明，还不是一轮真实 provider-backed baseline 结果
+- 还没有把 `short-001 / medium-001 / long-001` 三模式真实 worker 冒烟接到 P2 gate
+- 质量 acceptance 与成本对比还没有进入自动 gate
+- fallback / escalation 原因链已有字段，但仍缺一轮真实失败样本复盘来证明 operator 可用
 
 ### 最大缺口
 
 最大的缺口不是“没有更多 worker 类型”，而是：
 
-> 缺少一个最小但真实可运行的分层协作闭环。
+> 把已存在的 strong->small->strong runtime trace 跑成 provider-backed 的真实质量与成本证据。
 
 ### 下一步最具体动作
 
-先不要全面泛化，先固定一个最小场景：
+先不要全面泛化，下一步直接复用 P2 的 baseline matrix：
 
-- 强模型：task breakdown / judgment / acceptance
-- 小模型：子任务执行
-
-并至少在 trace 中记录：
-
-- `selected_model_tier`
-- `selected_worker`
-- `why_selected`
-- `fallback_reason`
-- `evaluation_result`
+- 选择 `short-001 / medium-001 / long-001`
+- 三种模式都创建 run，但重点观察 `orchestrated`
+- 验证 `orchestrated` 的 experiment run metadata 是否同时具备：
+- `planner_model_tier = strong`
+- `executor_model_tier = small`
+- `evaluator_model_tier = strong`
+- `orchestration_closed_loop_observed = true`
+- 再对比 `strong_only / small_only` 的 completion、acceptance、cost、human gate
 
 ### 风险提醒
 
@@ -128,55 +134,49 @@
 
 项目已经明显有 evaluation 意识，且文档层面对“goal fit、场景、路径、价值证明”的关注已经存在。
 
-这说明方向感是有的。
+这说明方向感是有的，而且当前代码层已经越过早期规划阶段。
 
 ### 估计完成度
 
-**10% - 20%**
+**60% - 70%**
 
 ### 为什么偏低
 
-因为目前更多还是：
+因为当前已经具备：
 
-- 文档上的评估意识
-- 方向性的评估规划
+- `strong_only / small_only / orchestrated` 三种实验模式
+- `ExperimentRunRecord` 与 experiment run 落盘
+- matrix service / summary surface
+- `completion_status / acceptance_result / recovery_success / failure_reason` 等统一字段
+- 内置 `baseline_matrix_v1` 的 3 short + 3 medium + 3 long case catalog
+- 每个 case 已有 `workspace_preconditions / acceptance_criteria / expected_artifacts / recovery_policy`
+- 创建 run 时会把 case 合同同步到 task metadata，避免只靠 title / goal 解释验收口径
+- `scripts/Run-BaselineMatrixGateProbe.ps1` 已提供最小 HTTP release-gate 探针
+- 2026-05-19 已在隔离端口 `18084` 跑通探针：9 个 catalog case、9 个冒烟 run、summary 9 runs
 
-而不是：
+但还没有到更高成熟度，因为：
 
-- 固定模式
-- 固定任务集
-- 固定指标
-- 可复跑结果落盘
+- 真实 worker 执行的 3+3+3 基准任务还没有跑出一轮正式结果
+- 成本口径仍偏占位，不能支撑严肃 cost comparison
+- acceptance 标准还没有和自动 artifact quality gate 绑定
+- 当前 gate 只证明 HTTP 合同、case 合同和 summary 骨架可复跑，还不能证明 orchestration 优于 baseline
 
 ### 最大缺口
 
 当前缺的不是“更多评估理念”，而是：
 
-> 一个最小可执行、可复跑、可对比的实验骨架。
+> 把已经冻结合同且具备 HTTP gate 的 baseline_matrix_v1 跑成真实 worker 质量与成本证据。
 
 ### 下一步最具体动作
 
-先建立三种固定模式：
+下一步不是再造 run skeleton，也不是再补 case 字段或 HTTP 冒烟 gate，而是做真实 worker 复跑：
 
-- `strong_only`
-- `small_only`
-- `orchestrated`
-
-并统一落盘：
-
-- `completion_status`
-- `acceptance_result`
-- `total_cost`
-- `handoff_count`
-- `resume_count`
-- `human_gate_count`
-- `failure_reason`
-
-任务集先从 3+3+3 开始：
-
-- 3 个短任务
-- 3 个中任务
-- 3 个长任务
+- 复用 `scripts/Run-BaselineMatrixGateProbe.ps1` 做 HTTP 合同前置检查
+- 用 `POST /api/v1/experiment_matrix/runs` 创建真实 `baseline_matrix_v1`
+- 先跑 `short-001 / medium-001 / long-001` 的三模式真实 worker 冒烟
+- 再跑完整 3+3+3
+- 把 `experiment_summary` 与失败 case 的 `live_flow / judgment_trace / tool_trace` 作为验收证据
+- 在 gate 中加入真实 artifact acceptance 与 cost threshold
 
 ### 风险提醒
 
@@ -205,15 +205,16 @@
 
 ### 估计完成度
 
-**45% - 60%**
+**55% - 70%**
 
 ### 为什么不是更高
 
-因为虽然概念已经清楚，但协议层还未完全封板：
+因为虽然概念已经清楚，且核心 packet 行为已有测试保护，但协议层还未完全封板：
 
-- schema 没有彻底冻结
-- resume packet 与 handoff packet 的职责边界仍不够正式
-- machine-readable first 的规范尚未完全统一
+- schema 文档没有彻底冻结
+- resume packet 与 handoff packet 的职责边界仍需要在 API contract 里正式化
+- machine-readable first 的规范还需要与 runtime 输出逐字段对齐
+- recovery / provider handoff 场景下的跨 worker packet 稳定性还需要更强验收
 
 ### 最大缺口
 
@@ -223,7 +224,7 @@
 
 ### 下一步最具体动作
 
-优先冻结最小字段集。
+优先把当前已经存在的最小字段集写成正式 contract，而不是继续停留在建议清单。
 
 #### Resume Packet 最小字段建议
 
@@ -272,12 +273,14 @@
 - failure recovery：same-worker retry / auto handoff / human gate
 - runtime fact aggregation、live flow、message projection
 - `declared rounds` / `auto_multi_round` / grounded write 等续跑信号
+- provider-backed worker 的 fresh-session recovery 与 provider failure diagnostics
+- `/dialogue/` 与 `/console/` 上的 recovery job 可见性
 
 说明执行层已经开始向“可操作系统”移动，而且已经能支持真实长任务的证据收集与多轮推进。
 
 ### 估计完成度
 
-**55% - 70%**
+**65% - 75%**
 
 ### 为什么还不高
 
@@ -335,18 +338,22 @@
 - dialogue layer 已在
 - task state / message projection 已有雏形
 - 系统正在往“用户可见任务面”靠拢
+- `pause/resume/continue/escalate/handoff/state` 已以 POST 写接口为正式路径
+- 旧 GET 兼容入口仍保留审计标记
+- `task_receipt / task_action / task_state / task_progress / task_result` 已形成核心 lifecycle projection
+- `/dialogue/` 已有 task auto catch-up、message expansion、recovery state、人话化 provider diagnostics 等前端合同测试
 
 ### 估计完成度
 
-**35% - 50%**
+**60% - 70%**
 
 ### 为什么还未完成
 
-因为当前仍然可见明显过渡态：
+因为当前仍然有过渡态，但重心已经从“接口未正式化”转为“兼容入口治理和长尾投影治理”：
 
-- 控制动作接口仍不够正式
-- runtime 与 message layer 尚未完全统一
-- 投影规则还不是稳定协议
+- 旧 GET 控制入口仍存在，需要迁移窗口和下线策略
+- 长尾 runtime subtype 进入消息层前仍需要白名单和字段合同
+- browser 级 lifecycle acceptance 仍要持续补强，尤其是真实 worker 慢响应/异步恢复场景
 
 ### 最大缺口
 
@@ -356,20 +363,12 @@
 
 ### 下一步最具体动作
 
-优先正式化关键控制动作：
+下一步不是再把 POST 接口“设想出来”，而是治理兼容期和长尾投影：
 
-- `POST /tasks/{id}/pause`
-- `POST /tasks/{id}/resume`
-- `POST /tasks/{id}/continue`
-- `POST /tasks/{id}/escalate`
-
-并固定关键生命周期消息：
-
-- `task_receipt`
-- `task_action`
-- `task_state`
-- `task_progress`
-- `task_result`
+- 制定旧 GET 控制入口的下线策略
+- 保留审计字段，观察外部调用方是否仍依赖 GET
+- 对新增 runtime subtype 建立进入 message layer 的白名单
+- 扩充浏览器级 lifecycle acceptance，覆盖 POST 控制动作、异步 recovery、human gate、terminal result 回放
 
 ### 风险提醒
 

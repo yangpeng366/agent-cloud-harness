@@ -228,6 +228,86 @@ header 只保留：
 - auto handoff count
 - 当前恢复动作（retry / handoff / human_gate）
 
+### 3.8 `worker_round` 必须进入主对话流，但不能变成日志流
+
+背景：
+
+- 真实任务中，Codex 已经产生 provider run、artifact、Codex JSONL 和大量中间输出，但主 transcript 只看到最终 `task_progress`。
+- 用户在主对话流里看不到“Codex 跑过哪几轮、产出了什么、为什么被截断或移交”，只能去 details / SQLite / JSONL 排查。
+- 这会造成误读：页面像是 Codex 没返回，实际只是 worker round 没被投影到 session message。
+
+设计原则：
+
+- 主对话流应该展示每一轮 worker execution 的人可读锚点。
+- 主对话流不应默认塞入 1MB+ raw output、stdout、JSONL 或 ANSI log。
+- artifact 仍是一等事实表，session message 只是面向用户的 projection。
+- `worker_round` projection 必须适用于 Codex、DeepSeek、Kimi、Claude、OpenClaw 等所有 worker，而不是 Codex 特例。
+
+后端投影合同：
+
+- `ControlNodeGraph` 在写入 worker artifact 后，同步追加一条 `session_messages`。
+- 推荐字段：
+  - `role=assistant`
+  - `message_type=worker_round`
+  - `task_id=<current task>`
+  - `content=<压缩摘要>`
+- `content` 示例：
+  - `Codex 执行了一轮，状态 partial_timeout，已产出部分结果，耗时 15m，等待继续或移交。`
+  - `DeepSeek 执行了一轮，状态 completed，产出 535 字结果。`
+  - `Kimi 执行失败，状态 failed，原因 provider unavailable。`
+- `metadata` 至少包含：
+  - `worker_id`
+  - `execution_status`
+  - `artifact_id`
+  - `agent_run_id`
+  - `provider_id`
+  - `provider_thread_id`
+  - `provider_session_id`
+  - `provider_turn_status`
+  - `provider_failure_class`
+  - `provider_failure_reason`
+  - `provider_run_dir`
+  - `provider_event_log_path`
+  - `provider_last_message_path`
+  - `provider_run_metadata_path`
+  - `duration_ms`
+  - `output_chars`
+  - `output_preview`
+  - `partial_output`
+  - `truncated`
+
+去重要求：
+
+- 同一个 `artifact_id` 只投影一次 `worker_round` message。
+- retry / handoff 后的新 worker round 必须各自投影，因为这是用户理解执行轨迹的关键。
+- `task_progress / task_result` 继续保留，用于总结任务级状态；`worker_round` 用于解释每轮 worker 执行。
+
+前端呈现合同：
+
+- `renderMessageCard` 增加 `message_type=worker_round` 卡片样式。
+- collapsed 默认显示：
+  - worker 名称
+  - 状态：`completed / failed / timeout / partial_timeout / cancelled`
+  - 耗时
+  - 输出短摘要
+  - provider thread / run id 的短展示
+- expanded 显示：
+  - `output_preview`
+  - provider run 文件路径
+  - artifact id
+  - recovery 建议动作
+- 对 `partial_timeout` 特殊显示：
+  - 文案用“部分结果”而不是“失败”
+  - 提供“继续 Codex thread”和“手动移交”操作入口
+  - 不默认显示为红色致命错误
+
+验收标准：
+
+- 真实任务中每次 worker round 后，主 transcript 能看到一条 `worker_round` 卡。
+- Codex 有输出但被截断时，主 transcript 显示 `partial_timeout` 和部分结果摘要。
+- 用户不打开 details，也能知道 Codex 跑过、耗时多久、输出在哪里、下一步是继续还是移交。
+- 大输出不会默认渲染进 DOM；展开预览必须有长度上限，并指向 provider run 文件。
+
 ### 3.5 Inspector 继续当 secondary surface
 
 保留这些能力，但不作为主阅读路径：
@@ -515,7 +595,7 @@ node .\scripts\dialogue-business-smoke.js
 - 右侧 details 默认密度又继续压低一层：header/empty state/overview/action/card padding 更小，更接近按需查看的 side surface
 - transcript 顶部筛选和 composer 下半区也继续压低默认密度：`message-panel__filters` 的摘要更短更薄，composer 的 label / inline hint / mode bar / 参数 summary 更接近单聊天输入器
 - `details-collapsed / sidebar-collapsed` 相关列宽也已经和这轮更窄主布局保持一致，不再残留旧的 `220px / 360px`
-- 当前还有一个明确的时间显示 seam：后端 `created_at / updated_at` 真实可能返回 epoch seconds 浮点数；前端若直接 `new Date(value)`，会把 `1778640974.603...` 误渲染成 `01/21 22:04`。因此 `/dialogue/` 下一轮必须先做统一时间归一化，再渲染 rail、transcript、details、artifact 和 tool trace
+- 时间显示问题已经收口：后端 `created_at / updated_at` 真实可能返回 epoch seconds 浮点数；前端若直接 `new Date(value)`，会把 `1778640974.603...` 误渲染成错误日期。`/dialogue/` 与 `/console/` 现在都统一先走 `normalizeTimestampValue(...) / timestampMs(...)`，避免两个前端对同一任务显示不同时间
 
 这轮收口靠的是三件基础设施修正，而不是 `/dialogue/` 产品语义本身发生了根本变化：
 
@@ -537,6 +617,22 @@ node .\scripts\dialogue-business-smoke.js
 - 第三轮 codex 风格壳层收口已经落到真实 `/dialogue/` HTML/CSS/JS，而不是仍停留在纯文档阶段
 - 更进一步的 details / status surface 继续收口仍未开始
 - 但仍不应把它写成“前端业务功能已完全验证通过”，因为 richer continuity / acceptance 仍需独立 acceptance 工具链
+
+最新这一轮继续补几个和长任务恢复直接相关的 UI 缺口：
+
+- `/dialogue/` 的 task action plan 接入 `recover`，`waiting_human / waiting / human_gate / failed` 优先显示“自动恢复”，避免用户只能在 `resume / continue / handoff` 之间猜
+- `recover` 动作走 `POST /api/v1/tasks/{id}/recover?async=true`，默认 `mode=auto`，和后端最近失败任务恢复入口保持一致，同时避免浏览器请求被真实 worker 长执行拖住
+- task detail 额外读取 `/api/v1/tasks/{id}/recovery_jobs?limit=5`，在 overview 中显示最近异步恢复 job 的 `status / request_id / action / execution_mode / target_worker / error`
+- 新增浏览器验收脚本 `scripts/recovery-job-ui-probe.js`：用真实 session/task 打开 `/dialogue/` 或 `/console/`，拦截 recover/recovery_jobs 响应，断言按钮请求包含 `recover?async=true` 且详情区能看到 `Recovery Job` 与 `request_id`
+- `message-panel__body--stream-only` 下的短 transcript 改成底部栈布局：`message-stream` 使用 `margin-top:auto`，剩余空白优先留在消息组上方，消息组、折叠任务轨迹和 composer 之间保持紧凑
+- 这轮只收敛已知空白 seam 与恢复动作入口，不改变 transcript-first 主结构和 details panel 的展开语义
+
+紧接着这一轮补的是 `/console/` 与 `/dialogue/` 的时间口径对齐：
+
+- `/console/` 的 session/task 排序不再直接 `new Date(epochSeconds)`，改用和 `/dialogue/` 一致的 `timestampMs(...)`
+- `/console/` 的 `formatTime(...)` 统一先归一化 epoch seconds / epoch milliseconds / ISO string，再渲染
+- 这能避免同一个 task 在 Dialogue 显示当前日期、Console 却显示成 1970 年附近错误日期，减少 operator 对“最近任务/最近失败任务”的误判
+- 验收入口：`node --test src/test/js/console-time-normalization.test.mjs`
 
 ---
 

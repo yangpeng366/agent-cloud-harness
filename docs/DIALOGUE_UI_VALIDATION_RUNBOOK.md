@@ -98,6 +98,10 @@
 
 - façade continuity
 - `chat` / `responses` richer browser path
+- task lifecycle control path
+  - `/dialogue/` 任务动作按钮必须调用正式 `POST /api/v1/tasks/{id}/pause|resume|continue|escalate|recover`
+  - `pause / resume` 这类状态动作必须能在 session message 中投影为 `task_action`
+  - 浏览器验收里不应出现 `legacy_control_route=true`，这只能来自历史 `GET` 兼容入口
 - acceptance record 素材
 
 ---
@@ -129,6 +133,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 - 如果工作区源码和真实 `8080` 页面行为明显不一致，优先按“旧 runtime / stale build”排障，不要先把问题归因为前端逻辑本身
 - 如果真实 `8080` 页面仍显示 `01/21 22:04` 这类明显错误时间，或 `task_progress` 还只有旧摘要/乱码，优先判断当前实例是否仍在跑旧/坏的运行 JAR；不要在未 fresh restart 的前提下直接判定“代码没生效”
 - 如果本机构建链直接报 `mvn` 找不到，要先修构建环境；否则你后面看到的所有 `/dialogue/` 页面行为，都可能只是旧构建的假象
+- `Run-DialogueBrowserAcceptanceProbe.ps1` 会优先从 PATH 解析 `node`，PATH 漂移时会回退到常见本机 Node runtime；仍找不到时再用 `-NodePath <path-to-node.exe>` 显式指定，避免验收脚本因为当前 shell 环境漏配 PATH 而误判页面失败
 
 ---
 
@@ -214,6 +219,7 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18386 --re
 - 但它仍只是 light business smoke，不等于 richer continuity / acceptance 全覆盖
 - 如果后续再失败，仍需要结合 report、browser console、requestfailed 和后端 API 证据一起判断
 - 如果失败点是“default `task_auto` 后 session 已写入 `task_brief`、session tasks 也已出现新 task，但页面还停在 session-only shell”，应优先归类为 **pending auto-task catch-up seam**，而不是“后端没触发任务”
+- 如果 default `task_auto` 后页面已经出现 `已提交任务，正在推进`，hash 已经带同一条 `task=...`，且 task thread / details 已经切到新 task，但 `#messageList` 尚未立刻渲染出原始 user intent，这不应判成 task_auto 失败；richer acceptance 的第一段 gate 应允许“消息原文可见”或“选中 task 收敛”二选一，后续 pinned latest-round output gate 再继续验证结果可见性
 - 如果失败点是“点开完整结果后，过几秒又自动收回”，应优先归类为 **message-card expanded state lost on polling seam**，而不是“后端没返回完整结果”
 
 ### Step D：最后再跑 richer acceptance
@@ -223,6 +229,16 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18386 --re
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18386
 ```
+
+这条 richer acceptance 当前还承担 P5 的 task lifecycle 浏览器级验收：
+
+- `manual-start task` 后，页面必须收敛到选中 task，hash 中有同一条 `task=...`
+- 点击任务动作 `pause` 时，浏览器 Network 只能看到 `POST /api/v1/tasks/{id}/pause`
+- `pause` 后，`GET /api/v1/sessions/{id}/messages` 必须能查到该 task 的 `task_action`，且 `metadata.request_method=POST`、`metadata.legacy_control_route` 不存在
+- `pause` 后主动作必须切到 `resume`
+- 点击 `resume` 时，浏览器 Network 只能看到 `POST /api/v1/tasks/{id}/resume`
+- `resume` 后，同一条消息流必须能查到 `task_action(action=resume)`，并保持 `request_method=POST`；这条 browser gate 不要求 `POST /resume` HTTP 响应已经完成，因为真实 worker round 可能会让该请求持续到后续调度结束
+- 这条验收只证明 `/dialogue/` 真实页面走正式 POST 控制面；历史 `GET` 兼容入口仍由 `TaskHandlerControlActionHttpTest.legacyGetPauseStillWorksAndIsMarkedForAudit()` 覆盖
 
 ---
 
@@ -281,13 +297,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - `drawerSummaryHeight`
 - 当前 gate 写实成：
   - `gapBetweenDrawerAndComposer <= 28`
+  - `gapBetweenMessageBodyAndComposer <= 28`
   - `drawerSummaryHeight <= 28`
 - fresh `18390` 的真实值当前为：
   - `gapBetweenLastCardAndDrawer = 10`
   - `gapBetweenDrawerAndComposer = 17`
+  - `gapBetweenMessageBodyAndComposer` 后续应作为更直接 seam 指标一起记录
   - `drawerHeight = 23`
   - `drawerSummaryHeight = 23`
 - 这说明“消息组 + collapsed thread drawer”已经基本被收成贴近 composer 的同一组底部栈；后续若再退化成中段断层，应优先检查这组布局阈值，而不是先怀疑消息数据没回来
+
+补充合同：
+
+- 用户肉眼看到的“`message-panel__body message-panel__body--stream-only` 到 `<section class="composer-panel">` 上方有大片空白”，不应只用 `thread drawer -> composer` 间距判断。
+- probe 必须额外记录 `messagePanelBody.bottom -> composerPanel.top` 的直接间距，即使 collapsed thread drawer 被隐藏、DOM 结构变化或 drawer 高度为 0，也能判断消息区底部是否贴近 composer。
+- 该指标和 `gapBetweenDrawerAndComposer` 同时存在：
+  - `gapBetweenDrawerAndComposer` 约束 collapsed task drawer 自身不要制造断层。
+  - `gapBetweenMessageBodyAndComposer` 约束用户指出的 message body 与 composer seam。
+- 如果真实页再次出现空白，优先看这两个字段；不要只凭截图或 CSS 正则判断。
 
 紧接着下一轮又收了一条和“完整结果展开”直接相关的前端 seam：
 
@@ -487,6 +514,30 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - 后续真实 `8080` 长寿实例里又进一步收口了另一条晚到刷新 seam：
     - 旧 `auto-start` task 的晚到 progress/result 不应再把刚显式选中的 `manual-start` task 抢回去
     - 当前这条 selected-task late-refresh drift 已通过短时 stickiness 收口，并已在 fresh-restart `8080` richer probe 上复验通过
+- 2026-05-27 真实 `8080` 复验记录：
+  - 先杀掉旧 `8080` 监听进程，再 `Build-WithJava21.ps1 -SkipTests -QuietMaven`，并用隔离库 `.tmp/agent_cloud_after_fix.db` fresh restart
+  - `scripts/screenshot.js --base-url http://localhost:8080 --report .tmp/dialogue-shell-report-8080-after-fix.json` 通过
+  - `scripts/dialogue-business-smoke.js --base-url http://localhost:8080 --report .tmp/dialogue-business-smoke-8080-after-fix.json` 通过
+  - `Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:8080 -Surface chat -ScreenshotDir .tmp/dialogue-browser-screens-8080-after-fix-chat` 通过
+  - 这轮 richer probe 覆盖了 `manual-start task`、`continue-current`、`followup manual-start`，以及任务动作 `POST /pause`、`POST /resume`
+  - `manual-start` browser gate 不应再只绑定旧文案 `任务已记录`；当前真实页可能返回 `已提交任务，正在推进`，验收应以选中 task/hash/detail/thread 收敛为主，回执文案只作辅助
+  - 浏览器探针取消中的 `live_flow` 请求不应再污染服务端日志；本轮 clean log 未出现 `TaskHandler error`、`connection reset`、`Broken pipe` 或 Windows 断连文本
+- 同日补充复验：
+  - `Run-DialogueBrowserAcceptanceProbe.ps1` 已能在当前 shell 找不到 `node` 的情况下自动解析到 Codex runtime Node，并在结果里输出 `node_path`
+  - SSE façade 的浏览器取消请求也已收口；`ChatFacadeHandler` 对已知客户端断连不再输出 ERROR，也不会继续尝试写 `internal error`
+  - 复验命令：`Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:8080 -Surface chat -ScreenshotDir .tmp/dialogue-browser-screens-8080-sse-fix-chat`
+  - 复验日志：`.tmp/server-8080-sse-fix.out.log` / `.tmp/server-8080-sse-fix.err.log` 未出现 `ChatFacadeHandler error`、`ChatFacadeHandler I/O error`、`TaskHandler error`、`connection reset`、`Broken pipe` 或 Windows 断连文本
+- 同日控制动作与富验收补充：
+  - fresh `8080` 实例：PID `36800`，日志 `.tmp/server-8080-control-fix-v8.out.log` / `.tmp/server-8080-control-fix-v8.err.log`，隔离库 `.tmp/agent_cloud_control_fix_v8.db`
+  - `scripts/screenshot.js --base-url http://localhost:8080 --report .tmp/dialogue-shell-report-8080-both-fix-v6.json` 通过
+  - `scripts/dialogue-business-smoke.js --base-url http://localhost:8080 --report .tmp/dialogue-business-smoke-8080-both-fix-v6.json` 通过
+  - `Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:8080 -Surface chat -DebugPort 19253 -UserDataDir .tmp/edge-dialogue-browser-probe-chat-v15 -ScreenshotDir .tmp/dialogue-browser-screens-8080-chat-fix-v15` 通过
+  - 本轮收口了两条真实前端 seam：
+    - pending auto/manual task 选择在有 submitted intent 时必须等 intent 匹配的新 task，不能被上一轮晚到 auto-start task 抢占
+    - task control action 以当前 active task card 为准，并在 `loadSelectedTask()` 后把 live_flow 返回的新 task 状态同步回 `state.tasks`，避免 pause 后 UI 被 stale task list 渲回 active
+  - richer probe 的 `pause/resume` 现在以正式 `task_action` 投影里的 `request_method=POST` 与 `request_path=/api/v1/tasks/{id}/{action}` 作为 route 证据，同时继续检查 UI 状态收敛；这是为了避开探针自身反复 `/messages?limit=120` 造成的 fetch record 抖动
+  - `Surface both` 与单独 `Surface responses` 在当前工作站仍出现长请求 / headless Edge 资源抖动，表现为浏览器侧 fetch `status=0` 或串行阶段超时；本轮不把 `both` 记为绿灯，后续应在新 fresh 实例、少残留 Edge 进程、单 surface 串行条件下重跑
+  - 严格日志检查未发现 `ChatFacadeHandler error`、`ChatFacadeHandler I/O error`、`TaskHandler error`、`connection reset`、`Broken pipe` 或 Windows 断连文本；`GET /api/v1/health` 返回 `up`
 
 因此当前更准确的结论是：
 

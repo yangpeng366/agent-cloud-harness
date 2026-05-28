@@ -42,6 +42,7 @@
 |------|------|------|---------|---------|------|
 | POST | `/api/v1/tasks` | 创建任务并自动进入控制图 | `title`, `task_type`, `source`, `priority`, `intent`, `goal?`, `parent_task_id?`, `session_id`, `metadata`, `auto_start?` | `Task` | 否 |
 | GET | `/api/v1/tasks` | 过滤或列出最近任务 | Query: `state` 或 `status`, `task_type`, `assigned_worker` | `Task[]` | 否 |
+| GET | `/api/v1/tasks/recoverable` | 列出最近可恢复/需人工处理的中断任务 | Query: `limit?` | `TaskRecoveryPlan[]` | 否 |
 | GET | `/api/v1/tasks/{id}` | 获取任务详情 | 路径参数 `id` | `Task` | 否 |
 | POST | `/api/v1/tasks/{id}/state` | 直接更新任务状态 | JSON: `state`, `reason` | `Task` | 否 |
 | GET | `/api/v1/tasks/{id}/packet` | 获取最近 resume packet | 路径参数 `id` | `ResumePacket \| null` | 否 |
@@ -54,16 +55,42 @@
 | GET | `/api/v1/tasks/{id}/experiment_summary` | 以当前任务所属 `experiment_name` 为键，查看整组 matrix 汇总与 case 对比 | 路径参数 `id` | `ExperimentMatrixSummary` | 否 |
 | GET | `/api/v1/tasks/{id}/harness_trace` | 查看面向 AHE 复盘的压缩 Harness 执行轨迹 | Query: `limit` | `HarnessTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/tool_trace` | 查看最近工具调用轨迹 | Query: `limit` | `ToolInvocationRecord[]` | 否 |
+| GET | `/api/v1/tasks/{id}/recovery_jobs` | 查看该任务最近异步恢复 job | Query: `limit?` | `TaskRecoveryJob[]` | 否 |
 | GET | `/api/v1/tasks/{id}/handoff_packet` | 预览移交 packet | Query: `target_worker` | `HandoffPacketView` | 否 |
 | POST | `/api/v1/tasks/{id}/pause` | 暂停任务 | JSON: `reason?` | `TaskControlResult` | 否 |
 | POST | `/api/v1/tasks/{id}/resume` | 恢复任务 | 可空 body | `TaskControlResult` | 否 |
 | POST | `/api/v1/tasks/{id}/continue` | 再次进入控制图 | 可空 body | `TaskControlResult` | 否 |
 | POST | `/api/v1/tasks/{id}/escalate` | 升级为人工等待 | JSON: `reason?` | `TaskControlResult` | 否 |
+| POST | `/api/v1/tasks/{id}/recover` | 按恢复计划冷启动恢复或 handoff 最近失败任务 | Query: `async?`; JSON: `mode?`, `target_worker?`, `reason?`, `async?`, `wait?` | `TaskRecoveryResult` | 否 |
 | GET | `/api/v1/tasks/{id}/pause` | 兼容旧客户端的暂停入口 | 路径参数 `id` | `TaskControlResult` | 否 |
 | GET | `/api/v1/tasks/{id}/resume` | 兼容旧客户端的恢复入口 | 路径参数 `id` | `TaskControlResult` | 否 |
 | GET | `/api/v1/tasks/{id}/continue` | 兼容旧客户端的继续入口 | 路径参数 `id` | `TaskControlResult` | 否 |
 | GET | `/api/v1/tasks/{id}/escalate` | 兼容旧客户端的升级入口 | 路径参数 `id` | `TaskControlResult` | 否 |
 | POST | `/api/v1/tasks/{id}/handoff` | 指定目标 worker 并移交 | JSON: `target_worker` | `HandoffResult` | 否 |
+
+`TaskRecoveryPlan` 当前用于 `/tasks/recoverable` 与 `/tasks/{id}/recover` 的恢复前诊断，稳定字段至少包括：
+
+- `recoverable` / `recommended_action` / `reason`
+- `target_worker`
+- `failure_class` / `provider_failure_class`
+- `failure_evidence_source` / `failure_evidence`：恢复计划采用的失败分类证据来源与短证据文本，可能来自 request、task metadata、agent run metadata、agent run summary、task waiting reason、task summary 或 next step
+- `recovery_stage` / `recovery_execution_mode`
+
+当 `mode=auto` 且请求或任务 metadata 中存在不同于当前 worker 的 `target_worker / auto_handoff_target` 时，恢复入口应执行 handoff 并返回 `handoff_result`；否则才按 fresh-session `resume` 恢复。
+
+默认恢复入口保持同步语义，HTTP 响应会等待本轮恢复动作返回。长任务或真实 provider worker 场景应使用 `POST /api/v1/tasks/{id}/recover?async=true`，或在 body 中传 `{"async":true}` / `{"wait":false}`。异步恢复会先同步校验恢复计划，不可恢复任务仍返回 `400`；可恢复任务返回 HTTP `202`，`TaskRecoveryResult.accepted=true`、`async=true`、`request_id` 和 `status_url`，后续进展通过 `status_url` 指向的 live flow 继续观察。
+
+异步恢复还会落一条 `TaskRecoveryJob`，可通过 `GET /api/v1/tasks/{id}/recovery_jobs?limit=10` 查询。`request_id` 即 job id；状态最小集合为 `accepted / running / succeeded / failed / interrupted`。其中 `interrupted` 表示 harness 重启或进程中断时，启动 reconciler 把遗留的 `accepted/running` job 收束为已中断，并写入 `completed_at / error_message`。该接口只读，不触发恢复动作。
+
+本地 live API 验收可运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptanceProbe.ps1 -BaseUrl http://localhost:8080
+```
+
+默认 probe 覆盖 recoverable 列表、auto handoff 和环境阻断拒绝；若要让 probe 额外验证 fresh-session 异步恢复触发链，可加 `-IncludeResumeExecution`。
+
+`-IncludeResumeExecution` 当前使用 `recover?async=true`，验收重点是 HTTP `202`、`accepted=true`、`async=true`、`request_id`、`status_url` 和 `recovery_execution_mode=fresh_session`。它不等待 worker 完成，后续进展通过 `status_url` 继续观察。
 
 ### 1.2A Chat Facade
 
@@ -195,15 +222,18 @@
 | GET | `/api/v1/workers` | 列出全部 worker | 无 | `Worker[]` | 否 |
 | POST | `/api/v1/workers` | 动态注册 worker | `worker_id`, `worker_type`, `capabilities`, `tool_capabilities`, `tool_scope`, `dependencies`, `metadata`, `suggest_only`, `ready` | `Worker` | 否 |
 | GET | `/api/v1/workers/{id}` | 查询 worker | 路径参数 `id` | `Worker` | 否 |
-| GET | `/api/v1/workers/{id}/readiness` | 查询 worker readiness | 路径参数 `id` | `ReadinessCheck` | 否 |
+| GET | `/api/v1/workers/{id}/readiness` | 查询 worker readiness | 路径参数 `id`；Query `mode=passive|dispatch`，默认 `passive` | `ReadinessCheck` | 否 |
 
 `GET /api/v1/tasks/{id}/select_worker` 当前返回的 `RouteResult` 除 `selected_worker` / `fallback_workers` / `route_reason` 外，还包含以下解释字段：
 
-- `route_source`：`learning_memory` 或 `capability_match`
+- `route_source`：`task_pinned`、`learning_memory`、`capability_match`、`ready_fallback` 或 `none`
 - `task_type`：本轮路由识别到的任务类型
 - `preferred_worker_hint`：从 learning memory 读取到的 worker hint
 - `learning_hint_applied`：本轮是否真的应用了 learned hint
 - `candidate_workers`：进入候选集的 worker 列表
+- `fallback_reason`：未按首选 worker / tier / hint 命中的原因；若分发前 readiness 跳过候选 worker，会包含对应 worker 与原因
+- `current_pinned_route`：当任务当前已有 assigned worker 时，说明是否继续固定到该 worker
+- `recovery_unpinned_recommendation`：恢复链建议解绑当前 worker 时的解释信息
 
 `GET /api/v1/tasks/{id}/runtime_context` 返回的 `TaskRuntimeContext.active_context` 当前会显式暴露：
 
@@ -515,18 +545,24 @@
 - `session_id`
 - `task_id`
 - `worker_id`
+- `execution_id`
 - `tool_name`
 - `arguments`
 - `result_summary`
+- `status`
 - `success`
 - `elapsed_ms`
+- `touched_paths`
 - `created_at`
 - `metadata`
 
 从 hardness phase-1 方案视角看，这意味着：
 
 - `ToolInvocationRecord` 已经不是 blueprint，而是现有 API 和持久化对象
-- 当前更主要的下一步不是“先造 tool trace”，而是增强它，例如补更显式的 `execution_id / status / touched_paths`，并让它更直接进入 runtime fact aggregation 与 continuation judgment
+- `execution_id / status / touched_paths` 已经是稳定 HTTP 字段、SQLite 字段和 runtime fact 输入，不应在后续重构里退化成只存在于 `metadata` 的弱字段
+- `RuntimeFactSetAssembler` 已使用这些字段推导 execution boundary，experiment evidence 会记录 `tool_execution_ids` 与 `tool_trace_path`
+- `/dialogue/` 与 `/console/` 的 details tool trace 摘要已优先显示 `status / execution_id / touched_paths`，再补充 `result_summary`
+- 后续不需要重新设计另一套 tool trace 对象；继续沿 `ToolInvocationRecord` 扩展消费面即可
 
 `GET /api/v1/tasks/{id}/harness_trace` 返回面向 AHE / Harness 演进复盘的压缩视图，聚合 live flow、tool trace、judgment trace、agent run 相关信息。当前稳定字段至少包含：
 
@@ -554,6 +590,10 @@
 `GET /api/v1/tasks/{id}/tool_trace` 当前直接返回最近的 `tool_invocations`，每条记录至少包含：
 
 - `tool_name`
+- `execution_id`
+- `status`
+- `success`
+- `touched_paths`
 - `arguments`
 - `result_summary`
 
@@ -624,6 +664,7 @@
 - `powershell/cmd` 仍然只在 Windows 宿主可注册；即使是 Windows，也还要求对应可执行文件真实存在
 - 这批命令工具属于“受控本地命令”，不是强沙箱；当前定位仍然是本地或受控环境 harness
 - `GET /api/v1/workers/{id}/readiness` 的 `checks` 现在同时包含依赖项、`tool:<name>` 形式的宿主工具检查，以及 provider-backed worker 的 `provider:<id>` / `executor_backend:<backend>` 检查；若某项命令工具不可用或当前 harness 没接入对应 provider executor，`reason` 会直接返回稳定原因文案
+- `GET /api/v1/workers/{id}/readiness?mode=dispatch` 会执行分发前 readiness。该模式会在 passive readiness 通过后追加 `checks.dispatch_preflight`，并返回 `mode=dispatch`、`dispatch_preflight_ready`、`dispatch_preflight_reason`、`dispatch_preflight_cached`、`dispatch_preflight_mode`、`dispatch_preflight_active_probe`、`dispatch_preflight_metadata`。它用于真正分发任务前确认 worker/provider 当前可接受新轮次；默认 `/readiness` 仍是 `mode=passive`，不主动启动 provider。`dispatch_preflight_active_probe=false` 只表示本次结果不是主动测试轮次，是否阻断仍以 `ready` 和严格模式配置为准。`dispatch_preflight_metadata` 当前用于回传被探测的本地 CLI 命令形态，例如 `launch_target`、`launch_mode`、`dispatch_preflight_probe_kind`、`dispatch_preflight_probe_args`、`dispatch_preflight_command_shape`、`dispatch_preflight_exit_code`。`mode` 只接受 `passive` 或 `dispatch`；未知取值返回 `400`，避免拼写错误被静默降级为 passive。
 - `GET /api/v1/workers` 与 `POST /api/v1/workers` 返回的 `Worker.metadata.host_tool_availability` 会回填该 worker 已声明命令工具的宿主探测结果
 
 ### 1.4 SkillHandler
@@ -681,6 +722,27 @@
 | POST | `/api/v1/experiment_matrix/runs` | 按 case/mode 批量创建可比较基线 run | JSON: `experiment_name?`, `case_keys?`, `modes?`, `priority?`, `source?`, `auto_start?`, `metadata?` | `ExperimentMatrixBatch` | 否 |
 | GET | `/api/v1/experiment_matrix/summary` | 按实验名聚合比较不同模式结果 | Query: `experiment_name` | `ExperimentMatrixSummary` | 否 |
 
+`BaselineTaskCase` 当前不只是任务标题清单。每个内置 case 都会返回：
+
+- `case_key`
+- `title`
+- `task_type`
+- `task_length_bucket`
+- `intent`
+- `goal`
+- `workspace_preconditions`
+- `acceptance_criteria`
+- `expected_artifacts`
+- `recovery_policy`
+- `metadata`
+
+`POST /api/v1/experiment_matrix/runs` 创建 task 时，会把 case 合同同步写入 task metadata：
+
+- `baseline_workspace_preconditions`
+- `baseline_acceptance_criteria`
+- `baseline_expected_artifacts`
+- `baseline_recovery_policy`
+
 `ExperimentMatrixSummary.mode_summaries[*]` 现在额外聚合以下 tool 观测字段：
 
 - `runs_with_tool_chain_data`
@@ -688,6 +750,20 @@
 - `max_tool_chain_step_count`
 - `tool_execution_mode_counts`
 - `tool_chain_termination_reason_counts`
+
+同一结构也会暴露 strong-to-small orchestration 的最小闭环证据，用于判断
+`orchestrated` 是否真的形成“强规划 / 小执行 / 强验收”路径，而不只是普通单 worker 执行：
+
+- `runs_with_strong_planner_evidence`
+- `runs_with_small_executor_evidence`
+- `runs_with_strong_evaluator_evidence`
+- `runs_with_strong_small_strong_loop`
+- `evaluator_model_tier_counts`
+
+这些字段只统计已经进入 `experiment_run.metadata` 的运行时证据，不依赖人工备注：
+`planner_worker/planner_model_tier` 来自 orchestrated planner 阶段，
+`executor_worker/executor_model_tier` 来自 execution 阶段，
+`evaluator_model_tier` 来自 completion judgment。若某一段证据缺失，对应计数不会被推断为成功。
 
 同一结构当前也会补充 mounted-context rollout 对比字段，便于直接比较
 `active_context_only / mounted_context_shadow / mounted_context_primary` 三种 prompt mode：

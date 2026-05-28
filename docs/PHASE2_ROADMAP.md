@@ -59,7 +59,7 @@ create task
 
 1. `working memory` 已有 `ActiveContextBuilder` 与 `active_context` 暴露面，但还没有完全收束成更稳定、边界更清晰的独立 runtime contract 层。
 2. worker 输出仍以自由文本为主，协议不稳定。
-3. `judgeCompletion()` 已存在，且已进入 `continue` 节点判断链，但其 contract、输入事实面与迁移动作语义仍有继续收硬空间。
+3. `judgeCompletion()` 已接入 `continue` 节点主迁移判断，`ControlNodeGraph.resolveAction(...)` 会综合 execution action、completion status/alignment 与 reopen/archive/external flags；下一步缺口是把 completion contract、输入事实面与终态边界继续收硬。
 4. consolidation 仍偏 checkpoint 摘要器，还没有明显反哺 active context / judgment policy。
 5. `operational learning memory` 已有最小服务与持久化落点，但强化策略、消费面和稳定协议仍在早期阶段。
 
@@ -104,7 +104,7 @@ src/main/java/com/agentcloud/runtime/
 
 - `DefaultWorkerExecutor` 返回的是 `outputText`
 - `judgeExecution()` 目前基本只消费动作词
-- `judgeCompletion()` 虽能返回结构，但未接入主迁移判断
+- `judgeCompletion()` 已参与主迁移判断，但 done / checkpoint / human gate 边界仍需要更稳定的 contract 与验收用例
 
 建议统一三类对象：
 
@@ -219,8 +219,8 @@ src/main/java/com/agentcloud/store/
 
 明确要求：
 
-- `judgeCompletion()` 必须真正参与迁移决策
-- `Task.nextStep` 应由结构化输出驱动，而不是长期保持空洞
+- `judgeCompletion()` 已经参与迁移决策；继续补齐 done / checkpoint / human gate 边界的 contract 与回归测试
+- `Task.nextStep` 已由结构化输出驱动：`ControlNodeGraph.enrichTaskFromJudgment(...)` 按 execution judgment `next_step`、completion judgment `suggested_next_action`、worker result `suggested_next_step`、旧 task `nextStep` 的顺序回填；下一步是继续锁住优先级、packet/message 投影和前端 details 摘要
 
 ### Step 3. 最后接 learning memory
 

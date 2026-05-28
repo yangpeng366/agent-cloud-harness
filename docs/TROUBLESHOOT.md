@@ -38,6 +38,56 @@
 
 ## 2. 常见错误场景
 
+### 2.0.a 最近失败任务恢复入口验收
+
+如果要验证 `thread not found`、provider runtime transient、自动 handoff 和环境阻断拒绝这些恢复合同是否仍然可用，先启动本地 harness，再运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptanceProbe.ps1 -BaseUrl http://localhost:8080
+```
+
+默认 probe 只走轻量 HTTP 合同，不触发同 worker `resume` 真实执行。需要同时覆盖 fresh-session 异步恢复触发链时，再显式加 `-IncludeResumeExecution`。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptanceProbe.ps1 -BaseUrl http://localhost:8080 -IncludeResumeExecution
+```
+
+带 `-IncludeResumeExecution` 时，probe 通过 `recover?async=true` 验证恢复入口能立即返回 `202 accepted`，并带出 `request_id / status_url / recovery_execution_mode=fresh_session`。这条验收不等待 worker 完成；如果后续状态没有推进，再看响应里的 `status_url`、服务端日志和 provider 可用性。
+
+长任务人工恢复时优先用异步入口，避免浏览器或脚本等待真实 worker 完成：
+
+```powershell
+curl -X POST "http://localhost:8080/api/v1/tasks/<task_id>/recover?async=true" `
+  -H "Content-Type: application/json" `
+  -d '{"mode":"auto","reason":"manual async recovery"}'
+```
+
+异步入口返回 `202` 只表示恢复动作已接受，后续看响应里的 `status_url`、`/tasks/{id}` 或 `/sessions/{id}/messages`。如果 provider 环境本身不可恢复，例如 `provider_auth_failed`，异步入口也应同步返回 `400`，不应进入后台。
+
+异步恢复已落 `TaskRecoveryJob`，可以直接查最近状态：
+
+```powershell
+curl "http://localhost:8080/api/v1/tasks/<task_id>/recovery_jobs?limit=10"
+```
+
+如果响应里的 `request_id` 在这个列表里不存在，说明请求没有成功进入异步恢复入口。若 job 停在 `accepted/running`，继续看 `status_url` 与服务端日志；若为 `failed`，先看 `error_message` 和 `metadata.recovery_action`。
+
+Console / Dialogue 手工点“自动恢复”时也应走同一条异步入口。页面任务详情会展示最近 `Recovery Job`；如果看不到 `request_id`，先查浏览器 Network 是否请求了 `recover?async=true`，再查 `/api/v1/tasks/<task_id>/recovery_jobs?limit=5`。
+
+前端合同可用浏览器 probe 验证，默认检查 `/dialogue/`：
+
+```powershell
+node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:8080 --surface dialogue
+```
+
+也可以检查 `/console/`：
+
+```powershell
+node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:8080 --surface console
+```
+
+这个 probe 会创建一个失败 task，但会在浏览器内拦截 recover/recovery_jobs 响应；验收目标是 UI 请求路径包含 `recover?async=true`，并且详情区展示 `Recovery Job` 与对应 `request_id`，不启动真实长 worker。
+
 ### 2.0 worker 执行失败后，什么时候该自动切 worker，什么时候该停到人工确认
 
 - **位置**: `ControlNodeGraph.continue/handoff/human_gate`, `/dialogue/`
@@ -73,6 +123,10 @@
   1. 当前轮空执行状态必须保留成 `empty`
   2. `continue` 必须立刻按恢复策略处理，而不是再交给默认 judgment
   3. 恢复预算耗尽后，task 应明确进入 `waiting_human / human_gate`
+- **当前验证入口**:
+  1. `ToolAwareWorkerExecutorMultiStepTest.noToolDelegatePreservesEmptyExecutionStatusFromFallbackExecutor`
+  2. `ControlNodeGraphActionResolutionTest.maybePlanFailureRecoveryTreatsEmptyExecutionStatusAsTransientFailure`
+  3. `ControlNodeGraphOrchestrationFlowTest.recoveryFallbackEmptyOutputStopsAtHumanGateAfterRetryAndSingleHandoff`
 - **快速排查**:
   1. 看后端日志是否同时出现：
      - `Worker round completed ... outputLength=0`
@@ -125,6 +179,11 @@
   1. `WorkerRegistry.checkReadiness(...)` 现在会额外返回 `runtime_available`
   2. `ControlNodeGraph` 在 auto-handoff 前会把失败 worker 标记为 temporary unavailable
   3. route / readiness / recovery 现在共用这一份状态，不再各看各的
+- **当前验证入口**:
+  1. `AgentProviderSupportTest.workerRegistryTemporaryUnavailabilityOverridesProviderReadiness()`
+  2. `AgentProviderSupportTest.dispatchReadinessRunsProviderPreflightAndMarksWorkerTemporarilyUnavailableOnFailure()`
+  3. `ControlNodeGraphActionResolutionTest.maybePlanFailureRecoveryAvoidsHotFailingProviderWhenAlternateProviderExists()`
+     - 该用例同时确认 auto-handoff 会把原 worker 的 `runtime_available=false` 写进 readiness
 - **排查顺序**:
   1. 先看 `.tmp/server-*.out.log` 是否出现：
      - `Worker marked temporarily unavailable`
@@ -132,6 +191,45 @@
   2. 再查 `GET /api/v1/workers/{id}/readiness`
   3. 如果刚失败但仍是 `runtime_available=true`，确认是否已经重启过 harness
   4. 如果业务上需要“跨重启保留不可用状态”，那已超出当前实现边界，应单独设计持久化降级/熔断策略
+
+### 2.0.5 怎么确认 worker 是否真的适合自动执行，而不是只适合推荐
+
+- **典型场景**:
+  1. 新增或调整了 provider worker
+  2. `/api/v1/workers/{id}/readiness` 看起来正常
+  3. 但实际执行时仍可能因为命令形态、输出格式、工作区访问或恢复语义不匹配而失败
+- **当前结论**:
+  1. 不要只看 `ready=true`
+  2. 还要看 worker 的 capability matrix metadata
+  3. 这些字段现在通过 `GET /api/v1/workers` 直接可见
+- **快速检查命令**:
+
+```powershell
+curl "http://localhost:8080/api/v1/workers"
+```
+
+- **关键字段**:
+  1. `metadata.execution_backend`: 当前执行后端，常见值为 `provider_app_server`、`provider_native_cli`、`tool_aware`、`unsupported`
+  2. `metadata.command_shape`: harness 预期使用的命令形态，例如 `codex app-server --listen stdio://`
+  3. `metadata.input_mode`: prompt 输入方式，例如 `json_rpc`、`argv_prompt`、`stdin_jsonl`、`tool_request`
+  4. `metadata.output_mode`: 输出解析方式，例如 `json_rpc_events`、`stream_json`、`json`、`tool_result`
+  5. `metadata.output_contract`: executor 期望落库的输出合同
+  6. `metadata.workspace_access_mode`: worker 如何访问本地工作区，例如 `codex_app_server_cwd`、`native_cli_cwd`、`native_cli_workspace_arg`
+  7. `metadata.local_workspace_access`: 是否允许自动接需要读写本地 repo 的 coding/ops 任务
+  8. `metadata.recovery_resume_policy`: 失败恢复时是否允许复用 provider session
+  9. `metadata.supports_resume`: provider/native worker 是否声明支持 resume
+  10. `metadata.side_effect_risk`: 自动执行风险分级
+- **判断口径**:
+  1. `execution_backend=unsupported` 的 worker 不能自动执行，`WorkerExecutorRouter` 会 fail fast
+  2. `local_workspace_access=false` 的 worker 不应自动接带 `workspace_root / repo_path / cwd` 或本地代码路径信号的 `coding/ops` 任务
+  3. `suggest_only=true` 的 worker 即使出现在列表里，也应优先理解为推荐候选，而不是默认自动执行目标
+  4. 如果 `command_shape` 与本机实际 CLI 帮助不一致，应先修 provider 命令计划，不要靠重试掩盖
+- **当前验证入口**:
+  1. `AgentProviderSupportTest.workerRegistryEnrichesWorkerCapabilityMatrixFields()`
+  2. `ApiErrorContractHttpTest.listWorkersExposesCapabilityMatrixMetadata()`
+  3. `WorkerExecutorRouterProviderNativeTest.unsupportedBackendFailsFastInsteadOfFallingBackToDefault()`
+  4. `WorkerRouterRouteTraceTest.pinnedWorkerWithoutWorkspaceAccessCannotOverrideLocalWorkspaceRequirement()`
+  5. `WorkerRouterRouteTraceTest.localWorkspaceOpsTaskRejectsCandidateWithoutWorkspaceAccess()`
 
 ### 2.0.1 `/dialogue/` 里为什么“聊天”现在会直接进入 task，而不是只记一条 session note
 
@@ -684,13 +782,15 @@
 - **典型表现**:
   1. 后端 API 里的 `created_at / updated_at` 看起来像当前日期对应的 epoch 秒数
   2. 但聊天流、任务 rail、details 或顶部摘要仍显示成 `01/21 22:04` 一类明显错误时间
+  3. `/dialogue/` 和 `/console/` 对同一条 task/session 显示出不同日期
 - **真实原因**:
   1. 当前后端部分时间字段会以 epoch seconds 浮点数返回
   2. 前端如果直接 `new Date(value)`，会把 seconds 当成 milliseconds 解释
   3. 另一种常见假象是：源码里已经修了时间归一化，但真实 `8080` 仍在跑旧/坏的运行 JAR
+  4. 旧版 `/console/` 的 session/task 排序也会受同一问题影响，把最近任务排错
 - **排查顺序**:
   1. 先查对应 API，确认 `created_at / updated_at` 原始值
-  2. 再确认前端所有时间入口是否都走了统一归一化，而不是只修了主聊天流
+  2. 再确认 `/dialogue/app.js` 与 `/console/app.js` 的时间入口是否都走了统一归一化，而不是只修了主聊天流
   3. 如果源码看起来已经修好，但真实页面仍错，优先 fresh build + fresh restart
   4. 如果 `GET /dialogue/app.js` 都返回不了，说明已经不是“时间格式问题”，而是当前实例静态资源链本身已坏
 
@@ -907,6 +1007,13 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
   2. 若已安装但未进 PATH，优先让仓库脚本自动解析本机 Maven 可执行路径
   3. 只有在 build 真正成功之后，再起 fresh 实例验证 `/dialogue/`
 
+- **2026-05-19 补充**:
+  1. `Use-Java21.ps1`、`Build-WithJava21.ps1`、`Run-HarnessWithJava21.ps1` 的用户可见提示已改成 ASCII 前缀，例如 `[INFO]`、`[OK]`、`[WARN]`、`[ERROR]`。
+  2. 这次修改只处理终端提示乱码风险，不改变 Maven 解析、Java 参数、运行 JAR 复制或端口检查逻辑。
+  3. 已确认 `Use-Java21.ps1`、`Build-WithJava21.ps1`、`Run-HarnessWithJava21.ps1`、`Test-WithJava21.ps1` 文件头均不再带 UTF-8 BOM，且四个脚本不含非 ASCII 字符。
+  4. 已验证 `powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -Dtest=ProviderFailureClassifierTest` 成功退出。
+  5. 已验证 `powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven` 成功产出 `target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar`。
+
 ### 2.8.7 调研类真实任务自动执行失败，但证据已经收集到了
 
 - **典型表现**:
@@ -1012,6 +1119,60 @@ curl http://localhost:8080/api/v1/workers/codex/readiness
 - **说明**:
   1. 这是刻意收紧的契约
   2. 目标是避免“路由层判 ready，但执行层必失败”的 detect/readiness drift
+
+### 2.10.1 Codex worker 显示 `thread not found (...)`，但本机 `.codex` 明明存在
+
+- **典型表现**:
+  1. Dialogue 或 task summary 显示 `worker codex failed: thread not found (27984)` 这类短线程号
+  2. 本机 `C:\Users\<user>\.codex` 或 portable `codex-home` 下确实有 Codex 会话文件
+  3. 甚至能在 `sessions/YYYY/MM/DD/rollout-...jsonl` 中看到对应任务 prompt 和大量命令输出
+- **不要误判成什么**:
+  1. 不要直接判定为 `.codex` 目录不存在
+  2. 不要把括号里的短数字当成 Codex 持久化 session UUID
+  3. 不要只看 worker artifact 的 `output_text`，它可能混入 Codex 命令执行输出、乱码或超长 stdout
+- **当前 Codex 接入方式**:
+  1. harness 的 codex worker 走 `CodexAppServerWorkerExecutor`
+  2. 每轮启动 `codex app-server --listen stdio://`
+  3. 通过 JSON-RPC 调用 `thread/resume` 或 `thread/start`，再调用 `turn/start`
+  4. 成功或失败的结构化字段会落到 agent run / live flow 的 worker metadata
+- **优先查看的结构化字段**:
+  1. `execution_backend`
+  2. `provider_session_id`
+  3. `provider_thread_id`
+  4. `resume_provider_session_id`
+  5. `provider_error`
+  6. `provider_turn_status`
+  7. `provider_failure_class`
+  8. `provider_protocol_trace`
+- **本地数据入口**:
+  1. harness DB：默认是 `${user.home}/.agentcloud/agent_cloud.db`，本地探针或 fresh 实例也可能使用 `.tmp/*.db`
+  2. Codex home：优先查当前进程使用的 `CODEX_HOME`；没有显式环境变量时再查 `C:\Users\<user>\.codex`
+  3. portable 环境常见位置：`E:\AI-Portable\codex-home`
+  4. Codex 会话文件常见位置：`<codex-home>\sessions\YYYY\MM\DD\rollout-*.jsonl`
+- **现场判定规则**:
+  1. 如果 agent run 的 `provider_error=codex turn completion timed out`，而 output/artifact 里含 `thread not found (...)`，优先按 provider timeout 排查
+  2. 如果 `provider_protocol_trace` 已包含 `thread/started`、`turn/started`、`item/commandExecution/outputDelta`，说明 harness 已经打到 Codex，不是启动前找不到 `.codex`
+  3. 如果 recovery 计划显示 `recovery_execution_mode=fresh_session`，恢复轮应清掉旧 `provider_session_id / provider_thread_id / codex_thread_id / resume_provider_session_id`
+- **常用命令**:
+
+```powershell
+codex --version
+codex --help
+codex exec --help
+codex exec resume --help
+codex app-server --help
+codex debug app-server --help
+codex debug app-server send-message-v2 --help
+```
+
+- **需要稳定获取 Codex 执行结果时的选项**:
+  1. 继续使用 app-server：读取 harness 的 `agent_runs.metadata_json.worker_metadata`、`artifacts.metadata_json.latest_worker_metadata` 和 Codex `sessions/*.jsonl`
+  2. 改为非交互 CLI：用 `codex exec --json -o <file>` 获取 JSONL 事件流和最后一条消息文件
+  3. 恢复已存在会话：用 `codex exec resume <SESSION_ID> --json -o <file>`，其中 `<SESSION_ID>` 应是 Codex UUID，不是 `thread not found (...)` 里的短数字
+- **处理建议**:
+  1. 先确认当前 8080 实例是否还活着；实例不在时只能查 SQLite 与 Codex home
+  2. 先用 `agent_runs` 的结构化字段定根因，再看 artifact 原文补证据
+  3. 对 `thread not found / timeout / session expired` 类 transient failure，优先走 `/api/v1/tasks/{id}/recover` 触发 fresh-session 恢复，而不是手工沿用旧 thread id
 
 ### 2.11 任务已经 handoff 到别的 worker，但 live flow / judgment 仍显示旧 worker 身份
 
@@ -1541,6 +1702,90 @@ UPDATE tasks SET metadata_json = json_set(metadata_json, '$.auto_multi_round', '
   - `task.metadata.recovery_execution_mode`
   - `sessions/{id}/messages` 最新 `task_progress/task_result.metadata.recovery_execution_mode`
   - `/dialogue/` 是否已更新到新静态资源
+
+#### 修复 1.2：分发前 readiness 需要走 `dispatch` 验活
+**文件**：
+- `src/main/java/com/agentcloud/engine/router/WorkerRegistry.java`
+- `src/main/java/com/agentcloud/server/WorkerHandler.java`
+- `src/main/java/com/agentcloud/engine/ControlNodeGraph.java`
+
+**问题现象**：
+- `/workers/{id}/readiness` 显示 `ready=true`
+- 任务一发出去就出现 `thread not found / provider unavailable / failed to start / timeout`
+- 长任务恢复链 auto handoff 后，下一个候选 worker 也可能立刻失败
+
+**原因**：
+- 默认 readiness 是 `passive` 模式，只检查配置、宿主工具、provider detect 和最近失败缓存。
+- 这些检查不能证明 provider 现在能接受一次新的任务轮次。
+- 长任务分发和恢复需要分发前可用性，否则 recovery 可能只是在多个不可用 backend 之间轮转。
+
+**当前合同**：
+- 默认入口仍是 passive：
+
+```powershell
+curl http://localhost:8080/api/v1/workers/codex/readiness
+```
+
+- 分发前验活入口使用 `mode=dispatch`：
+
+```powershell
+curl "http://localhost:8080/api/v1/workers/codex/readiness?mode=dispatch"
+```
+
+- `mode` 只接受 `passive` 或 `dispatch`。如果传入 `mode=disptach` 等未知值，接口应返回 `400`，避免误把分发前验活降级成 passive readiness。
+
+- `dispatch` 响应会额外关注：
+  - `mode=dispatch`
+  - `checks.dispatch_preflight`
+  - `dispatch_preflight_ready`
+  - `dispatch_preflight_reason`
+  - `dispatch_preflight_cached`
+
+**排查提示**：
+- 先看 passive readiness，确认不是二进制、工具、provider detect 或 unsupported backend 问题。
+- 再看 dispatch readiness，确认分发前主动验活是否通过。
+- 如果 dispatch 失败，worker 会被短期标记为 temporarily unavailable；路由和恢复链应跳过它。
+- 如果 passive 通过但 dispatch 失败，优先处理 provider 运行态或认证态，不要只改 task prompt。
+- 当前 scheduler 路由已经按 dispatch readiness 做分发门禁；如果 `/tasks/{id}/select_worker` 仍选中了问题 worker，应优先检查 route trace 的 `fallback_reason`、`candidate_workers` 与 `/workers/{id}/readiness?mode=dispatch` 是否一致。
+
+#### 修复 1.3：最近失败任务统一恢复入口
+**文件**：
+- `src/main/java/com/agentcloud/engine/TaskService.java`
+- `src/main/java/com/agentcloud/server/TaskHandler.java`
+- `src/main/resources/web/console/app.js`
+
+**问题现象**：
+- 长任务在 `thread not found`、provider runtime failure、超大输出后进入 `waiting_human / failed / paused`。
+- 页面上只能分别点 `resume / continue / handoff`，但看不出应该 cold-start 还是换 worker。
+- 如果继续沿用旧 provider session/thread，恢复会反复失败。
+
+**当前合同**：
+- 查看最近可恢复任务：
+
+```powershell
+curl "http://localhost:8080/api/v1/tasks/recoverable?limit=10"
+```
+
+- 自动恢复单个任务：
+
+```powershell
+curl -X POST "http://localhost:8080/api/v1/tasks/<task_id>/recover" `
+  -H "Content-Type: application/json" `
+  -d '{"mode":"auto","reason":"manual recovery"}'
+```
+
+- 指定目标 worker 做 handoff 恢复：
+
+```powershell
+curl -X POST "http://localhost:8080/api/v1/tasks/<task_id>/recover" `
+  -H "Content-Type: application/json" `
+  -d '{"mode":"handoff","target_worker":"codex"}'
+```
+
+**排查提示**：
+- `plan.recovery_execution_mode=fresh_session` 表示本轮会清掉旧 `provider_session_id / provider_thread_id / codex_thread_id`。
+- `plan.recoverable=false` 且原因是认证/安装/环境问题时，应先修 provider 环境，不要盲目重试。
+- 如果 `target_worker` 或 `auto_handoff_target` 存在，`recover` 会优先走 handoff。
 
 #### 修复 1：积极的任务自动继续策略
 **文件**：`src/main/java/com/agentcloud/engine/ControlNodeGraph.java`

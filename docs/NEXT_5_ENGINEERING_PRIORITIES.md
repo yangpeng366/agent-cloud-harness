@@ -63,28 +63,40 @@
 
 ## 当前缺口
 
-当前仍缺少：
+当前已经不再是完全缺少这条 trace。代码层已经有最小 runtime 证据：
 
-- 明确的模型角色分工节点
-- 可追踪的 model tier selection 记录
-- strong planner / small executor 的稳定执行路径
-- fallback / escalation 的显式原因链
+- planner 阶段会写入 `planner_worker / planner_model_tier`
+- executor 阶段会写入 `executor_worker / executor_model_tier`
+- completion judgment 会写入 `evaluator_role / evaluator_model_tier / evaluation_result`
+- experiment run / matrix summary 已能统计 `orchestration_closed_loop_observed` 与 strong-small-strong loop
+
+当前仍缺少的是更硬的真实运行证据：
+
+- provider-backed 的 `short-001 / medium-001 / long-001` 三模式复跑
+- 从真实 worker artifact 到 completion judgment 的质量验收
+- 成本口径与 `strong_only / small_only` 的可比较结果
+- 至少一条真实 fallback / escalation 样本的可解释原因链
 
 ## 开发目标
 
-先做一个最小可运行场景，不要一开始泛化：
+先把已有最小 runtime 场景接到 baseline matrix，不要一开始泛化：
 
 - 强模型负责 task breakdown / judgment / acceptance
 - 小模型负责子任务执行
-- 至少支持单条主流程稳定跑完
+- `orchestrated` run 必须在 trace 中留下 planner / executor / evaluator 三段证据
+- 同一 case 必须能和 `strong_only / small_only` 比较
 
-建议引入可追踪字段：
+这些字段已经是必须保留的 runtime contract：
 
 - `selected_model_tier`
 - `selected_worker`
 - `why_selected`
 - `fallback_reason`
 - `evaluation_result`
+- `planner_model_tier`
+- `executor_model_tier`
+- `evaluator_model_tier`
+- `orchestration_closed_loop_observed`
 
 ## 验收标准
 
@@ -130,14 +142,14 @@
 
 当前缺少：
 
-- 固定实验模式
-- 固定输出指标
-- 固定任务集
-- 固定落盘格式
+- 真实 worker 执行后的 matrix 结果
+- 自动 artifact acceptance gate
+- 成本 threshold / cost gate
+- 把 baseline matrix HTTP gate 提升为 release gate
 
 ## 开发目标
 
-至少支持三种实验模式：
+代码层已经支持三种实验模式：
 
 - `mode=strong_only`
 - `mode=small_only`
@@ -153,11 +165,17 @@
 - `human_gate_count`
 - `failure_reason`
 
-任务集先从最小集合开始：
+内置 `baseline_matrix_v1` 已经有最小 3+3+3 case catalog：
 
 - 3 个短任务
 - 3 个中任务
 - 3 个长任务
+
+当前还应继续补：
+
+- 用 `scripts/Run-BaselineMatrixGateProbe.ps1` 做 HTTP 合同 gate
+- 跑一轮真实 worker 的 `short-001 / medium-001 / long-001`
+- 把 `experiment_summary`、失败 case 的 `live_flow / judgment_trace / tool_trace` 纳入 release gate 证据
 
 ## 验收标准
 
@@ -409,28 +427,30 @@ checkpoint / handoff packet 是整个 continuity 设计的地基。
 
 当前系统明显还带有过渡态特征：
 
-- `pause/resume/continue/escalate` 仍然是 GET
-- assistant/system message 投影是 best-effort
-- runtime layer 与 message layer 尚未完全统一
+- `pause/resume/continue/escalate` 已正式切到 POST 写接口，但旧 GET 兼容入口仍存在
+- 关键 lifecycle message 已有稳定投影字段，但覆盖面和浏览器级验收还需要继续收紧
+- runtime layer 与 message layer 的核心状态语义已对齐，剩余风险主要在长尾 subtype 和 UI 映射一致性
 
 ## 当前缺口
 
 当前仍缺少：
 
-- 明确的状态变更 API 语义
-- 稳定的消息投影规则
-- task state 与 dialogue state 的一致映射
+- 旧 GET 控制入口的退役策略、外部调用方迁移说明和最终下线验收
+- `task_receipt / task_action / task_state / task_progress / task_result` 之外的长尾 runtime subtype 投影边界
+- task state 与 dialogue state 的浏览器级一致映射验收矩阵
 
 ## 开发目标
 
-先把控制动作正式化为 POST/PATCH，例如：
+继续把控制动作固定为 POST 写接口，并把 GET 仅作为带审计标记的历史兼容入口：
 
-- `POST /tasks/{id}/pause`
-- `POST /tasks/{id}/resume`
-- `POST /tasks/{id}/continue`
-- `POST /tasks/{id}/escalate`
+- `POST /api/v1/tasks/{id}/pause`
+- `POST /api/v1/tasks/{id}/resume`
+- `POST /api/v1/tasks/{id}/continue`
+- `POST /api/v1/tasks/{id}/escalate`
+- `POST /api/v1/tasks/{id}/handoff`
+- `POST /api/v1/tasks/{id}/state`
 
-同时明确哪些 runtime 事件应该投影成稳定消息：
+当前已经明确的稳定 runtime/message 投影面包括：
 
 - `task_receipt`
 - `task_action`
@@ -438,26 +458,33 @@ checkpoint / handoff packet 是整个 continuity 设计的地基。
 - `task_progress`
 - `task_result`
 
-保证 message layer 成为稳定回放面，而不是临时 UI 辅助层。
+后续目标不是重新发明 message layer，而是把这组投影继续作为稳定回放面，补齐长尾 subtype、UI 映射和浏览器级验收。
 
 ## 验收标准
 
-以下至少满足：
+当前已经满足并有测试证据的部分：
 
-1. 控制动作使用语义正确的写接口
-2. task state change 有一致事件流
-3. runtime 关键事件可稳定投影到消息层
-4. `/dialogue/` 能稳定反映任务生命周期
+1. 控制动作使用语义正确的写接口：`TaskHandlerControlActionHttpTest.postPauseUsesFormalWriteRouteAndReasonBody()`
+2. 旧 GET 入口仍可用但会进入审计标记：`TaskHandlerControlActionHttpTest.legacyGetPauseStillWorksAndIsMarkedForAudit()`
+3. task state change 同时写一致事件流和消息流：`TaskServiceControlActionProjectionTest.updateTaskStateWritesConsistentLifecycleEventAndMessage()`
+4. task control action 有稳定消息投影字段：`TaskServiceControlActionProjectionTest.pauseTaskWritesControlActionProjectionWithStableMetadata()`
+5. continue 运行过程能投影 `task_progress / task_result`：`TaskServiceMessageReceiptTest.continueWritesAssistantProgressMessageWithExperimentRouteMetadata()`、`TaskServiceMessageReceiptTest.continueWritesAssistantResultMessageForTerminalTask()`
+
+仍需继续补强的验收：
+
+1. `/dialogue/` 真实浏览器路径能稳定反映 task lifecycle，并能区分正式 POST 动作与历史 GET 兼容动作
+2. 长尾 runtime subtype 进入消息层前有明确白名单、字段合同和回归测试
+3. GET 兼容入口下线前有迁移窗口、日志观测和失败回退策略
 
 ## 风险
 
-- 只改 API path，不统一事件语义
-- 消息投影仍是 best-effort，导致 UI 与 runtime 脱节
-- 状态变更没有审计字段，后续回放困难
+- 外部调用方继续依赖旧 GET，导致缓存/预取误触发风险长期存在
+- 新增 runtime subtype 绕过稳定 message contract，重新让 UI 与 runtime 脱节
+- 只看单元测试而缺少 `/dialogue/` 浏览器级生命周期验收，导致投影字段存在但页面状态不一致
 
 ## 推荐策略
 
-先收口关键生命周期事件，不要一次把所有 message subtype 全铺开。
+保持当前策略：关键生命周期事件先收口，长尾 subtype 只在有明确字段合同和页面消费路径时再进入 message layer。GET 兼容入口继续保留短期安全垫，但所有新接入必须使用 POST。
 
 ---
 

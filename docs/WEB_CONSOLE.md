@@ -16,7 +16,8 @@
 - `Console`
   - 保留原来的 control-plane 观察视角
   - 更适合集中看 `live_flow`、raw JSON 和细节排障
-  - 当前 `runtime health` 与 `route box` 也会直接显示 provider 恢复降级窗口，不必只靠 raw JSON 判断“恢复时系统会避开谁”
+- 当前 `runtime health` 与 `route box` 也会直接显示 provider 恢复降级窗口，不必只靠 raw JSON 判断“恢复时系统会避开谁”
+- Provider Detail 现在会额外拉取对应 worker 的 `readiness?mode=dispatch`，直接显示 dispatch preflight 是否 ready、结果是否来自缓存、是否为 active probe，以及本次探测的 CLI 参数/命令形态；排查“provider 看似 ready 但 worker 命令参数不兼容”时不必只看 raw JSON。
 
 当前稳定能力仍然主要建立在 `task/session/live_flow` API 上。关于下一步的真实消息层方案，见：
 
@@ -42,6 +43,7 @@
 - 选择任务并查看 `live_flow`
 - 触发 `continue / pause / resume / escalate / handoff`
 - 查看 route preview、judgment、artifact、tool trace、原始 `live_flow` JSON
+- 查看 provider detail 中的 worker dispatch probe，包括 `dispatch_preflight_metadata.dispatch_preflight_probe_args` 与 `dispatch_preflight_command_shape`
 
 ## 当前交互形态
 
@@ -70,7 +72,8 @@
 - 对当前选中的 task，如果历史 `session message.metadata` 还是旧壳，而 `live_flow.task.metadata.failure_summary_readable` 已经更完整，transcript 主卡也应允许借用这份 task metadata 来补齐默认预览和展开正文
 - 这条 transcript 主卡纠偏不应严格绑死在 `selectedTaskId` 上；如果页面当前已经聚焦到同一条 `live_flow.task`，主卡也应允许直接借用这条 focused task 的最新 outcome projection，把 `failed` 收成短可读失败摘要
 - transcript 主卡收成可读失败摘要后，还应继续控制默认密度：折叠态正文与 outcome strip 优先保留 `worker + short failure/result`，恢复状态与下一步继续留在 hint / expanded body，而不是重新把第一屏拉成长状态行
-- richer acceptance / 真实页复看时，浏览器 console 也应尽量干净；像 `/favicon.ico` 这种稳定可复现的静态资源 `404` 不属于主业务，但仍应收掉，避免污染页面验收噪声
+- richer acceptance / 真实页复看时，浏览器 console 也应尽量干净；`/dialogue/` 与 `/console/` 现在都声明空 favicon，服务端也对 `/favicon.ico` 返回 `204`，避免稳定可复现的 favicon `404` 污染页面验收噪声
+- 当前验证入口：`WebConsoleHandlerHttpTest.consoleRouteDeclaresEmptyFavicon()` 与 `WebConsoleHandlerHttpTest.rootFaviconReturnsNoContentForAcceptanceNoise()`
 - 对带 `task=` hash 的真实页，首屏也不应先闪旧态再收敛；更接近 `codex/openclaw` 的体验是：一打开就尽量直接落在当前 selected task 的 worker/status/outcome 上，而不是先渲染一版 `idle / failed` 再等下一轮刷新纠正
 - 如果要把 `/dialogue/` 收得更像 `codex/openclaw`，优先增强第一页的 `worker / status / short output` 执行条带，而不是继续往 details 里堆信息；执行中的 worker 必须是第一眼就能扫到的主信息
 - 对已选中的 active task，第一页 transcript 顶部最好再钉一块 `latest round output` 摘要，把最近一轮 worker 结果直接放到主视线里，而不是只靠 message list 里的历史顺序自然出现
@@ -99,7 +102,8 @@
 - composer 的内联上下文现在也会短暂保留这条最近 façade 回执，形成稳定的“上一轮系统反馈”，不再只靠瞬时 toast 传达任务已记录、已推进或已完成
 - 这条内联 façade 回执现在也会按当前 `session/task` 作用域约束，切到别的会话或别的任务时不会继续显示上一轮不相关的反馈
 - 在 `自动` 模式下，composer 现在默认先走 façade 的 `task_mode=task_auto`；如果当前上下文已经选中 task，这一轮就按 continuity 继续该 task；如果当前只有 session，则会 materialize 成新 task，而不是只写 session note
-- 当前真实运行里还要额外注意一个前端状态同步缺口：`task_auto` 已经在后端 materialize 成新 task 时，页面不一定会立刻切到这个新 task；这属于 UI selection seam，而不是 `task_auto` 语义本身失效
+- `task_auto` materialize 新 task 后的前端选择同步已经收口：页面会先显示 `task_pending`，再用 pending auto-task tracker 主动 catch up 同 session 下的新 task，并切到该 task
+- 当前验证入口：`node --test src/test/js/dialogue-facade-pending-plan.test.mjs src/test/js/dialogue-pending-auto-task-plan.test.mjs`
 - 在 `聊天` 模式下，composer 也会强制走 façade 的 `task_mode=task_auto`。这里的“聊天”不再等于 `message_only`，而是“按当前 session/task 连续推进”
 - 在 `新任务` 模式下，composer 会走 façade 的 `task_mode=task_required`，由 façade 复用原生 `TaskService` 强制 materialize 新任务并启动
 - `follow-up` 不再长期占一个显式模式位；现在更偏向通过“生成 follow-up”按钮或已有 parent 绑定自动触发，并仍然透传 `parent_task_id` 来生成新的 follow-up task，而不是继续父任务本身
@@ -113,14 +117,16 @@
 - 对于 `auto_start / resume / continue / handoff` 这类会重新进入执行链的动作，后端还会尽量根据 `summary / judgment / artifact / active_context` 生成 `task_progress`；若任务已进入 `done / failed`，则会写成 `task_result`
 - `task_progress / task_result` 现在会额外带上 `model_mode / route_source / preferred_worker_hint / learning_hint_applied / tool_chain_* / acceptance_result` 等结构化 metadata，方便在消息层直接看当前 route 与实验上下文
 - `task_progress / task_result` 的 message body 现在也会优先收成 `summary_preview`，并把 `next_step` 作为第二行提示；`task_action / task_state / task_receipt` 则会优先消费 `action_label` 与当前 `task_status / control_node`，更像 thread 回执，而不是原始长文本广播
-- 这条“默认先显示摘要”现在已经证明有一个真实副作用：用户能看到任务被推进了，但看不到完整结果正文。因此下一轮 UI 约束不该再是“只保留 summary_preview”，而应改成“collapsed 默认看摘要，expanded 再看 full content / output_text / artifact_content”
+- 这条“默认先显示摘要”的副作用已经收口到 message expansion 合同：collapsed 默认看 `summary_preview`，expanded 会优先展开 `full_content / output_text / artifact_content`，失败态没有完整正文时也会把 `failure_summary_readable` 当成第一等展开源
+- 当前验证入口：`node --test src/test/js/dialogue-message-expansion-plan.test.mjs`
 - 对真实项目页来说，这条约束还要再落一层：如果当前已经选中了 active task，不能只等用户手点刷新；`/dialogue/` 应主动短轮询当前 task 的消息和 live_flow，让最新 `task_progress / task_result` 自动回流到主聊天流
 - 对当前选中 task 的最新 `task_progress / task_result`，如果后端已经提供 `metadata.full_content / output_text / artifact_content`，主聊天流里至少要做到两件事：
   - 明确露出“展开完整结果”入口，而不是只给一条模糊摘要
   - 对最新结果卡给予更强的默认可见性，避免用户误判成“没拿到 agent 返回结果”
-- 这条“可展开结果”不应只看 `full_content / output_text / artifact_content`。如果失败态消息只有 `failure_summary_readable`，主聊天流也应把它当成第一等展开源，至少能展开出 `Failure Summary`，而不是只留一条 `failed`
+- 这条“可展开结果”不只看 `full_content / output_text / artifact_content`。如果失败态消息只有 `failure_summary_readable`，主聊天流也会把它当成第一等展开源，至少展开出 `Failure Summary`，而不是只留一条 `failed`
 - 若当前 worker 返回的是不可读失败输出（例如 provider/runtime 侧 mojibake），主聊天流应优先退化成可读失败摘要，而不是直接把原始乱码暴露给用户；原始 trace 继续下沉到 `details / live_flow / judgment_trace`
-- 对真实任务流来说，只给一条可读失败摘要还不够；如果系统已经自动重试或自动切 worker，主聊天流至少还应露出 `failure_class / auto retry / auto handoff / human_gate` 这类恢复状态
+- 对真实任务流来说，主聊天流现在不只给一条可读失败摘要；如果系统已经自动重试或自动切 worker，消息卡和 pinned outcome 会露出人话化的 `failure_class / retry / handoff / human_gate` 恢复状态
+- 当前验证入口：`node --test src/test/js/dialogue-task-thread-preview-regression.test.mjs`
 - 任务气泡和链头会直接显示 `auto-start / manual-start` 标记，信号来自任务元数据里的 `start_mode`
 - message card 会额外显示 `trigger / completion / action` 信号标签，便于快速判断这条 assistant 回执是由哪次推进动作触发的
 - `/dialogue/` 的 message card 现在也会直接把 route / tool chain / mode / learning hint 转成 badge，不必切到右侧 detail 才能看当前执行上下文
@@ -179,16 +185,21 @@
 - 同一轮里，details 的 header、empty state、overview/action/card 默认高度也继续压低一层
 - 最新这一轮又继续压了右侧 details 默认密度：header、empty state、overview/action/card padding 更小，更像真正的次级 side surface
 - 最新这一轮又继续压了 transcript 顶部筛选和 composer 下半区：filter summary 更短更薄，composer 的 label / inline hint / mode bar / 参数 summary 更接近单聊天输入器
-- 当前还有一个明确的布局尾项：消息较少时，transcript 默认仍会把消息卡停在上半区，导致大块空白落在消息下方、composer 上方。更接近 `codex/openclaw` 的壳层应该让 `summary + transcript` 组整体贴近 composer，把剩余空白优先留在消息组上方
-- 如果下方还挂着折叠态 `任务轨迹` summary，这个底部栈也应一起贴近 composer；不应出现“消息卡和轨迹摘要都在上半区，下面再留一截白板”的断层
-- 折叠态 `任务轨迹` summary 本身也应更像一条薄 footer strip，而不是第二块卡片头；否则就算 transcript 已贴底，视觉上仍会像“中间断了一层”
-- 当前还有一个明确的时间显示缺口：后端消息时间现在可能以 epoch seconds 浮点数返回；前端若直接 `new Date(value)` 会误显示成 `01/21 22:04`。`/dialogue/` 必须先做统一时间归一化，再渲染聊天流、details、artifact、tool trace 和 session/task rail 时间
+- 短 transcript 的大空白问题已经收口到 CSS 与回归测试：`message-panel__body--stream-only` 会让 `message-stream` 作为底部栈贴近 composer，折叠态 `任务轨迹` summary 也被压成薄 footer strip
+- 当前验证入口：`node --test src/test/js/dialogue-transcript-layout-plan.test.mjs`
+- 若真实页再次出现“消息卡悬在上半区、composer 上方断一截”，优先对照 `task_note_attach.layout_metrics.gapBetweenDrawerAndComposer <= 28` 与 `drawerSummaryHeight <= 28`，再排查是否实例仍在跑旧 JAR
+- 时间显示缺口已经收口：后端消息时间可能以 epoch seconds 浮点数返回，`/dialogue/` 与 `/console/` 都会先走 `normalizeTimestampValue(...) / timestampMs(...)` 再渲染聊天流、details、artifact、tool trace 和 session/task rail 时间
+- 当前验证入口：`node --test src/test/js/dialogue-time-normalization.test.mjs src/test/js/console-time-normalization.test.mjs`
+- 前端资源树现在通过 `src/main/resources/web/package.json` 局部声明 `type=module`，只让 `/dialogue/` 与 `/console/` 的浏览器模块和 Node plan 测试按 ESM 解析；不要把仓库根 `package.json` 直接改成 `type=module`，否则会影响仍使用 CommonJS 的 `scripts/*.js` 页面级探针。
+- 2026-05-19 已复跑完整前端 plan 套件：`node --test src/test/js/*.mjs`，结果 `163` 个测试全部通过，并且不再出现 `MODULE_TYPELESS_PACKAGE_JSON` 警告。
 - 真实项目排查时还要额外区分“逻辑没修”和“实例没更新”两件事：如果源码里已经统一做了 epoch-seconds 归一化，但 `8080` 页面仍显示旧错误时间或旧摘要卡片，优先怀疑当前实例仍在跑旧/坏的运行 JAR
-- 当前还有一个明确的结果可见性缺口：`task_progress / task_result` 若只显示 `summary_preview`，用户点了继续推进也看不到完整结果正文。下一轮约束应改成“collapsed 默认看摘要，expanded 可直接展开 full content / output_text / artifact_content`
-- 当前还有一个明确的失败恢复可见性缺口：主聊天流不能只剩一条失败摘要，应至少能看出 `failure_class / auto retry / auto handoff / human_gate` 中的当前恢复阶段
+- 结果可见性缺口已经收口到 `message-expansion-plan.js`：`task_progress / task_result` collapsed 默认看摘要，expanded 可直接展开 `full_content / output_text / artifact_content`，并在旧空壳 `full_content` 遇到 `failure_summary_readable` 时回退到可读失败摘要
+- 当前验证入口：`node --test src/test/js/dialogue-message-expansion-plan.test.mjs`
+- 失败恢复可见性缺口已经收口：主聊天流不只剩失败摘要，还能看出 `failure_class / auto retry / auto handoff / human_gate` 中的当前恢复阶段，并把原始枚举人话化
+- 当前验证入口：`node --test src/test/js/dialogue-task-thread-preview-regression.test.mjs`
 - 第四轮收口还把 transcript 顶部 role/scope filter 下沉成默认折叠的 `筛选` drawer，并进一步压薄了窄屏下的 header / statusbar / composer footer；当前 `narrow` profile 单独复跑也保持绿色
-- 当前还有一条正在收口的真实 seam：default `task_auto` 已能在后端 materialize 新 task，但若 façade 响应仍在进行，前端可能短时间停在 session-only shell；更合理的方向是先显示 `task_pending`，再主动 catch up 同 session 下的新 task，而不是等整轮响应结束
-- fresh `18348` 这轮已经证明这条 catch-up 方向有效：default `task_auto` 现在能在真实页面里切进新 task；当前剩下的是一个更小的实现缺口 `delay is not defined`，属于前端 helper 漏补，而不是产品语义回退
+- `task_auto` catch-up 也已经收口：default `task_auto` 后端 materialize 新 task 后，前端会先显示 `task_pending`，再通过 pending tracker 主动抓取并选中新 task；`delay()` helper 已补齐，不再保留 `delay is not defined` 缺口
+- 当前验证入口：`node --test src/test/js/dialogue-facade-pending-plan.test.mjs src/test/js/dialogue-pending-auto-task-plan.test.mjs`
 - shell screenshot 和 business smoke 当前应串行跑，不要并发共用一个实例；否则后者创建的 session/task/hash 会污染前者的壳层报告
 - 如果要验证 richer browser 业务路径，优先参考 `Run-DialogueBrowserAcceptanceProbe.ps1`；后续若要把“壳层截图”和“业务交互 smoke”分层，建议按 `docs/DIALOGUE_CODEX_UI_ADAPTATION_PLAN.md` 收口
 - 如果要直接执行 `/dialogue/` UI 启动、shell screenshot、light business smoke 的完整顺序，优先参考 `docs/DIALOGUE_UI_VALIDATION_RUNBOOK.md`

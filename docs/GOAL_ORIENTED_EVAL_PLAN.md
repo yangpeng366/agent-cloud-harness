@@ -258,6 +258,37 @@
 - 足够小，便于用三种 `model_mode` 快速对比
 - 足够可验收，能形成第一版闭环证据
 
+## 5.5 当前内置 baseline case 合同
+
+当前代码层已经提供第一版 `baseline_matrix_v1` case catalog：
+
+- 3 个 `short`
+- 3 个 `medium`
+- 3 个 `long`
+- 每个 case 都会在 `strong_only / small_only / orchestrated` 三种 `model_mode` 下创建可比较 task
+
+这些 case 不再只依赖 title / intent / goal。`GET /api/v1/experiment_matrix/cases` 暴露的每个 `BaselineTaskCase` 还必须带：
+
+- `workspace_preconditions`：运行前置条件，例如当前 worktree、临时 SQLite、架构边界
+- `acceptance_criteria`：可人工或脚本审计的最小通过标准
+- `expected_artifacts`：期望产物类别，例如 `fix_plan`、`regression_assertion`、`acceptance_gate`
+- `recovery_policy`：该长度 bucket 允许的 retry / handoff / human gate 边界
+
+`POST /api/v1/experiment_matrix/runs` 创建 task 时，也会把同一份合同同步写入 task metadata：
+
+- `baseline_workspace_preconditions`
+- `baseline_acceptance_criteria`
+- `baseline_expected_artifacts`
+- `baseline_recovery_policy`
+
+这一步把 P2 缺口从“没有 3+3+3 任务集”推进为更具体的问题：
+
+- case 已有内置合同
+- 仍缺真实仓库任务的一轮正式复跑结果
+- 仍缺成本口径与 acceptance gate 自动判定
+- 已有最小 HTTP release-gate 探针：`scripts/Run-BaselineMatrixGateProbe.ps1`
+- 仍缺真实 worker 执行后的质量 gate 和成本 gate
+
 ---
 
 ## 6. 推荐最小实验集
@@ -276,8 +307,39 @@
 
 ### 任务范围
 
-- 优先选用 `5.4` 中的 3-5 个小型真实任务
-- 每个任务都要求有明确 acceptance，且最好能复用仓库现有 API / trace / experiment 观测面
+- 优先先跑内置 `baseline_matrix_v1` 的 3+3+3 catalog
+- 如只做冒烟，可先选 `short-001 / medium-001 / long-001`
+- 每个任务都必须保留 `baseline_acceptance_criteria` 与 `baseline_recovery_policy`
+- 后续再把 `5.4` 中的新真实任务追加为 `baseline_matrix_v2`
+
+### 最小 release-gate 探针
+
+当前可以先用不触发真实 worker 的 HTTP 探针验证 baseline matrix 接面是否仍可作为 release gate 起点：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-BaselineMatrixGateProbe.ps1 `
+  -BaseUrl http://localhost:8080 `
+  -ExperimentName baseline-gate-smoke `
+  -ReportPath .tmp\baseline-matrix-gate-probe.json
+```
+
+该探针会验证：
+
+- `/api/v1/health` 可用
+- `/api/v1/experiment_matrix/cases` 返回 3+3+3 catalog
+- 每个 case 都带 workspace / acceptance / artifact / recovery 合同
+- `/api/v1/experiment_matrix/runs` 能创建 `short-001 / medium-001 / long-001` 的三模式冒烟 run
+- 创建出的 task metadata 保留 baseline 合同
+- `/api/v1/experiment_matrix/summary` 能按 mode 和 case 聚合这 9 条 run
+
+2026-05-19 已在隔离实例 `http://localhost:18084` 验证通过，报告：
+
+- `.tmp/baseline-matrix-gate-probe-20260519.json`
+- `catalog_case_count = 9`
+- `created_run_count = 9`
+- `summary_total_runs = 9`
+
+注意：这条 gate 只证明 baseline matrix 的 HTTP 合同、case 合同和 summary 骨架可复跑；它不证明真实 worker 已完成任务，也不证明 acceptance quality gate 或 cost gate 已闭环。
 
 ### 必看观测
 
@@ -451,6 +513,16 @@
 - failure_reason
 - recovery_success
 - final_artifact_quality_note
+- strong-to-small 闭环证据：
+  - runs_with_strong_planner_evidence
+  - runs_with_small_executor_evidence
+  - runs_with_strong_evaluator_evidence
+  - runs_with_strong_small_strong_loop
+  - evaluator_model_tier_counts
+
+这些 strong-to-small 字段必须来自 harness 自动落盘的运行时证据：
+`planner_worker/planner_model_tier`、`executor_worker/executor_model_tier` 与 completion judgment 的
+`evaluator_model_tier`。实验记录中不要用人工备注补齐这些字段，否则 matrix summary 会把真实闭环能力和验收后判断混在一起。
 
 这样后续才能做真实对比，而不是只留下印象。
 
