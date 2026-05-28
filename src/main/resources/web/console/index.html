@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agent Cloud Console</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="./app.css">
 </head>
 <body>
@@ -166,6 +167,7 @@
             <button class="button button--ghost" data-task-action="continue" type="button">继续</button>
             <button class="button button--ghost" data-task-action="pause" type="button">暂停</button>
             <button class="button button--ghost" data-task-action="resume" type="button">恢复</button>
+            <button class="button button--ghost" data-task-action="recover" type="button">自动恢复</button>
             <button class="button button--ghost" data-task-action="escalate" type="button">升级</button>
         </div>
 
@@ -265,6 +267,13 @@
                     <span>最近产物</span>
                 </div>
                 <div class="artifact-list" id="artifactList"></div>
+            </section>
+
+            <section class="inspector-card">
+                <div class="section-title">
+                    <span>Agent Actions</span>
+                </div>
+                <div class="artifact-list" id="agentActionList"></div>
             </section>
 
             <section class="inspector-card">

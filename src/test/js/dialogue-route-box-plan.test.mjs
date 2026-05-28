@@ -45,8 +45,8 @@ test("route box plan counts recovery provider deprioritization as drawer detail"
         }
     });
 
-    assert.equal(plan.hasDrawer, false);
-    assert.equal(plan.drawerSummary, "");
+    assert.equal(plan.hasDrawer, true);
+    assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
 });
 
 test("route box plan keeps recovery fresh-session chip as drawer detail", () => {

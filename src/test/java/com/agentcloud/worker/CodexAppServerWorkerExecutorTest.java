@@ -38,8 +38,14 @@ class CodexAppServerWorkerExecutorTest {
     @Test
     void missingBinaryReturnsFailedMetadataWithoutThrowing() {
         String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
         String original = System.getProperty(propertyKey);
+        String originalRunDir = System.getProperty(runDirKey);
+        String originalMode = System.getProperty(modeKey);
         System.setProperty(propertyKey, "definitely-missing-codex-binary-for-test");
+        System.setProperty(runDirKey, tempDir.resolve("provider-runs").toString());
+        System.clearProperty(modeKey);
         try {
             AgentProviderRegistry registry = new AgentProviderRegistry();
             BuiltinAgentProviders.defaults().forEach(registry::register);
@@ -52,11 +58,158 @@ class CodexAppServerWorkerExecutorTest {
             assertEquals("codex", result.metadata().get("provider_id"));
             assertEquals("definitely-missing-codex-binary-for-test", result.metadata().get("cli_binary"));
             assertEquals("codex_json_rpc", result.metadata().get("provider_output_parser"));
+            assertEquals("provider_not_installed", result.metadata().get("provider_failure_class"));
+            assertTrue(result.metadata().get("provider_failure_reason").toString()
+                .contains("definitely-missing-codex-binary-for-test"));
+            assertEquals(false, result.metadata().get("provider_retryable"));
+            assertTrue(Files.exists(Path.of(result.metadata().get("provider_run_dir").toString())));
+            assertTrue(Files.exists(Path.of(result.metadata().get("provider_prompt_path").toString())));
+            assertTrue(Files.exists(Path.of(result.metadata().get("provider_event_log_path").toString())));
+            assertTrue(Files.exists(Path.of(result.metadata().get("provider_last_message_path").toString())));
+            assertTrue(Files.exists(Path.of(result.metadata().get("provider_run_metadata_path").toString())));
         } finally {
             if (original == null) {
                 System.clearProperty(propertyKey);
             } else {
                 System.setProperty(propertyKey, original);
+            }
+            if (originalRunDir == null) {
+                System.clearProperty(runDirKey);
+            } else {
+                System.setProperty(runDirKey, originalRunDir);
+            }
+            if (originalMode == null) {
+                System.clearProperty(modeKey);
+            } else {
+                System.setProperty(modeKey, originalMode);
+            }
+        }
+    }
+
+    @Test
+    void execJsonModeRunsCodexExecAndReadsLastMessageRunFiles() throws Exception {
+        String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
+        String original = System.getProperty(propertyKey);
+        String originalRunDir = System.getProperty(runDirKey);
+        String originalMode = System.getProperty(modeKey);
+        Path cli = fakeCodexExecJsonCli();
+        System.setProperty(propertyKey, cli.toString());
+        System.setProperty(runDirKey, tempDir.resolve("codex-exec-json-runs").toString());
+        System.setProperty(modeKey, "exec_json");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("codex"), "codex");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("provider_native_cli_json", result.metadata().get("execution_backend"));
+            assertEquals("codex_exec_json", result.metadata().get("provider_output_parser"));
+            assertEquals("session_exec_json_test", result.metadata().get("provider_session_id"));
+            assertEquals("codex exec json result", result.outputText().trim());
+            assertTrue(Path.of(result.metadata().get("provider_prompt_path").toString()).toFile().isFile());
+            assertTrue(Files.readString(Path.of(result.metadata().get("provider_event_log_path").toString()))
+                .contains("session_exec_json_test"));
+            assertEquals("codex exec json result",
+                Files.readString(Path.of(result.metadata().get("provider_last_message_path").toString())).trim());
+            assertTrue(result.metadata().get("cli_command_preview").toString().contains("exec --json -o"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+            if (originalRunDir == null) {
+                System.clearProperty(runDirKey);
+            } else {
+                System.setProperty(runDirKey, originalRunDir);
+            }
+            if (originalMode == null) {
+                System.clearProperty(modeKey);
+            } else {
+                System.setProperty(modeKey, originalMode);
+            }
+        }
+    }
+
+    @Test
+    void codexRunFileMetadataIsAttachedToFailureResult() throws Exception {
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String originalRunDir = System.getProperty(runDirKey);
+        System.setProperty(runDirKey, tempDir.resolve("codex-runs").toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+
+            Method buildPlan = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+                "buildPlan",
+                LocalCliProviderConfig.ResolvedConfig.class,
+                TaskRuntimeContext.class,
+                String.class
+            );
+            buildPlan.setAccessible(true);
+            Object plan = buildPlan.invoke(
+                executor,
+                new LocalCliProviderConfig("codex", "codex", "X", "Y").resolve(),
+                runtimeContext("codex"),
+                "D:\\gitAll\\agent-cloud-harness"
+            );
+            Class<?> runFilesClass = Class.forName("com.agentcloud.worker.CodexAppServerWorkerExecutor$ProviderRunFiles");
+            Method createRunFiles = runFilesClass.getDeclaredMethod(
+                "create",
+                String.class,
+                String.class,
+                String.class,
+                plan.getClass()
+            );
+            createRunFiles.setAccessible(true);
+            Object runFiles = createRunFiles.invoke(null, "codex", "task_codex_executor", "codex", plan);
+
+            Method failureResult = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+                "failureResult",
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                String.class,
+                plan.getClass(),
+                com.agentcloud.agent.AgentProviderStatus.class,
+                long.class,
+                Integer.class,
+                String.class,
+                runFilesClass
+            );
+            failureResult.setAccessible(true);
+            WorkerExecutionResult result = (WorkerExecutionResult) failureResult.invoke(
+                executor,
+                "failed",
+                "codex app-server test failure",
+                "codex",
+                "codex",
+                "D:\\gitAll\\agent-cloud-harness",
+                plan,
+                null,
+                12L,
+                null,
+                null,
+                runFiles
+            );
+
+            Path promptPath = Path.of(result.metadata().get("provider_prompt_path").toString());
+            Path metadataPath = Path.of(result.metadata().get("provider_run_metadata_path").toString());
+            assertTrue(Files.exists(promptPath));
+            assertTrue(Files.exists(metadataPath));
+            assertTrue(Files.readString(promptPath).contains("Task Focus:"));
+            assertTrue(Files.readString(metadataPath).contains("codex app-server test failure"));
+        } finally {
+            if (originalRunDir == null) {
+                System.clearProperty(runDirKey);
+            } else {
+                System.setProperty(runDirKey, originalRunDir);
             }
         }
     }
@@ -180,6 +333,81 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    void promptBuilderIncludesWorkspaceRootsAsWorkspaceReferences() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+        TaskRuntimeContext context = runtimeContext("codex", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "检查本地仓库并补测试。",
+            "workspace_roots", List.of("D:\\gitAll\\articleeditor")
+        )));
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+        Object plan = method.invoke(
+            executor,
+            new LocalCliProviderConfig("codex", "codex", "X", "Y").resolve(),
+            context,
+            "D:\\gitAll\\articleeditor"
+        );
+        Method promptGetter = plan.getClass().getDeclaredMethod("prompt");
+        promptGetter.setAccessible(true);
+        String prompt = (String) promptGetter.invoke(plan);
+
+        assertTrue(prompt.contains("Workspaces:"));
+        assertTrue(prompt.contains("D:\\gitAll\\articleeditor"));
+    }
+
+    @Test
+    void codexResolvesWorkingDirectoryFromSingleWorkspaceRootsWhenExplicitCwdMissing() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+        TaskRuntimeContext context = runtimeContext("codex", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "按 workspace_roots 执行本地代码任务。",
+            "workspace_roots", List.of("D:\\gitAll\\articleeditor")
+        )));
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "resolveWorkingDirectory",
+            TaskRuntimeContext.class,
+            com.agentcloud.model.Worker.class
+        );
+        method.setAccessible(true);
+
+        assertEquals("D:\\gitAll\\articleeditor", method.invoke(executor, context, null));
+    }
+
+    @Test
+    void codexDoesNotCollapseMultipleWorkspaceRootsIntoArbitraryCwd() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+        TaskRuntimeContext context = runtimeContext("codex", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "多仓库任务应由 ChatFacade 拆成子任务。",
+            "workspace_roots", List.of("D:\\gitAll\\articleeditor", "D:\\gitAll\\agent-cloud-harness")
+        )));
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "resolveWorkingDirectory",
+            TaskRuntimeContext.class,
+            com.agentcloud.model.Worker.class
+        );
+        method.setAccessible(true);
+
+        assertEquals(Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString(),
+            method.invoke(executor, context, null));
+    }
+
+    @Test
     void codexPlanUsesResolvedWindowsLaunchWrapperMetadata() throws Exception {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);
@@ -263,5 +491,28 @@ class CodexAppServerWorkerExecutorTest {
             12
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, null);
+    }
+
+    private Path fakeCodexExecJsonCli() throws Exception {
+        String body = """
+            @echo off
+            set OUT=
+            :loop
+            if "%1"=="" goto done
+            if "%1"=="-o" (
+              set OUT=%2
+              shift
+              shift
+              goto loop
+            )
+            shift
+            goto loop
+            :done
+            echo {"type":"session.created","session_id":"session_exec_json_test"}
+            echo {"type":"message","text":"fallback output"}
+            echo codex exec json result> "%OUT%"
+            exit /b 0
+            """;
+        return Files.writeString(tempDir.resolve("codex-exec-json.cmd"), body);
     }
 }

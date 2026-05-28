@@ -7,6 +7,7 @@ import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.model.RuntimeFactSet;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -36,7 +37,8 @@ public class RuntimeCognitionSurfaceAssembler {
                 routePreview.candidateWorkers() == null ? List.of() : routePreview.candidateWorkers(),
                 blankToNull(routePreview.preferredWorkerHint()),
                 routePreview.learningHintApplied(),
-                blankToNull(routePreview.fallbackReason())
+                blankToNull(routePreview.fallbackReason()),
+                routeSkippedWorkerMetadata(routePreview.dispatchSkippedWorkers())
             );
 
         RuntimeCognitionSurfaceView.ExecutionSurface executionSurface = executionBoundary == null ? null
@@ -47,6 +49,23 @@ public class RuntimeCognitionSurfaceAssembler {
                 ),
                 blankToNull(executionBoundary.executionId()),
                 blankToNull(executionBoundary.executionStatus()),
+                metadataString(executionMetadata, "execution_backend"),
+                metadataString(executionMetadata, "provider_id"),
+                metadataString(executionMetadata, "provider_session_id"),
+                metadataString(executionMetadata, "provider_thread_id"),
+                metadataString(executionMetadata, "resume_provider_session_id"),
+                metadataString(executionMetadata, "provider_error"),
+                metadataString(executionMetadata, "provider_turn_status"),
+                metadataString(executionMetadata, "provider_failure_class"),
+                metadataString(executionMetadata, "provider_failure_reason"),
+                metadataBoolean(executionMetadata, "provider_retryable", runtimeMetadata),
+                metadataStringList(executionMetadata, "provider_protocol_trace"),
+                metadataString(executionMetadata, "provider_run_dir"),
+                metadataString(executionMetadata, "provider_prompt_path"),
+                metadataString(executionMetadata, "provider_stdout_path"),
+                metadataString(executionMetadata, "provider_event_log_path"),
+                metadataString(executionMetadata, "provider_last_message_path"),
+                metadataString(executionMetadata, "provider_run_metadata_path"),
                 executionBoundary.durationMs(),
                 executionBoundary.toolInvocationCount(),
                 executionBoundary.toolInvocationIds() == null ? List.of() : executionBoundary.toolInvocationIds(),
@@ -134,7 +153,25 @@ public class RuntimeCognitionSurfaceAssembler {
                     : metadataStringList(executionMetadata, "evidence_refs"),
                 metadataStringList(executionMetadata, "unfinished_items").isEmpty()
                     ? metadataStringList(runtimeMetadata, "unfinished_items")
-                    : metadataStringList(executionMetadata, "unfinished_items")
+                    : metadataStringList(executionMetadata, "unfinished_items"),
+                metadataMapList(executionMetadata, runtimeMetadata, "proposed_actions"),
+                metadataMapList(executionMetadata, runtimeMetadata, "accepted_actions"),
+                metadataMapList(executionMetadata, runtimeMetadata, "rejected_actions"),
+                metadataMapList(executionMetadata, runtimeMetadata, "approval_needed_actions"),
+                metadataStringList(executionMetadata, "context_requests").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "context_requests")
+                    : metadataStringList(executionMetadata, "context_requests"),
+                firstNonBlank(
+                    metadataString(executionMetadata, "completion_claim"),
+                    metadataString(runtimeMetadata, "completion_claim")
+                ),
+                firstNonBlank(
+                    metadataString(executionMetadata, "handoff_target"),
+                    metadataString(runtimeMetadata, "handoff_target")
+                ),
+                metadataStringList(executionMetadata, "risk_flags").isEmpty()
+                    ? metadataStringList(runtimeMetadata, "risk_flags")
+                    : metadataStringList(executionMetadata, "risk_flags")
             );
 
         RuntimeCognitionSurfaceView.JudgmentSurface executionJudgmentSurface =
@@ -431,6 +468,39 @@ public class RuntimeCognitionSurfaceAssembler {
         return List.of();
     }
 
+    private List<Map<String, Object>> metadataMapList(Map<String, Object> primary,
+                                                      Map<String, Object> fallback,
+                                                      String key) {
+        List<Map<String, Object>> selected = metadataMapList(primary, key);
+        return selected.isEmpty() ? metadataMapList(fallback, key) : selected;
+    }
+
+    private List<Map<String, Object>> metadataMapList(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return List.of();
+        }
+        Object value = metadata.get(key);
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        ArrayList<Map<String, Object>> items = new ArrayList<>();
+        for (Object raw : iterable) {
+            if (!(raw instanceof Map<?, ?> map) || map.isEmpty()) {
+                continue;
+            }
+            LinkedHashMap<String, Object> copied = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null && entry.getValue() != null) {
+                    copied.put(entry.getKey().toString(), entry.getValue());
+                }
+            }
+            if (!copied.isEmpty()) {
+                items.add(copied);
+            }
+        }
+        return List.copyOf(items);
+    }
+
     private Boolean objectBoolean(Object value) {
         if (value instanceof Boolean bool) {
             return bool;
@@ -439,6 +509,33 @@ public class RuntimeCognitionSurfaceAssembler {
             return Boolean.parseBoolean(text);
         }
         return null;
+    }
+
+    private List<Map<String, Object>> routeSkippedWorkerMetadata(List<WorkerRouter.RouteSkippedWorker> skippedWorkers) {
+        if (skippedWorkers == null || skippedWorkers.isEmpty()) {
+            return List.of();
+        }
+        return skippedWorkers.stream()
+            .map(skipped -> {
+                LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+                putIfNonBlank(metadata, "worker_id", skipped.workerId());
+                putIfNonBlank(metadata, "reason", skipped.reason());
+                putIfNonBlank(metadata, "provider_failure_class", skipped.providerFailureClass());
+                putIfNonBlank(metadata, "provider_failure_reason", skipped.providerFailureReason());
+                if (skipped.providerRetryable() != null) {
+                    metadata.put("provider_retryable", skipped.providerRetryable());
+                }
+                return (Map<String, Object>) metadata;
+            })
+            .filter(metadata -> !metadata.isEmpty())
+            .toList();
+    }
+
+    private void putIfNonBlank(Map<String, Object> target, String key, String value) {
+        String normalized = blankToNull(value);
+        if (target != null && key != null && !key.isBlank() && normalized != null) {
+            target.put(key, normalized);
+        }
     }
 
     private Integer firstNonNullInt(Integer... values) {

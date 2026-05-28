@@ -27,6 +27,24 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         boundary.execution_id,
         boundary.executionId
     );
+    const providerRunDir = firstNonBlank(
+        boundary.provider_run_dir,
+        boundary.providerRunDir,
+        metadata.provider_run_dir,
+        metadata.providerRunDir
+    );
+    const providerLastMessagePath = firstNonBlank(
+        boundary.provider_last_message_path,
+        boundary.providerLastMessagePath,
+        metadata.provider_last_message_path,
+        metadata.providerLastMessagePath
+    );
+    const providerEventLogPath = firstNonBlank(
+        boundary.provider_event_log_path,
+        boundary.providerEventLogPath,
+        metadata.provider_event_log_path,
+        metadata.providerEventLogPath
+    );
     const labelParts = [
         status ? humanizeToken(status) : null,
         toolInvocationCount ? formatCount(toolInvocationCount, "call") : null,
@@ -34,7 +52,10 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
     ].filter(Boolean);
     const chips = [
         executionId ? `exec: ${executionId}` : null,
-        workerId ? `worker: ${workerId}` : null
+        workerId ? `worker: ${workerId}` : null,
+        providerRunDir ? `run: ${providerRunDir}` : null,
+        providerLastMessagePath ? `last: ${providerLastMessagePath}` : null,
+        providerEventLogPath ? `events: ${providerEventLogPath}` : null
     ].filter(Boolean);
     return {
         status,
@@ -43,6 +64,9 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         workerId,
         traceSummary,
         executionId,
+        providerRunDir,
+        providerLastMessagePath,
+        providerEventLogPath,
         label: labelParts.length > 0 ? labelParts.join(" · ") : null,
         chips
     };

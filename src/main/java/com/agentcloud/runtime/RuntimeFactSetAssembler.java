@@ -11,6 +11,7 @@ import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
 import com.agentcloud.runtime.model.RuntimeFactSet;
 import com.agentcloud.store.ToolInvocationDao;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -303,6 +304,7 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "preferred_worker_hint");
         copyMetadataKey(source, selected, "learning_hint_applied");
         copyMetadataKey(source, selected, "fallback_reason");
+        copyMetadataKey(source, selected, "dispatch_skipped_workers");
         copyMetadataKey(source, selected, "route_source");
         copyMetadataKey(source, selected, "provider_id");
         copyMetadataKey(source, selected, "execution_backend");
@@ -317,6 +319,18 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "provider_session_id");
         copyMetadataKey(source, selected, "provider_thread_id");
         copyMetadataKey(source, selected, "resume_provider_session_id");
+        copyMetadataKey(source, selected, "provider_error");
+        copyMetadataKey(source, selected, "provider_turn_status");
+        copyMetadataKey(source, selected, "provider_failure_class");
+        copyMetadataKey(source, selected, "provider_failure_reason");
+        copyMetadataKey(source, selected, "provider_retryable");
+        copyMetadataKey(source, selected, "provider_protocol_trace");
+        copyMetadataKey(source, selected, "provider_run_dir");
+        copyMetadataKey(source, selected, "provider_prompt_path");
+        copyMetadataKey(source, selected, "provider_stdout_path");
+        copyMetadataKey(source, selected, "provider_event_log_path");
+        copyMetadataKey(source, selected, "provider_last_message_path");
+        copyMetadataKey(source, selected, "provider_run_metadata_path");
         copyMetadataKey(source, selected, "model_mode");
         copyMetadataKey(source, selected, "orchestration_stage");
         copyMetadataKey(source, selected, "planner_worker");
@@ -340,6 +354,18 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "directory_backed_artifact");
         copyMetadataKey(source, selected, "evidence_refs");
         copyMetadataKey(source, selected, "unfinished_items");
+        copyMetadataKey(source, selected, "proposed_actions");
+        copyMetadataKey(source, selected, "accepted_actions");
+        copyMetadataKey(source, selected, "rejected_actions");
+        copyMetadataKey(source, selected, "approval_needed_actions");
+        copyMetadataKey(source, selected, "agent_action_decision_count");
+        copyMetadataKey(source, selected, "agent_action_accepted_count");
+        copyMetadataKey(source, selected, "agent_action_rejected_count");
+        copyMetadataKey(source, selected, "agent_action_approval_needed_count");
+        copyMetadataKey(source, selected, "context_requests");
+        copyMetadataKey(source, selected, "completion_claim");
+        copyMetadataKey(source, selected, "handoff_target");
+        copyMetadataKey(source, selected, "risk_flags");
         copyMetadataKey(source, selected, "needs_context_reopen");
         copyMetadataKey(source, selected, "reopen_candidate_paths");
         copyMetadataKey(source, selected, "reopen_summary");
@@ -467,6 +493,15 @@ public class RuntimeFactSetAssembler {
         if (candidateWorkers.isEmpty() && routerPreview != null && routerPreview.candidateWorkers() != null) {
             candidateWorkers = routerPreview.candidateWorkers();
         }
+        List<WorkerRouter.RouteSkippedWorker> dispatchSkippedWorkers = currentRouteWins
+            ? routeSkippedWorkers(routerPreview != null ? routerPreview.dispatchSkippedWorkers() : null)
+            : routeSkippedWorkers(latestWorkerMetadata.get("dispatch_skipped_workers"));
+        if (dispatchSkippedWorkers.isEmpty()) {
+            dispatchSkippedWorkers = routeSkippedWorkers(latestWorkerMetadata.get("dispatch_skipped_workers"));
+        }
+        if (dispatchSkippedWorkers.isEmpty()) {
+            dispatchSkippedWorkers = routeSkippedWorkers(routerPreview != null ? routerPreview.dispatchSkippedWorkers() : null);
+        }
         boolean hasMetadataRoute = latestWorkerMetadata != null && !latestWorkerMetadata.isEmpty() && (
             selectedWorker != null
                 || routeSource != null
@@ -500,7 +535,8 @@ public class RuntimeFactSetAssembler {
                     null,
                     null,
                     null,
-                    null
+                    null,
+                    dispatchSkippedWorkers
                 );
             }
             return routerPreview;
@@ -526,7 +562,8 @@ public class RuntimeFactSetAssembler {
             null,
             null,
             null,
-            null
+            null,
+            dispatchSkippedWorkers
         );
     }
 
@@ -612,6 +649,24 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(latestWorkerMetadata, metadata, "mounted_evidence_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "mounted_index_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "mounted_archive_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "execution_backend");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_session_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_thread_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "resume_provider_session_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_error");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_status");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_class");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_reason");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_retryable");
+        copyMetadataKey(latestWorkerMetadata, metadata, "dispatch_skipped_workers");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_protocol_trace");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_run_dir");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_prompt_path");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_stdout_path");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_event_log_path");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_last_message_path");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_run_metadata_path");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_execution_mode");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_step_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_termination_reason");
@@ -620,6 +675,18 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_scope");
         copyMetadataKey(latestWorkerMetadata, metadata, "evidence_refs");
         copyMetadataKey(latestWorkerMetadata, metadata, "unfinished_items");
+        copyMetadataKey(latestWorkerMetadata, metadata, "proposed_actions");
+        copyMetadataKey(latestWorkerMetadata, metadata, "accepted_actions");
+        copyMetadataKey(latestWorkerMetadata, metadata, "rejected_actions");
+        copyMetadataKey(latestWorkerMetadata, metadata, "approval_needed_actions");
+        copyMetadataKey(latestWorkerMetadata, metadata, "agent_action_decision_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "agent_action_accepted_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "agent_action_rejected_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "agent_action_approval_needed_count");
+        copyMetadataKey(latestWorkerMetadata, metadata, "context_requests");
+        copyMetadataKey(latestWorkerMetadata, metadata, "completion_claim");
+        copyMetadataKey(latestWorkerMetadata, metadata, "handoff_target");
+        copyMetadataKey(latestWorkerMetadata, metadata, "risk_flags");
         copyMetadataKey(latestWorkerMetadata, metadata, "grounded_output_present");
         copyMetadataKey(latestWorkerMetadata, metadata, "missing_required_current_round_write");
         String latestToolName = firstNonBlank(
@@ -734,6 +801,14 @@ public class RuntimeFactSetAssembler {
         copyMetadataIfPresent(metadata, latest.metadata(), "candidate_workers");
         copyMetadataIfPresent(metadata, latest.metadata(), "evidence_refs");
         copyMetadataIfPresent(metadata, latest.metadata(), "unfinished_items");
+        copyMetadataIfPresent(metadata, latest.metadata(), "proposed_actions");
+        copyMetadataIfPresent(metadata, latest.metadata(), "accepted_actions");
+        copyMetadataIfPresent(metadata, latest.metadata(), "rejected_actions");
+        copyMetadataIfPresent(metadata, latest.metadata(), "approval_needed_actions");
+        copyMetadataIfPresent(metadata, latest.metadata(), "context_requests");
+        copyMetadataIfPresent(metadata, latest.metadata(), "completion_claim");
+        copyMetadataIfPresent(metadata, latest.metadata(), "handoff_target");
+        copyMetadataIfPresent(metadata, latest.metadata(), "risk_flags");
         metadata.put("latest_tool_name", latest.toolName());
 
         return new RuntimeFactSet.ExecutionBoundary(
@@ -968,6 +1043,36 @@ public class RuntimeFactSetAssembler {
             .toList();
     }
 
+    private List<WorkerRouter.RouteSkippedWorker> routeSkippedWorkers(Object value) {
+        if (value instanceof List<?> list && !list.isEmpty() && list.get(0) instanceof WorkerRouter.RouteSkippedWorker) {
+            return list.stream()
+                .filter(WorkerRouter.RouteSkippedWorker.class::isInstance)
+                .map(WorkerRouter.RouteSkippedWorker.class::cast)
+                .toList();
+        }
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<WorkerRouter.RouteSkippedWorker> skippedWorkers = new ArrayList<>();
+        for (Object item : iterable) {
+            if (!(item instanceof Map<?, ?> map)) {
+                continue;
+            }
+            String workerId = stringValue(map.get("worker_id"));
+            if (workerId == null || workerId.isBlank()) {
+                continue;
+            }
+            skippedWorkers.add(new WorkerRouter.RouteSkippedWorker(
+                workerId,
+                stringValue(map.get("reason")),
+                stringValue(map.get("provider_failure_class")),
+                stringValue(map.get("provider_failure_reason")),
+                objectBoolean(map.get("provider_retryable"))
+            ));
+        }
+        return skippedWorkers.isEmpty() ? List.of() : List.copyOf(skippedWorkers);
+    }
+
     private boolean metadataBoolean(Map<String, Object> metadata, String key, boolean defaultValue) {
         if (metadata == null || key == null || key.isBlank()) {
             return defaultValue;
@@ -980,6 +1085,16 @@ public class RuntimeFactSetAssembler {
             return defaultValue;
         }
         return Boolean.parseBoolean(value.toString());
+    }
+
+    private Boolean objectBoolean(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return Boolean.parseBoolean(text);
+        }
+        return null;
     }
 
     private Decision latestDecision(TaskRuntimeContext runtimeContext, String decisionType) {

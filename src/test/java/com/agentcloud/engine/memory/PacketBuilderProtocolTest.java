@@ -1,11 +1,13 @@
 package com.agentcloud.engine.memory;
 
 import com.agentcloud.model.Artifact;
+import com.agentcloud.model.AgentAction;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.HandoffPacket;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
+import com.agentcloud.store.AgentActionDao;
 import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.DecisionDao;
@@ -37,6 +39,7 @@ class PacketBuilderProtocolTest {
             TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
             DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
             ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            AgentActionDao agentActionDao = db.jdbi().onDemand(AgentActionDao.class);
 
             Session session = Session.create("session_1", "protocol session", "active");
             sessionDao.insert(session);
@@ -92,8 +95,42 @@ class PacketBuilderProtocolTest {
                 "Delegation brief ready for executor.",
                 Map.of("selected_model_tier", "strong")
             ));
+            agentActionDao.insert(new AgentAction(
+                "act_1",
+                session.id(),
+                task.id(),
+                "exec_1",
+                "REQUEST_CONTEXT",
+                "needs_approval",
+                "Need repository layout confirmation before continuing.",
+                Map.of("needed_context", List.of("repository layout")),
+                "medium",
+                true,
+                "",
+                "",
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+            ));
+            agentActionDao.insert(new AgentAction(
+                "act_2",
+                session.id(),
+                task.id(),
+                "exec_1",
+                "CHECKPOINT",
+                "accepted",
+                "Checkpoint current packet contract.",
+                Map.of("reason", "preserve continuity"),
+                "low",
+                false,
+                "runtime",
+                "",
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+            ));
 
-            PacketBuilder builder = new PacketBuilder(decisionDao, artifactDao, taskDao);
+            PacketBuilder builder = new PacketBuilder(decisionDao, artifactDao, taskDao, null, null, null, agentActionDao);
             ResumePacket packet = builder.buildResumePacket(task, session);
 
             assertEquals("1.1", packet.packetVersion());
@@ -129,6 +166,15 @@ class PacketBuilderProtocolTest {
             assertEquals("codex", routeSurface.get("selected_worker"));
             Map<?, ?> executionSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("execution"));
             assertEquals("mounted_context_primary", executionSurface.get("prompt_mode"));
+            List<?> recentActions = assertInstanceOf(List.class, packet.payload().get("recent_actions"));
+            assertEquals(2, recentActions.size());
+            List<?> acceptedActions = assertInstanceOf(List.class, packet.payload().get("accepted_actions"));
+            assertEquals(1, acceptedActions.size());
+            List<?> approvalNeededActions = assertInstanceOf(List.class, packet.payload().get("approval_needed_actions"));
+            assertEquals(1, approvalNeededActions.size());
+            List<?> actionContextRequests = assertInstanceOf(List.class, packet.payload().get("action_context_requests"));
+            assertTrue(actionContextRequests.contains("repository layout"));
+            assertTrue(packet.payload().get("action_summary").toString().contains("REQUEST_CONTEXT needs_approval"));
             assertEquals(Boolean.TRUE, packet.machineReadableFirst());
         }
     }
@@ -140,6 +186,7 @@ class PacketBuilderProtocolTest {
             TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
             DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
             ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            AgentActionDao agentActionDao = db.jdbi().onDemand(AgentActionDao.class);
 
             Session session = Session.create("session_2", "handoff session", "active");
             sessionDao.insert(session);
@@ -238,8 +285,25 @@ class PacketBuilderProtocolTest {
                 "Implementation outline prepared.",
                 Map.of("selected_model_tier", "strong")
             ));
+            agentActionDao.insert(new AgentAction(
+                "act_handoff_1",
+                session.id(),
+                task.id(),
+                "exec_2",
+                "HANDOFF",
+                "accepted",
+                "Delegate execution to kimi.",
+                Map.of("target_worker", "kimi"),
+                "low",
+                false,
+                "runtime",
+                "",
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+            ));
 
-            PacketBuilder builder = new PacketBuilder(decisionDao, artifactDao, taskDao);
+            PacketBuilder builder = new PacketBuilder(decisionDao, artifactDao, taskDao, null, null, null, agentActionDao);
             HandoffPacket packet = builder.buildHandoffPacket(task, session, "codex", "kimi");
 
             assertEquals("1.0", packet.packetVersion());
@@ -267,6 +331,11 @@ class PacketBuilderProtocolTest {
                 assertInstanceOf(Map.class, packet.metadata().get("runtime_cognition_surface"));
             Map<?, ?> routeSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("route"));
             assertEquals("codex", routeSurface.get("selected_worker"));
+            List<?> recentActions = assertInstanceOf(List.class, packet.metadata().get("recent_actions"));
+            assertEquals(1, recentActions.size());
+            List<?> acceptedActions = assertInstanceOf(List.class, packet.metadata().get("accepted_actions"));
+            assertEquals(1, acceptedActions.size());
+            assertTrue(packet.metadata().get("action_summary").toString().contains("HANDOFF accepted"));
         }
     }
 

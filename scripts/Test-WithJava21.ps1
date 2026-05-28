@@ -1,7 +1,9 @@
 param(
     [string]$JdkHome = "C:\Program Files\Java\jdk-21.0.9+10",
     [switch]$QuietMaven,
-    [string[]]$MavenArgs = @()
+    [string[]]$MavenArgs = @(),
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PassthroughMavenArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +17,7 @@ if ($QuietMaven) {
 }
 $argsToRun += "test"
 $argsToRun += $MavenArgs
+$argsToRun += $PassthroughMavenArgs
 
 Write-Host "Using JAVA_HOME: $env:JAVA_HOME"
 Write-Host "Using Maven: $mavenExecutable"

@@ -537,6 +537,116 @@ class TaskServiceMessageReceiptTest {
     }
 
     @Test
+    void continueWritesAssistantProgressMessageWithProviderDiagnostics() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-progress-provider-diagnostics-message.db"))) {
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, null, null, null, null, null, null,
+                null, null, null, null, null, null
+            ) {
+                @Override
+                public Task enter(Task task) {
+                    Task updated = new Task(
+                        task.id(),
+                        task.sessionId(),
+                        task.parentTaskId(),
+                        task.title(),
+                        "active",
+                        task.priority(),
+                        task.createdAt(),
+                        Instant.now(),
+                        task.startedAt(),
+                        task.completedAt(),
+                        task.ownerRole(),
+                        "Codex 超时后已进入恢复流程。",
+                        task.goal(),
+                        "等待 fresh session 继续推进。",
+                        "kimi",
+                        "scheduler",
+                        task.waitingReason(),
+                        new java.util.LinkedHashMap<>(Map.ofEntries(
+                            Map.entry("model_mode", "orchestrated"),
+                            Map.entry("failure_class", "worker_runtime_transient"),
+                            Map.entry("failure_summary_readable", "worker codex failed: thread not found (27984)"),
+                            Map.entry("provider_error", "codex turn completion timed out"),
+                            Map.entry("provider_turn_status", "timeout"),
+                            Map.entry("provider_failure_class", "provider_runtime_transient"),
+                            Map.entry("provider_failure_reason", "turn timed out"),
+                            Map.entry("provider_retryable", true),
+                            Map.entry("provider_thread_id", "019e4401-f18c-7fa2-b63d-8544108edcf5"),
+                            Map.entry("provider_protocol_trace", List.of("thread/started", "turn/started")),
+                            Map.entry("recovery_stage", "auto_handoff_scheduled"),
+                            Map.entry("recovery_execution_mode", "fresh_session")
+                        ))
+                    );
+                    taskDao.updateState(updated);
+                    return updated;
+                }
+            };
+
+            TaskService service = service(db, graph, true);
+            Task task = service.createTask(new TaskCreateRequest(
+                "provider diagnostics progress", "coding", "user", "high",
+                "先创建一个 provider 超时恢复任务", "消息 metadata 必须带 provider diagnostics", null, null,
+                Map.of("model_mode", "orchestrated"),
+                false
+            ));
+
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_output",
+                "Provider timeout worker round",
+                null,
+                null,
+                "worker codex failed: thread not found (27984)",
+                Map.ofEntries(
+                    Map.entry("selected_worker", "kimi"),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("route_source", "capability_match"),
+                    Map.entry("execution_status", "timeout"),
+                    Map.entry("failure_class", "worker_runtime_transient"),
+                    Map.entry("failure_summary_readable", "worker codex failed: thread not found (27984)"),
+                    Map.entry("output_text", "worker codex failed: thread not found (27984)"),
+                    Map.entry("provider_error", "codex turn completion timed out"),
+                    Map.entry("provider_turn_status", "timeout"),
+                    Map.entry("provider_failure_class", "provider_runtime_transient"),
+                    Map.entry("provider_failure_reason", "turn timed out"),
+                    Map.entry("provider_retryable", true),
+                    Map.entry("provider_thread_id", "019e4401-f18c-7fa2-b63d-8544108edcf5"),
+                    Map.entry("provider_protocol_trace", List.of("thread/started", "turn/started")),
+                    Map.entry("recovery_stage", "auto_handoff_scheduled"),
+                    Map.entry("recovery_execution_mode", "fresh_session")
+                )
+            ));
+
+            service.continueTask(task.id());
+
+            List<SessionMessage> messages = messageDao.listBySession(task.sessionId(), 20);
+            SessionMessage progress = messages.get(messages.size() - 1);
+            assertEquals("assistant", progress.role());
+            assertEquals("task_progress", progress.messageType());
+            assertEquals("codex turn completion timed out", progress.metadata().get("provider_error"));
+            assertEquals("timeout", progress.metadata().get("provider_turn_status"));
+            assertEquals("provider_runtime_transient", progress.metadata().get("provider_failure_class"));
+            assertEquals("turn timed out", progress.metadata().get("provider_failure_reason"));
+            assertEquals(Boolean.TRUE, progress.metadata().get("provider_retryable"));
+            assertEquals("019e4401-f18c-7fa2-b63d-8544108edcf5", progress.metadata().get("provider_thread_id"));
+            assertEquals(List.of("thread/started", "turn/started"), progress.metadata().get("provider_protocol_trace"));
+            assertEquals("codex turn completion timed out", progress.metadata().get("summary_preview"));
+            assertTrue(progress.content().contains("codex turn completion timed out"));
+            String fullContent = String.valueOf(progress.metadata().get("full_content"));
+            assertTrue(fullContent.contains("Failure Summary\ncodex turn completion timed out"));
+            assertFalse(fullContent.contains("Failure Summary\nworker codex failed: thread not found (27984)"));
+        }
+    }
+
+    @Test
     void continueSuppressesUnreadableWorkerOutputFromExpandedFailureContent() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-progress-recovery-sanitized-message.db"))) {
             TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);

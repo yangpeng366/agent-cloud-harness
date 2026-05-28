@@ -15,6 +15,10 @@ test("sparse transcript anchors summary and messages toward the composer", () =>
     );
     assert.match(
         css,
+        /\.message-panel__body--stream-only\s+\.message-stream\s*\{[^}]*margin-top:\s*auto;/s
+    );
+    assert.match(
+        css,
         /\.message-stream\s*\{[^}]*flex:\s*0 1 auto;/s
     );
     assert.match(
@@ -24,5 +28,22 @@ test("sparse transcript anchors summary and messages toward the composer", () =>
     assert.match(
         css,
         /\.thread-drawer__summary\s*\{[^}]*display:\s*flex;[^}]*justify-content:\s*space-between;[^}]*padding:\s*1px 2px 0;/s
+    );
+});
+
+test("browser acceptance probe guards message body to composer seam", () => {
+    const runner = readFileSync(new URL("../../../scripts/dialogue-browser-acceptance-probe-runner.cjs", import.meta.url), "utf8");
+
+    assert.match(
+        runner,
+        /gapBetweenMessageBodyAndComposer:\s*messagePanelBody\s*&&\s*composerPanel[\s\S]*composerPanel\.getBoundingClientRect\(\)\.top\s*-\s*messagePanelBody\.getBoundingClientRect\(\)\.bottom/s
+    );
+    assert.match(
+        runner,
+        /gapBetweenMessageBodyAndComposer\s*>\s*28/s
+    );
+    assert.match(
+        runner,
+        /too much space between message body and composer/s
     );
 });

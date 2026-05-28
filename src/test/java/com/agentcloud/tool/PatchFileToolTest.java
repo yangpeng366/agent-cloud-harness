@@ -86,6 +86,42 @@ class PatchFileToolTest {
         assertEquals("keep keep", Files.readString(draft));
     }
 
+    @Test
+    void readFileAllowsTaskWorkspaceOutsideStaticWorkerScope() throws Exception {
+        Path harnessScope = tempDir.resolve("harness");
+        Path taskWorkspace = tempDir.resolve("articleeditor");
+        Files.createDirectories(harnessScope);
+        Files.createDirectories(taskWorkspace);
+        Path source = taskWorkspace.resolve("MchSyncTaskServiceImpl.java");
+        Files.writeString(source, "class MchSyncTaskServiceImpl {}");
+
+        WorkerRegistry workerRegistry = new WorkerRegistry();
+        workerRegistry.register(new Worker(
+            "deepseek",
+            "deepseek",
+            List.of("coding"),
+            List.of("read_file"),
+            List.of(harnessScope.toString()),
+            Map.of("api_key", true),
+            Map.of("execution_backend", "provider_native_cli"),
+            false,
+            true
+        ));
+        ReadFileTool tool = new ReadFileTool(workerRegistry, new ToolPolicy());
+
+        ToolResult result = tool.invoke(new ToolRequest(
+            "session-read",
+            "task-read",
+            "deepseek",
+            "read_file",
+            Map.of("path", source.toString()),
+            Map.of("workspace_root", taskWorkspace.toString())
+        ));
+
+        assertTrue(result.success());
+        assertTrue(result.output().contains("MchSyncTaskServiceImpl"));
+    }
+
     private WorkerRegistry createWorkerRegistry() {
         WorkerRegistry workerRegistry = new WorkerRegistry();
         workerRegistry.register(new Worker(

@@ -229,6 +229,105 @@ class TaskHandlerProviderSelectionHttpTest {
     }
 
     @Test
+    void agentRunEndpointSurfacesProviderErrorDiagnostics() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run-provider-error.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "agent run provider error",
+                "coding",
+                "user",
+                "high",
+                "verify provider error diagnosis",
+                "read latest provider error",
+                null,
+                null,
+                Map.of("model_mode", "strong_only"),
+                false
+            ));
+            AgentRunService agentRunService = new AgentRunService(fixture.agentRunDao, new AgentProviderRegistry());
+            Worker selectedWorker = new Worker(
+                "codex",
+                "codex",
+                List.of("coding"),
+                List.of(),
+                List.of(),
+                Map.of(),
+                Map.of("model_tier", "strong", "primary_role", "planner_executor"),
+                false,
+                true
+            );
+            WorkerRouter.RouteResult route = new WorkerRouter.RouteResult(
+                task.id(),
+                "codex",
+                List.of(),
+                "selected by capability match",
+                "capability_match",
+                "coding",
+                null,
+                false,
+                List.of("codex"),
+                "codex",
+                "strong",
+                "planner_executor",
+                "candidate",
+                "selected by capability match",
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                List.of()
+            );
+            WorkerExecutionResult result = new WorkerExecutionResult(
+                "thread not found: 27316",
+                "thread not found: 27316\nlarge command output...",
+                false,
+                null,
+                null,
+                "recover with fresh session",
+                "low",
+                "timeout",
+                List.of(),
+                List.of("codex output requires inspection"),
+                0,
+                150_000L,
+                Map.of(
+                    "provider_error", "codex turn completion timed out",
+                    "provider_turn_status", "timeout",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "provider_failure_reason", "codex turn completion timed out",
+                    "provider_retryable", true
+                )
+            );
+            AgentRunRecord record = agentRunService.recordCompletedWorkerRun(
+                task,
+                route,
+                selectedWorker,
+                result,
+                Instant.parse("2026-05-18T10:00:00Z"),
+                Instant.parse("2026-05-18T10:02:30Z")
+            );
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/agent_run"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode data = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data");
+            assertEquals(200, response.statusCode());
+            assertEquals(record.runId(), data.path("run_id").asText());
+            assertEquals("timeout", data.path("status").asText());
+            assertEquals("codex turn completion timed out", data.path("summary").asText());
+            assertEquals("codex turn completion timed out", data.path("metadata").path("provider_error").asText());
+            assertEquals("timeout", data.path("metadata").path("provider_turn_status").asText());
+            assertEquals("provider_runtime_transient", data.path("metadata").path("provider_failure_class").asText());
+        }
+    }
+
+    @Test
     void agentRunDetailAndProviderRunsUsePersistedRecords() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run-detail.db"))) {
             Task task = fixture.service.createTask(new TaskCreateRequest(
@@ -807,7 +906,9 @@ class TaskHandlerProviderSelectionHttpTest {
             null,
             null,
             null,
-            null
+            null,
+            null,
+            List.of()
         );
         WorkerExecutionResult result = new WorkerExecutionResult(
             "Status " + executionStatus,

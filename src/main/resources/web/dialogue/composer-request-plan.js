@@ -22,6 +22,7 @@ export function buildChatFacadeRequest(input) {
     if (normalized.modelMode) {
         metadata.model_mode = normalized.modelMode;
     }
+    applyProviderExecutionContract(metadata, normalized);
     if (normalized.followupParentTaskId) {
         metadata.parent_task_id = normalized.followupParentTaskId;
         metadata.followup_parent_task_id = normalized.followupParentTaskId;
@@ -66,6 +67,7 @@ export function buildResponsesFacadeRequest(input) {
     if (normalized.modelMode) {
         metadata.model_mode = normalized.modelMode;
     }
+    applyProviderExecutionContract(metadata, normalized);
     if (normalized.followupParentTaskId) {
         metadata.parent_task_id = normalized.followupParentTaskId;
         metadata.followup_parent_task_id = normalized.followupParentTaskId;
@@ -111,8 +113,30 @@ function normalizeRequestInput(input) {
         taskType: normalizeText(source.taskType) || "continuation",
         taskPriority: normalizeText(source.taskPriority) || "high",
         autoStart: source.autoStart !== false,
-        autoMultiRound: source.autoMultiRound === true
+        autoMultiRound: source.autoMultiRound === true,
+        localPaths: normalizeTextList(source.localPaths),
+        validationCommands: normalizeTextList(source.validationCommands),
+        writeScope: normalizeTextList(source.writeScope),
+        acceptanceCriteria: normalizeTextList(source.acceptanceCriteria)
     };
+}
+
+function applyProviderExecutionContract(metadata, normalized) {
+    if (normalized.localPaths.length > 0) {
+        metadata.workspace_roots = normalized.localPaths;
+        metadata.reference_paths = normalized.localPaths;
+        metadata.target_paths = normalized.localPaths;
+        metadata.repo_path = normalized.localPaths[0];
+    }
+    if (normalized.validationCommands.length > 0) {
+        metadata.validation_commands = normalized.validationCommands;
+    }
+    if (normalized.writeScope.length > 0) {
+        metadata.write_scope = normalized.writeScope;
+    }
+    if (normalized.acceptanceCriteria.length > 0) {
+        metadata.acceptance_criteria = normalized.acceptanceCriteria;
+    }
 }
 
 function requiredText(value, field) {
@@ -125,4 +149,12 @@ function requiredText(value, field) {
 
 function normalizeText(value) {
     return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function normalizeTextList(value) {
+    if (Array.isArray(value)) {
+        return value.map(normalizeText).filter(Boolean);
+    }
+    const text = normalizeText(value);
+    return text ? [text] : [];
 }

@@ -227,6 +227,21 @@
                                 </select>
                             </label>
 
+                            <label class="field field--wide">
+                                <span>本地路径 / workspace</span>
+                                <textarea id="taskLocalPaths" rows="2" placeholder="每行一个路径，例如 D:\gitAll\agent-cloud-harness"></textarea>
+                            </label>
+
+                            <label class="field field--wide">
+                                <span>校验命令</span>
+                                <textarea id="taskValidationCommands" rows="2" placeholder="每行一个命令，例如 mvn -Dtest=ProviderTaskPromptBuilderTest test"></textarea>
+                            </label>
+
+                            <label class="field field--wide">
+                                <span>修改范围 / 验收标准</span>
+                                <textarea id="taskExecutionContract" rows="2" placeholder="第一行可写修改范围；后续写验收标准。"></textarea>
+                            </label>
+
                             <label class="toggle-pill">
                                 <input id="taskAutoStart" type="checkbox" checked>
                                 <span>创建后立即推进</span>
@@ -386,6 +401,19 @@
             <details class="details-card details-card--collapsible">
                 <summary class="details-card__summary">
                     <div>
+                        <strong>Agent Actions</strong>
+                        <span>worker proposed / accepted / rejected。</span>
+                    </div>
+                    <span class="details-card__hint">展开</span>
+                </summary>
+                <div class="details-card__body">
+                    <div class="stack-list" id="agentActionList"></div>
+                </div>
+            </details>
+
+            <details class="details-card details-card--collapsible">
+                <summary class="details-card__summary">
+                    <div>
                         <strong>工具轨迹</strong>
                         <span>留在 inspector。</span>
                     </div>
@@ -427,6 +455,10 @@
             <div class="modal-section">
                 <h3>工具调用</h3>
                 <div id="modalTools"></div>
+            </div>
+            <div class="modal-section">
+                <h3>Provider Run 文件</h3>
+                <div id="modalProviderRunFiles"></div>
             </div>
         </div>
         <div class="modal-footer">

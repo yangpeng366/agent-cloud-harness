@@ -11,8 +11,9 @@ import java.util.regex.Pattern;
  */
 public final class TaskTypeHeuristics {
     private static final Pattern WINDOWS_REPO_PATH = Pattern.compile("(?i)[a-z]:\\\\[^\\r\\n]*?(gitall|workspace|repo|project)\\\\");
+    private static final Pattern SOURCE_TREE_REFERENCE = Pattern.compile("(?i)(^|[\\\\/])src([\\\\/]|\\b)|(^|[\\\\/])test(s)?([\\\\/]|\\b)");
     private static final Pattern CODE_FILE_REFERENCE = Pattern.compile("(?i)\\.(java|kt|js|ts|tsx|jsx|py|go|rs|cpp|c|cs|php|rb|sql|xml|yml|yaml|json|md)\\b");
-    private static final Pattern CODING_ACTION_KEYWORD = Pattern.compile("(?i)(fix|patch|refactor|implement|修改|改造|改代码|写代码|补丁|修复|实现|重构|新增|调试|定位|代码|仓库|repo|工程)");
+    private static final Pattern CODING_ACTION_KEYWORD = Pattern.compile("(?i)(fix|patch|refactor|implement|verify|test|check|debug|修改|改造|改代码|写代码|补丁|修复|实现|重构|新增|调试|定位|代码|仓库|repo|工程|检查|排查|测试|补测试|验证)");
 
     private TaskTypeHeuristics() {
     }
@@ -54,15 +55,21 @@ public final class TaskTypeHeuristics {
         String lower = combined.toLowerCase();
         boolean mentionsRepoPath = WINDOWS_REPO_PATH.matcher(combined).find();
         boolean mentionsCodeFile = CODE_FILE_REFERENCE.matcher(combined).find();
+        boolean mentionsSourceTree = SOURCE_TREE_REFERENCE.matcher(combined).find();
         boolean mentionsCodingAction = CODING_ACTION_KEYWORD.matcher(combined).find();
         boolean mentionsKnownRepo = lower.contains("\\gitall\\")
             || lower.contains("/src/main/")
             || lower.contains("\\src\\main\\")
+            || lower.contains("\\src")
+            || lower.contains("/src")
+            || lower.contains("\\test")
+            || lower.contains("/test")
             || lower.contains("pom.xml")
             || lower.contains("package.json")
             || lower.contains("articleeditor");
         return (mentionsCodingAction && (mentionsRepoPath || mentionsCodeFile || mentionsKnownRepo))
             || (mentionsRepoPath && mentionsCodeFile)
+            || (mentionsRepoPath && mentionsSourceTree)
             || (mentionsKnownRepo && mentionsCodingAction);
     }
 
@@ -76,8 +83,11 @@ public final class TaskTypeHeuristics {
                 stringValue(metadata != null ? metadata.get("summary") : null),
                 stringValue(metadata != null ? metadata.get("intent") : null),
                 stringValue(metadata != null ? metadata.get("workspace") : null),
+                stringValue(metadata != null ? metadata.get("workspace_root") : null),
+                stringValue(metadata != null ? metadata.get("workspace_roots") : null),
                 stringValue(metadata != null ? metadata.get("repo_path") : null),
                 stringValue(metadata != null ? metadata.get("working_directory") : null),
+                stringValue(metadata != null ? metadata.get("cwd") : null),
                 stringValue(metadata != null ? metadata.get("target_path") : null)
             ),
             joinedExtras

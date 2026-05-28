@@ -329,6 +329,77 @@ class TaskServiceLiveFlowViewTest {
     }
 
     @Test
+    void liveFlowProjectsProviderExecutionSurface() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-provider-execution-surface.db"))) {
+            TaskService service = service(db);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "provider execution surface", "coding", "user", "high",
+                "检查 provider-backed 轮次投影", "展示 provider backend/thread/error", null, null, Map.of(), false
+            ));
+
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "codex turn completion timed out",
+                Map.of("latest_worker_metadata", Map.ofEntries(
+                    Map.entry("selected_worker", "codex"),
+                    Map.entry("execution_status", "timeout"),
+                    Map.entry("execution_backend", "provider_app_server"),
+                    Map.entry("provider_id", "codex"),
+                    Map.entry("provider_session_id", "thread-codex-001"),
+                    Map.entry("provider_thread_id", "thread-codex-001"),
+                    Map.entry("resume_provider_session_id", "thread-codex-001"),
+                    Map.entry("provider_error", "codex turn completion timed out"),
+                    Map.entry("provider_turn_status", "timeout"),
+                    Map.entry("provider_failure_class", "provider_runtime_transient"),
+                    Map.entry("provider_failure_reason", "turn timed out"),
+                    Map.entry("provider_retryable", true),
+                    Map.entry("provider_protocol_trace", List.of("thread/started", "turn/started")),
+                    Map.entry("provider_run_dir", "D:\\tmp\\provider-runs\\codex\\task-provider"),
+                    Map.entry("provider_prompt_path", "D:\\tmp\\provider-runs\\codex\\task-provider\\prompt.txt"),
+                    Map.entry("provider_event_log_path", "D:\\tmp\\provider-runs\\codex\\task-provider\\events.jsonl"),
+                    Map.entry("provider_last_message_path", "D:\\tmp\\provider-runs\\codex\\task-provider\\last_message.md"),
+                    Map.entry("provider_run_metadata_path", "D:\\tmp\\provider-runs\\codex\\task-provider\\metadata.json")
+                ))
+            ));
+
+            var flow = service.getLiveFlow(task.id(), 10);
+
+            assertNotNull(flow.executionBoundary());
+            assertEquals("provider_app_server", flow.executionBoundary().metadata().get("execution_backend"));
+            assertEquals("codex", flow.executionBoundary().metadata().get("provider_id"));
+            assertNotNull(flow.runtimeCognitionSurface());
+            assertNotNull(flow.runtimeCognitionSurface().execution());
+            assertEquals("provider_app_server", flow.runtimeCognitionSurface().execution().executionBackend());
+            assertEquals("codex", flow.runtimeCognitionSurface().execution().providerId());
+            assertEquals("thread-codex-001", flow.runtimeCognitionSurface().execution().providerSessionId());
+            assertEquals("thread-codex-001", flow.runtimeCognitionSurface().execution().providerThreadId());
+            assertEquals("thread-codex-001", flow.runtimeCognitionSurface().execution().resumeProviderSessionId());
+            assertEquals("codex turn completion timed out", flow.runtimeCognitionSurface().execution().providerError());
+            assertEquals("timeout", flow.runtimeCognitionSurface().execution().providerTurnStatus());
+            assertEquals("provider_runtime_transient", flow.runtimeCognitionSurface().execution().providerFailureClass());
+            assertEquals("turn timed out", flow.runtimeCognitionSurface().execution().providerFailureReason());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().execution().providerRetryable());
+            assertEquals(List.of("thread/started", "turn/started"),
+                flow.runtimeCognitionSurface().execution().providerProtocolTrace());
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-provider", flow.runtimeCognitionSurface().execution().providerRunDir());
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-provider\\prompt.txt", flow.runtimeCognitionSurface().execution().providerPromptPath());
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-provider\\events.jsonl", flow.runtimeCognitionSurface().execution().providerEventLogPath());
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-provider\\last_message.md", flow.runtimeCognitionSurface().execution().providerLastMessagePath());
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-provider\\metadata.json", flow.runtimeCognitionSurface().execution().providerRunMetadataPath());
+            assertEquals("codex turn completion timed out", flow.runtimeFacts().latestOutput());
+        }
+    }
+
+    @Test
     void getJudgmentTraceAndLiveFlowExposeMountedContextRuntimeFacts() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-trace-runtime-facts.db"))) {
             TaskService service = service(db);

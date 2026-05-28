@@ -1,5 +1,6 @@
 package com.agentcloud.worker;
 
+import com.agentcloud.model.AgentActionDraft;
 import com.agentcloud.worker.model.WorkerExecutionEnvelope;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
@@ -23,6 +24,11 @@ public record WorkerExecutionResult(
     String executionStatus,
     List<String> evidenceRefs,
     List<String> unfinishedItems,
+    List<AgentActionDraft> proposedActions,
+    List<String> contextRequests,
+    String completionClaim,
+    String handoffTarget,
+    List<String> riskFlags,
     Integer tokenUsage,
     Long durationMs,
     Map<String, Object> metadata
@@ -32,7 +38,18 @@ public record WorkerExecutionResult(
                                  String confidence, Integer tokenUsage, Long durationMs,
                                  Map<String, Object> metadata) {
         this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
-            confidence, "unknown", List.of(), List.of(), tokenUsage, durationMs, metadata);
+            confidence, "unknown", List.of(), List.of(), List.of(), List.of(), "", "", List.of(),
+            tokenUsage, durationMs, metadata);
+    }
+
+    public WorkerExecutionResult(String summary, String outputText, boolean producedArtifact,
+                                 String artifactTitle, String artifactContent, String suggestedNextStep,
+                                 String confidence, String executionStatus,
+                                 List<String> evidenceRefs, List<String> unfinishedItems,
+                                 Integer tokenUsage, Long durationMs, Map<String, Object> metadata) {
+        this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
+            confidence, executionStatus, evidenceRefs, unfinishedItems, List.of(), List.of(), "", "", List.of(),
+            tokenUsage, durationMs, metadata);
     }
 
     public WorkerExecutionResult {
@@ -45,6 +62,11 @@ public record WorkerExecutionResult(
         if (executionStatus == null) executionStatus = "unknown";
         if (evidenceRefs == null) evidenceRefs = List.of();
         if (unfinishedItems == null) unfinishedItems = List.of();
+        if (proposedActions == null) proposedActions = List.of();
+        if (contextRequests == null) contextRequests = List.of();
+        if (completionClaim == null) completionClaim = "";
+        if (handoffTarget == null) handoffTarget = "";
+        if (riskFlags == null) riskFlags = List.of();
         if (tokenUsage == null) tokenUsage = 0;
         if (durationMs == null) durationMs = 0L;
         if (metadata == null) metadata = Map.of();
@@ -80,6 +102,11 @@ public record WorkerExecutionResult(
             envelope.executionStatus(),
             evidenceRefs,
             unfinishedItems,
+            proposedActions,
+            contextRequests,
+            completionClaim,
+            handoffTarget,
+            riskFlags,
             tokenUsage,
             envelope.durationMs(),
             merged

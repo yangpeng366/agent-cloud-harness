@@ -6,6 +6,7 @@ import com.agentcloud.agent.AgentProviderResolver;
 import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.agent.providers.LocalCliProviderConfig;
+import com.agentcloud.agent.providers.CliCapabilityProfile;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.TextDecoding;
@@ -18,9 +19,11 @@ import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.StringReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -36,6 +39,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 面向本地 agent CLI 的单轮执行器。
@@ -45,6 +50,9 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(ProviderCliWorkerExecutor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long PROCESS_TIMEOUT_MS = 180_000L;
+    private static final int MAX_CAPTURE_BYTES = 1_048_576;
+    private static final int SQLITE_OUTPUT_TEXT_LIMIT = 16_384;
+    private static final Pattern WINDOWS_ABSOLUTE_PATH = Pattern.compile("(?i)\\b[a-z]:\\\\[^\\s\"'<>|，,；;。)）]+");
 
     private final AgentProviderRegistry providerRegistry;
     private final WorkerRegistry workerRegistry;
@@ -91,7 +99,8 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         LocalCliProviderConfig.ResolvedConfig config = resolvedConfig(providerId);
         AgentProviderStatus providerStatus = providerStatus(providerId);
         String cwd = resolveWorkingDirectory(context, worker);
-        ProviderCliPlan plan = buildPlan(providerId, config, context, cwd);
+        ProviderCliPlan plan = buildPlan(providerId, config, context, cwd, cliProfile(providerStatus));
+        ProviderRunFiles runFiles = ProviderRunFiles.create(providerId, taskId(context), workerId, plan);
 
         long startedAtMs = System.currentTimeMillis();
         Process process = null;
@@ -106,7 +115,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             process = builder.start();
             Process runningProcess = process;
             OutputCapture capture = new OutputCapture();
-            Thread drainer = Thread.ofVirtual().start(() -> capture.drain(runningProcess.getInputStream()));
+            Thread drainer = Thread.ofVirtual().start(() -> capture.drain(runningProcess.getInputStream(), runFiles.stdout()));
             if (plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank()) {
                 writePromptToStdin(process, plan.stdinPrompt());
             }
@@ -115,21 +124,27 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 process.waitFor(5, TimeUnit.SECONDS);
                 drainer.join(2_000);
                 long durationMs = System.currentTimeMillis() - startedAtMs;
+                runFiles.closeQuietly();
                 return failureResult("timeout", "provider-native cli timed out",
-                    providerId, workerId, cwd, plan, providerStatus, durationMs, null);
+                    providerId, workerId, cwd, plan, providerStatus, durationMs, null, runFiles);
             }
             drainer.join(2_000);
             output = consume(capture.bytes(), providerId);
+            if (capture.truncated()) {
+                output = output.withOutputLimitExceeded(capture.totalBytes(), MAX_CAPTURE_BYTES);
+            }
             output = output.withExitCode(process.exitValue());
         } catch (IOException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
+            runFiles.closeQuietly();
             return failureResult("failed", "failed to start provider-native cli: " + e.getMessage(),
-                providerId, workerId, cwd, plan, providerStatus, durationMs, null);
+                providerId, workerId, cwd, plan, providerStatus, durationMs, null, runFiles);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             long durationMs = System.currentTimeMillis() - startedAtMs;
+            runFiles.closeQuietly();
             return failureResult("cancelled", "provider-native cli interrupted",
-                providerId, workerId, cwd, plan, providerStatus, durationMs, null);
+                providerId, workerId, cwd, plan, providerStatus, durationMs, null, runFiles);
         } finally {
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
@@ -144,22 +159,35 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             metadata.put("provider_session_id", output.sessionId());
         }
         metadata.put("provider_output_parser", output.parser());
+        if (output.outputTruncated()) {
+            metadata.put("provider_output_truncated", true);
+            metadata.put("provider_output_total_bytes", output.outputTotalBytes());
+            metadata.put("provider_output_capture_limit_bytes", output.outputCaptureLimitBytes());
+        }
         if (output.version() != null && !output.version().isBlank()) {
             metadata.put("provider_version", output.version());
         }
 
         String outputText = output.outputText() == null ? "" : output.outputText().trim();
+        runFiles.writeLastMessage(outputText);
+        appendRunFileMetadata(metadata, runFiles);
         String summary = summarize(outputText, output.errorText(), normalizedStatus);
+        String providerDiagnostic = providerDiagnostic(output.errorText(), outputText, normalizedStatus);
         if (output.errorText() != null && !output.errorText().isBlank()) {
             metadata.put("provider_error", output.errorText());
+        } else if ("failed".equals(normalizedStatus) && providerDiagnostic != null && !providerDiagnostic.isBlank()) {
+            metadata.put("provider_error", providerDiagnostic);
         }
+        attachProviderFailureClassification(metadata, normalizedStatus, providerDiagnostic);
+        String sqliteOutputText = sqliteOutputText(outputText, metadata);
+        runFiles.writeMetadata(metadata);
 
         log.info("Provider-native CLI round completed. provider={} worker={} status={} exitCode={} durationMs={}",
             providerId, workerId, normalizedStatus, output.exitCode(), durationMs);
 
         return new WorkerExecutionResult(
             summary,
-            outputText,
+            sqliteOutputText,
             false,
             "",
             "",
@@ -190,15 +218,23 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                       LocalCliProviderConfig.ResolvedConfig config,
                                       TaskRuntimeContext context,
                                       String cwd) {
+        return buildPlan(providerId, config, context, cwd, null);
+    }
+
+    private ProviderCliPlan buildPlan(String providerId,
+                                      LocalCliProviderConfig.ResolvedConfig config,
+                                      TaskRuntimeContext context,
+                                      String cwd,
+                                      CliCapabilityProfile profile) {
         String prompt = ProviderTaskPromptBuilder.build(context);
         return switch (providerId.toLowerCase(Locale.ROOT)) {
-            case "cursor" -> buildCursorPlan(config, prompt, context, cwd);
+            case "cursor" -> buildCursorPlan(config, prompt, context, cwd, profile);
             case "openclaw" -> buildOpenClawPlan(config, prompt, context);
-            case "claude" -> buildClaudePlan(config, prompt, context);
-            case "gemini" -> buildGeminiPlan(config, prompt, context);
+            case "claude" -> buildClaudePlan(config, prompt, context, profile);
+            case "gemini" -> buildGeminiPlan(config, prompt, context, profile);
             case "deepseek" -> buildDeepSeekPlan(config, prompt, context);
-            case "kimi" -> buildKimiPlan(config, prompt, context, cwd);
-            case "copilot" -> buildCopilotPlan(config, prompt, context);
+            case "kimi" -> buildKimiPlan(config, prompt, context, cwd, profile);
+            case "copilot" -> buildCopilotPlan(config, prompt, context, profile);
             case "opencode" -> buildOpenCodePlan(config, prompt, context);
             default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
         };
@@ -207,29 +243,41 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private ProviderCliPlan buildCursorPlan(LocalCliProviderConfig.ResolvedConfig config,
                                             String prompt,
                                             TaskRuntimeContext context,
-                                            String cwd) {
+                                            String cwd,
+                                            CliCapabilityProfile profile) {
         ArrayList<String> args = new ArrayList<>();
         args.add("chat");
         args.add("-p");
         args.add(prompt);
         args.add("--output-format");
         args.add("stream-json");
-        args.add("--yolo");
-        if (cwd != null && !cwd.isBlank()) {
+        ArrayList<String> profileAdjustments = new ArrayList<>();
+        if (!profileUnsupported(profile, "yolo")) {
+            args.add("--yolo");
+        } else {
+            profileAdjustments.add("dropped --yolo");
+        }
+        if (cwd != null && !cwd.isBlank() && !profileUnsupported(profile, "workspace_arg")) {
             args.add("--workspace");
             args.add(cwd);
+        } else if (cwd != null && !cwd.isBlank()) {
+            profileAdjustments.add("dropped --workspace");
         }
         String model = configuredModel(config, context);
-        if (model != null && !model.isBlank()) {
+        if (model != null && !model.isBlank() && !profileUnsupported(profile, "model")) {
             args.add("--model");
             args.add(model);
+        } else if (model != null && !model.isBlank()) {
+            profileAdjustments.add("dropped --model");
         }
         String resumeId = resumeId(context);
-        if (resumeId != null && !resumeId.isBlank()) {
+        if (resumeId != null && !resumeId.isBlank() && !profileUnsupported(profile, "resume")) {
             args.add("--resume");
             args.add(resumeId);
+        } else if (resumeId != null && !resumeId.isBlank()) {
+            profileAdjustments.add("dropped --resume");
         }
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, profile, profileAdjustments);
     }
 
     private ProviderCliPlan buildOpenClawPlan(LocalCliProviderConfig.ResolvedConfig config,
@@ -239,8 +287,11 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         args.add("agent");
         args.add("--local");
         args.add("--json");
-        args.add("--session-id");
-        args.add(resumeId(context));
+        String resumeId = resumeId(context);
+        if (resumeId != null && !resumeId.isBlank()) {
+            args.add("--session-id");
+            args.add(resumeId);
+        }
         String model = configuredModel(config, context);
         if (model != null && !model.isBlank()) {
             args.add("--agent");
@@ -253,7 +304,8 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
 
     private ProviderCliPlan buildClaudePlan(LocalCliProviderConfig.ResolvedConfig config,
                                             String prompt,
-                                            TaskRuntimeContext context) {
+                                            TaskRuntimeContext context,
+                                            CliCapabilityProfile profile) {
         ArrayList<String> args = new ArrayList<>();
         args.add("-p");
         args.add("--output-format");
@@ -264,92 +316,105 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         args.add("--strict-mcp-config");
         args.add("--permission-mode");
         args.add("bypassPermissions");
+        ArrayList<String> profileAdjustments = new ArrayList<>();
         String model = configuredModel(config, context);
-        if (model != null && !model.isBlank()) {
+        if (model != null && !model.isBlank() && !profileUnsupported(profile, "model")) {
             args.add("--model");
             args.add(model);
+        } else if (model != null && !model.isBlank()) {
+            profileAdjustments.add("dropped --model");
         }
         String resumeId = resumeId(context);
-        if (resumeId != null && !resumeId.isBlank()) {
+        if (resumeId != null && !resumeId.isBlank() && !profileUnsupported(profile, "resume")) {
             args.add("--resume");
             args.add(resumeId);
+        } else if (resumeId != null && !resumeId.isBlank()) {
+            profileAdjustments.add("dropped --resume");
         }
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, buildClaudeInput(prompt));
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, buildClaudeInput(prompt), Map.of(),
+            profile, profileAdjustments);
     }
 
     private ProviderCliPlan buildGeminiPlan(LocalCliProviderConfig.ResolvedConfig config,
                                             String prompt,
-                                            TaskRuntimeContext context) {
+                                            TaskRuntimeContext context,
+                                            CliCapabilityProfile profile) {
         ArrayList<String> args = new ArrayList<>();
         args.add("-p");
         args.add(prompt);
-        args.add("--yolo");
+        ArrayList<String> profileAdjustments = new ArrayList<>();
+        if (!profileUnsupported(profile, "yolo")) {
+            args.add("--yolo");
+        } else {
+            profileAdjustments.add("dropped --yolo");
+        }
         args.add("-o");
         args.add("stream-json");
         String model = configuredModel(config, context);
-        if (model != null && !model.isBlank()) {
+        if (model != null && !model.isBlank() && !profileUnsupported(profile, "model")) {
             args.add("-m");
             args.add(model);
+        } else if (model != null && !model.isBlank()) {
+            profileAdjustments.add("dropped -m");
         }
         String resumeId = resumeId(context);
-        if (resumeId != null && !resumeId.isBlank()) {
+        if (resumeId != null && !resumeId.isBlank() && !profileUnsupported(profile, "resume")) {
             args.add("-r");
             args.add(resumeId);
+        } else if (resumeId != null && !resumeId.isBlank()) {
+            profileAdjustments.add("dropped -r");
         }
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, profile, profileAdjustments);
     }
 
     private ProviderCliPlan buildDeepSeekPlan(LocalCliProviderConfig.ResolvedConfig config,
                                               String prompt,
                                               TaskRuntimeContext context) {
         ArrayList<String> args = new ArrayList<>();
-        String binary = config.binary().value();
-
-        String effectiveModel = null;
-        if (isDeepSeekFacadeBinary(binary)) {
-            args.add("--provider");
-            args.add("deepseek");
-            effectiveModel = configuredModel(config, context);
-            if (effectiveModel != null && !effectiveModel.isBlank()) {
-                args.add("--model");
-                args.add(effectiveModel);
-            }
-        }
         args.add("exec");
         args.add(prompt);
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), effectiveModel);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), null);
     }
 
     private ProviderCliPlan buildKimiPlan(LocalCliProviderConfig.ResolvedConfig config,
                                           String prompt,
                                           TaskRuntimeContext context,
-                                          String cwd) {
+                                          String cwd,
+                                          CliCapabilityProfile profile) {
         ArrayList<String> args = new ArrayList<>();
         args.add("--print");
         args.add("--output-format");
         args.add("stream-json");
-        if (cwd != null && !cwd.isBlank()) {
+        ArrayList<String> profileAdjustments = new ArrayList<>();
+        if (cwd != null && !cwd.isBlank() && !profileUnsupported(profile, "work_dir_arg")) {
             args.add("--work-dir");
             args.add(cwd);
+        } else if (cwd != null && !cwd.isBlank()) {
+            profileAdjustments.add("dropped --work-dir");
         }
         String model = configuredModel(config, context);
-        if (model != null && !model.isBlank()) {
+        if (model != null && !model.isBlank() && !profileUnsupported(profile, "model")) {
             args.add("--model");
             args.add(model);
+        } else if (model != null && !model.isBlank()) {
+            profileAdjustments.add("dropped --model");
         }
         String resumeId = resumeId(context);
-        if (resumeId != null && !resumeId.isBlank()) {
+        if (resumeId != null && !resumeId.isBlank() && !profileUnsupported(profile, "resume")) {
             args.add("--session");
             args.add(resumeId);
+        } else if (resumeId != null && !resumeId.isBlank()) {
+            profileAdjustments.add("dropped --session");
         }
         args.add("--prompt");
         args.add(prompt);
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, profile, profileAdjustments);
     }
 
     private ProviderCliPlan buildCopilotPlan(LocalCliProviderConfig.ResolvedConfig config,
                                              String prompt,
-                                             TaskRuntimeContext context) {
+                                             TaskRuntimeContext context,
+                                             CliCapabilityProfile profile) {
         ArrayList<String> args = new ArrayList<>();
         args.add("-p");
         args.add(prompt);
@@ -357,17 +422,22 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         args.add("json");
         args.add("--allow-all");
         args.add("--no-ask-user");
+        ArrayList<String> profileAdjustments = new ArrayList<>();
         String model = configuredModel(config, context);
-        if (model != null && !model.isBlank()) {
+        if (model != null && !model.isBlank() && !profileUnsupported(profile, "model")) {
             args.add("--model");
             args.add(model);
+        } else if (model != null && !model.isBlank()) {
+            profileAdjustments.add("dropped --model");
         }
         String resumeId = resumeId(context);
-        if (resumeId != null && !resumeId.isBlank()) {
+        if (resumeId != null && !resumeId.isBlank() && !profileUnsupported(profile, "resume")) {
             args.add("--resume");
             args.add(resumeId);
+        } else if (resumeId != null && !resumeId.isBlank()) {
+            profileAdjustments.add("dropped --resume");
         }
-        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), model, profile, profileAdjustments);
     }
 
     private ProviderCliPlan buildOpenCodePlan(LocalCliProviderConfig.ResolvedConfig config,
@@ -426,6 +496,26 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                             String model,
                                             String stdinPrompt,
                                             Map<String, String> environment) {
+        return providerCliPlan(launchSpec, args, promptPreview, model, stdinPrompt, environment, null, List.of());
+    }
+
+    private ProviderCliPlan providerCliPlan(LocalCliProviderConfig.LaunchSpec launchSpec,
+                                            List<String> args,
+                                            String promptPreview,
+                                            String model,
+                                            CliCapabilityProfile profile,
+                                            List<String> profileAdjustments) {
+        return providerCliPlan(launchSpec, args, promptPreview, model, null, Map.of(), profile, profileAdjustments);
+    }
+
+    private ProviderCliPlan providerCliPlan(LocalCliProviderConfig.LaunchSpec launchSpec,
+                                            List<String> args,
+                                            String promptPreview,
+                                            String model,
+                                            String stdinPrompt,
+                                            Map<String, String> environment,
+                                            CliCapabilityProfile profile,
+                                            List<String> profileAdjustments) {
         return new ProviderCliPlan(
             launchSpec.command(args),
             promptPreview,
@@ -434,7 +524,9 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             environment,
             launchSpec.configuredBinary(),
             launchSpec.executableTarget(),
-            launchSpec.launchMode()
+            launchSpec.launchMode(),
+            profile,
+            profileAdjustments == null ? List.of() : List.copyOf(profileAdjustments)
         );
     }
 
@@ -457,21 +549,51 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
 
     private static final class OutputCapture {
         private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        private long totalBytes;
+        private boolean truncated;
 
-        private void drain(InputStream input) {
+        private void drain(InputStream input, OutputStream rawOutput) {
             byte[] chunk = new byte[8192];
             try (input) {
                 int read;
                 while ((read = input.read(chunk)) != -1) {
-                    buffer.write(chunk, 0, read);
+                    totalBytes += read;
+                    if (rawOutput != null) {
+                        rawOutput.write(chunk, 0, read);
+                    }
+                    int remaining = MAX_CAPTURE_BYTES - buffer.size();
+                    if (remaining > 0) {
+                        buffer.write(chunk, 0, Math.min(read, remaining));
+                    }
+                    if (read > remaining) {
+                        truncated = true;
+                    }
+                }
+                if (rawOutput != null) {
+                    rawOutput.flush();
                 }
             } catch (IOException ignored) {
                 // 让上层用已有内容继续解析，避免输出链因为收尾失败彻底丢失。
+            } finally {
+                if (rawOutput != null) {
+                    try {
+                        rawOutput.close();
+                    } catch (IOException ignored) {
+                    }
+                }
             }
         }
 
         private byte[] bytes() {
             return buffer.toByteArray();
+        }
+
+        private long totalBytes() {
+            return totalBytes;
+        }
+
+        private boolean truncated() {
+            return truncated;
         }
     }
 
@@ -935,10 +1057,15 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 metadataString(metadata, "cwd"),
                 metadataString(metadata, "workspace"),
                 metadataString(metadata, "working_directory"),
-                metadataString(metadata, "workspace_root")
+                metadataString(metadata, "workspace_root"),
+                singleWorkspaceRoot(metadata)
             );
             if (taskPath != null && !taskPath.isBlank()) {
                 return taskPath;
+            }
+            String inferred = inferWorkspaceRoot(context.task());
+            if (inferred != null && !inferred.isBlank()) {
+                return inferred;
             }
         }
         if (worker != null && worker.toolScope() != null && !worker.toolScope().isEmpty()) {
@@ -948,6 +1075,131 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             }
         }
         return Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString();
+    }
+
+    private String inferWorkspaceRoot(Task task) {
+        if (task == null) {
+            return null;
+        }
+        String source = firstNonBlank(
+            task.goal(),
+            task.title(),
+            task.summary(),
+            metadataString(task.metadata(), "goal"),
+            metadataString(task.metadata(), "intent"),
+            metadataString(task.metadata(), "target_path")
+        );
+        if (source == null) {
+            return null;
+        }
+        Matcher matcher = WINDOWS_ABSOLUTE_PATH.matcher(source);
+        while (matcher.find()) {
+            String root = workspaceRootFromPath(matcher.group());
+            if (root != null) {
+                return root;
+            }
+        }
+        return null;
+    }
+
+    private String singleWorkspaceRoot(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        Object raw = metadata.get("workspace_roots");
+        if (raw == null) {
+            return null;
+        }
+        ArrayList<String> roots = new ArrayList<>();
+        if (raw instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                addWorkspaceRoot(roots, item);
+            }
+        } else if (raw.getClass().isArray() && raw instanceof Object[] array) {
+            for (Object item : array) {
+                addWorkspaceRoot(roots, item);
+            }
+        } else {
+            String text = raw.toString();
+            if (text.contains("\n")) {
+                for (String part : text.split("\\R")) {
+                    addWorkspaceRoot(roots, part);
+                }
+            } else if (text.contains("|")) {
+                for (String part : text.split("\\|")) {
+                    addWorkspaceRoot(roots, part);
+                }
+            } else {
+                addWorkspaceRoot(roots, raw);
+            }
+        }
+        return roots.size() == 1 ? roots.get(0) : null;
+    }
+
+    private void addWorkspaceRoot(List<String> roots, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        String value = raw.toString().trim();
+        if (!value.isBlank() && !roots.contains(value)) {
+            roots.add(value);
+        }
+    }
+
+    private String workspaceRootFromPath(String rawPath) {
+        String normalized = stripTrailingPathNoise(rawPath);
+        if (normalized == null) {
+            return null;
+        }
+        try {
+            Path path = Paths.get(normalized).toAbsolutePath().normalize();
+            Path cursor = Files.isDirectory(path) ? path : path.getParent();
+            while (cursor != null) {
+                if (Files.isDirectory(cursor.resolve(".git"))
+                    || Files.exists(cursor.resolve("pom.xml"))
+                    || Files.exists(cursor.resolve("package.json"))) {
+                    return cursor.toString();
+                }
+                cursor = cursor.getParent();
+            }
+        } catch (RuntimeException ignored) {
+            // Fall back to textual D:\gitAll\<repo> extraction.
+        }
+        return gitAllRepoRootFromText(normalized);
+    }
+
+    private String gitAllRepoRootFromText(String pathText) {
+        String normalized = blankToNull(pathText);
+        if (normalized == null) {
+            return null;
+        }
+        String lower = normalized.toLowerCase(Locale.ROOT);
+        int marker = lower.indexOf("\\gitall\\");
+        if (marker < 0) {
+            return null;
+        }
+        int start = marker + "\\gitall\\".length();
+        int nextSlash = normalized.indexOf('\\', start);
+        if (nextSlash <= start) {
+            return null;
+        }
+        return normalized.substring(0, nextSlash);
+    }
+
+    private String stripTrailingPathNoise(String value) {
+        String normalized = blankToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        while (!normalized.isEmpty()) {
+            char last = normalized.charAt(normalized.length() - 1);
+            if (last == '.' || last == ',' || last == ';' || last == '，' || last == '；' || last == '。') {
+                normalized = normalized.substring(0, normalized.length() - 1);
+                continue;
+            }
+            break;
+        }
+        return normalized;
     }
 
     private String systemPrompt(TaskRuntimeContext context, String providerDisplayName) {
@@ -1011,6 +1263,14 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         metadata.put("cli_binary", plan.configuredBinary());
         metadata.put("cli_cwd", cwd);
         metadata.put("cli_command_preview", plan.commandPreview());
+        metadata.put("cli_command_shape", sanitizedCommandShape(providerId, plan));
+        metadata.put("cli_command_arg_count", plan.command().size());
+        metadata.put("cli_prompt_delivery", promptDeliveryMode(plan));
+        metadata.put("cli_uses_stdin", plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank());
+        metadata.put("cli_uses_resume", hasResumeArg(plan));
+        putIfNonBlank(metadata, "cli_resume_arg_name", resumeArgName(plan));
+        metadata.put("provider_expected_output_mode", expectedOutputMode(providerId));
+        metadata.put("provider_expected_parser", expectedParser(providerId));
         putIfNonBlank(metadata, "cli_resolved_binary", plan.executableTarget());
         putIfNonBlank(metadata, "cli_launch_mode", plan.launchMode());
         metadata.put("prompt_preview", plan.promptPreview());
@@ -1027,7 +1287,106 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 metadata.put("provider_status_metadata", providerStatus.metadata());
             }
         }
+        if (plan.cliProfile() != null) {
+            metadata.put("cli_profile", plan.cliProfile().metadata());
+        }
+        if (plan.cliProfileAdjustments() != null && !plan.cliProfileAdjustments().isEmpty()) {
+            metadata.put("cli_profile_adjustments", plan.cliProfileAdjustments());
+        }
         return metadata;
+    }
+
+    private CliCapabilityProfile cliProfile(AgentProviderStatus providerStatus) {
+        if (providerStatus == null || providerStatus.metadata() == null) {
+            return null;
+        }
+        return CliCapabilityProfile.fromMetadata(providerStatus.metadata());
+    }
+
+    private boolean profileUnsupported(CliCapabilityProfile profile, String capability) {
+        return profile != null && profile.explicitlyUnsupported(capability);
+    }
+
+    private List<String> sanitizedCommandShape(String providerId, ProviderCliPlan plan) {
+        if (plan == null || plan.command() == null || plan.command().isEmpty()) {
+            return List.of();
+        }
+        return plan.command().stream()
+            .map(arg -> sanitizeCommandArg(providerId, arg))
+            .toList();
+    }
+
+    private String sanitizeCommandArg(String providerId, String arg) {
+        if (arg == null) {
+            return "";
+        }
+        String value = arg.trim();
+        String normalizedProvider = providerId == null ? "" : providerId.trim().toLowerCase(Locale.ROOT);
+        if (!normalizedProvider.isBlank() && value.equalsIgnoreCase(normalizedProvider)) {
+            return value;
+        }
+        if (looksLikePromptArg(value)) {
+            return "<prompt>";
+        }
+        return value;
+    }
+
+    private boolean looksLikePromptArg(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        return value.length() > 160
+            || value.contains("\n")
+            || value.contains("Task Focus:")
+            || value.contains("Workspaces:")
+            || value.contains("Expected Deliverables:")
+            || value.contains("Required Checks:");
+    }
+
+    private String promptDeliveryMode(ProviderCliPlan plan) {
+        if (plan != null && plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank()) {
+            return "stdin_jsonl";
+        }
+        return "argv_prompt";
+    }
+
+    private boolean hasResumeArg(ProviderCliPlan plan) {
+        return resumeArgName(plan) != null;
+    }
+
+    private String resumeArgName(ProviderCliPlan plan) {
+        if (plan == null || plan.command() == null || plan.command().isEmpty()) {
+            return null;
+        }
+        for (String arg : plan.command()) {
+            if ("--resume".equals(arg) || "-r".equals(arg) || "--session".equals(arg) || "--session-id".equals(arg)) {
+                return arg;
+            }
+        }
+        return null;
+    }
+
+    private String expectedOutputMode(String providerId) {
+        return switch (providerId == null ? "" : providerId.toLowerCase(Locale.ROOT)) {
+            case "deepseek" -> "text";
+            case "copilot" -> "jsonl";
+            case "opencode" -> "json";
+            default -> "stream_json";
+        };
+    }
+
+    private String expectedParser(String providerId) {
+        return switch (providerId == null ? "" : providerId.toLowerCase(Locale.ROOT)) {
+            case "cursor" -> "cursor_stream_json";
+            case "openclaw" -> "openclaw_json";
+            case "claude" -> "claude_stream_json";
+            case "gemini" -> "gemini_stream_json";
+            case "deepseek" -> "deepseek_exec_text";
+            case "kimi" -> "kimi_stream_json";
+            case "copilot" -> "copilot_jsonl";
+            case "opencode" -> "opencode_json";
+            default -> "unknown";
+        };
     }
 
     private WorkerExecutionResult failureResult(String status,
@@ -1038,11 +1397,18 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                                 ProviderCliPlan plan,
                                                 AgentProviderStatus providerStatus,
                                                 long durationMs,
-                                                Integer exitCode) {
+                                                Integer exitCode,
+                                                ProviderRunFiles runFiles) {
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         metadata.put("provider_error", errorText);
+        appendRunFileMetadata(metadata, runFiles);
+        attachProviderFailureClassification(metadata, status, errorText);
         if (exitCode != null) {
             metadata.put("exit_code", exitCode);
+        }
+        if (runFiles != null) {
+            runFiles.writeLastMessage("");
+            runFiles.writeMetadata(metadata);
         }
         return new WorkerExecutionResult(
             summarize("", errorText, status),
@@ -1061,6 +1427,38 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         );
     }
 
+    private String taskId(TaskRuntimeContext context) {
+        return context != null && context.task() != null && context.task().id() != null && !context.task().id().isBlank()
+            ? context.task().id()
+            : "unknown_task";
+    }
+
+    private void appendRunFileMetadata(Map<String, Object> metadata, ProviderRunFiles runFiles) {
+        if (metadata == null || runFiles == null || !runFiles.available()) {
+            return;
+        }
+        metadata.put("provider_run_dir", runFiles.runDir().toString());
+        metadata.put("provider_prompt_path", runFiles.promptPath().toString());
+        metadata.put("provider_stdout_path", runFiles.stdoutPath().toString());
+        metadata.put("provider_last_message_path", runFiles.lastMessagePath().toString());
+        metadata.put("provider_run_metadata_path", runFiles.metadataPath().toString());
+    }
+
+    private String sqliteOutputText(String outputText, Map<String, Object> metadata) {
+        String value = outputText == null ? "" : outputText;
+        if (value.length() <= SQLITE_OUTPUT_TEXT_LIMIT
+            && !Boolean.parseBoolean(String.valueOf(metadata != null ? metadata.get("provider_output_truncated") : null))) {
+            return value;
+        }
+        if (metadata != null) {
+            metadata.put("provider_output_truncated", true);
+            metadata.put("provider_output_sqlite_limit_chars", SQLITE_OUTPUT_TEXT_LIMIT);
+        }
+        return value.length() <= SQLITE_OUTPUT_TEXT_LIMIT
+            ? value
+            : value.substring(0, SQLITE_OUTPUT_TEXT_LIMIT);
+    }
+
     private String summarize(String outputText, String errorText, String status) {
         String base = firstNonBlank(outputText, errorText, status);
         if (base == null) {
@@ -1068,6 +1466,20 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         }
         String normalized = base.replaceAll("\\s+", " ").trim();
         return normalized.length() > 240 ? normalized.substring(0, 240) + "..." : normalized;
+    }
+
+    private String providerDiagnostic(String errorText, String outputText, String status) {
+        return firstNonBlank(errorText, outputText, status);
+    }
+
+    private void attachProviderFailureClassification(Map<String, Object> metadata, String status, String message) {
+        ProviderFailureClassifier.Classification classification = ProviderFailureClassifier.classify(status, message);
+        if (classification == null) {
+            return;
+        }
+        metadata.put("provider_failure_class", classification.failureClass());
+        metadata.put("provider_failure_reason", classification.reason());
+        metadata.put("provider_retryable", classification.retryable());
     }
 
     private String normalizeStatus(String rawStatus, Integer exitCode) {
@@ -1301,21 +1713,24 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                    Map<String, String> environment,
                                    String configuredBinary,
                                    String executableTarget,
-                                   String launchMode) {
+                                   String launchMode,
+                                   CliCapabilityProfile cliProfile,
+                                   List<String> cliProfileAdjustments) {
         private ProviderCliPlan {
             if (command == null) command = List.of();
             if (promptPreview == null) promptPreview = "";
             if (environment == null) environment = Map.of();
             if (configuredBinary == null) configuredBinary = "";
             if (launchMode == null || launchMode.isBlank()) launchMode = "direct";
+            if (cliProfileAdjustments == null) cliProfileAdjustments = List.of();
         }
 
         private ProviderCliPlan(List<String> command, String promptPreview, String model) {
-            this(command, promptPreview, model, null, Map.of(), "", "", "direct");
+            this(command, promptPreview, model, null, Map.of(), "", "", "direct", null, List.of());
         }
 
         private ProviderCliPlan(List<String> command, String promptPreview, String model, String stdinPrompt) {
-            this(command, promptPreview, model, stdinPrompt, Map.of(), "", "", "direct");
+            this(command, promptPreview, model, stdinPrompt, Map.of(), "", "", "direct", null, List.of());
         }
 
         private String commandPreview() {
@@ -1329,15 +1744,175 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                      String sessionId,
                                      Integer exitCode,
                                      String version,
-                                     String parser) {
+                                     String parser,
+                                     boolean outputTruncated,
+                                     Long outputTotalBytes,
+                                     Integer outputCaptureLimitBytes) {
         private ProviderCliOutput {
             if (status == null || status.isBlank()) status = "completed";
             if (outputText == null) outputText = "";
             if (parser == null || parser.isBlank()) parser = "unknown";
         }
 
+        private ProviderCliOutput(String status,
+                                  String outputText,
+                                  String errorText,
+                                  String sessionId,
+                                  Integer exitCode,
+                                  String version,
+                                  String parser) {
+            this(status, outputText, errorText, sessionId, exitCode, version, parser, false, null, null);
+        }
+
         private ProviderCliOutput withExitCode(int value) {
-            return new ProviderCliOutput(status, outputText, errorText, sessionId, value, version, parser);
+            return new ProviderCliOutput(status, outputText, errorText, sessionId, value, version, parser,
+                outputTruncated, outputTotalBytes, outputCaptureLimitBytes);
+        }
+
+        private ProviderCliOutput withOutputLimitExceeded(long totalBytes, int captureLimitBytes) {
+            String message = "provider output too large, truncated at " + captureLimitBytes
+                + " bytes (total bytes read " + totalBytes + ")";
+            String boundedOutput = outputText == null ? "" : outputText;
+            return new ProviderCliOutput(
+                "failed",
+                boundedOutput,
+                errorText == null || errorText.isBlank() ? message : errorText,
+                sessionId,
+                exitCode,
+                version,
+                parser,
+                true,
+                totalBytes,
+                captureLimitBytes
+            );
+        }
+    }
+
+    private static final class ProviderRunFiles implements Closeable {
+        private final Path runDir;
+        private final Path promptPath;
+        private final Path stdoutPath;
+        private final Path lastMessagePath;
+        private final Path metadataPath;
+        private final OutputStream stdout;
+        private final boolean available;
+
+        private ProviderRunFiles(Path runDir,
+                                 Path promptPath,
+                                 Path stdoutPath,
+                                 Path lastMessagePath,
+                                 Path metadataPath,
+                                 OutputStream stdout,
+                                 boolean available) {
+            this.runDir = runDir;
+            this.promptPath = promptPath;
+            this.stdoutPath = stdoutPath;
+            this.lastMessagePath = lastMessagePath;
+            this.metadataPath = metadataPath;
+            this.stdout = stdout;
+            this.available = available;
+        }
+
+        private static ProviderRunFiles create(String providerId, String taskId, String workerId, ProviderCliPlan plan) {
+            try {
+                String executionId = "run-" + System.currentTimeMillis() + "-" + sanitizePathSegment(workerId);
+                Path taskRunDir = ProviderRunFileSupport.providerRunRoot()
+                    .resolve(sanitizePathSegment(providerId))
+                    .resolve(sanitizePathSegment(taskId))
+                    .toAbsolutePath()
+                    .normalize();
+                ProviderRunFileSupport.cleanupTaskRuns(taskRunDir, log);
+                Path runDir = taskRunDir.resolve(executionId);
+                Files.createDirectories(runDir);
+                Path promptPath = runDir.resolve("prompt.txt");
+                Path stdoutPath = runDir.resolve("stdout.log");
+                Path lastMessagePath = runDir.resolve("last_message.md");
+                Path metadataPath = runDir.resolve("metadata.json");
+                String prompt = plan != null && plan.stdinPrompt() != null && !plan.stdinPrompt().isBlank()
+                    ? plan.stdinPrompt()
+                    : plan != null ? plan.promptPreview() : "";
+                Files.writeString(promptPath, prompt == null ? "" : prompt, StandardCharsets.UTF_8);
+                return new ProviderRunFiles(
+                    runDir,
+                    promptPath,
+                    stdoutPath,
+                    lastMessagePath,
+                    metadataPath,
+                    Files.newOutputStream(stdoutPath),
+                    true
+                );
+            } catch (IOException e) {
+                log.warn("Provider run files unavailable. provider={} worker={} reason={}", providerId, workerId, e.getMessage());
+                return new ProviderRunFiles(null, null, null, null, null, OutputStream.nullOutputStream(), false);
+            }
+        }
+
+        private static String sanitizePathSegment(String value) {
+            return ProviderRunFileSupport.sanitizePathSegment(value);
+        }
+
+        private boolean available() {
+            return available;
+        }
+
+        private Path runDir() {
+            return runDir;
+        }
+
+        private Path promptPath() {
+            return promptPath;
+        }
+
+        private Path stdoutPath() {
+            return stdoutPath;
+        }
+
+        private Path lastMessagePath() {
+            return lastMessagePath;
+        }
+
+        private Path metadataPath() {
+            return metadataPath;
+        }
+
+        private OutputStream stdout() {
+            return stdout;
+        }
+
+        private void writeLastMessage(String outputText) {
+            if (!available || lastMessagePath == null) {
+                return;
+            }
+            try {
+                Files.writeString(lastMessagePath, outputText == null ? "" : outputText, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                log.warn("Failed to write provider last message file. path={} reason={}", lastMessagePath, e.getMessage());
+            }
+        }
+
+        private void writeMetadata(Map<String, Object> metadata) {
+            if (!available || metadataPath == null) {
+                return;
+            }
+            try {
+                MAPPER.writerWithDefaultPrettyPrinter().writeValue(metadataPath.toFile(), metadata == null ? Map.of() : metadata);
+            } catch (IOException e) {
+                log.warn("Failed to write provider run metadata file. path={} reason={}", metadataPath, e.getMessage());
+            }
+        }
+
+        private void closeQuietly() {
+            try {
+                close();
+            } catch (IOException ignored) {
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (stdout != null) {
+                stdout.close();
+            }
         }
     }
 }

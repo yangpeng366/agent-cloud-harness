@@ -38,6 +38,26 @@ test("message role summary keeps only the strongest lifecycle signal and shorter
     assert.ok(summary.latestText.length <= 96);
 });
 
+test("message role summary surfaces provider diagnostics from latest outcome", () => {
+    const summary = buildMessageRoleSummary([
+        {
+            role: "assistant",
+            message_type: "task_progress",
+            content: "任务仍在恢复中。",
+            created_at: "2026-05-10T10:02:00Z",
+            task_id: "task_provider",
+            metadata: {
+                provider_error: "codex turn completion timed out",
+                provider_failure_class: "provider_runtime_transient",
+                selected_worker: "kimi",
+                route_source: "capability_match"
+            }
+        }
+    ], "assistant");
+
+    assert.equal(summary.primarySignal, "provider · codex turn completion timed…");
+});
+
 test("message role summary returns null when role has no messages", () => {
     assert.equal(buildMessageRoleSummary([], "system"), null);
 });

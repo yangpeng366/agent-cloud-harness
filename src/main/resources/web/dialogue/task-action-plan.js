@@ -2,6 +2,7 @@ const ACTIONS = {
     continue: { action: "continue", label: "继续推进" },
     pause: { action: "pause", label: "暂停" },
     resume: { action: "resume", label: "恢复" },
+    recover: { action: "recover", label: "自动恢复" },
     escalate: { action: "escalate", label: "转人工处理" },
     handoff: { action: "handoff", label: "移交 Worker" }
 };
@@ -15,13 +16,19 @@ export function buildTaskActionPlan(task) {
             secondary: [ACTIONS.continue, ACTIONS.escalate, ACTIONS.handoff]
         };
     }
-    if (status === "waiting_human" || status === "waiting" || controlNode === "human_gate") {
+    if (status === "failed") {
         return {
-            primary: ACTIONS.resume,
-            secondary: [ACTIONS.continue, ACTIONS.handoff]
+            primary: ACTIONS.recover,
+            secondary: [ACTIONS.handoff]
         };
     }
-    if (status === "done" || status === "failed" || controlNode === "end") {
+    if (status === "waiting_human" || status === "waiting" || controlNode === "human_gate") {
+        return {
+            primary: ACTIONS.recover,
+            secondary: [ACTIONS.resume, ACTIONS.continue, ACTIONS.handoff]
+        };
+    }
+    if (status === "done" || controlNode === "end") {
         return {
             primary: null,
             secondary: [ACTIONS.handoff]

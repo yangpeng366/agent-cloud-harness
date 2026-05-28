@@ -44,6 +44,19 @@ function joinExpandedSections(parts) {
         .join("\n\n");
 }
 
+function buildProviderDiagnosticsSection(metadata) {
+    const lines = [
+        ["error", firstNonBlank(metadata.provider_error, metadata.providerError)],
+        ["turn status", firstNonBlank(metadata.provider_turn_status, metadata.providerTurnStatus)],
+        ["failure class", firstNonBlank(metadata.provider_failure_class, metadata.providerFailureClass)],
+        ["failure reason", firstNonBlank(metadata.provider_failure_reason, metadata.providerFailureReason)],
+        ["retryable", firstNonBlank(metadata.provider_retryable, metadata.providerRetryable)]
+    ]
+        .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
+        .map(([label, value]) => `${label}: ${String(value).trim()}`);
+    return lines.length > 0 ? `Provider Diagnostics\n${lines.join("\n")}` : "";
+}
+
 function uniquePush(parts, candidate) {
     const normalized = normalizeForCompare(candidate);
     if (!normalized) {
@@ -85,6 +98,7 @@ function buildTaskOutcomeFullContent(message, metadata, content) {
         metadata.failure_summary_readable,
         metadata.failureSummaryReadable
     );
+    const providerDiagnostics = buildProviderDiagnosticsSection(metadata);
     const outputText = firstNonBlank(metadata.output_text, metadata.outputText);
     const artifactContent = firstNonBlank(metadata.artifact_content, metadata.artifactContent);
     const nextStep = firstNonBlank(metadata.next_step, metadata.nextStep);
@@ -94,6 +108,9 @@ function buildTaskOutcomeFullContent(message, metadata, content) {
     }
     if (failureSummary) {
         uniquePush(parts, `Failure Summary\n${failureSummary}`);
+    }
+    if (providerDiagnostics) {
+        uniquePush(parts, providerDiagnostics);
     }
     if (outputText) {
         uniquePush(parts, `Worker Output\n${outputText}`);
@@ -148,6 +165,16 @@ export function hasExpandedTaskOutcomeContent(message) {
         metadata.fullContent,
         metadata.failure_summary_readable,
         metadata.failureSummaryReadable,
+        metadata.provider_error,
+        metadata.providerError,
+        metadata.provider_turn_status,
+        metadata.providerTurnStatus,
+        metadata.provider_failure_class,
+        metadata.providerFailureClass,
+        metadata.provider_failure_reason,
+        metadata.providerFailureReason,
+        metadata.provider_retryable,
+        metadata.providerRetryable,
         metadata.output_text,
         metadata.outputText,
         metadata.artifact_content,

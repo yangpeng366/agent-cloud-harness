@@ -153,6 +153,87 @@ class ChatFacadeHandlerHttpTest {
             Task task = fixture.taskDao.findById(taskId).orElseThrow();
             assertEquals("coding", String.valueOf(task.metadata().get("task_type")));
             assertEquals("coding", task.goal().contains("ArticleThirdService.java") ? String.valueOf(task.metadata().get("task_type")) : "coding");
+            assertEquals("D:\\gitAll\\articleeditor", task.metadata().get("workspace_root"));
+            assertEquals("D:\\gitAll\\articleeditor", task.metadata().get("cwd"));
+            assertEquals("D:\\gitAll\\articleeditor", task.metadata().get("repo_path"));
+            assertTrue(((List<?>) task.metadata().get("reference_paths")).contains("D:\\gitAll\\articleeditor"));
+            assertTrue(((List<?>) task.metadata().get("target_paths")).contains("D:\\gitAll\\articleeditor"));
+        }
+    }
+
+    @Test
+    void postChatCompletionPreservesProviderExecutionContractMetadata() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("chat-facade-provider-contract.db"))) {
+            ApiCall response = fixture.postJson("/v1/chat/completions", Map.of(
+                "model", "agentcloud-default",
+                "messages", List.of(Map.of(
+                    "role", "user",
+                    "content", "按本地代码任务合同推进，不要等 harness 预读文件。"
+                )),
+                "stream", false,
+                "metadata", Map.of(
+                    "task_mode", "task_required",
+                    "task_type", "coding",
+                    "repo_path", "D:\\gitAll\\agent-cloud-harness",
+                    "reference_paths", List.of("D:\\gitAll\\agent-cloud-harness\\docs\\AGENT_PROVIDER_TECHNICAL_DESIGN.md"),
+                    "validation_commands", List.of("mvn -Dtest=ProviderTaskPromptBuilderTest test"),
+                    "write_scope", List.of("src/main/java/com/agentcloud/worker", "docs"),
+                    "acceptance_criteria", List.of("worker reports validation result")
+                )
+            ));
+
+            assertEquals(200, response.statusCode());
+            String taskId = response.body().path("agentcloud").path("task_id").asText();
+            Task task = fixture.taskDao.findById(taskId).orElseThrow();
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("repo_path"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("workspace_root"));
+            assertEquals(List.of("mvn -Dtest=ProviderTaskPromptBuilderTest test"), task.metadata().get("validation_commands"));
+            assertEquals(List.of("src/main/java/com/agentcloud/worker", "docs"), task.metadata().get("write_scope"));
+            assertEquals(List.of("worker reports validation result"), task.metadata().get("acceptance_criteria"));
+            assertEquals(
+                List.of("D:\\gitAll\\agent-cloud-harness\\docs\\AGENT_PROVIDER_TECHNICAL_DESIGN.md"),
+                task.metadata().get("reference_paths")
+            );
+        }
+    }
+
+    @Test
+    void postChatCompletionSplitsMultipleLocalWorkspacesIntoChildTasks() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("chat-facade-split-workspaces.db"))) {
+            ApiCall response = fixture.postJson("/v1/chat/completions", Map.of(
+                "model", "agentcloud-default",
+                "messages", List.of(Map.of(
+                    "role", "user",
+                    "content", "同时检查 D:\\gitAll\\articleeditor\\src 和 D:\\gitAll\\agent-cloud-harness\\docs，各自补测试。"
+                )),
+                "stream", false,
+                "metadata", Map.of(
+                    "task_mode", "task_required"
+                )
+            ));
+
+            assertEquals(200, response.statusCode());
+            String parentTaskId = response.body().path("agentcloud").path("task_id").asText();
+            assertFalse(parentTaskId.isBlank());
+
+            Task parent = fixture.taskDao.findById(parentTaskId).orElseThrow();
+            assertEquals(Boolean.TRUE, parent.metadata().get("split_parent"));
+            assertEquals("multiple_local_workspaces", parent.metadata().get("split_reason"));
+            assertEquals("manual", parent.metadata().get("start_mode"));
+            assertEquals("coding", parent.metadata().get("task_type"));
+
+            List<Task> tasks = fixture.taskDao.listBySession(parent.sessionId());
+            List<Task> children = tasks.stream()
+                .filter(task -> parentTaskId.equals(task.parentTaskId()))
+                .toList();
+            assertEquals(2, children.size());
+            assertTrue(children.stream().allMatch(task -> "coding".equals(task.metadata().get("task_type"))));
+            assertTrue(children.stream().anyMatch(task ->
+                "D:\\gitAll\\articleeditor".equals(task.metadata().get("cwd"))
+                    && Boolean.TRUE.equals(task.metadata().get("split_child"))));
+            assertTrue(children.stream().anyMatch(task ->
+                "D:\\gitAll\\agent-cloud-harness".equals(task.metadata().get("cwd"))
+                    && Boolean.TRUE.equals(task.metadata().get("split_child"))));
         }
     }
 

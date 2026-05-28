@@ -5,15 +5,53 @@ param(
     [switch]$Background,
     [string]$StdOutPath = ".tmp\server.out.log",
     [string]$StdErrPath = ".tmp\server.err.log",
-    [string[]]$JavaArgs = @()
+    [string[]]$JavaArgs = @(),
+    [switch]$AutoStop
 )
 
 $ErrorActionPreference = "Stop"
+
+function Write-ErrorWithHelp {
+    param(
+        [string]$Message,
+        [string]$HelpMessage
+    )
+    Write-Host "`n[ERROR] $Message" -ForegroundColor Red
+    if ($HelpMessage) {
+        Write-Host "`nSolution:" -ForegroundColor Cyan
+        Write-Host $HelpMessage -ForegroundColor Yellow
+    }
+    Write-Host ""
+    exit 1
+}
+
+function Write-Info {
+    param([string]$Message)
+    Write-Host "`n[INFO] $Message" -ForegroundColor Cyan
+}
+
+function Write-Success {
+    param([string]$Message)
+    Write-Host "[OK] $Message" -ForegroundColor Green
+}
+
+function Write-Warning {
+    param([string]$Message)
+    Write-Host "`n[WARN] $Message" -ForegroundColor Yellow
+}
 
 function Resolve-HarnessJar {
     param([string]$RequestedJarPath)
 
     if (-not [string]::IsNullOrWhiteSpace($RequestedJarPath)) {
+        if (-not (Test-Path -LiteralPath $RequestedJarPath)) {
+            Write-ErrorWithHelp `
+                -Message "Specified JAR file not found: $RequestedJarPath" `
+                -HelpMessage @"
+Please verify the path is correct, or run build first:
+.\scripts\Build-WithJava21.ps1 -SkipTests
+"@
+        }
         return (Resolve-Path -LiteralPath $RequestedJarPath).Path
     }
 
@@ -28,7 +66,19 @@ function Resolve-HarnessJar {
         }
     }
 
-    throw "no runnable harness jar found. Checked: $($candidates -join ', ')"
+    Write-ErrorWithHelp `
+        -Message "No runnable Harness JAR file found" `
+        -HelpMessage @"
+Checked locations:
+- $($candidates -join "`n- ")
+
+Solutions:
+1. Run build first:
+   .\scripts\Build-WithJava21.ps1 -SkipTests
+
+2. Or specify custom JAR path:
+   .\scripts\Run-HarnessWithJava21.ps1 -JarPath "path/to/your.jar"
+"@
 }
 
 function New-RuntimeJarCopy {
@@ -47,36 +97,129 @@ function New-RuntimeJarCopy {
     return (Resolve-Path -LiteralPath $runtimeJar).Path
 }
 
-function Assert-PortAvailable {
+function Stop-ProcessByPort {
     param([int]$PortNumber)
 
     $listeners = Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue
-    if ($listeners) {
-        $owningProcess = ($listeners | Select-Object -First 1).OwningProcess
-        $processInfo = $null
-        if ($owningProcess) {
-            $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $owningProcess" -ErrorAction SilentlyContinue
-        }
+    if (-not $listeners) {
+        return $null
+    }
 
-        $commandLine = $processInfo.CommandLine
-        if ([string]::IsNullOrWhiteSpace($commandLine)) {
-            $commandLine = "<unavailable>"
-        }
+    $owningProcess = ($listeners | Select-Object -First 1).OwningProcess
+    if (-not $owningProcess) {
+        return $null
+    }
 
-        throw "port $PortNumber is already in use by PID $owningProcess. command: $commandLine"
+    $processInfo = $null
+    try {
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $owningProcess" -ErrorAction SilentlyContinue
+    }
+    catch {
+        Write-Warning "Failed to get process info for PID $owningProcess"
+    }
+
+    $commandLine = $processInfo.CommandLine
+    if ([string]::IsNullOrWhiteSpace($commandLine)) {
+        $commandLine = "<unavailable>"
+    }
+
+    Write-Warning "Port $PortNumber is already in use by another process"
+    Write-Host "  PID: $owningProcess" -ForegroundColor Gray
+    Write-Host "  Command Line: $commandLine" -ForegroundColor Gray
+
+    try {
+        Write-Info "Stopping existing process (PID: $owningProcess)..."
+        Stop-Process -Id $owningProcess -Force -ErrorAction Stop
+        Write-Success "Successfully stopped process (PID: $owningProcess)"
+        Start-Sleep -Milliseconds 500
+        return $owningProcess
+    }
+    catch {
+        Write-ErrorWithHelp `
+            -Message "Failed to stop process (PID: $owningProcess): $_" `
+            -HelpMessage @"
+Solutions:
+1. Manually stop the process:
+   Stop-Process -Id $owningProcess -Force
+
+2. Use a different port:
+   .\scripts\Run-HarnessWithJava21.ps1 -Port 8081
+
+3. Find and stop process:
+   Get-NetTCPConnection -LocalPort $PortNumber | Select-Object OwningProcess
+   Stop-Process -Id <PID> -Force
+"@
     }
 }
 
-. (Join-Path $PSScriptRoot "Use-Java21.ps1") -JdkHome $JdkHome -Quiet
+function Assert-PortAvailable {
+    param([int]$PortNumber, [switch]$AutoStop)
 
+    $listeners = Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue
+    if ($listeners) {
+        if ($AutoStop) {
+            Stop-ProcessByPort -PortNumber $PortNumber
+        }
+        else {
+            $owningProcess = ($listeners | Select-Object -First 1).OwningProcess
+            $processInfo = $null
+            if ($owningProcess) {
+                $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $owningProcess" -ErrorAction SilentlyContinue
+            }
+
+            $commandLine = $processInfo.CommandLine
+            if ([string]::IsNullOrWhiteSpace($commandLine)) {
+                $commandLine = "<unavailable>"
+            }
+
+            Write-ErrorWithHelp `
+                -Message "Port $PortNumber is already in use" `
+                -HelpMessage @"
+Process info using the port:
+- PID: $owningProcess
+- Command Line: $commandLine
+
+Solutions:
+1. Use -AutoStop parameter to automatically stop the process:
+   .\scripts\Run-HarnessWithJava21.ps1 -Port $PortNumber -AutoStop
+
+2. Stop the process manually:
+   Stop-Process -Id $owningProcess -Force
+
+3. Use a different port:
+   .\scripts\Run-HarnessWithJava21.ps1 -Port 8081
+"@
+        }
+    }
+}
+
+Write-Info "Starting Agent Cloud Harness..."
+
+try {
+    Write-Info "Step 1/3: Configure Java 21 environment"
+    . (Join-Path $PSScriptRoot "Use-Java21.ps1") -JdkHome $JdkHome -Quiet
+    Write-Success "Java environment configured successfully"
+}
+catch {
+    Write-ErrorWithHelp `
+        -Message "Failed to configure Java environment: $_" `
+        -HelpMessage @"
+1. Ensure Java 21 is installed
+2. Use -JdkHome parameter to specify correct path
+"@
+}
+
+Write-Info "Step 2/3: Resolve JAR file path"
 $resolvedJar = Resolve-HarnessJar -RequestedJarPath $JarPath
-$javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
-$argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)
+Write-Success "Found JAR: $resolvedJar"
 
 if ($Background) {
-    Assert-PortAvailable -PortNumber $Port
+    Write-Info "Step 3/3: Start in background mode (port check + launch)"
+    Assert-PortAvailable -PortNumber $Port -AutoStop:$AutoStop
     New-Item -ItemType Directory -Force -Path ".tmp" | Out-Null
     $runtimeJar = New-RuntimeJarCopy -SourceJarPath $resolvedJar -PortNumber $Port
+
+    $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
     $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $runtimeJar)
 
     $process = Start-Process `
@@ -87,17 +230,56 @@ if ($Background) {
         -RedirectStandardError $StdErrPath `
         -PassThru
 
-    Write-Host "Started agent-cloud-harness."
-    Write-Host "PID: $($process.Id)"
-    Write-Host "Port: $Port"
-    Write-Host "Jar: $resolvedJar"
-    Write-Host "RuntimeJar: $runtimeJar"
-    Write-Host "Stdout: $StdOutPath"
-    Write-Host "Stderr: $StdErrPath"
+    Write-Host @"
+
+Agent Cloud Harness started (background mode)
+------------------------------------------------------
+PID:        $($process.Id)
+Port:       $Port
+Jar:        $resolvedJar
+RuntimeJar: $runtimeJar
+Stdout:     $StdOutPath
+Stderr:     $StdErrPath
+------------------------------------------------------
+
+Access URLs:
+- Dialogue:  http://localhost:$Port/dialogue/
+- Console:   http://localhost:$Port/console/
+- Health:    http://localhost:$Port/api/v1/health
+
+Management commands:
+- View logs:  Get-Content -Path "$StdOutPath" -Wait
+- Stop service:  Stop-Process -Id $($process.Id) -Force
+- Check port:  Get-NetTCPConnection -LocalPort $Port
+"@
 }
 else {
+    Write-Info "Step 3/3: Start in foreground mode"
+
+    $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
+    $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)
+
+    Write-Host @"
+
+Starting Agent Cloud Harness (foreground mode)
+------------------------------------------------------
+Command: $javaExe $($argumentList -join ' ')
+------------------------------------------------------
+
+Press Ctrl+C to stop the service
+"@
+
     & $javaExe @argumentList
+
     if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+        Write-ErrorWithHelp `
+            -Message "Service failed to start with exit code: $LASTEXITCODE" `
+            -HelpMessage @"
+Common startup failure reasons:
+1. Port is in use - use -Port parameter to specify another port
+2. JAR file is corrupted - rebuild the project
+3. Java version incompatible - ensure using Java 21
+4. Check error logs for detailed information
+"@
     }
 }

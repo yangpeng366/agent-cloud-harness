@@ -239,6 +239,47 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   FOREIGN KEY(task_id) REFERENCES tasks(id)
 );
 
+CREATE TABLE IF NOT EXISTS agent_actions (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  source_execution_id TEXT,
+  action_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT,
+  payload_json TEXT,
+  risk_level TEXT,
+  requires_approval INTEGER NOT NULL DEFAULT 0,
+  accepted_by TEXT,
+  rejection_reason TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
+CREATE TABLE IF NOT EXISTS task_recovery_jobs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  status TEXT NOT NULL,
+  mode TEXT,
+  recommended_action TEXT,
+  target_worker TEXT,
+  recovery_execution_mode TEXT,
+  failure_class TEXT,
+  provider_failure_class TEXT,
+  status_url TEXT,
+  accepted_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  error_message TEXT,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(task_id) REFERENCES tasks(id)
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_tasks_session_status_updated
 ON tasks(session_id, status, updated_at);
@@ -296,3 +337,15 @@ ON agent_runs(task_id, started_at);
 
 CREATE INDEX IF NOT EXISTS idx_agent_runs_provider_started
 ON agent_runs(provider_id, started_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_actions_task_created
+ON agent_actions(task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_actions_session_task_created
+ON agent_actions(session_id, task_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_actions_type_status_created
+ON agent_actions(action_type, status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_task_recovery_jobs_task_accepted
+ON task_recovery_jobs(task_id, accepted_at);

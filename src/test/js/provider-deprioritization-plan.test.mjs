@@ -26,3 +26,16 @@ test("provider deprioritization plan stays empty when recovery hint absent", () 
     assert.equal(plan.chip, "");
     assert.equal(plan.headline, "");
 });
+
+test("provider deprioritization plan accepts select-worker recovery top-level fields", () => {
+    const plan = buildProviderDeprioritizationPlan({
+        recovery_provider_deprioritized: true,
+        recovery_deprioritized_provider: "claude",
+        recovery_deprioritization_reason: "recent transient provider failures"
+    });
+
+    assert.equal(plan.providerDeprioritized, true);
+    assert.equal(plan.deprioritizedProvider, "claude");
+    assert.equal(plan.chip, "recovery避开 claude");
+    assert.equal(plan.headline, "恢复阶段会优先避开 claude");
+});

@@ -31,9 +31,9 @@ abstract class AbstractLocalFileTool implements Tool {
         Worker worker = requireWorker(request);
         Object raw = request.arguments().get("path");
         if ((raw == null || raw.toString().isBlank()) && allowScopeRootDefault) {
-            return toolPolicy.resolveAllowedPath(worker, worker.toolScope().get(0), writeMode);
+            return toolPolicy.resolveAllowedPath(worker, worker.toolScope().get(0), writeMode, request.taskMetadata());
         }
-        return toolPolicy.resolveAllowedPath(worker, stringArg(request.arguments(), "path"), writeMode);
+        return toolPolicy.resolveAllowedPath(worker, stringArg(request.arguments(), "path"), writeMode, request.taskMetadata());
     }
 
     protected String stringArg(Map<String, Object> arguments, String key) {

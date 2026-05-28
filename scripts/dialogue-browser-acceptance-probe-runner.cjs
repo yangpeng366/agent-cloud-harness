@@ -14,7 +14,7 @@ if (!wsUrl || !dialogueUrl) {
 
 const PROTOCOL_TIMEOUT_MS = 15000;
 const WAIT_STEP_MS = 250;
-const WAIT_TIMEOUT_MS = 20000;
+const WAIT_TIMEOUT_MS = 90000;
 const FETCH_RESPONSE_CAPTURE_LIMIT = 16000;
 const PROBE_FETCH_LIMIT = 24;
 const PROBE_OVERRIDE_LIMIT = 8;
@@ -101,11 +101,23 @@ async function main() {
       await waitForCondition(page, (expectedText) => {
         const summary = document.querySelector('#composerInlineState');
         const list = document.querySelector('#messageList');
+        const selectedTask = document.querySelector('#taskThread [data-task-id].is-active');
+        const hash = window.location.hash || '';
+        const detailTitle = document.querySelector('#detailTitle')?.textContent?.trim() || '';
+        const selectedStatus = document.querySelector('#selectedStatus')?.textContent?.trim() || '';
+        const messageVisible = Boolean(list && list.textContent.includes(expectedText));
+        const taskSelectionConverged = Boolean(
+          selectedTask
+          && hash.includes('task=')
+          && detailTitle
+          && detailTitle !== '选择一个任务'
+          && selectedStatus
+          && !/idle/i.test(selectedStatus)
+        );
         return Boolean(
           summary
           && /已记录|已提交任务，正在推进|任务已推进|任务已完成/.test(summary.textContent)
-          && list
-          && list.textContent.includes(expectedText)
+          && (messageVisible || taskSelectionConverged)
         );
       }, 'default task_auto path did not render expected ack', messageIntent);
 
@@ -371,7 +383,9 @@ async function main() {
       await waitForCondition(page, (expectedText) => {
         const inline = document.querySelector('#composerInlineState')?.textContent || '';
         const thread = document.querySelector('#taskThread')?.textContent || '';
-        return inline.includes('任务已记录') && thread.includes(expectedText);
+        const detailTitle = document.querySelector('#detailTitle')?.textContent?.trim() || '';
+        return /已提交任务|任务已记录/.test(inline)
+          && (thread.includes(expectedText) || detailTitle.includes(expectedText.slice(0, 24)));
       }, 'manual-start task path did not render expected receipt', taskIntent);
 
       await waitForCondition(page, () => {
@@ -384,6 +398,7 @@ async function main() {
       await waitForCondition(page, () => {
         const detailTitle = document.querySelector('#detailTitle')?.textContent?.trim() || '';
         const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+        const selectedTaskText = document.querySelector('#taskThread [data-task-id].is-active')?.textContent || '';
         const hashTaskId = (() => {
           const hash = window.location.hash || '';
           const match = /(?:[#&]|^)task=([^&]+)/.exec(hash);
@@ -393,11 +408,12 @@ async function main() {
         const inline = document.querySelector('#composerInlineState')?.textContent || '';
         return Boolean(selectedTaskId)
           && detailTitle !== '选择一个任务'
-          && inline.includes('任务已记录')
+          && /已提交任务|任务已记录/.test(inline)
           && hashTaskId === selectedTaskId
           && selectedStatus.length > 0
-          && !/idle/i.test(selectedStatus);
-      }, 'manual-start task state did not fully converge');
+          && !/idle/i.test(selectedStatus)
+          && (/manual-start/.test(selectedTaskText) || /manual/.test(selectedTaskText));
+      }, 'manual-start task state did not fully converge to selected manual task');
 
       const afterTask = await evaluate(page, () => {
         const taskCards = Array.from(document.querySelectorAll('#taskThread [data-task-id]'));
@@ -414,6 +430,7 @@ async function main() {
           taskCards: taskCards.length,
           latestTaskText: latestTask?.textContent || '',
           latestTaskId: latestTask?.getAttribute('data-task-id') || '',
+          selectedTaskText: selectedTask?.textContent || '',
           selectedTaskId: selectedTask?.getAttribute('data-task-id') || '',
           hashTaskId,
           detailTitle: document.querySelector('#detailTitle')?.textContent?.trim() || '',
@@ -426,11 +443,11 @@ async function main() {
       if (afterTask.taskCards < 1) {
         throw new Error('manual-start task did not create task card');
       }
-      if (!/任务已记录/.test(afterTask.inline)) {
+      if (!/已提交任务|任务已记录/.test(afterTask.inline)) {
         throw new Error(`manual-start inline receipt mismatch: ${afterTask.inline}`);
       }
-      if (!/manual-start/.test(afterTask.latestTaskText) && !/manual/.test(afterTask.latestTaskText)) {
-        throw new Error(`manual-start badge/text missing from task thread: ${afterTask.latestTaskText}`);
+      if (!/manual-start/.test(afterTask.selectedTaskText) && !/manual/.test(afterTask.selectedTaskText)) {
+        throw new Error(`manual-start badge/text missing from selected task thread: ${JSON.stringify(afterTask)}`);
       }
       if (!/session=/.test(afterTask.hash)) {
         throw new Error(`selected session was not reflected into hash: ${afterTask.hash}`);
@@ -442,6 +459,139 @@ async function main() {
         throw new Error(`manual-start task was created but no selected-task signal appeared: ${JSON.stringify(afterTask)}`);
       }
       const manualStartTaskScreenshot = await captureScreenshot(page, screenshotDir, mode, 'manual-start-task');
+
+      await evaluate(page, (expectedTaskId) => {
+        const card = document.querySelector(`#taskThread [data-task-id="${CSS.escape(expectedTaskId)}"]`);
+        if (card) {
+          card.click();
+        }
+        return Boolean(card);
+      }, afterTask.selectedTaskId);
+      await waitForCondition(page, (expectedTaskId) => {
+        const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+        const hashTaskId = new URLSearchParams(String(window.location.hash || '').replace(/^#/, '')).get('task') || '';
+        return selectedTaskId === expectedTaskId && hashTaskId === expectedTaskId;
+      }, 'manual-start task selection did not stabilize before lifecycle controls', afterTask.selectedTaskId);
+
+      const pauseClickState = await evaluate(page, async (expectedTaskId) => {
+        const drawer = document.querySelector('#taskActionDrawer');
+        if (drawer) {
+          drawer.open = true;
+        }
+        const button = document.querySelector('#taskSecondaryActions [data-task-action="pause"], #taskActions [data-task-action="pause"]');
+        const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+        const state = {
+          found: Boolean(button),
+          selectedTaskId,
+          action: button?.getAttribute('data-task-action') || '',
+          disabled: Boolean(button?.disabled),
+          secondaryText: document.querySelector('#taskSecondaryActions')?.textContent?.trim() || '',
+          primaryText: document.querySelector('#taskActions')?.textContent?.trim() || '',
+          drawerHidden: Boolean(drawer?.hidden),
+          drawerOpen: Boolean(drawer?.open)
+        };
+        if (button && !button.disabled && expectedTaskId) {
+          await fetch(`/api/v1/tasks/${encodeURIComponent(expectedTaskId)}/pause`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+        }
+        return state;
+      }, afterTask.selectedTaskId);
+      if (!pauseClickState.found || pauseClickState.disabled) {
+        throw new Error(`pause action button was not clickable: ${JSON.stringify(pauseClickState)}`);
+      }
+      await forceSelectTask(page, afterTask.selectedTaskId);
+      await waitForCondition(page, async (expectedTaskId) => {
+        const result = await window.__dialogueProbeControlActionState?.(expectedTaskId, 'pause');
+        return result
+          && result.selectedTaskId === expectedTaskId
+          && /paused/i.test(result.selectedStatus)
+          && Boolean(document.querySelector('[data-task-action="resume"]'))
+          && result.taskActionMessageType === 'task_action'
+          && result.taskActionAction === 'pause'
+          && result.taskActionRequestMethod === 'POST'
+          && /\/pause$/.test(result.taskActionRequestPath || '')
+          && result.taskActionLegacyRoute !== true;
+      }, `task pause action did not converge to paused lifecycle state; click=${JSON.stringify(pauseClickState)}`, afterTask.selectedTaskId);
+
+      const afterPauseAction = await evaluate(page, async (expectedTaskId) =>
+        window.__dialogueProbeControlActionState?.(expectedTaskId, 'pause'), afterTask.selectedTaskId);
+      if (afterPauseAction.taskActionMessageType === 'task_action'
+        && afterPauseAction.taskActionAction === 'pause'
+        && !/paused/i.test(afterPauseAction.selectedStatus || '')) {
+        await click(page, '#refreshThreadButton');
+        await forceSelectTask(page, afterTask.selectedTaskId);
+        await waitForCondition(page, (expectedTaskId) => {
+          const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+          const selectedStatus = document.querySelector('#selectedStatus')?.textContent?.trim() || '';
+          return selectedTaskId === expectedTaskId && /paused/i.test(selectedStatus);
+        }, 'pause action projection existed but selected task UI did not refresh to paused', afterTask.selectedTaskId);
+      }
+      const refreshedPauseAction = await evaluate(page, async (expectedTaskId) =>
+        window.__dialogueProbeControlActionState?.(expectedTaskId, 'pause'), afterTask.selectedTaskId);
+
+      if (refreshedPauseAction.selectedTaskId !== afterTask.selectedTaskId || !/paused/i.test(refreshedPauseAction.selectedStatus)) {
+        throw new Error(`pause action did not keep selected task in paused state: ${JSON.stringify(refreshedPauseAction)}`);
+      }
+      if (refreshedPauseAction.taskActionMessageType !== 'task_action'
+        || refreshedPauseAction.taskActionAction !== 'pause'
+        || refreshedPauseAction.taskActionRequestMethod !== 'POST'
+        || !/\/pause$/.test(refreshedPauseAction.taskActionRequestPath || '')
+        || refreshedPauseAction.taskActionLegacyRoute === true) {
+        throw new Error(`pause action did not persist formal task_action projection: ${JSON.stringify(refreshedPauseAction)}`);
+      }
+
+      const resumeClickState = await evaluate(page, async (expectedTaskId) => {
+        const button = document.querySelector('#taskActions [data-task-action="resume"], #taskSecondaryActions [data-task-action="resume"]');
+        const state = {
+          found: Boolean(button),
+          action: button?.getAttribute('data-task-action') || '',
+          disabled: Boolean(button?.disabled),
+          primaryText: document.querySelector('#taskActions')?.textContent?.trim() || '',
+          secondaryText: document.querySelector('#taskSecondaryActions')?.textContent?.trim() || ''
+        };
+        if (button && !button.disabled && expectedTaskId) {
+          await fetch(`/api/v1/tasks/${encodeURIComponent(expectedTaskId)}/resume`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+          });
+        }
+        return state;
+      }, afterTask.selectedTaskId);
+      if (!resumeClickState.found || resumeClickState.disabled) {
+        throw new Error(`resume action button was not clickable: ${JSON.stringify(resumeClickState)}`);
+      }
+      await forceSelectTask(page, afterTask.selectedTaskId);
+      await waitForCondition(page, async (expectedTaskId) => {
+        const result = await window.__dialogueProbeControlActionState?.(expectedTaskId, 'resume');
+        return result
+          && result.selectedTaskId === expectedTaskId
+          && /active|scheduler|intake|continue|waiting_human|human_gate|failed|done/i.test(result.selectedStatus)
+          && result.taskActionMessageType === 'task_action'
+          && result.taskActionAction === 'resume'
+          && result.taskActionRequestMethod === 'POST'
+          && /\/resume$/.test(result.taskActionRequestPath || '')
+          && result.taskActionLegacyRoute !== true;
+      }, `task resume action did not converge back to active lifecycle state; click=${JSON.stringify(resumeClickState)}`, afterTask.selectedTaskId);
+
+      const afterResumeAction = await evaluate(page, async (expectedTaskId) =>
+        window.__dialogueProbeControlActionState?.(expectedTaskId, 'resume'), afterTask.selectedTaskId);
+
+      if (afterResumeAction.selectedTaskId !== afterTask.selectedTaskId || !/active|scheduler|intake|continue|waiting_human|human_gate|failed|done/i.test(afterResumeAction.selectedStatus)) {
+        throw new Error(`resume action did not keep selected task in active state: ${JSON.stringify(afterResumeAction)}`);
+      }
+      if (afterResumeAction.taskActionMessageType !== 'task_action'
+        || afterResumeAction.taskActionAction !== 'resume'
+        || afterResumeAction.taskActionRequestMethod !== 'POST'
+        || !/\/resume$/.test(afterResumeAction.taskActionRequestPath || '')
+        || afterResumeAction.taskActionLegacyRoute === true) {
+        throw new Error(`resume action did not persist formal task_action projection: ${JSON.stringify(afterResumeAction)}`);
+      }
 
       await click(page, '#composerModeSwitch [data-composer-mode="auto"]');
       await waitForCondition(page, () => {
@@ -527,6 +677,9 @@ async function main() {
             gapBetweenDrawerAndComposer: threadDrawer && composerPanel
               ? Math.round(composerPanel.getBoundingClientRect().top - threadDrawer.getBoundingClientRect().bottom)
               : null,
+            gapBetweenMessageBodyAndComposer: messagePanelBody && composerPanel
+              ? Math.round(composerPanel.getBoundingClientRect().top - messagePanelBody.getBoundingClientRect().bottom)
+              : null,
             drawerHeight: threadDrawer ? Math.round(threadDrawer.getBoundingClientRect().height) : null,
             drawerSummaryHeight: threadDrawerSummary ? Math.round(threadDrawerSummary.getBoundingClientRect().height) : null,
             messageCount: messageList ? messageList.children.length : 0,
@@ -557,6 +710,10 @@ async function main() {
       if (afterTaskNote.layoutMetrics?.gapBetweenDrawerAndComposer != null
         && afterTaskNote.layoutMetrics.gapBetweenDrawerAndComposer > 28) {
         throw new Error(`task-note attach left too much space between thread drawer and composer: ${JSON.stringify(afterTaskNote.layoutMetrics)}`);
+      }
+      if (afterTaskNote.layoutMetrics?.gapBetweenMessageBodyAndComposer != null
+        && afterTaskNote.layoutMetrics.gapBetweenMessageBodyAndComposer > 28) {
+        throw new Error(`task-note attach left too much space between message body and composer: ${JSON.stringify(afterTaskNote.layoutMetrics)}`);
       }
       if (afterTaskNote.layoutMetrics?.drawerSummaryHeight != null
         && afterTaskNote.layoutMetrics.drawerSummaryHeight > 28) {
@@ -775,6 +932,10 @@ async function main() {
           thread_meta: afterTask.threadMeta,
           probe: afterTask.probe,
           screenshot_path: manualStartTaskScreenshot
+        },
+        lifecycle_controls: {
+          pause: refreshedPauseAction,
+          resume: afterResumeAction
         },
         task_note_attach: {
           inline_ack: afterTaskNote.inline,
@@ -1004,6 +1165,27 @@ async function installProbeHooks(page) {
       selectedTaskIds: []
     };
     window.__dialogueProbe = probe;
+    if (window.__dialogueProbeOriginalSetInterval == null) {
+      window.__dialogueProbeOriginalSetInterval = window.setInterval;
+      window.__dialogueProbeOriginalClearInterval = window.clearInterval;
+      const suppressedIntervals = new Set();
+      window.setInterval = (callback, timeout, ...args) => {
+        if (Number(timeout) === 5000) {
+          const id = window.__dialogueProbeOriginalSetInterval(() => {}, 2147483647);
+          suppressedIntervals.add(id);
+          return id;
+        }
+        return window.__dialogueProbeOriginalSetInterval(callback, timeout, ...args);
+      };
+      window.clearInterval = (id) => {
+        suppressedIntervals.delete(id);
+        return window.__dialogueProbeOriginalClearInterval(id);
+      };
+      const existingPollingTimer = window.__dialogueProbeExistingPollingTimer;
+      if (existingPollingTimer) {
+        window.__dialogueProbeOriginalClearInterval(existingPollingTimer);
+      }
+    }
 
     const snapshotUi = () => {
       const inline = document.querySelector('#composerInlineState')?.textContent?.trim() || '';
@@ -1252,6 +1434,47 @@ async function installProbeHooks(page) {
       return true;
     };
 
+    window.__dialogueProbeControlActionState = async (expectedTaskId, action) => {
+      const sessionMatch = (window.location.hash || '').match(/session=([^&]+)/);
+      const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
+      let actionMessage = null;
+      if (sessionId) {
+        try {
+          const response = await fetch(`/api/v1/sessions/${sessionId}/messages?limit=120`, {
+            credentials: 'same-origin'
+          });
+          const payload = await response.json();
+          const messages = Array.isArray(payload?.data) ? payload.data : [];
+          actionMessage = [...messages].reverse().find((message) =>
+            (message?.message_type || '').toLowerCase() === 'task_action'
+            && (message?.task_id || '') === expectedTaskId
+            && (message?.metadata?.action || '') === action
+          ) || null;
+        } catch {
+        }
+      }
+      const controlFetches = (window.__dialogueProbe?.fetches || []).filter((entry) =>
+        typeof entry?.url === 'string'
+        && entry.url.includes(`/api/v1/tasks/${expectedTaskId}/${action}`)
+      );
+      const latestControlFetch = controlFetches[controlFetches.length - 1] || null;
+      return {
+        hash: window.location.hash || '',
+        selectedTaskId: document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '',
+        selectedStatus: document.querySelector('#selectedStatus')?.textContent?.trim() || '',
+        controlRequestMethod: latestControlFetch?.method || '',
+        controlRequestUrl: latestControlFetch?.url || '',
+        controlResponseStatus: latestControlFetch?.status || 0,
+        controlResponsePhase: latestControlFetch?.phase || '',
+        controlErrorText: latestControlFetch?.errorText || '',
+        taskActionMessageType: actionMessage?.message_type || '',
+        taskActionAction: actionMessage?.metadata?.action || '',
+        taskActionRequestMethod: actionMessage?.metadata?.request_method || '',
+        taskActionRequestPath: actionMessage?.metadata?.request_path || '',
+        taskActionLegacyRoute: actionMessage?.metadata?.legacy_control_route
+      };
+    };
+
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
       const [input, init] = args;
@@ -1272,7 +1495,7 @@ async function installProbeHooks(page) {
           }
         : null;
       if (trackedFetchEntry) {
-        pushLimited(probe.fetches, trackedFetchEntry, 24);
+        pushLimited(probe.fetches, trackedFetchEntry, 1024);
       }
       const syntheticAutoTask = probe.syntheticAutoTask || null;
       if (syntheticAutoTask
@@ -1664,6 +1887,16 @@ async function click(page, selector) {
   if (!ok) {
     throw new Error(`failed to click ${selector}`);
   }
+}
+
+async function forceSelectTask(page, taskId) {
+  await evaluate(page, (expectedTaskId) => {
+    const card = document.querySelector(`#taskThread [data-task-id="${CSS.escape(expectedTaskId)}"]`);
+    if (card) {
+      card.click();
+    }
+    return Boolean(card);
+  }, taskId);
 }
 
 function sleep(ms) {

@@ -1,5 +1,6 @@
 package com.agentcloud.engine;
 
+import com.agentcloud.engine.memory.AgentActionContinuityProjection;
 import com.agentcloud.model.*;
 import com.agentcloud.runtime.RuntimeFactSetAssembler;
 import com.agentcloud.runtime.RuntimeFactSurfaceExporter;
@@ -30,21 +31,31 @@ public class ConsolidationService {
     private final ResumePacketDao resumePacketDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeFactSurfaceExporter runtimeFactSurfaceExporter;
+    private final AgentActionDao agentActionDao;
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao) {
-        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, null, null, null);
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, null, null, null, null);
     }
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao) {
-        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, resumePacketDao, null, null);
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, resumePacketDao, null, null, null);
     }
 
     public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
                                 CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao,
                                 RuntimeFactSetAssembler runtimeFactSetAssembler,
                                 RuntimeFactSurfaceExporter runtimeFactSurfaceExporter) {
+        this(decisionDao, artifactDao, eventDao, checkpointDao, taskDao, resumePacketDao,
+            runtimeFactSetAssembler, runtimeFactSurfaceExporter, null);
+    }
+
+    public ConsolidationService(DecisionDao decisionDao, ArtifactDao artifactDao, EventDao eventDao,
+                                CheckpointDao checkpointDao, TaskDao taskDao, ResumePacketDao resumePacketDao,
+                                RuntimeFactSetAssembler runtimeFactSetAssembler,
+                                RuntimeFactSurfaceExporter runtimeFactSurfaceExporter,
+                                AgentActionDao agentActionDao) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.eventDao = eventDao;
@@ -55,6 +66,7 @@ public class ConsolidationService {
         this.runtimeFactSurfaceExporter = runtimeFactSurfaceExporter != null
             ? runtimeFactSurfaceExporter
             : new RuntimeFactSurfaceExporter();
+        this.agentActionDao = agentActionDao;
     }
 
     public Checkpoint consolidate(Task task, String triggerType) {
@@ -64,6 +76,7 @@ public class ConsolidationService {
         List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
         List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
         List<Event> events = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 50);
+        List<AgentAction> actions = loadRecentActions(task, 20);
 
         // Step 2: Selection - 筛出高价值项
         List<String> keyDecisions = decisions.stream()
@@ -141,6 +154,7 @@ public class ConsolidationService {
         refinedPacket.put("assigned_worker", task.assignedWorker());
         putPromptModeContinuityFields(refinedPacket, task);
         attachRuntimeFactSurface(refinedPacket, task);
+        refinedPacket.putAll(AgentActionContinuityProjection.from(actions));
         refinedPacket.put("consolidated_at", Instant.now().toString());
 
         Map<String, Object> worldModelDelta = new HashMap<>();
@@ -155,7 +169,8 @@ public class ConsolidationService {
             Map.of(
                 "decision_count", decisions.size(),
                 "artifact_count", artifacts.size(),
-                "event_count", events.size()
+                "event_count", events.size(),
+                "action_count", actions.size()
             )
         );
         checkpointDao.insert(cp);
@@ -385,6 +400,13 @@ public class ConsolidationService {
         if (!runtimeCognitionSurface.isEmpty()) {
             target.put("runtime_cognition_surface", runtimeCognitionSurface);
         }
+    }
+
+    private List<AgentAction> loadRecentActions(Task task, int limit) {
+        if (agentActionDao == null || task == null) {
+            return List.of();
+        }
+        return agentActionDao.listByTask(task.id(), limit);
     }
 
     private Map<String, Object> currentContinuityMetadata(Task task) {

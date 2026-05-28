@@ -77,6 +77,12 @@ class ChatFacadeHandler implements HttpHandler {
         } catch (IllegalArgumentException e) {
             log.warn("ChatFacadeHandler validation error: {}", e.getMessage());
             NioHttpServer.sendIllegalArgument(ex, e);
+        } catch (IOException e) {
+            if (NioHttpServer.isClientDisconnect(e)) {
+                return;
+            }
+            log.error("ChatFacadeHandler I/O error", e);
+            NioHttpServer.sendInternalError(ex);
         } catch (Exception e) {
             log.error("ChatFacadeHandler error", e);
             NioHttpServer.sendInternalError(ex);
@@ -93,6 +99,11 @@ class ChatFacadeHandler implements HttpHandler {
             writeSseData(body, finalChunk(completion));
             body.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
             body.flush();
+        } catch (IOException e) {
+            if (NioHttpServer.isClientDisconnect(e)) {
+                return;
+            }
+            throw e;
         } finally {
             ex.close();
         }
@@ -191,6 +202,11 @@ class ChatFacadeHandler implements HttpHandler {
             writeSseData(body, new ResponseStreamEvent("response.completed", response, null, null, null, null, null, null, null));
             body.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
             body.flush();
+        } catch (IOException e) {
+            if (NioHttpServer.isClientDisconnect(e)) {
+                return;
+            }
+            throw e;
         } finally {
             ex.close();
         }

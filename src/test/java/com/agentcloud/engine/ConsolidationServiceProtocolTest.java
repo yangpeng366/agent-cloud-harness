@@ -1,12 +1,14 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.Artifact;
+import com.agentcloud.model.AgentAction;
 import com.agentcloud.model.Checkpoint;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
+import com.agentcloud.store.AgentActionDao;
 import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.CheckpointDao;
 import com.agentcloud.store.DatabaseManager;
@@ -40,6 +42,7 @@ class ConsolidationServiceProtocolTest {
             TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
             DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
             ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            AgentActionDao agentActionDao = db.jdbi().onDemand(AgentActionDao.class);
             EventDao eventDao = db.jdbi().onDemand(EventDao.class);
             CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
 
@@ -111,13 +114,51 @@ class ConsolidationServiceProtocolTest {
                 "Generating packet before transition",
                 Map.of("control_node", "packet")
             ));
+            agentActionDao.insert(new AgentAction(
+                "act_cp_1",
+                session.id(),
+                task.id(),
+                "exec_cp_1",
+                "CHECKPOINT",
+                "accepted",
+                "Persist pause-time action continuity.",
+                Map.of("reason", "pause_before"),
+                "low",
+                false,
+                "runtime",
+                "",
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+            ));
+            agentActionDao.insert(new AgentAction(
+                "act_cp_2",
+                session.id(),
+                task.id(),
+                "exec_cp_1",
+                "REQUEST_CONTEXT",
+                "needs_approval",
+                "Need pause reviewer input.",
+                Map.of("needed_context", List.of("pause reviewer input")),
+                "medium",
+                true,
+                "",
+                "",
+                Instant.now(),
+                Instant.now(),
+                Map.of()
+            ));
 
             ConsolidationService service = new ConsolidationService(
                 decisionDao,
                 artifactDao,
                 eventDao,
                 checkpointDao,
-                taskDao
+                taskDao,
+                null,
+                null,
+                null,
+                agentActionDao
             );
 
             Checkpoint checkpoint = service.consolidate(task, "pause_before");
@@ -149,6 +190,16 @@ class ConsolidationServiceProtocolTest {
             assertEquals("codex", routeSurface.get("selected_worker"));
             Map<?, ?> executionSurface = assertInstanceOf(Map.class, runtimeCognitionSurface.get("execution"));
             assertEquals("mounted_context_shadow", executionSurface.get("prompt_mode"));
+            List<?> recentActions = assertInstanceOf(List.class, refinedPacket.get("recent_actions"));
+            assertEquals(2, recentActions.size());
+            List<?> acceptedActions = assertInstanceOf(List.class, refinedPacket.get("accepted_actions"));
+            assertEquals(1, acceptedActions.size());
+            List<?> approvalNeededActions = assertInstanceOf(List.class, refinedPacket.get("approval_needed_actions"));
+            assertEquals(1, approvalNeededActions.size());
+            List<?> actionContextRequests = assertInstanceOf(List.class, refinedPacket.get("action_context_requests"));
+            assertTrue(actionContextRequests.contains("pause reviewer input"));
+            assertTrue(refinedPacket.get("action_summary").toString().contains("CHECKPOINT accepted"));
+            assertEquals(2, persisted.metadata().get("action_count"));
 
             Map<?, ?> taskIdentity = assertInstanceOf(Map.class, refinedPacket.get("task_identity"));
             assertEquals("task_cp_1", taskIdentity.get("task_id"));

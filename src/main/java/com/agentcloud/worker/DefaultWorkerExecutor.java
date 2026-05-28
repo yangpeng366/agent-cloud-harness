@@ -32,6 +32,9 @@ import java.util.Map;
 public class DefaultWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(DefaultWorkerExecutor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String ACTION_OUTPUT_FIELDS =
+        "Optional bounded-autonomy fields: proposed_actions (array of {action_type, summary, payload, risk_level, requires_approval, reason, confidence}), "
+            + "context_requests (array), completion_claim (string), handoff_target (string), risk_flags (array). ";
     private final LlmClient llmClient;
     private final MountedContextPromptRenderer mountedContextPromptRenderer;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
@@ -108,7 +111,8 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 + "Respond with a JSON object containing exactly these fields: "
                 + "summary (string), output_text (string), produced_artifact (boolean), "
                 + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
-                + "confidence (high|medium|low). Keep summary concise, keep output_text under 1200 characters, "
+                + "confidence (high|medium|low). " + ACTION_OUTPUT_FIELDS
+                + "Keep summary concise, keep output_text under 1200 characters, "
                 + "keep artifact_content under 1600 characters, and use suggested_next_step for the executor handoff instruction. "
                 + "No markdown, no extra text.";
         }
@@ -118,7 +122,8 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 + "Respond with a JSON object containing exactly these fields: "
                 + "summary (string), output_text (string), produced_artifact (boolean), "
                 + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
-                + "confidence (high|medium|low). Keep summary concise, keep output_text under 1200 characters, "
+                + "confidence (high|medium|low). " + ACTION_OUTPUT_FIELDS
+                + "Keep summary concise, keep output_text under 1200 characters, "
                 + "keep artifact_content under 1600 characters, and focus on concrete execution progress. "
                 + "No markdown, no extra text.";
         }
@@ -127,7 +132,8 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             + "Respond with a JSON object containing exactly these fields: "
             + "summary (string), output_text (string), produced_artifact (boolean), "
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
-            + "confidence (high|medium|low). Keep summary concise, keep output_text under 1200 characters, "
+            + "confidence (high|medium|low). " + ACTION_OUTPUT_FIELDS
+            + "Keep summary concise, keep output_text under 1200 characters, "
             + "keep artifact_content under 1600 characters, and prefer a compact actionable answer over a long draft. "
             + "No markdown, no extra text.";
     }
@@ -314,6 +320,33 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         return List.copyOf(items);
     }
 
+    private List<com.agentcloud.model.AgentActionDraft> readActionDrafts(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<com.agentcloud.model.AgentActionDraft> drafts = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item == null || !item.isObject()) {
+                continue;
+            }
+            Map<String, Object> payload = item.has("payload") && item.get("payload").isObject()
+                ? MAPPER.convertValue(item.get("payload"), Map.class)
+                : Map.of();
+            drafts.add(new com.agentcloud.model.AgentActionDraft(
+                item.path("action_type").asText(item.path("actionType").asText("")),
+                item.path("summary").asText(""),
+                payload,
+                item.path("risk_level").asText(item.path("riskLevel").asText("low")),
+                item.has("requires_approval")
+                    ? item.path("requires_approval").asBoolean(false)
+                    : item.path("requiresApproval").asBoolean(false),
+                item.path("reason").asText(""),
+                item.path("confidence").asText("")
+            ));
+        }
+        return List.copyOf(drafts);
+    }
+
     private List<String> formatRecentMessages(List<SessionMessage> messages, int limit) {
         if (messages == null || messages.isEmpty() || limit <= 0) {
             return List.of();
@@ -358,6 +391,11 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             String executionStatus = json.path("execution_status").asText("completed");
             List<String> evidenceRefs = readStringList(json.path("evidence_refs"));
             List<String> unfinishedItems = readStringList(json.path("unfinished_items"));
+            List<com.agentcloud.model.AgentActionDraft> proposedActions = readActionDrafts(json.path("proposed_actions"));
+            List<String> contextRequests = readStringList(json.path("context_requests"));
+            String completionClaim = json.path("completion_claim").asText("");
+            String handoffTarget = json.path("handoff_target").asText("");
+            List<String> riskFlags = readStringList(json.path("risk_flags"));
 
             Map<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("parser", "json");
@@ -372,6 +410,11 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
                 executionStatus,
                 evidenceRefs,
                 unfinishedItems,
+                proposedActions,
+                contextRequests,
+                completionClaim,
+                handoffTarget,
+                riskFlags,
                 0,
                 durationMs,
                 metadata

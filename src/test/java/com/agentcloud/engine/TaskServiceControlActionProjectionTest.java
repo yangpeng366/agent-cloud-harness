@@ -202,6 +202,61 @@ class TaskServiceControlActionProjectionTest {
         }
     }
 
+    @Test
+    void resumeTaskWritesControlActionProjectionBeforeWorkerExecutionCompletes() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-resume-action-projection.db"))) {
+            TaskService service = service(db);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "demo resume", "continuation", "user", "high",
+                "创建一个暂停任务", "等待恢复", null, null, Map.of(), false
+            ));
+
+            Task paused = task.withStatus("paused")
+                .withControlNode("packet")
+                .withWaitingReason("manual pause");
+            db.jdbi().onDemand(TaskDao.class).updateState(paused);
+
+            Map<String, Object> requestMetadata = new LinkedHashMap<>();
+            requestMetadata.put("requested_via", "http_api");
+            requestMetadata.put("request_method", "POST");
+            requestMetadata.put("request_path", "/api/v1/tasks/" + task.id() + "/resume");
+
+            service.resumeTask(task.id(), requestMetadata);
+
+            SessionMessage actionMessage = messageDao.listBySession(task.sessionId(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "resume".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("POST", actionMessage.metadata().get("request_method"));
+            assertEquals("http_api", actionMessage.metadata().get("requested_via"));
+            assertEquals("/api/v1/tasks/" + task.id() + "/resume", actionMessage.metadata().get("request_path"));
+            assertFalse(actionMessage.metadata().containsKey("legacy_control_route"));
+            assertEquals("active", actionMessage.metadata().get("task_status"));
+            assertEquals("scheduler", actionMessage.metadata().get("control_node"));
+
+            SessionMessage stateMessage = messageDao.listBySession(task.sessionId(), 20).stream()
+                .filter(message -> "task_state".equals(message.messageType()))
+                .filter(message -> "active".equals(message.metadata().get("current_state")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("paused", stateMessage.metadata().get("old_state"));
+            assertEquals("active", stateMessage.metadata().get("new_state"));
+            assertEquals("POST", stateMessage.metadata().get("request_method"));
+
+            Event actionEvent = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 20).stream()
+                .filter(event -> "task_control_action".equals(event.eventType()))
+                .filter(event -> "resume".equals(event.payload().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("POST", actionEvent.payload().get("request_method"));
+            assertEquals("active", actionEvent.payload().get("task_status"));
+        }
+    }
+
     private TaskService service(DatabaseManager db) {
         TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
         SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -218,6 +273,16 @@ class TaskServiceControlActionProjectionTest {
                     .withControlNode("packet")
                     .withAssignedWorker("codex")
                     .withWaitingReason(reason);
+                taskDao.updateState(updated);
+                return updated;
+            }
+
+            @Override
+            public Task triggerResume(Task task) {
+                Task updated = task.withStatus("active")
+                    .withControlNode("scheduler")
+                    .withAssignedWorker("codex")
+                    .withWaitingReason(null);
                 taskDao.updateState(updated);
                 return updated;
             }

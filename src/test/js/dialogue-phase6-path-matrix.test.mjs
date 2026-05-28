@@ -66,10 +66,21 @@ test("phase6 path matrix covers task_required auto-start path end to end", () =>
         facadeModel: "agentcloud-strong",
         taskMode: "task_required",
         title: "整理方案",
-        derivedTitle: "继续整理方案"
+        derivedTitle: "继续整理方案",
+        localPaths: ["D:\\gitAll\\agent-cloud-harness"],
+        validationCommands: ["mvn -Dtest=ProviderTaskPromptBuilderTest test"],
+        writeScope: ["src/main/java/com/agentcloud/worker"],
+        acceptanceCriteria: ["worker reports validation result"]
     });
     assert.equal(request.metadata.task_mode, "task_required");
     assert.equal(request.metadata.auto_start, true);
+    assert.deepEqual(request.metadata.workspace_roots, ["D:\\gitAll\\agent-cloud-harness"]);
+    assert.equal(request.metadata.repo_path, "D:\\gitAll\\agent-cloud-harness");
+    assert.deepEqual(request.metadata.reference_paths, ["D:\\gitAll\\agent-cloud-harness"]);
+    assert.deepEqual(request.metadata.target_paths, ["D:\\gitAll\\agent-cloud-harness"]);
+    assert.deepEqual(request.metadata.validation_commands, ["mvn -Dtest=ProviderTaskPromptBuilderTest test"]);
+    assert.deepEqual(request.metadata.write_scope, ["src/main/java/com/agentcloud/worker"]);
+    assert.deepEqual(request.metadata.acceptance_criteria, ["worker reports validation result"]);
 
     const completion = parseChatCompletionResponseBody({
         contentType: "text/event-stream",

@@ -48,6 +48,30 @@ test("failure summary alone still enables expandable task outcome content", () =
     }), true);
 });
 
+test("provider diagnostics alone enable expandable task outcome content", () => {
+    const message = {
+        message_type: "task_progress",
+        content: "failed",
+        metadata: {
+            provider_error: "codex turn completion timed out",
+            provider_turn_status: "timeout",
+            provider_failure_class: "provider_runtime_transient",
+            provider_failure_reason: "turn timed out",
+            provider_retryable: true
+        }
+    };
+    const plan = buildMessageExpansionPlan(message, "failed");
+
+    assert.equal(plan.needsExpand, true);
+    assert.equal(plan.fullContent.includes("Provider Diagnostics"), true);
+    assert.equal(plan.fullContent.includes("error: codex turn completion timed out"), true);
+    assert.equal(plan.fullContent.includes("turn status: timeout"), true);
+    assert.equal(plan.fullContent.includes("failure class: provider_runtime_transient"), true);
+    assert.equal(plan.fullContent.includes("failure reason: turn timed out"), true);
+    assert.equal(plan.fullContent.includes("retryable: true"), true);
+    assert.equal(hasExpandedTaskOutcomeContent(message), true);
+});
+
 test("stale shell full content falls back to readable failure summary for expansion", () => {
     const plan = buildMessageExpansionPlan(
         {

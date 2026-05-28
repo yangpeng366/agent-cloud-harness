@@ -1,0 +1,47 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const appJs = readFileSync(new URL("../../main/resources/web/console/app.js", import.meta.url), "utf8");
+
+test("console normalizes epoch-second timestamps before sorting and rendering", () => {
+    assert.match(
+        appJs,
+        /\.sort\(\(a,\s*b\)\s*=>\s*timestampMs\(b\.updated_at\s*\|\|\s*b\.updatedAt\s*\|\|\s*0\)\s*-\s*timestampMs\(a\.updated_at\s*\|\|\s*a\.updatedAt\s*\|\|\s*0\)\)/s
+    );
+    assert.match(
+        appJs,
+        /\.sort\(\(a,\s*b\)\s*=>\s*timestampMs\(a\.created_at\s*\|\|\s*a\.createdAt\s*\|\|\s*0\)\s*-\s*timestampMs\(b\.created_at\s*\|\|\s*b\.createdAt\s*\|\|\s*0\)\)/s
+    );
+    assert.match(
+        appJs,
+        /function formatTime\(value\)\s*\{[\s\S]*?const normalized = normalizeTimestampValue\(value\);[\s\S]*?const date = new Date\(normalized\);/
+    );
+    assert.match(appJs, /function normalizeTimestampValue\(value\)/);
+    assert.match(appJs, /function timestampMs\(value\)/);
+});
+
+test("console createdAtMillis delegates to timestampMs", () => {
+    assert.match(
+        appJs,
+        /function createdAtMillis\(task\)\s*\{\s*return timestampMs\(task\?\.created_at \|\| task\?\.createdAt \|\| 0\);\s*\}/
+    );
+});
+
+test("console provider detail fetches and renders worker dispatch probe metadata", () => {
+    assert.match(
+        appJs,
+        /apiOrNull\(`\/api\/v1\/workers\/\$\{encodeURIComponent\(workerId\)\}\/readiness\?mode=dispatch`\)/
+    );
+    assert.match(appJs, /function renderWorkerDispatchReadiness\(readiness,\s*workerId\)/);
+    assert.match(appJs, /dispatch_preflight_metadata \|\| readiness\.dispatchPreflightMetadata/);
+    assert.match(appJs, /cli_profile \|\| readiness\.cliProfile/);
+    assert.match(appJs, /function renderCliProfileBadges\(profile\)/);
+    assert.match(appJs, /supports_yolo/);
+    assert.match(appJs, /provider_failure_class/);
+    assert.match(appJs, /provider_retryable/);
+    assert.match(appJs, /dispatch_preflight_probe_args/);
+    assert.match(appJs, /dispatch_preflight_command_shape/);
+    assert.match(appJs, /function workerIdForProvider\(providerId\)/);
+    assert.match(appJs, /return "openclaw-native";/);
+});

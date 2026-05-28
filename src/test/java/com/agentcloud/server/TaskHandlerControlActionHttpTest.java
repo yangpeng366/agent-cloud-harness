@@ -15,6 +15,7 @@ import com.agentcloud.model.Session;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.TaskCreateRequest;
+import com.agentcloud.model.ToolInvocationRecord;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.ContextObject;
@@ -33,6 +34,8 @@ import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionDao;
 import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.TaskDao;
+import com.agentcloud.store.TaskRecoveryJobDao;
+import com.agentcloud.store.ToolInvocationDao;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -105,6 +108,63 @@ class TaskHandlerControlActionHttpTest {
             assertEquals("http_api", createdEvent.payload().get("requested_via"));
             assertEquals("POST", createdEvent.payload().get("request_method"));
             assertEquals("/api/v1/tasks", createdEvent.payload().get("request_path"));
+        }
+    }
+
+    @Test
+    void postCreateTaskReturnsNormalizedProviderExecutionContract() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-create-contract.db"))) {
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "title":"http provider contract",
+                          "task_type":"coding",
+                          "source":"user",
+                          "priority":"high",
+                          "intent":"修改 D:\\\\gitAll\\\\agent-cloud-harness\\\\src\\\\main\\\\java\\\\com\\\\agentcloud\\\\engine\\\\TaskService.java 并补测试。",
+                          "goal":"验证 HTTP 直建任务也能给 worker 明确本地执行合同。",
+                          "metadata":{
+                            "validation_commands":["mvn -Dtest=TaskServiceAutoStartTest test"],
+                            "write_scope":["src/main/java/com/agentcloud/engine","docs"],
+                            "acceptance_criteria":["HTTP 响应和 DB 都能看到 provider 执行合同"]
+                          },
+                          "auto_start":false
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> responseMetadata = harness.map(data.get("metadata"));
+            String taskId = data.get("id").toString();
+
+            assertEquals(200, response.statusCode());
+            assertEquals("D:\\gitAll\\agent-cloud-harness", responseMetadata.get("workspace_root"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", responseMetadata.get("cwd"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", responseMetadata.get("repo_path"));
+            assertTrue(((List<?>) responseMetadata.get("reference_paths"))
+                .contains("D:\\gitAll\\agent-cloud-harness\\src\\main\\java\\com\\agentcloud\\engine\\TaskService.java"));
+            assertEquals(List.of("mvn -Dtest=TaskServiceAutoStartTest test"), responseMetadata.get("validation_commands"));
+            assertEquals(List.of("src/main/java/com/agentcloud/engine", "docs"), responseMetadata.get("write_scope"));
+            assertEquals(List.of("HTTP 响应和 DB 都能看到 provider 执行合同"), responseMetadata.get("acceptance_criteria"));
+
+            Task persisted = harness.taskDao.findById(taskId).orElseThrow();
+            assertEquals(responseMetadata.get("repo_path"), persisted.metadata().get("repo_path"));
+            assertEquals(responseMetadata.get("reference_paths"), persisted.metadata().get("reference_paths"));
+            assertEquals(responseMetadata.get("target_paths"), persisted.metadata().get("target_paths"));
+            assertEquals(responseMetadata.get("validation_commands"), persisted.metadata().get("validation_commands"));
+
+            Event createdEvent = harness.eventDao.listBySessionAndTask(persisted.sessionId(), persisted.id(), 20).stream()
+                .filter(event -> "task_created".equals(event.eventType()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("coding", createdEvent.payload().get("task_type"));
+            assertEquals(Boolean.FALSE, createdEvent.payload().get("auto_start"));
+            assertEquals("http_api", createdEvent.payload().get("requested_via"));
         }
     }
 
@@ -224,6 +284,627 @@ class TaskHandlerControlActionHttpTest {
             assertEquals(1, tasks.size());
             assertEquals(codingCodex.id(), tasks.getFirst().get("id"));
             assertEquals("codex", tasks.getFirst().get("assigned_worker"));
+        }
+    }
+
+    @Test
+    void getRecoverableTasksListsRecentInterruptedTasksBeforeGenericTaskRoute() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recoverable-list.db"))) {
+            Task interrupted = harness.createManualTask("recoverable coding", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/recoverable?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            List<Map<String, Object>> plans = harness.list(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals(1, plans.size());
+            assertEquals(interrupted.id(), plans.getFirst().get("task_id"));
+            assertEquals(Boolean.TRUE, plans.getFirst().get("recoverable"));
+            assertEquals("fresh_session", plans.getFirst().get("recovery_execution_mode"));
+        }
+    }
+
+    @Test
+    void getRecoverableTasksClassifiesProviderFailureFromWaitingReasonEvidence() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recoverable-waiting-reason.db"))) {
+            Task interrupted = harness.createManualTask("recoverable waiting reason", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withWaitingReason("thread not found: 29180"));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/recoverable?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            List<Map<String, Object>> plans = harness.list(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals(1, plans.size());
+            assertEquals(interrupted.id(), plans.getFirst().get("task_id"));
+            assertEquals("provider_runtime_transient", plans.getFirst().get("provider_failure_class"));
+            assertEquals("task.waiting_reason", plans.getFirst().get("failure_evidence_source"));
+            assertEquals("thread not found: 29180", plans.getFirst().get("failure_evidence"));
+            assertEquals("fresh_session", plans.getFirst().get("recovery_execution_mode"));
+        }
+    }
+
+    @Test
+    void getRecoverableTasksUsesAgentRunProviderErrorAsFailureEvidence() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recoverable-agent-run-provider-error.db"))) {
+            Task interrupted = harness.createManualTask("recoverable provider error", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex"));
+            Instant startedAt = Instant.parse("2026-05-18T10:00:00Z");
+            harness.agentRunDao.insert(new AgentRunRecord(
+                "arun_provider_error",
+                interrupted.id(),
+                interrupted.sessionId(),
+                "codex",
+                "Codex",
+                "planner_executor",
+                "codex",
+                "strong",
+                "timeout",
+                startedAt,
+                startedAt.plusMillis(150_000),
+                150_000L,
+                "thread not found: 27316",
+                "run.failed",
+                0,
+                Map.of(
+                    "worker_execution_status", "timeout",
+                    "provider_error", "codex turn completion timed out",
+                    "provider_turn_status", "timeout",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "provider_failure_reason", "codex turn completion timed out"
+                )
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/recoverable?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> body = NioHttpServer.SHARED_MAPPER.readValue(response.body(), Map.class);
+            List<Map<String, Object>> plans = (List<Map<String, Object>>) body.get("data");
+            assertEquals(200, response.statusCode());
+            assertEquals(1, plans.size());
+            assertEquals(interrupted.id(), plans.getFirst().get("task_id"));
+            assertEquals("provider_runtime_transient", plans.getFirst().get("provider_failure_class"));
+            assertEquals("agent_run.metadata.provider_error", plans.getFirst().get("failure_evidence_source"));
+            assertEquals("codex turn completion timed out", plans.getFirst().get("failure_evidence"));
+            assertEquals("fresh_session", plans.getFirst().get("recovery_execution_mode"));
+        }
+    }
+
+    @Test
+    void getRecoverableTasksClassifiesOversizedOutputFailureAsRuntimeTransient() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recoverable-large-output.db"))) {
+            Task interrupted = harness.createManualTask("recoverable large output", "coding");
+            harness.saveTask(interrupted
+                .withStatus("failed")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withSummary("provider failed after codex produced output too large for the response channel"));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/recoverable?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            List<Map<String, Object>> plans = harness.list(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals(1, plans.size());
+            assertEquals(interrupted.id(), plans.getFirst().get("task_id"));
+            assertEquals(Boolean.TRUE, plans.getFirst().get("recoverable"));
+            assertEquals("provider_runtime_transient", plans.getFirst().get("provider_failure_class"));
+            assertEquals("task.summary", plans.getFirst().get("failure_evidence_source"));
+            assertEquals("fresh_session", plans.getFirst().get("recovery_execution_mode"));
+        }
+    }
+
+    @Test
+    void postRecoverAsyncAcceptsOversizedOutputFailureAsFreshSessionRecovery() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-async-large-output.db"))) {
+            Task interrupted = harness.createManualTask("recover async large output", "coding");
+            harness.saveTask(interrupted
+                .withStatus("failed")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withSummary("provider failed: output too large, maximum output exceeded")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "provider_thread_id", "thread_with_large_output",
+                    "codex_thread_id", "codex_large_output"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover?async=true"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"reason\":\"recover large output\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> plan = harness.map(data.get("plan"));
+
+            assertEquals(202, response.statusCode());
+            assertEquals(Boolean.TRUE, data.get("accepted"));
+            assertEquals(Boolean.TRUE, data.get("async"));
+            assertEquals(Boolean.TRUE, plan.get("recoverable"));
+            assertEquals("provider_runtime_transient", plan.get("provider_failure_class"));
+            assertEquals("task.summary", plan.get("failure_evidence_source"));
+            assertEquals("fresh_session", plan.get("recovery_execution_mode"));
+
+            List<Map<String, Object>> jobs = waitForRecoveryJobStatus(
+                harness,
+                interrupted.id(),
+                data.get("request_id").toString(),
+                "succeeded"
+            );
+            assertEquals("resume", jobs.getFirst().get("recommended_action"));
+            assertEquals("fresh_session", jobs.getFirst().get("recovery_execution_mode"));
+            Task persisted = harness.taskDao.findById(interrupted.id()).orElseThrow();
+            assertFalse(persisted.metadata().containsKey("provider_thread_id"));
+            assertFalse(persisted.metadata().containsKey("codex_thread_id"));
+        }
+    }
+
+    @Test
+    void postRecoverResumesWithFreshSessionMetadataAndClearsProviderContinuation() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-post.db"))) {
+            Task interrupted = harness.createManualTask("recover post", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withWaitingReason("thread not found")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "provider_session_id", "sess_old",
+                    "provider_thread_id", "thread_old",
+                    "codex_thread_id", "codex_old"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"reason\":\"retry from test\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> plan = harness.map(data.get("plan"));
+            Map<String, Object> control = harness.map(data.get("control_result"));
+            Task persisted = harness.taskDao.findById(interrupted.id()).orElseThrow();
+
+            assertEquals(200, response.statusCode());
+            assertEquals(Boolean.TRUE, plan.get("recoverable"));
+            assertEquals("resume", plan.get("recommended_action"));
+            assertEquals("resume", control.get("decision"));
+            assertEquals("active", persisted.status());
+            assertEquals("scheduler", persisted.controlNode());
+            assertEquals("fresh_session", persisted.metadata().get("recovery_execution_mode"));
+            assertEquals(Boolean.TRUE, persisted.metadata().get("manual_recovery_requested"));
+            assertFalse(persisted.metadata().containsKey("provider_session_id"));
+            assertFalse(persisted.metadata().containsKey("provider_thread_id"));
+            assertFalse(persisted.metadata().containsKey("codex_thread_id"));
+        }
+    }
+
+    @Test
+    void postRecoverAsyncReturnsAcceptedWithoutWaitingForControlResult() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-async.db"))) {
+            Task interrupted = harness.createManualTask("recover async", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withWaitingReason("thread not found")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "provider_thread_id", "thread_old"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover?async=true"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"reason\":\"async retry\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> plan = harness.map(data.get("plan"));
+
+            assertEquals(202, response.statusCode());
+            assertEquals(Boolean.TRUE, data.get("accepted"));
+            assertEquals(Boolean.TRUE, data.get("async"));
+            assertTrue(data.get("request_id").toString().startsWith("recovery_"));
+            assertEquals("/api/v1/tasks/" + interrupted.id() + "/live_flow", data.get("status_url"));
+            assertFalse(data.containsKey("control_result"));
+            assertFalse(data.containsKey("handoff_result"));
+            assertEquals(Boolean.TRUE, plan.get("recoverable"));
+            assertEquals("fresh_session", plan.get("recovery_execution_mode"));
+
+            HttpResponse<String> jobsResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recovery_jobs?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> jobsPayload = harness.readJson(jobsResponse.body());
+            List<Map<String, Object>> jobs = harness.list(jobsPayload.get("data"));
+
+            assertEquals(200, jobsResponse.statusCode());
+            assertEquals(1, jobs.size());
+            assertEquals(data.get("request_id"), jobs.getFirst().get("id"));
+            assertEquals(interrupted.id(), jobs.getFirst().get("task_id"));
+            assertTrue(List.of("accepted", "running", "succeeded").contains(jobs.getFirst().get("status")));
+            assertEquals("resume", jobs.getFirst().get("recommended_action"));
+            assertEquals("fresh_session", jobs.getFirst().get("recovery_execution_mode"));
+
+            waitForRecoveryJobStatus(
+                harness,
+                interrupted.id(),
+                data.get("request_id").toString(),
+                "succeeded"
+            );
+        }
+    }
+
+    @Test
+    void postRecoverAsyncAutoHandoffUsesTargetWorkerAndRecordsJob() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-async-handoff.db"))) {
+            Task interrupted = harness.createManualTask("recover async handoff", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withWaitingReason("thread not found")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover?async=true"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"target_worker\":\"claude\",\"reason\":\"async switch\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> plan = harness.map(data.get("plan"));
+            String requestId = data.get("request_id").toString();
+
+            assertEquals(202, response.statusCode());
+            assertEquals(Boolean.TRUE, data.get("accepted"));
+            assertEquals("handoff", plan.get("recommended_action"));
+            assertEquals("claude", plan.get("target_worker"));
+            assertFalse(data.containsKey("control_result"));
+            assertFalse(data.containsKey("handoff_result"));
+
+            List<Map<String, Object>> jobs = waitForRecoveryJobStatus(
+                harness, interrupted.id(), requestId, "succeeded");
+            Map<String, Object> job = jobs.stream()
+                .filter(item -> requestId.equals(String.valueOf(item.get("id"))))
+                .findFirst()
+                .orElseThrow();
+            Task persisted = harness.taskDao.findById(interrupted.id()).orElseThrow();
+
+            assertEquals("handoff", job.get("recommended_action"));
+            assertEquals("claude", job.get("target_worker"));
+            assertEquals("fresh_session", job.get("recovery_execution_mode"));
+            assertEquals("claude", persisted.assignedWorker());
+            assertEquals("scheduler", persisted.controlNode());
+        }
+    }
+
+    @Test
+    void postRecoverAsyncStillRejectsProviderEnvironmentBlockedFailures() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-async-blocked.db"))) {
+            Task interrupted = harness.createManualTask("recover async blocked", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "provider_failure_class", "provider_auth_failed"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover?async=true"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+
+            assertEquals(400, response.statusCode());
+            assertEquals(Boolean.FALSE, payload.get("success"));
+            assertTrue(payload.get("message").toString().contains("provider_auth_failed"));
+        }
+    }
+
+    @Test
+    void postRecoverAsyncRecordsFailedJobWithSanitizedErrorSummary() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-async-failed.db"))) {
+            harness.failNextResume("provider unavailable token=secret-token\n" + "x".repeat(600));
+            Task interrupted = harness.createManualTask("recover async failed", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withWaitingReason("thread not found")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "provider_thread_id", "thread_old"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover?async=true"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"reason\":\"async failed retry\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+
+            List<Map<String, Object>> jobs = waitForRecoveryJobStatus(
+                harness, interrupted.id(), data.get("request_id").toString(), "failed");
+            Map<String, Object> failedJob = jobs.getFirst();
+
+            assertEquals(202, response.statusCode());
+            assertEquals("failed", failedJob.get("status"));
+            assertTrue(failedJob.get("error_message").toString().contains("provider unavailable"));
+            assertFalse(failedJob.get("error_message").toString().contains("secret-token"));
+            assertTrue(failedJob.get("error_message").toString().length() <= 223);
+        }
+    }
+
+    @Test
+    void recoveryJobDaoMarksActiveJobsInterruptedOnStartupReconcile() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recovery-job-reconcile.db"))) {
+            Task task = harness.createManualTask("recover interrupted", "coding");
+            Instant acceptedAt = Instant.parse("2026-05-17T10:00:00Z");
+            harness.recoveryJobDao.insert(new com.agentcloud.model.TaskRecoveryJob(
+                "recovery_accepted",
+                task.id(),
+                task.sessionId(),
+                "accepted",
+                "auto",
+                "resume",
+                null,
+                "fresh_session",
+                "worker_runtime_transient",
+                "provider_runtime_transient",
+                "/api/v1/tasks/" + task.id() + "/live_flow",
+                acceptedAt,
+                null,
+                null,
+                null,
+                Map.of()
+            ));
+            harness.recoveryJobDao.insert(new com.agentcloud.model.TaskRecoveryJob(
+                "recovery_running",
+                task.id(),
+                task.sessionId(),
+                "running",
+                "auto",
+                "resume",
+                null,
+                "fresh_session",
+                "worker_runtime_transient",
+                "provider_runtime_transient",
+                "/api/v1/tasks/" + task.id() + "/live_flow",
+                acceptedAt,
+                acceptedAt.plusSeconds(1),
+                null,
+                null,
+                Map.of()
+            ));
+            harness.recoveryJobDao.insert(new com.agentcloud.model.TaskRecoveryJob(
+                "recovery_succeeded",
+                task.id(),
+                task.sessionId(),
+                "succeeded",
+                "auto",
+                "resume",
+                null,
+                "fresh_session",
+                "worker_runtime_transient",
+                "provider_runtime_transient",
+                "/api/v1/tasks/" + task.id() + "/live_flow",
+                acceptedAt,
+                acceptedAt.plusSeconds(1),
+                acceptedAt.plusSeconds(2),
+                null,
+                Map.of()
+            ));
+
+            Instant reconciledAt = Instant.parse("2026-05-17T10:05:00Z");
+            int updated = harness.recoveryJobDao.markActiveJobsInterrupted(
+                reconciledAt,
+                "harness restarted before async recovery completed"
+            );
+            List<com.agentcloud.model.TaskRecoveryJob> jobs = harness.recoveryJobDao.listByTask(task.id(), 10);
+
+            assertEquals(2, updated);
+            Map<String, com.agentcloud.model.TaskRecoveryJob> byId = jobs.stream()
+                .collect(java.util.stream.Collectors.toMap(com.agentcloud.model.TaskRecoveryJob::id, job -> job));
+            assertEquals("interrupted", byId.get("recovery_accepted").status());
+            assertEquals(reconciledAt, byId.get("recovery_accepted").completedAt());
+            assertEquals("harness restarted before async recovery completed", byId.get("recovery_accepted").errorMessage());
+            assertEquals("interrupted", byId.get("recovery_running").status());
+            assertEquals("succeeded", byId.get("recovery_succeeded").status());
+            assertEquals(acceptedAt.plusSeconds(2), byId.get("recovery_succeeded").completedAt());
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/recovery_jobs?limit=10"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> payload = harness.readJson(response.body());
+            List<Map<String, Object>> apiJobs = harness.list(payload.get("data"));
+            Map<String, Map<String, Object>> apiJobsById = apiJobs.stream()
+                .collect(java.util.stream.Collectors.toMap(job -> job.get("id").toString(), job -> job));
+            assertEquals("interrupted", apiJobsById.get("recovery_accepted").get("status"));
+            assertEquals("harness restarted before async recovery completed",
+                apiJobsById.get("recovery_accepted").get("error_message"));
+            assertEquals("interrupted", apiJobsById.get("recovery_running").get("status"));
+            assertEquals("succeeded", apiJobsById.get("recovery_succeeded").get("status"));
+        }
+    }
+
+    @Test
+    void toolTraceExposesExecutionStatusAndTouchedPaths() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-tool-trace-contract.db"))) {
+            Task task = harness.createManualTask("tool trace contract", "coding");
+            Instant now = Instant.parse("2026-05-17T06:30:00Z");
+            harness.toolInvocationDao.insert(new ToolInvocationRecord(
+                "tool_trace_contract_1",
+                task.sessionId(),
+                task.id(),
+                "codex",
+                "exec_tool_trace_contract",
+                "write_file",
+                Map.of("path", "docs/output.md"),
+                "updated output doc",
+                "succeeded",
+                true,
+                42,
+                List.of("docs/output.md"),
+                now,
+                Map.of("tool_execution_mode", "multi_tool_round")
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/tool_trace?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            List<Map<String, Object>> traces = harness.list(payload.get("data"));
+            Map<String, Object> trace = traces.getFirst();
+
+            assertEquals(200, response.statusCode());
+            assertEquals("tool_trace_contract_1", trace.get("id"));
+            assertEquals("exec_tool_trace_contract", trace.get("execution_id"));
+            assertEquals("succeeded", trace.get("status"));
+            assertEquals(Boolean.TRUE, trace.get("success"));
+            assertEquals(List.of("docs/output.md"), trace.get("touched_paths"));
+            assertEquals("write_file", trace.get("tool_name"));
+        }
+    }
+
+    @Test
+    void postRecoverAutoHandoffUsesTargetWorkerAndReturnsHandoffResult() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-auto-handoff.db"))) {
+            Task interrupted = harness.createManualTask("recover handoff", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "failure_class", "worker_runtime_transient",
+                    "provider_failure_class", "provider_runtime_transient",
+                    "auto_handoff_target", "claude"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\",\"reason\":\"switch worker\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            Map<String, Object> plan = harness.map(data.get("plan"));
+            Map<String, Object> handoff = harness.map(data.get("handoff_result"));
+            Task persisted = harness.taskDao.findById(interrupted.id()).orElseThrow();
+
+            assertEquals(200, response.statusCode());
+            assertEquals(Boolean.TRUE, plan.get("recoverable"));
+            assertEquals("handoff", plan.get("recommended_action"));
+            assertEquals("claude", plan.get("target_worker"));
+            assertEquals("codex", handoff.get("previous_worker"));
+            assertEquals("claude", handoff.get("assigned_worker"));
+            assertEquals("claude", persisted.assignedWorker());
+            assertEquals("scheduler", persisted.controlNode());
+        }
+    }
+
+    @Test
+    void postRecoverRejectsProviderEnvironmentBlockedFailures() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-recover-blocked.db"))) {
+            Task interrupted = harness.createManualTask("recover blocked", "coding");
+            harness.saveTask(interrupted
+                .withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withAssignedWorker("codex")
+                .withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                    "provider_failure_class", "provider_auth_failed"
+                ))));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + interrupted.id() + "/recover"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("{\"mode\":\"auto\"}"))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+
+            assertEquals(400, response.statusCode());
+            assertEquals(Boolean.FALSE, payload.get("success"));
+            assertTrue(payload.get("message").toString().contains("provider_auth_failed"));
         }
     }
 
@@ -472,6 +1153,81 @@ class TaskHandlerControlActionHttpTest {
         }
     }
 
+    private static List<Map<String, Object>> waitForRecoveryJobStatus(TestHarness harness,
+                                                                       String taskId,
+                                                                       String requestId,
+                                                                       String expectedStatus) throws Exception {
+        AssertionError lastFailure = null;
+        for (int attempt = 0; attempt < 20; attempt++) {
+            HttpResponse<String> jobsResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + taskId + "/recovery_jobs?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            Map<String, Object> jobsPayload = harness.readJson(jobsResponse.body());
+            List<Map<String, Object>> jobs = harness.list(jobsPayload.get("data"));
+            if (!jobs.isEmpty() && requestId.equals(jobs.getFirst().get("id"))) {
+                if (expectedStatus.equals(jobs.getFirst().get("status"))) {
+                    return jobs;
+                }
+                lastFailure = new AssertionError("expected recovery job status "
+                    + expectedStatus + " but was " + jobs.getFirst().get("status"));
+            }
+            Thread.sleep(50);
+        }
+        throw lastFailure != null ? lastFailure : new AssertionError("recovery job not found: " + requestId);
+    }
+
+    private static final class FailingResumeControlNodeGraph extends ControlNodeGraph {
+        private final TaskDao taskDao;
+        private String resumeFailureMessage;
+
+        private FailingResumeControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao) {
+            super(taskDao, eventDao, sessionDao, null, null, null, null,
+                null, null, null, null, null, null);
+            this.taskDao = taskDao;
+        }
+
+        private void failNextResume(String message) {
+            this.resumeFailureMessage = message;
+        }
+
+        @Override
+        public Task triggerPause(Task task, String reason) {
+            Task updated = task.withStatus("paused")
+                .withControlNode("packet")
+                .withAssignedWorker("codex")
+                .withWaitingReason(reason);
+            taskDao.updateState(updated);
+            return updated;
+        }
+
+        @Override
+        public Task triggerResume(Task task) {
+            if (resumeFailureMessage != null) {
+                String message = resumeFailureMessage;
+                resumeFailureMessage = null;
+                throw new IllegalStateException(message);
+            }
+            Task updated = task.withStatus("active")
+                .withControlNode("scheduler")
+                .withWaitingReason(null);
+            taskDao.updateState(updated);
+            return updated;
+        }
+
+        @Override
+        public Task triggerHandoff(Task task, String targetWorker) {
+            Task updated = task.withStatus("active")
+                .withControlNode("scheduler")
+                .withAssignedWorker(targetWorker)
+                .withWaitingReason(null);
+            taskDao.updateState(updated);
+            return updated;
+        }
+    }
+
     private static final class TestHarness implements AutoCloseable {
         private final DatabaseManager db;
         private final TaskService service;
@@ -480,6 +1236,9 @@ class TaskHandlerControlActionHttpTest {
         private final SessionMessageDao messageDao;
         private final EventDao eventDao;
         private final AgentRunDao agentRunDao;
+        private final ToolInvocationDao toolInvocationDao;
+        private final TaskRecoveryJobDao recoveryJobDao;
+        private final FailingResumeControlNodeGraph graph;
         private final HttpServer server;
         private final ExecutorService executor;
         private final HttpClient client;
@@ -492,27 +1251,19 @@ class TaskHandlerControlActionHttpTest {
             this.eventDao = db.jdbi().onDemand(EventDao.class);
             this.messageDao = db.jdbi().onDemand(SessionMessageDao.class);
             this.agentRunDao = db.jdbi().onDemand(AgentRunDao.class);
+            this.toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            this.recoveryJobDao = db.jdbi().onDemand(TaskRecoveryJobDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
             WorkerRouter workerRouter = new WorkerRouter(new WorkerRegistry());
+            PacketBuilder packetBuilder = new PacketBuilder(decisionDao, artifactDao, taskDao);
 
-            ControlNodeGraph graph = new ControlNodeGraph(
-                taskDao, this.eventDao, this.sessionDao, null, null, null, null,
-                null, null, null, null, null, null
-            ) {
-                @Override
-                public Task triggerPause(Task task, String reason) {
-                    Task updated = task.withStatus("paused")
-                        .withControlNode("packet")
-                        .withAssignedWorker("codex")
-                        .withWaitingReason(reason);
-                    taskDao.updateState(updated);
-                    return updated;
-                }
-            };
+            this.graph = new FailingResumeControlNodeGraph(taskDao, this.eventDao, this.sessionDao);
 
             this.service = new TaskService(
-                taskDao, this.sessionDao, this.eventDao, null, workerRouter, null, graph,
-                null, null, null, null, null, messageDao, null,
-                new AgentRunService(agentRunDao, new AgentProviderRegistry())
+                taskDao, this.sessionDao, this.eventDao, null, workerRouter, packetBuilder, graph,
+                null, null, null, null, this.toolInvocationDao, messageDao, null,
+                new AgentRunService(agentRunDao, new AgentProviderRegistry()), this.recoveryJobDao
             );
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = Executors.newCachedThreadPool();
@@ -544,6 +1295,10 @@ class TaskHandlerControlActionHttpTest {
 
         private void saveTask(Task task) {
             taskDao.updateState(task);
+        }
+
+        private void failNextResume(String message) {
+            graph.failNextResume(message);
         }
 
         private URI uri(String path) {

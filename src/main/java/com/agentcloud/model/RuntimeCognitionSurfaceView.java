@@ -3,6 +3,7 @@ package com.agentcloud.model;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 单任务诊断面里的 route / execution / judgment 对照视图。
@@ -25,7 +26,8 @@ public record RuntimeCognitionSurfaceView(
         List<String> candidateWorkers,
         String preferredWorkerHint,
         Boolean learningHintApplied,
-        String fallbackReason
+        String fallbackReason,
+        List<Map<String, Object>> dispatchSkippedWorkers
     ) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -33,6 +35,23 @@ public record RuntimeCognitionSurfaceView(
         String workerId,
         String executionId,
         String executionStatus,
+        String executionBackend,
+        String providerId,
+        String providerSessionId,
+        String providerThreadId,
+        String resumeProviderSessionId,
+        String providerError,
+        String providerTurnStatus,
+        String providerFailureClass,
+        String providerFailureReason,
+        Boolean providerRetryable,
+        List<String> providerProtocolTrace,
+        String providerRunDir,
+        String providerPromptPath,
+        String providerStdoutPath,
+        String providerEventLogPath,
+        String providerLastMessagePath,
+        String providerRunMetadataPath,
         Long durationMs,
         Integer toolInvocationCount,
         List<String> toolInvocationIds,
@@ -60,7 +79,15 @@ public record RuntimeCognitionSurfaceView(
         Integer mountedIndexCount,
         Integer mountedArchiveCount,
         List<String> evidenceRefs,
-        List<String> unfinishedItems
+        List<String> unfinishedItems,
+        List<Map<String, Object>> proposedActions,
+        List<Map<String, Object>> acceptedActions,
+        List<Map<String, Object>> rejectedActions,
+        List<Map<String, Object>> approvalNeededActions,
+        List<String> contextRequests,
+        String completionClaim,
+        String handoffTarget,
+        List<String> riskFlags
     ) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

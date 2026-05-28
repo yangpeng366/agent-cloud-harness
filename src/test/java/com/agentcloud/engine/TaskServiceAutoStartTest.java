@@ -11,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -82,6 +83,66 @@ class TaskServiceAutoStartTest {
 
             assertEquals(Boolean.TRUE, task.metadata().get("auto_start"));
             assertEquals("auto", task.metadata().get("start_mode"));
+        }
+    }
+
+    @Test
+    void directTaskCreationInfersWorkspaceContractFromLocalPathIntent() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("direct-task-local-path-contract.db"))) {
+            TaskService service = service(db, null);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "direct coding task",
+                "coding",
+                "user",
+                "high",
+                "修改 D:\\gitAll\\agent-cloud-harness\\src\\main\\java\\com\\agentcloud\\engine\\TaskService.java 并补测试。",
+                "让 worker 能拿到本地路径合同。",
+                null,
+                null,
+                Map.of(),
+                false
+            ));
+
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("workspace_root"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("cwd"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("repo_path"));
+            assertTrue(((List<?>) task.metadata().get("reference_paths"))
+                .contains("D:\\gitAll\\agent-cloud-harness\\src\\main\\java\\com\\agentcloud\\engine\\TaskService.java"));
+            assertTrue(((List<?>) task.metadata().get("target_paths"))
+                .contains("D:\\gitAll\\agent-cloud-harness\\src\\main\\java\\com\\agentcloud\\engine\\TaskService.java"));
+        }
+    }
+
+    @Test
+    void directTaskCreationExpandsExplicitRepoPathAndPreservesProviderContract() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("direct-task-provider-contract.db"))) {
+            TaskService service = service(db, null);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "direct provider contract",
+                "coding",
+                "user",
+                "high",
+                "按 provider 合同执行。",
+                "验证直建任务也能给 worker 明确路径和验收。",
+                null,
+                null,
+                Map.of(
+                    "repo_path", "D:\\gitAll\\agent-cloud-harness",
+                    "validation_commands", List.of("mvn -Dtest=TaskServiceAutoStartTest test"),
+                    "write_scope", List.of("src/main/java/com/agentcloud/engine", "docs"),
+                    "acceptance_criteria", List.of("worker reports exact validation result")
+                ),
+                false
+            ));
+
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("workspace_root"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("cwd"));
+            assertEquals("D:\\gitAll\\agent-cloud-harness", task.metadata().get("repo_path"));
+            assertEquals(List.of("mvn -Dtest=TaskServiceAutoStartTest test"), task.metadata().get("validation_commands"));
+            assertEquals(List.of("src/main/java/com/agentcloud/engine", "docs"), task.metadata().get("write_scope"));
+            assertEquals(List.of("worker reports exact validation result"), task.metadata().get("acceptance_criteria"));
         }
     }
 

@@ -63,6 +63,10 @@ public class ToolPolicy {
     }
 
     public Path resolveAllowedPath(Worker worker, String rawPath, boolean writeMode) {
+        return resolveAllowedPath(worker, rawPath, writeMode, Map.of());
+    }
+
+    public Path resolveAllowedPath(Worker worker, String rawPath, boolean writeMode, Map<String, Object> taskMetadata) {
         if (worker == null) {
             throw new IllegalArgumentException("worker not found");
         }
@@ -79,7 +83,7 @@ public class ToolPolicy {
         }
         candidate = candidate.toAbsolutePath().normalize();
 
-        for (String scopeValue : worker.toolScope()) {
+        for (String scopeValue : allowedScopes(worker, taskMetadata)) {
             if (scopeValue == null || scopeValue.isBlank()) {
                 continue;
             }
@@ -95,11 +99,15 @@ public class ToolPolicy {
     }
 
     public Path resolveWorkingDirectory(Worker worker, Map<String, Object> arguments) {
+        return resolveWorkingDirectory(worker, arguments, Map.of());
+    }
+
+    public Path resolveWorkingDirectory(Worker worker, Map<String, Object> arguments, Map<String, Object> taskMetadata) {
         Object raw = arguments == null ? null : arguments.get("cwd");
         String requested = raw == null || raw.toString().isBlank()
-            ? scopeRoot(worker)
+            ? scopeRoot(worker, taskMetadata)
             : raw.toString();
-        return resolveAllowedPath(worker, requested, false);
+        return resolveAllowedPath(worker, requested, false, taskMetadata);
     }
 
     public int resolveCommandTimeoutMs(Map<String, Object> arguments) {
@@ -140,11 +148,48 @@ public class ToolPolicy {
         }
     }
 
-    private String scopeRoot(Worker worker) {
-        if (worker == null || worker.toolScope() == null || worker.toolScope().isEmpty()) {
+    private List<String> allowedScopes(Worker worker, Map<String, Object> taskMetadata) {
+        java.util.ArrayList<String> scopes = new java.util.ArrayList<>();
+        if (worker != null && worker.toolScope() != null) {
+            scopes.addAll(worker.toolScope());
+        }
+        addMetadataScope(scopes, taskMetadata, "workspace_root");
+        addMetadataScope(scopes, taskMetadata, "workspace");
+        addMetadataScope(scopes, taskMetadata, "working_directory");
+        addMetadataScope(scopes, taskMetadata, "cwd");
+        addMetadataScope(scopes, taskMetadata, "repo_path");
+        addMetadataScope(scopes, taskMetadata, "workspace_roots");
+        addMetadataScope(scopes, taskMetadata, "workspaces");
+        return scopes.stream()
+            .filter(value -> value != null && !value.isBlank())
+            .distinct()
+            .toList();
+    }
+
+    private void addMetadataScope(List<String> scopes, Map<String, Object> metadata, String key) {
+        if (scopes == null || metadata == null || key == null) {
+            return;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                if (item != null && !item.toString().isBlank()) {
+                    scopes.add(item.toString());
+                }
+            }
+            return;
+        }
+        if (value != null && !value.toString().isBlank()) {
+            scopes.add(value.toString());
+        }
+    }
+
+    private String scopeRoot(Worker worker, Map<String, Object> taskMetadata) {
+        List<String> scopes = allowedScopes(worker, taskMetadata);
+        if (scopes.isEmpty()) {
             throw new IllegalArgumentException("worker has no tool scope");
         }
-        return worker.toolScope().get(0);
+        return scopes.get(0);
     }
 
     private int boundedPositiveInt(Map<String, Object> arguments,

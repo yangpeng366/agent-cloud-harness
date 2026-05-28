@@ -16,10 +16,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -62,7 +65,11 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         LocalCliProviderConfig.ResolvedConfig config = providerConfig.resolve();
         AgentProviderStatus providerStatus = providerStatus(providerId);
         String cwd = resolveWorkingDirectory(context, worker);
+        if (shouldUseExecJsonMode()) {
+            return executeExecJsonRound(context, workerId, providerId, config, providerStatus, cwd);
+        }
         CodexExecutionPlan plan = buildPlan(config, context, cwd);
+        ProviderRunFiles runFiles = ProviderRunFiles.create(providerId, taskId(context), workerId, plan);
 
         long startedAtMs = System.currentTimeMillis();
         Process process = null;
@@ -72,36 +79,38 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
                 .redirectErrorStream(true);
             process = builder.start();
-            output = runSession(process, plan);
+            output = runSession(process, plan, runFiles);
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
                 long durationMs = System.currentTimeMillis() - startedAtMs;
                 return failureResult("timeout", "codex app-server timed out",
-                    providerId, workerId, cwd, plan, providerStatus, durationMs, null, null);
+                    providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
             }
             output = output.withExitCode(process.exitValue());
         } catch (IOException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
             return failureResult("failed", "failed to start codex app-server: " + e.getMessage(),
-                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null);
+                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             long durationMs = System.currentTimeMillis() - startedAtMs;
             return failureResult("cancelled", "codex app-server interrupted",
-                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null);
+                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
         } catch (IllegalStateException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
             return failureResult("failed", e.getMessage(),
-                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null);
+                providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
         } finally {
             if (process != null && process.isAlive()) {
                 process.destroyForcibly();
             }
+            runFiles.closeQuietly();
         }
 
         long durationMs = System.currentTimeMillis() - startedAtMs;
         String normalizedStatus = normalizeStatus(output.status(), output.exitCode());
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
+        appendRunFileMetadata(metadata, runFiles);
         metadata.put("exit_code", output.exitCode());
         metadata.put("provider_output_parser", output.protocol());
         metadata.put("tool_invocation_count", output.toolInvocationCount());
@@ -121,9 +130,12 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         if (output.errorText() != null && !output.errorText().isBlank()) {
             metadata.put("provider_error", output.errorText());
         }
+        attachProviderFailureClassification(metadata, normalizedStatus, output.errorText());
 
         String outputText = output.outputText() == null ? "" : output.outputText().trim();
         String summary = summarize(outputText, output.errorText(), normalizedStatus);
+        runFiles.writeLastMessage(outputText);
+        runFiles.writeMetadata(metadata);
 
         log.info("Codex app-server round completed. worker={} status={} exitCode={} durationMs={} threadId={}",
             workerId, normalizedStatus, output.exitCode(), durationMs, output.threadId());
@@ -139,6 +151,93 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             normalizedStatus,
             List.of(),
             normalizedStatus.equals("failed") && !outputText.isBlank() ? List.of("codex app-server output requires inspection") : List.of(),
+            0,
+            durationMs,
+            Map.copyOf(metadata)
+        );
+    }
+
+    private WorkerExecutionResult executeExecJsonRound(TaskRuntimeContext context,
+                                                       String workerId,
+                                                       String providerId,
+                                                       LocalCliProviderConfig.ResolvedConfig config,
+                                                       AgentProviderStatus providerStatus,
+                                                       String cwd) {
+        CodexExecutionPlan initialPlan = buildExecJsonPlan(config, context, cwd);
+        ProviderRunFiles runFiles = ProviderRunFiles.create(providerId, taskId(context), workerId, initialPlan);
+        if (!runFiles.available()) {
+            return failureResult("failed", "codex exec_json run files unavailable",
+                providerId, workerId, cwd, initialPlan, providerStatus, 0L, null, null, runFiles);
+        }
+        CodexExecutionPlan plan = initialPlan.withCommand(execJsonCommand(config, runFiles));
+        long startedAtMs = System.currentTimeMillis();
+        Process process = null;
+        Integer exitCode = null;
+        try {
+            runFiles.closeQuietly();
+            ProcessBuilder builder = new ProcessBuilder(plan.command())
+                .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
+                .redirectInput(runFiles.promptPath().toFile())
+                .redirectOutput(runFiles.eventsPath().toFile())
+                .redirectErrorStream(true);
+            process = builder.start();
+            if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                process.waitFor(5, TimeUnit.SECONDS);
+                long durationMs = System.currentTimeMillis() - startedAtMs;
+                return failureResult("timeout", "codex exec --json timed out",
+                    providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
+            }
+            exitCode = process.exitValue();
+        } catch (IOException e) {
+            long durationMs = System.currentTimeMillis() - startedAtMs;
+            return failureResult("failed", "failed to start codex exec --json: " + e.getMessage(),
+                providerId, workerId, cwd, plan, providerStatus, durationMs, exitCode, null, runFiles);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            long durationMs = System.currentTimeMillis() - startedAtMs;
+            return failureResult("cancelled", "codex exec --json interrupted",
+                providerId, workerId, cwd, plan, providerStatus, durationMs, exitCode, null, runFiles);
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+
+        long durationMs = System.currentTimeMillis() - startedAtMs;
+        CodexExecJsonOutput output = consumeExecJson(runFiles, exitCode);
+        String normalizedStatus = normalizeStatus(output.status(), exitCode);
+        LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
+        appendRunFileMetadata(metadata, runFiles);
+        metadata.put("exit_code", exitCode);
+        metadata.put("provider_output_parser", "codex_exec_json");
+        if (output.sessionId() != null && !output.sessionId().isBlank()) {
+            metadata.put("provider_session_id", output.sessionId());
+            metadata.put("provider_thread_id", output.sessionId());
+        }
+        if (output.errorText() != null && !output.errorText().isBlank()) {
+            metadata.put("provider_error", output.errorText());
+        }
+        attachProviderFailureClassification(metadata, normalizedStatus, output.errorText());
+
+        String outputText = output.outputText() == null ? "" : output.outputText().trim();
+        String summary = summarize(outputText, output.errorText(), normalizedStatus);
+        runFiles.writeMetadata(metadata);
+
+        log.info("Codex exec_json round completed. worker={} status={} exitCode={} durationMs={} sessionId={}",
+            workerId, normalizedStatus, exitCode, durationMs, output.sessionId());
+
+        return new WorkerExecutionResult(
+            summary,
+            outputText,
+            false,
+            "",
+            "",
+            "",
+            "medium",
+            normalizedStatus,
+            List.of(),
+            normalizedStatus.equals("failed") && !outputText.isBlank() ? List.of("codex exec_json output requires inspection") : List.of(),
             0,
             durationMs,
             Map.copyOf(metadata)
@@ -179,15 +278,56 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             systemPrompt(context),
             launchSpec.configuredBinary(),
             launchSpec.executableTarget(),
-            launchSpec.launchMode()
+            launchSpec.launchMode(),
+            "provider_app_server"
         );
     }
 
-    private CodexSessionOutput runSession(Process process, CodexExecutionPlan plan)
+    private CodexExecutionPlan buildExecJsonPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                                 TaskRuntimeContext context,
+                                                 String cwd) {
+        String prompt = ProviderTaskPromptBuilder.build(context);
+        String model = configuredModel(config, context);
+        LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
+        return new CodexExecutionPlan(
+            List.of(),
+            prompt,
+            truncate(prompt, 240),
+            model,
+            cwd,
+            resumeThreadId(context),
+            systemPrompt(context),
+            launchSpec.configuredBinary(),
+            launchSpec.executableTarget(),
+            launchSpec.launchMode(),
+            "provider_native_cli_json"
+        );
+    }
+
+    private List<String> execJsonCommand(LocalCliProviderConfig.ResolvedConfig config, ProviderRunFiles runFiles) {
+        ArrayList<String> args = new ArrayList<>();
+        args.add("exec");
+        args.add("--json");
+        args.add("-o");
+        args.add(runFiles.lastMessagePath().toString());
+        args.add("--skip-git-repo-check");
+        return config.launchSpec().command(args);
+    }
+
+    private boolean shouldUseExecJsonMode() {
+        String mode = firstNonBlank(
+            System.getProperty("agentcloud.providers.codex.execution_mode"),
+            System.getenv("AGENTCLOUD_CODEX_EXECUTION_MODE"),
+            "app_server"
+        );
+        return "exec_json".equalsIgnoreCase(mode.trim());
+    }
+
+    private CodexSessionOutput runSession(Process process, CodexExecutionPlan plan, ProviderRunFiles runFiles)
         throws IOException, InterruptedException {
         try (Writer writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8);
              BufferedReader reader = process.inputReader(StandardCharsets.UTF_8)) {
-            JsonRpcSession session = new JsonRpcSession(writer, reader);
+            JsonRpcSession session = new JsonRpcSession(writer, reader, runFiles.events());
             session.request("initialize", Map.of(
                 "clientInfo", Map.of(
                     "name", "agent-cloud-harness",
@@ -318,6 +458,12 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         return new LocalCliProviderConfig("codex", "codex", "MULTICA_CODEX_PATH", "MULTICA_CODEX_MODEL");
     }
 
+    private String taskId(TaskRuntimeContext context) {
+        return context != null && context.task() != null && context.task().id() != null && !context.task().id().isBlank()
+            ? context.task().id()
+            : "unknown_task";
+    }
+
     private String configuredModel(LocalCliProviderConfig.ResolvedConfig config, TaskRuntimeContext context) {
         String taskModel = context == null || context.task() == null ? null : metadataString(context.task().metadata(), "provider_model");
         if (taskModel != null && !taskModel.isBlank()) {
@@ -341,7 +487,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 metadataString(metadata, "cwd"),
                 metadataString(metadata, "workspace"),
                 metadataString(metadata, "working_directory"),
-                metadataString(metadata, "workspace_root")
+                metadataString(metadata, "workspace_root"),
+                singleWorkspaceRoot(metadata)
             );
             if (taskPath != null && !taskPath.isBlank()) {
                 return taskPath;
@@ -354,6 +501,50 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             }
         }
         return Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString();
+    }
+
+    private String singleWorkspaceRoot(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return null;
+        }
+        Object raw = metadata.get("workspace_roots");
+        if (raw == null) {
+            return null;
+        }
+        java.util.ArrayList<String> roots = new java.util.ArrayList<>();
+        if (raw instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                addWorkspaceRoot(roots, item);
+            }
+        } else if (raw.getClass().isArray() && raw instanceof Object[] array) {
+            for (Object item : array) {
+                addWorkspaceRoot(roots, item);
+            }
+        } else {
+            String text = raw.toString();
+            if (text.contains("\n")) {
+                for (String part : text.split("\\R")) {
+                    addWorkspaceRoot(roots, part);
+                }
+            } else if (text.contains("|")) {
+                for (String part : text.split("\\|")) {
+                    addWorkspaceRoot(roots, part);
+                }
+            } else {
+                addWorkspaceRoot(roots, raw);
+            }
+        }
+        return roots.size() == 1 ? roots.get(0) : null;
+    }
+
+    private void addWorkspaceRoot(java.util.List<String> roots, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        String value = raw.toString().trim();
+        if (!value.isBlank() && !roots.contains(value)) {
+            roots.add(value);
+        }
     }
 
     private String resumeThreadId(TaskRuntimeContext context) {
@@ -382,7 +573,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("provider_id", providerId);
         metadata.put("selected_worker", workerId);
-        metadata.put("execution_backend", "provider_app_server");
+        metadata.put("execution_backend", plan.executionBackend());
         metadata.put("cli_binary", plan.configuredBinary());
         metadata.put("cli_cwd", cwd);
         metadata.put("cli_command_preview", plan.commandPreview());
@@ -408,6 +599,120 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         return metadata;
     }
 
+    private CodexExecJsonOutput consumeExecJson(ProviderRunFiles runFiles, Integer exitCode) {
+        String lastMessage = readFile(runFiles == null ? null : runFiles.lastMessagePath());
+        String status = exitCode != null && exitCode == 0 ? "completed" : "failed";
+        String sessionId = null;
+        String errorText = null;
+        StringBuilder fallbackOutput = new StringBuilder();
+        Path eventsPath = runFiles == null ? null : runFiles.eventsPath();
+        if (eventsPath != null && Files.isRegularFile(eventsPath)) {
+            try (BufferedReader reader = Files.newBufferedReader(eventsPath, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String trimmed = line.trim();
+                    if (trimmed.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        JsonNode node = MAPPER.readTree(trimmed);
+                        sessionId = firstNonBlank(sessionId, extractThreadId(node), text(node, "session_id"), text(node, "sessionId"));
+                        status = firstNonBlank(statusFromExecJsonEvent(node), status);
+                        String eventError = firstNonBlank(
+                            text(node, "error"),
+                            text(node, "message"),
+                            nestedText(node, "error", "message")
+                        );
+                        if (eventError != null && looksLikeErrorEvent(node)) {
+                            errorText = firstNonBlank(errorText, eventError);
+                        }
+                        appendFallbackOutput(fallbackOutput, node);
+                    } catch (Exception ignored) {
+                        if (exitCode != null && exitCode != 0) {
+                            errorText = firstNonBlank(errorText, trimmed);
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                errorText = firstNonBlank(errorText, "failed to read codex exec_json events: " + e.getMessage());
+            }
+        }
+        String outputText = firstNonBlank(lastMessage, fallbackOutput.toString().trim());
+        if ((outputText == null || outputText.isBlank()) && exitCode != null && exitCode != 0) {
+            outputText = "";
+            errorText = firstNonBlank(errorText, "codex exec_json exited with code " + exitCode);
+        }
+        return new CodexExecJsonOutput(status, outputText, errorText, sessionId);
+    }
+
+    private String readFile(Path path) {
+        if (path == null || !Files.isRegularFile(path)) {
+            return null;
+        }
+        try {
+            return Files.readString(path, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    private String statusFromExecJsonEvent(JsonNode node) {
+        String raw = firstNonBlank(
+            text(node, "status"),
+            nestedText(node, "data", "status"),
+            nestedText(node, "turn", "status")
+        );
+        if (raw == null) {
+            return null;
+        }
+        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "completed", "success", "succeeded" -> "completed";
+            case "failed", "error" -> "failed";
+            case "cancelled", "canceled", "aborted" -> "cancelled";
+            case "timeout" -> "timeout";
+            default -> null;
+        };
+    }
+
+    private boolean looksLikeErrorEvent(JsonNode node) {
+        String type = firstNonBlank(text(node, "type"), text(node, "event"), text(node, "kind"));
+        return type != null && type.toLowerCase(Locale.ROOT).contains("error");
+    }
+
+    private void appendFallbackOutput(StringBuilder output, JsonNode node) {
+        String type = firstNonBlank(text(node, "type"), text(node, "event"), text(node, "kind"));
+        String text = firstNonBlank(
+            text(node, "text"),
+            nestedText(node, "message", "content"),
+            nestedText(node, "data", "text"),
+            nestedText(node, "data", "message")
+        );
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        if (type != null) {
+            String normalizedType = type.toLowerCase(Locale.ROOT);
+            if (!normalizedType.contains("message") && !normalizedType.contains("answer") && !normalizedType.contains("output")) {
+                return;
+            }
+        }
+        if (!output.isEmpty()) {
+            output.append('\n');
+        }
+        output.append(text.trim());
+    }
+
+    private void appendRunFileMetadata(Map<String, Object> metadata, ProviderRunFiles runFiles) {
+        if (metadata == null || runFiles == null || !runFiles.available()) {
+            return;
+        }
+        metadata.put("provider_run_dir", runFiles.runDir().toString());
+        metadata.put("provider_prompt_path", runFiles.promptPath().toString());
+        metadata.put("provider_event_log_path", runFiles.eventsPath().toString());
+        metadata.put("provider_last_message_path", runFiles.lastMessagePath().toString());
+        metadata.put("provider_run_metadata_path", runFiles.metadataPath().toString());
+    }
+
     private WorkerExecutionResult failureResult(String status,
                                                 String errorText,
                                                 String providerId,
@@ -417,16 +722,23 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                                 AgentProviderStatus providerStatus,
                                                 long durationMs,
                                                 Integer exitCode,
-                                                String threadId) {
+                                                String threadId,
+                                                ProviderRunFiles runFiles) {
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         metadata.put("provider_error", errorText);
         metadata.put("provider_output_parser", "codex_json_rpc");
+        appendRunFileMetadata(metadata, runFiles);
+        attachProviderFailureClassification(metadata, status, errorText);
         if (exitCode != null) {
             metadata.put("exit_code", exitCode);
         }
         if (threadId != null && !threadId.isBlank()) {
             metadata.put("provider_session_id", threadId);
             metadata.put("provider_thread_id", threadId);
+        }
+        if (runFiles != null) {
+            runFiles.writeLastMessage("");
+            runFiles.writeMetadata(metadata);
         }
         return new WorkerExecutionResult(
             summarize("", errorText, status),
@@ -452,6 +764,16 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
         String normalized = base.replaceAll("\\s+", " ").trim();
         return normalized.length() > 240 ? normalized.substring(0, 240) + "..." : normalized;
+    }
+
+    private void attachProviderFailureClassification(Map<String, Object> metadata, String status, String message) {
+        ProviderFailureClassifier.Classification classification = ProviderFailureClassifier.classify(status, message);
+        if (classification == null) {
+            return;
+        }
+        metadata.put("provider_failure_class", classification.failureClass());
+        metadata.put("provider_failure_reason", classification.reason());
+        metadata.put("provider_retryable", classification.retryable());
     }
 
     private String normalizeStatus(String rawStatus, Integer exitCode) {
@@ -523,6 +845,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final class JsonRpcSession {
         private final Writer writer;
         private final BufferedReader reader;
+        private final OutputStream events;
         private final StringBuilder output = new StringBuilder();
         private final List<String> protocolTrace = new ArrayList<>();
         private final Set<String> toolInvocationIds = new LinkedHashSet<>();
@@ -533,9 +856,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private String errorText;
         private String protocol = "codex_json_rpc";
 
-        private JsonRpcSession(Writer writer, BufferedReader reader) {
+        private JsonRpcSession(Writer writer, BufferedReader reader, OutputStream events) {
             this.writer = writer;
             this.reader = reader;
+            this.events = events == null ? OutputStream.nullOutputStream() : events;
         }
 
         private JsonNode request(String method, Map<String, Object> params) throws IOException, InterruptedException {
@@ -578,7 +902,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
 
         private void sendObject(Object payload) throws IOException {
-            writer.write(MAPPER.writeValueAsString(payload));
+            String line = MAPPER.writeValueAsString(payload);
+            writeEvent("harness_send", line);
+            writer.write(line);
             writer.write("\n");
             writer.flush();
         }
@@ -597,6 +923,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 if (trimmed.isBlank()) {
                     continue;
                 }
+                writeEvent("provider_recv", trimmed);
                 try {
                     return MAPPER.readTree(trimmed);
                 } catch (Exception ignored) {
@@ -604,6 +931,17 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 }
             }
             return null;
+        }
+
+        private void writeEvent(String direction, String line) throws IOException {
+            if (line == null || line.isBlank()) {
+                return;
+            }
+            LinkedHashMap<String, Object> event = new LinkedHashMap<>();
+            event.put("direction", direction);
+            event.put("line", line);
+            events.write(MAPPER.writeValueAsString(event).getBytes(StandardCharsets.UTF_8));
+            events.write('\n');
         }
 
         private void handleEnvelope(JsonNode envelope) throws IOException {
@@ -860,17 +1198,45 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       String systemPrompt,
                                       String configuredBinary,
                                       String executableTarget,
-                                      String launchMode) {
+                                      String launchMode,
+                                      String executionBackend) {
         private CodexExecutionPlan {
             if (command == null) command = List.of();
             if (prompt == null) prompt = "";
             if (promptPreview == null) promptPreview = "";
             if (configuredBinary == null) configuredBinary = "";
             if (launchMode == null || launchMode.isBlank()) launchMode = "direct";
+            if (executionBackend == null || executionBackend.isBlank()) executionBackend = "provider_app_server";
         }
 
         private String commandPreview() {
             return String.join(" ", command);
+        }
+
+        private CodexExecutionPlan withCommand(List<String> value) {
+            return new CodexExecutionPlan(
+                value,
+                prompt,
+                promptPreview,
+                model,
+                cwd,
+                resumeThreadId,
+                systemPrompt,
+                configuredBinary,
+                executableTarget,
+                launchMode,
+                executionBackend
+            );
+        }
+    }
+
+    private record CodexExecJsonOutput(String status,
+                                       String outputText,
+                                       String errorText,
+                                       String sessionId) {
+        private CodexExecJsonOutput {
+            if (status == null || status.isBlank()) status = "completed";
+            if (outputText == null) outputText = "";
         }
     }
 
@@ -898,6 +1264,131 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 status, outputText, errorText, threadId, value, protocol, turnStatus,
                 toolInvocationCount, toolInvocationIds, protocolTrace
             );
+        }
+    }
+
+    private static final class ProviderRunFiles implements Closeable {
+        private final Path runDir;
+        private final Path promptPath;
+        private final Path eventsPath;
+        private final Path lastMessagePath;
+        private final Path metadataPath;
+        private final OutputStream events;
+        private final boolean available;
+
+        private ProviderRunFiles(Path runDir,
+                                 Path promptPath,
+                                 Path eventsPath,
+                                 Path lastMessagePath,
+                                 Path metadataPath,
+                                 OutputStream events,
+                                 boolean available) {
+            this.runDir = runDir;
+            this.promptPath = promptPath;
+            this.eventsPath = eventsPath;
+            this.lastMessagePath = lastMessagePath;
+            this.metadataPath = metadataPath;
+            this.events = events;
+            this.available = available;
+        }
+
+        private static ProviderRunFiles create(String providerId, String taskId, String workerId, CodexExecutionPlan plan) {
+            try {
+                String executionId = "run-" + System.currentTimeMillis() + "-" + sanitizePathSegment(workerId);
+                Path taskRunDir = ProviderRunFileSupport.providerRunRoot()
+                    .resolve(sanitizePathSegment(providerId))
+                    .resolve(sanitizePathSegment(taskId))
+                    .toAbsolutePath()
+                    .normalize();
+                ProviderRunFileSupport.cleanupTaskRuns(taskRunDir, log);
+                Path runDir = taskRunDir.resolve(executionId);
+                Files.createDirectories(runDir);
+                Path promptPath = runDir.resolve("prompt.txt");
+                Path eventsPath = runDir.resolve("events.jsonl");
+                Path lastMessagePath = runDir.resolve("last_message.md");
+                Path metadataPath = runDir.resolve("metadata.json");
+                Files.writeString(promptPath, plan == null ? "" : plan.prompt(), StandardCharsets.UTF_8);
+                return new ProviderRunFiles(
+                    runDir,
+                    promptPath,
+                    eventsPath,
+                    lastMessagePath,
+                    metadataPath,
+                    Files.newOutputStream(eventsPath),
+                    true
+                );
+            } catch (IOException e) {
+                log.warn("Codex provider run files unavailable. provider={} worker={} reason={}", providerId, workerId, e.getMessage());
+                return new ProviderRunFiles(null, null, null, null, null, OutputStream.nullOutputStream(), false);
+            }
+        }
+
+        private static String sanitizePathSegment(String value) {
+            return ProviderRunFileSupport.sanitizePathSegment(value);
+        }
+
+        private boolean available() {
+            return available;
+        }
+
+        private Path runDir() {
+            return runDir;
+        }
+
+        private Path promptPath() {
+            return promptPath;
+        }
+
+        private Path eventsPath() {
+            return eventsPath;
+        }
+
+        private Path lastMessagePath() {
+            return lastMessagePath;
+        }
+
+        private Path metadataPath() {
+            return metadataPath;
+        }
+
+        private OutputStream events() {
+            return events;
+        }
+
+        private void writeLastMessage(String outputText) {
+            if (!available || lastMessagePath == null) {
+                return;
+            }
+            try {
+                Files.writeString(lastMessagePath, outputText == null ? "" : outputText, StandardCharsets.UTF_8);
+            } catch (IOException e) {
+                log.warn("Failed to write codex provider last message file. path={} reason={}", lastMessagePath, e.getMessage());
+            }
+        }
+
+        private void writeMetadata(Map<String, Object> metadata) {
+            if (!available || metadataPath == null) {
+                return;
+            }
+            try {
+                MAPPER.writerWithDefaultPrettyPrinter().writeValue(metadataPath.toFile(), metadata == null ? Map.of() : metadata);
+            } catch (IOException e) {
+                log.warn("Failed to write codex provider run metadata file. path={} reason={}", metadataPath, e.getMessage());
+            }
+        }
+
+        private void closeQuietly() {
+            try {
+                close();
+            } catch (IOException ignored) {
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (events != null) {
+                events.close();
+            }
         }
     }
 }

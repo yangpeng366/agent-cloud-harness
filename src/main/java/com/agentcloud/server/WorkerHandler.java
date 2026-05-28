@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -45,7 +46,8 @@ class WorkerHandler implements HttpHandler {
                 else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(w));
             } else if ("GET".equals(method) && path.matches("/api/v1/workers/[^/]+/readiness")) {
                 String id = NioHttpServer.pathVar(ex, 4);
-                var check = registry.checkReadiness(id);
+                String mode = readinessMode(ex);
+                var check = registry.checkReadiness(id, mode);
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(check));
             } else if ("POST".equals(method) && path.equals("/api/v1/workers")) {
                 Map<String, Object> body = mapper.readValue(NioHttpServer.readBody(ex), Map.class);
@@ -183,5 +185,29 @@ class WorkerHandler implements HttpHandler {
             throw new IllegalArgumentException("tool_scope is required when tool_capabilities are declared");
         }
         return toolScope;
+    }
+
+    private String readinessMode(HttpExchange ex) {
+        String mode = parseQuery(ex.getRequestURI().getQuery()).getOrDefault("mode", "passive");
+        String normalizedMode = mode == null || mode.isBlank() ? "passive" : mode.trim().toLowerCase(Locale.ROOT);
+        if (!"passive".equals(normalizedMode) && !"dispatch".equals(normalizedMode)) {
+            throw new IllegalArgumentException("mode must be passive or dispatch");
+        }
+        return normalizedMode;
+    }
+
+    private Map<String, String> parseQuery(String query) {
+        if (query == null || query.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> params = new LinkedHashMap<>();
+        for (String part : query.split("&")) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            String[] kv = part.split("=", 2);
+            params.put(kv[0], kv.length > 1 ? kv[1] : "");
+        }
+        return params;
     }
 }

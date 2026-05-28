@@ -19,9 +19,13 @@ import { buildTaskActionPlan } from "./task-action-plan.js";
 import { renderTaskActionHtml } from "./task-action-render-plan.js";
 import { buildTaskOverviewPlan } from "./task-overview-plan.js";
 import { renderTaskHeaderHtml } from "./task-header-render-plan.js";
+import { buildRecoveryJobPlan } from "./recovery-job-plan.js";
+import { buildToolTraceStatusLabel, buildToolTraceSummary } from "./tool-trace-plan.js";
 import { renderComposerInlineSignalsHtml } from "./composer-inline-render-plan.js";
 import { renderFacadeReplyBadgeHtml } from "./facade-reply-badge-render-plan.js";
 import { buildExecutionBoundaryFacts } from "./execution-boundary-plan.js";
+import { buildProviderRunFilePlan } from "./provider-run-file-plan.js";
+import { buildAgentActionPlan } from "./agent-action-plan.js";
 import { buildPendingFacadeReply } from "./facade-pending-plan.js";
 import { buildPendingAutoTaskTracker, resolvePendingAutoTaskCandidate } from "./pending-auto-task-plan.js";
 import { buildComposerSubmitContext } from "./composer-submit-context-plan.js";
@@ -56,6 +60,8 @@ const state = {
     pendingAutoTaskTracker: null,
     lastFacadeReply: null,
     liveFlow: null,
+    recoveryJobs: [],
+    agentActions: [],
     experimentSummary: null,
     toastTimer: null,
     pollingTimer: null,
@@ -101,6 +107,9 @@ const dom = {
     taskAssignedWorker: document.getElementById("taskAssignedWorker"),
     taskModelMode: document.getElementById("taskModelMode"),
     taskGoal: document.getElementById("taskGoal"),
+    taskLocalPaths: document.getElementById("taskLocalPaths"),
+    taskValidationCommands: document.getElementById("taskValidationCommands"),
+    taskExecutionContract: document.getElementById("taskExecutionContract"),
     taskAutoStart: document.getElementById("taskAutoStart"),
     taskContinueCurrent: document.getElementById("taskContinueCurrent"),
     taskAutoMultiRound: document.getElementById("taskAutoMultiRound"),
@@ -138,6 +147,7 @@ const dom = {
     experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
     artifactList: document.getElementById("artifactList"),
+    agentActionList: document.getElementById("agentActionList"),
     relatedMessages: document.getElementById("relatedMessages"),
     toolList: document.getElementById("toolList"),
     toast: document.getElementById("toast"),
@@ -149,6 +159,7 @@ const dom = {
     modalRouteInfo: document.getElementById("modalRouteInfo"),
     modalDecisions: document.getElementById("modalDecisions"),
     modalTools: document.getElementById("modalTools"),
+    modalProviderRunFiles: document.getElementById("modalProviderRunFiles"),
     modalCloseButton: document.getElementById("modalCloseButton"),
     modalCloseBtn: document.getElementById("modalCloseBtn")
 };
@@ -215,6 +226,9 @@ function bindEvents() {
     dom.taskActions.addEventListener("click", (event) => {
         onTaskActionClick(event).catch(handleError);
     });
+    dom.taskSecondaryActions.addEventListener("click", (event) => {
+        onTaskActionClick(event).catch(handleError);
+    });
     if (dom.followupButton) {
         dom.followupButton.addEventListener("click", onFollowupDraft);
     }
@@ -226,6 +240,11 @@ function bindEvents() {
     });
     dom.modalCloseButton.addEventListener("click", closeModal);
     dom.modalCloseBtn.addEventListener("click", closeModal);
+    if (dom.modalProviderRunFiles) {
+        dom.modalProviderRunFiles.addEventListener("click", (event) => {
+            onProviderRunFileClick(event).catch(handleError);
+        });
+    }
     dom.taskDetailModal.addEventListener("click", (e) => {
         if (e.target === dom.taskDetailModal) {
             closeModal();
@@ -317,7 +336,10 @@ async function loadTasks() {
     // 避免旧 auto-start task 的晚到 progress/result 刷新把它抢回去。
     const selectedTaskStillExists = state.selectedTaskId
         && state.tasks.some((task) => task.id === state.selectedTaskId);
-    const preserveExplicitSelection = selectedTaskStillExists && Date.now() < Number(state.selectedTaskStickyUntil || 0);
+    const hashTaskId = currentHashTaskId();
+    const preserveHashSelection = selectedTaskStillExists && hashTaskId === state.selectedTaskId;
+    const preserveExplicitSelection = selectedTaskStillExists
+        && (preserveHashSelection || Date.now() < Number(state.selectedTaskStickyUntil || 0));
 
     if (preserveExplicitSelection) {
         if (!state.tasks.some((task) => task.id === state.followupParentTaskId)) {
@@ -427,7 +449,12 @@ function applyRelatedMessagesFromLiveFlow(flow) {
 async function loadSelectedTask(taskId, loud) {
     state.selectedTaskLoading = true;
     renderDetails();
-    const liveFlow = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/live_flow?limit=8`);
+    const encodedTaskId = encodeURIComponent(taskId);
+    const [liveFlow, recoveryJobs, agentActions] = await Promise.all([
+        api(`/api/v1/tasks/${encodedTaskId}/live_flow?limit=8`),
+        apiOrNull(`/api/v1/tasks/${encodedTaskId}/recovery_jobs?limit=5`),
+        apiOrNull(`/api/v1/agent_actions?task_id=${encodedTaskId}&limit=20`)
+    ]);
     if (state.selectedTaskId !== taskId) {
         state.selectedTaskLoading = false;
         return;
@@ -446,6 +473,11 @@ async function loadSelectedTask(taskId, loud) {
     }
 
     state.liveFlow = liveFlow;
+    if (task?.id) {
+        state.tasks = state.tasks.map((item) => item?.id === task.id ? task : item);
+    }
+    state.recoveryJobs = Array.isArray(recoveryJobs) ? recoveryJobs : [];
+    state.agentActions = Array.isArray(agentActions) ? agentActions : [];
     state.experimentSummary = await loadTaskExperimentSummary(taskId, liveFlow);
     if (state.selectedTaskId !== taskId) {
         state.selectedTaskLoading = false;
@@ -571,18 +603,20 @@ async function onCreateTask(event) {
     try {
         setButtonBusy(dom.submitTaskButton, true, submitTaskButtonLabel(), busyLabel);
         const session = await ensureSessionForMessage(intent);
-        const pendingTaskId = submitContext.followupParentTaskId
+        const pendingReplyTaskId = submitContext.followupParentTaskId
             || submitContext.referencedTaskId
             || submitContext.continueCurrentTaskId;
+        const pendingExistingTaskId = submitContext.referencedTaskId || submitContext.continueCurrentTaskId;
         const pendingReply = buildPendingFacadeReply({
             sessionId: session.id,
-            taskId: pendingTaskId,
+            taskId: pendingReplyTaskId,
             resolvedMode: submissionPlan.resolvedMode
         });
         state.pendingAutoTaskTracker = buildPendingAutoTaskTracker({
             sessionId: session.id,
             resolvedMode: submissionPlan.resolvedMode,
-            existingTaskId: pendingTaskId,
+            existingTaskId: pendingExistingTaskId,
+            intent,
             currentTaskIds: state.tasks.map((task) => task?.id || "")
         });
         if (pendingReply) {
@@ -595,6 +629,7 @@ async function onCreateTask(event) {
         await waitForPendingAutoTaskSelection(session.id);
         const completion = await completionPromise;
         await applyChatFacadeCompletion(completion, intent, submissionPlan);
+        await waitForPendingAutoTaskSelection(session.id);
     } finally {
         setButtonBusy(dom.submitTaskButton, false, submitTaskButtonLabel(), busyLabel);
     }
@@ -703,19 +738,33 @@ function onMessageActionClick(event) {
 
 async function onTaskActionClick(event) {
     const button = event.target.closest("[data-task-action]");
-    if (!button || !state.selectedTaskId) {
+    const targetTaskId = activeThreadTaskId() || state.selectedTaskId;
+    if (!button || !targetTaskId) {
         return;
     }
 
+    state.selectedTaskId = targetTaskId;
     const action = button.dataset.taskAction;
-    await api(`/api/v1/tasks/${encodeURIComponent(state.selectedTaskId)}/${action}`, {
+    const body = action === "recover"
+        ? JSON.stringify({ mode: "auto", reason: "manual recovery from dialogue" })
+        : "{}";
+    const actionPath = action === "recover" ? "recover?async=true" : action;
+    const result = await api(`/api/v1/tasks/${encodeURIComponent(targetTaskId)}/${actionPath}`, {
         method: "POST",
-        body: "{}"
+        body
     });
     await loadTasks();
-    await loadSelectedTask(state.selectedTaskId, false);
+    state.selectedTaskId = targetTaskId;
+    await loadSelectedTask(targetTaskId, false);
     await loadMessages(taskSessionId(selectedTask()) || state.selectedSessionId);
-    showToast(`已执行 ${action}`);
+    const requestId = result?.request_id || result?.requestId;
+    showToast(requestId ? `已触发 ${action}: ${requestId}` : `已执行 ${action}`);
+}
+
+function activeThreadTaskId() {
+    return dom.taskThread
+        ?.querySelector("[data-task-id].is-active")
+        ?.getAttribute("data-task-id") || "";
 }
 
 async function onHandoff() {
@@ -1043,6 +1092,7 @@ function renderDetails() {
         dom.experimentSummary.innerHTML = emptyState("正在加载 experiment summary。");
         dom.decisionList.innerHTML = emptyState("正在加载 decision。");
         dom.artifactList.innerHTML = emptyState("正在加载 artifact。");
+        dom.agentActionList.innerHTML = emptyState("正在加载 reconciled action。");
         dom.toolList.innerHTML = emptyState("正在加载 tool trace。");
         setTaskActionState(false);
         renderDetailsPanelState();
@@ -1069,6 +1119,7 @@ function renderDetails() {
         dom.experimentSummary.innerHTML = emptyState("当前任务不属于 experiment batch。");
         dom.decisionList.innerHTML = emptyState("暂无 decision");
         dom.artifactList.innerHTML = emptyState("暂无 artifact");
+        dom.agentActionList.innerHTML = emptyState("暂无 reconciled action");
         dom.toolList.innerHTML = emptyState("暂无 tool trace");
         setTaskActionState(false);
         renderDetailsPanelState();
@@ -1115,6 +1166,7 @@ function renderDetails() {
         nextCandidates
     });
     const taskActionPlan = buildTaskActionPlan(task);
+    const recoveryJobPlan = buildRecoveryJobPlan(state.recoveryJobs, { formatTime });
     const taskActionRender = renderTaskActionHtml(taskActionPlan, {
         renderButton: renderTaskActionButton,
         renderEmpty: emptyState
@@ -1135,7 +1187,7 @@ function renderDetails() {
     dom.taskOverview.hidden = false;
     dom.taskActions.hidden = false;
     dom.taskDetailsScroll.hidden = false;
-    dom.taskOverview.innerHTML = headerRender.overviewHtml;
+    dom.taskOverview.innerHTML = headerRender.overviewHtml + renderRecoveryJobPanel(recoveryJobPlan);
     dom.taskActions.innerHTML = taskActionRender.primaryHtml;
     dom.taskSecondaryActions.innerHTML = taskActionRender.secondaryHtml;
     dom.taskActionDrawer.hidden = headerRender.secondaryHidden;
@@ -1204,19 +1256,16 @@ function renderDetails() {
     dom.decisionList.innerHTML = decisionCards.length > 0 ? decisionCards.join("") : emptyState("暂无 decision");
 
     dom.artifactList.innerHTML = recentArtifacts.length > 0
-        ? recentArtifacts.map((artifact) => stackItem(
-            artifact.artifact_type || artifact.artifactType || "artifact",
-            artifact.title || "untitled artifact",
-            preview(artifact.summary || artifact.uri || "", 220),
-            formatTime(artifact.created_at || artifact.createdAt)
-        )).join("")
+        ? recentArtifacts.map(renderArtifactCard).join("")
         : emptyState("暂无 artifact");
+
+    dom.agentActionList.innerHTML = renderAgentActions(state.agentActions);
 
     const toolCards = tools.map((tool) => stackItem(
             tool.tool_name || tool.toolName || "tool",
-            tool.success ? "success" : "failed",
-            preview(tool.result_summary || tool.resultSummary || "", 220),
-            `${formatTime(tool.created_at || tool.createdAt)}${tool.elapsed_ms || tool.elapsedMs ? ` · ${tool.elapsed_ms || tool.elapsedMs} ms` : ""}`
+            toolTraceStatusLabel(tool),
+            toolTraceSummary(tool),
+            toolTraceMeta(tool)
         ));
     if (toolSummary) {
         toolCards.unshift(renderToolChainSummaryCard(toolFacts, toolLabel, toolSummary));
@@ -2241,6 +2290,25 @@ function overviewCard(label, value) {
     `;
 }
 
+function renderRecoveryJobPanel(plan) {
+    if (!plan?.visible) {
+        return "";
+    }
+    return `
+        <div class="overview-card overview-card--wide">
+            <span>Recovery Job</span>
+            <strong>${escapeHtml(plan.summary)}</strong>
+            <small class="message__hint mono">${escapeHtml(plan.requestId)}</small>
+            ${plan.chips.length > 0 ? `
+                <div class="dialogue-task__signals">
+                    ${plan.chips.map((chip) => `<span class="signal">${escapeHtml(chip)}</span>`).join("")}
+                </div>
+            ` : ""}
+            ${plan.error ? `<small class="message__hint">${escapeHtml(plan.error)}</small>` : ""}
+        </div>
+    `;
+}
+
 function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
     const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
     const boundaryFacts = buildExecutionBoundaryFacts({ execution_boundary: executionBoundary }, []);
@@ -2365,6 +2433,7 @@ function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundar
     ].filter(Boolean);
     const cognitionRows = [
         summarizeExecutionSurface(executionSurface),
+        summarizeProviderRunFiles(executionSurface),
         summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
         summarizeJudgmentSurface("done judge", completionJudgmentSurface)
     ].filter(Boolean);
@@ -2390,6 +2459,168 @@ function stackItem(label, title, body, meta) {
             ${body ? `<p>${escapeHtml(body)}</p>` : ""}
         </div>
     `;
+}
+
+function renderArtifactCard(artifact) {
+    const metadata = artifactMetadata(artifact);
+    const type = artifact.artifact_type || artifact.artifactType || "artifact";
+    const title = artifact.title || "untitled artifact";
+    const createdAt = formatTime(artifact.created_at || artifact.createdAt);
+    const worker = firstNonBlank(metadata.worker_id, metadata.workerId, metadata.selected_worker, metadata.selectedWorker);
+    const status = firstNonBlank(metadata.execution_status, metadata.executionStatus, metadata.agent_run_status, metadata.agentRunStatus);
+    const durationMs = metadata.duration_ms ?? metadata.durationMs;
+    const threadId = firstNonBlank(metadata.provider_thread_id, metadata.providerThreadId, metadata.provider_session_id, metadata.providerSessionId);
+    const agentRunId = firstNonBlank(metadata.agent_run_id, metadata.agentRunId);
+    const outputText = stripAnsi(artifactOutputText(artifact, metadata));
+    const summary = stripAnsi(firstNonBlank(artifact.summary, outputText, artifact.uri, "") || "");
+    const chips = [
+        worker ? `worker ${worker}` : null,
+        status ? `status ${status}` : null,
+        durationMs != null ? formatDurationMs(durationMs) : null,
+        threadId ? `thread ${threadId}` : null,
+        agentRunId ? `run ${agentRunId}` : null
+    ].filter(Boolean);
+    const files = artifactProviderRunFiles(metadata);
+    const drawer = renderArtifactOutputDrawer(outputText, files);
+    return `
+        <div class="stack-item artifact-card">
+            <div class="stack-item__meta">
+                <span class="task-badge">${escapeHtml(type)}</span>
+                <span>${escapeHtml(createdAt)}</span>
+            </div>
+            <strong>${escapeHtml(title)}</strong>
+            ${chips.length > 0 ? `<div class="artifact-card__chips">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}</div>` : ""}
+            ${summary ? `<p>${escapeHtml(preview(summary, 360))}</p>` : ""}
+            ${files.length > 0 ? renderArtifactProviderFiles(files) : ""}
+            ${drawer}
+        </div>
+    `;
+}
+
+function artifactMetadata(artifact) {
+    const metadata = artifact.metadata || artifact.metadata_json || artifact.metadataJson || {};
+    if (typeof metadata === "string") {
+        try {
+            return JSON.parse(metadata);
+        } catch {
+            return {};
+        }
+    }
+    return metadata && typeof metadata === "object" ? metadata : {};
+}
+
+function artifactOutputText(artifact, metadata) {
+    return firstNonBlank(
+        metadata.output_text,
+        metadata.outputText,
+        metadata.artifact_content,
+        metadata.artifactContent,
+        artifact.content,
+        artifact.summary,
+        artifact.uri
+    ) || "";
+}
+
+function artifactProviderRunFiles(metadata) {
+    return [
+        ["run dir", metadata.provider_run_dir || metadata.providerRunDir],
+        ["prompt", metadata.provider_prompt_path || metadata.providerPromptPath],
+        ["events", metadata.provider_event_log_path || metadata.providerEventLogPath],
+        ["last message", metadata.provider_last_message_path || metadata.providerLastMessagePath],
+        ["metadata", metadata.provider_run_metadata_path || metadata.providerRunMetadataPath],
+        ["codex jsonl", metadata.provider_session_log_path || metadata.providerSessionLogPath || metadata.codex_rollout_path || metadata.codexRolloutPath]
+    ]
+        .map(([label, path]) => ({ label, path: firstNonBlank(path) }))
+        .filter((file) => file.path);
+}
+
+function renderArtifactProviderFiles(files) {
+    return `
+        <div class="provider-run-files artifact-card__files">
+            ${files.map((file) => `
+                <div class="provider-run-files__path">
+                    <span class="task-badge">${escapeHtml(file.label)}</span>
+                    <code>${escapeHtml(file.path)}</code>
+                </div>
+            `).join("")}
+        </div>
+    `;
+}
+
+function renderArtifactOutputDrawer(outputText, files) {
+    if (!outputText) {
+        return "";
+    }
+    const maxPreviewLength = 12000;
+    const truncated = outputText.length > maxPreviewLength;
+    const previewText = truncated ? `${outputText.slice(0, maxPreviewLength)}\n\n... 已截断，完整内容请查看上方 provider run 文件。` : outputText;
+    const pathHint = files.find((file) => file.label === "last message" || file.label === "events" || file.label === "codex jsonl")?.path;
+    return `
+        <details class="inline-preview-drawer artifact-output-drawer">
+            <summary class="inline-preview-drawer__summary">展开 worker 输出预览${pathHint ? ` · ${escapeHtml(preview(pathHint, 72))}` : ""}</summary>
+            <pre class="provider-run-files__preview artifact-output-drawer__preview">${escapeHtml(previewText)}</pre>
+        </details>
+    `;
+}
+
+function stripAnsi(value) {
+    return String(value || "").replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+}
+
+function formatDurationMs(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) {
+        return String(value);
+    }
+    if (number >= 1000) {
+        return `${(number / 1000).toFixed(1)}s`;
+    }
+    return `${Math.round(number)}ms`;
+}
+
+function renderAgentActions(actions) {
+    const plan = buildAgentActionPlan(actions);
+    if (!plan.hasActions) {
+        return emptyState("暂无 reconciled action");
+    }
+    return `
+        ${stackItem("summary", plan.summary, `${plan.counts.total} total`, "agent action surface")}
+        ${plan.visible.map(renderAgentActionItem).join("")}
+    `;
+}
+
+function renderAgentActionItem(action) {
+    const statusLabel = action.status === "needs_approval" ? "needs approval" : action.status;
+    const meta = [
+        action.actionType,
+        `risk=${action.riskLevel}`,
+        action.requiresApproval ? "requires approval" : null,
+        formatTime(action.createdAt)
+    ].filter(Boolean).join(" · ");
+    const payloadText = Object.keys(action.payload || {}).length > 0
+        ? `\n${JSON.stringify(action.payload)}`
+        : "";
+    return stackItem(
+        statusLabel,
+        action.summary || action.actionType,
+        `${action.rejectionReason || ""}${payloadText}`.trim(),
+        meta
+    );
+}
+
+function toolTraceStatusLabel(tool) {
+    return buildToolTraceStatusLabel(tool);
+}
+
+function toolTraceSummary(tool) {
+    return buildToolTraceSummary(tool, { preview });
+}
+
+function toolTraceMeta(tool) {
+    return [
+        formatTime(tool?.created_at || tool?.createdAt),
+        tool?.elapsed_ms || tool?.elapsedMs ? `${tool.elapsed_ms || tool.elapsedMs} ms` : null
+    ].filter(Boolean).join(" · ");
 }
 
 function buildUserMessage(task) {
@@ -2954,6 +3185,11 @@ async function submitComposerThroughChatFacade(intent, plan = composerSubmission
     const modelMode = dom.taskModelMode.value.trim() || null;
     const autoStart = dom.taskAutoStart.checked;
     const autoMultiRound = dom.taskAutoMultiRound?.checked || false;
+    const localPaths = splitComposerLines(dom.taskLocalPaths?.value);
+    const validationCommands = splitComposerLines(dom.taskValidationCommands?.value);
+    const executionContractLines = splitComposerLines(dom.taskExecutionContract?.value);
+    const writeScope = executionContractLines.length > 0 ? [executionContractLines[0]] : [];
+    const acceptanceCriteria = executionContractLines.slice(writeScope.length);
 
     return requestFacadeCompletion(state.facadeSurface, buildFacadeRequest({
         intent,
@@ -2972,8 +3208,22 @@ async function submitComposerThroughChatFacade(intent, plan = composerSubmission
         taskType: dom.taskType.value,
         taskPriority: dom.taskPriority.value,
         autoStart,
-        autoMultiRound
+        autoMultiRound,
+        localPaths,
+        validationCommands,
+        writeScope,
+        acceptanceCriteria
     }));
+}
+
+function splitComposerLines(value) {
+    if (typeof value !== "string" || !value.trim()) {
+        return [];
+    }
+    return value
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
 }
 
 async function waitForPendingAutoTaskSelection(sessionId) {
@@ -3042,8 +3292,6 @@ async function applyChatFacadeCompletion(completion, intent, plan = composerSubm
         intent,
         referencedTaskTitle: referencedTask?.title || referencedTask?.id || ""
     });
-    state.pendingAutoTaskTracker = null;
-
     dom.taskTitle.value = "";
     dom.taskGoal.value = "";
     dom.taskIntent.value = "";
@@ -3070,6 +3318,7 @@ async function applyChatFacadeCompletion(completion, intent, plan = composerSubm
     }
 
     if (taskId) {
+        state.pendingAutoTaskTracker = null;
         await selectTask(taskId, false);
     } else {
         state.relatedMessages = [];
@@ -4015,6 +4264,25 @@ function summarizeExecutionSurface(surface) {
     return { label: "execution", value: parts.join(" · ") };
 }
 
+function summarizeProviderRunFiles(surface) {
+    if (!surface || Object.keys(surface).length === 0) {
+        return null;
+    }
+    const paths = [
+        ["run", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
+        ["last", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
+        ["events", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
+        ["stdout", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
+        ["meta", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
+    ]
+        .filter(([, value]) => value)
+        .map(([label, value]) => `${label}: ${preview(value, 140)}`);
+    if (paths.length === 0) {
+        return null;
+    }
+    return { label: "run files", value: paths.join(" · ") };
+}
+
 function summarizeJudgmentSurface(label, surface) {
     if (!surface || Object.keys(surface).length === 0) {
         return null;
@@ -4305,6 +4573,11 @@ function applyLocationSelection() {
         state.detailsOpen = true;
     }
     state.facadeSurface = readFacadeSurfaceFromHash(window.location.hash, { firstNonBlank });
+}
+
+function currentHashTaskId() {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    return firstNonBlank(params.get("task"), params.get("task_id")) || "";
 }
 
 function syncLocationSelection() {
@@ -4820,6 +5093,17 @@ async function api(path, options = {}) {
     return payload?.data ?? payload;
 }
 
+async function apiOrNull(path, options = {}) {
+    try {
+        return await api(path, options);
+    } catch (error) {
+        if (error.status !== 404 && !/not found/i.test(error.message || "")) {
+            console.warn(`optional api unavailable: ${path}`, error);
+        }
+        return null;
+    }
+}
+
 function delay(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -4981,12 +5265,74 @@ async function openTaskDetailModal(taskId) {
         dom.modalTools.innerHTML = tools.map((tool) => `
             <div class="info-item">
                 <label>${escapeHtml(tool.tool_name || tool.toolName || "tool")}</label>
-                <value>状态: ${tool.success ? "success" : "failed"} · ${escapeHtml(tool.result_summary || tool.resultSummary || "no summary")}</value>
+                <value>${escapeHtml(toolTraceStatusLabel(tool))} · ${escapeHtml(toolTraceSummary(tool))}</value>
             </div>
         `).join("");
     } else {
         dom.modalTools.innerHTML = emptyState("暂无工具调用记录");
     }
+
+    renderProviderRunFiles(flow);
     
     dom.taskDetailModal.style.display = "flex";
+}
+
+function renderProviderRunFiles(flow) {
+    if (!dom.modalProviderRunFiles) {
+        return;
+    }
+    const plan = buildProviderRunFilePlan(flow);
+    if (!plan.files || plan.files.length === 0) {
+        dom.modalProviderRunFiles.innerHTML = emptyState("暂无 provider run 文件");
+        return;
+    }
+    const runDir = plan.runDir ? `
+        <div class="provider-run-files__path">
+            <span class="task-badge">run dir</span>
+            <code>${escapeHtml(plan.runDir)}</code>
+        </div>
+    ` : "";
+    const buttons = plan.files.map((file) => `
+        <button class="button button--ghost button--compact"
+                type="button"
+                title="${escapeHtml(file.path)}"
+                data-provider-run-task-id="${escapeHtml(plan.taskId)}"
+                data-provider-run-kind="${escapeHtml(file.kind)}">
+            ${escapeHtml(file.label)}
+        </button>
+    `).join("");
+    dom.modalProviderRunFiles.innerHTML = `
+        <div class="provider-run-files">
+            ${runDir}
+            <div class="provider-run-files__actions">${buttons}</div>
+            <pre class="provider-run-files__preview" data-provider-run-preview>选择文件预览内容</pre>
+        </div>
+    `;
+}
+
+async function onProviderRunFileClick(event) {
+    const button = event.target.closest("[data-provider-run-kind]");
+    if (!button) {
+        return;
+    }
+    const taskId = button.dataset.providerRunTaskId;
+    const kind = button.dataset.providerRunKind;
+    const previewBox = dom.modalProviderRunFiles?.querySelector("[data-provider-run-preview]");
+    if (!taskId || !kind || !previewBox) {
+        return;
+    }
+    button.disabled = true;
+    previewBox.textContent = "读取中...";
+    try {
+        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?kind=${encodeURIComponent(kind)}`);
+        const meta = [
+            file.kind || kind,
+            file.path,
+            file.size_bytes || file.sizeBytes ? `${file.size_bytes || file.sizeBytes} bytes` : null,
+            file.truncated ? `truncated at ${file.limit_bytes || file.limitBytes || "limit"} bytes` : null
+        ].filter(Boolean).join(" · ");
+        previewBox.textContent = [meta, file.content || ""].filter(Boolean).join("\n\n");
+    } finally {
+        button.disabled = false;
+    }
 }

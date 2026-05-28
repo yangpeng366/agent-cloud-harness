@@ -91,6 +91,7 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "dispatch_skipped_workers", exportRouteSkippedWorkers(route.dispatchSkippedWorkers()));
         putIfPresent(payload, "current_pinned_route", exportRouteDiagnostic(route.currentPinnedRoute()));
         putIfPresent(payload, "recovery_unpinned_recommendation", exportRouteDiagnostic(route.recoveryUnpinnedRecommendation()));
         return payload;
@@ -110,6 +111,7 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "dispatch_skipped_workers", copyMapList(route.dispatchSkippedWorkers()));
         return payload;
     }
 
@@ -137,6 +139,24 @@ public class RuntimeFactSurfaceExporter {
         return payload;
     }
 
+    private List<Map<String, Object>> exportRouteSkippedWorkers(List<WorkerRouter.RouteSkippedWorker> skippedWorkers) {
+        if (skippedWorkers == null || skippedWorkers.isEmpty()) {
+            return List.of();
+        }
+        return skippedWorkers.stream()
+            .map(skipped -> {
+                Map<String, Object> metadata = new LinkedHashMap<>();
+                putIfPresent(metadata, "worker_id", blankToNull(skipped.workerId()));
+                putIfPresent(metadata, "reason", blankToNull(skipped.reason()));
+                putIfPresent(metadata, "provider_failure_class", blankToNull(skipped.providerFailureClass()));
+                putIfPresent(metadata, "provider_failure_reason", blankToNull(skipped.providerFailureReason()));
+                putIfPresent(metadata, "provider_retryable", skipped.providerRetryable());
+                return metadata;
+            })
+            .filter(metadata -> !metadata.isEmpty())
+            .toList();
+    }
+
     private Map<String, Object> exportExecutionSurface(RuntimeCognitionSurfaceView.ExecutionSurface execution) {
         if (execution == null) {
             return Map.of();
@@ -145,6 +165,23 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "worker_id", blankToNull(execution.workerId()));
         putIfPresent(payload, "execution_id", blankToNull(execution.executionId()));
         putIfPresent(payload, "execution_status", blankToNull(execution.executionStatus()));
+        putIfPresent(payload, "execution_backend", blankToNull(execution.executionBackend()));
+        putIfPresent(payload, "provider_id", blankToNull(execution.providerId()));
+        putIfPresent(payload, "provider_session_id", blankToNull(execution.providerSessionId()));
+        putIfPresent(payload, "provider_thread_id", blankToNull(execution.providerThreadId()));
+        putIfPresent(payload, "resume_provider_session_id", blankToNull(execution.resumeProviderSessionId()));
+        putIfPresent(payload, "provider_error", blankToNull(execution.providerError()));
+        putIfPresent(payload, "provider_turn_status", blankToNull(execution.providerTurnStatus()));
+        putIfPresent(payload, "provider_failure_class", blankToNull(execution.providerFailureClass()));
+        putIfPresent(payload, "provider_failure_reason", blankToNull(execution.providerFailureReason()));
+        putIfPresent(payload, "provider_retryable", execution.providerRetryable());
+        putIfPresent(payload, "provider_protocol_trace", copyList(execution.providerProtocolTrace()));
+        putIfPresent(payload, "provider_run_dir", blankToNull(execution.providerRunDir()));
+        putIfPresent(payload, "provider_prompt_path", blankToNull(execution.providerPromptPath()));
+        putIfPresent(payload, "provider_stdout_path", blankToNull(execution.providerStdoutPath()));
+        putIfPresent(payload, "provider_event_log_path", blankToNull(execution.providerEventLogPath()));
+        putIfPresent(payload, "provider_last_message_path", blankToNull(execution.providerLastMessagePath()));
+        putIfPresent(payload, "provider_run_metadata_path", blankToNull(execution.providerRunMetadataPath()));
         putIfPresent(payload, "duration_ms", execution.durationMs());
         putIfPresent(payload, "tool_invocation_count", execution.toolInvocationCount());
         putIfPresent(payload, "tool_invocation_ids", copyList(execution.toolInvocationIds()));
@@ -173,6 +210,14 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "mounted_archive_count", execution.mountedArchiveCount());
         putIfPresent(payload, "evidence_refs", copyList(execution.evidenceRefs()));
         putIfPresent(payload, "unfinished_items", copyList(execution.unfinishedItems()));
+        putIfPresent(payload, "proposed_actions", copyMapList(execution.proposedActions()));
+        putIfPresent(payload, "accepted_actions", copyMapList(execution.acceptedActions()));
+        putIfPresent(payload, "rejected_actions", copyMapList(execution.rejectedActions()));
+        putIfPresent(payload, "approval_needed_actions", copyMapList(execution.approvalNeededActions()));
+        putIfPresent(payload, "context_requests", copyList(execution.contextRequests()));
+        putIfPresent(payload, "completion_claim", blankToNull(execution.completionClaim()));
+        putIfPresent(payload, "handoff_target", blankToNull(execution.handoffTarget()));
+        putIfPresent(payload, "risk_flags", copyList(execution.riskFlags()));
         return payload;
     }
 
@@ -244,6 +289,17 @@ public class RuntimeFactSurfaceExporter {
 
     private List<String> copyList(List<String> values) {
         return values == null || values.isEmpty() ? null : List.copyOf(values);
+    }
+
+    private List<Map<String, Object>> copyMapList(List<Map<String, Object>> values) {
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.stream()
+            .filter(value -> value != null && !value.isEmpty())
+            .map(LinkedHashMap::new)
+            .map(value -> (Map<String, Object>) value)
+            .toList();
     }
 
     private String blankToNull(String value) {

@@ -252,6 +252,11 @@ button {
     color: var(--ink);
 }
 
+.button--compact {
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
 .link-button {
     background: transparent;
     color: var(--accent-deep);
@@ -1284,6 +1289,47 @@ button {
 .cognition-timeline__entry {
     display: grid;
     gap: 6px;
+}
+
+.provider-run-files {
+    display: grid;
+    gap: 10px;
+}
+
+.provider-run-files__path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-soft);
+    font-size: 12px;
+}
+
+.provider-run-files__path code {
+    white-space: normal;
+    word-break: break-all;
+}
+
+.provider-run-files__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.provider-run-files__preview {
+    max-height: 300px;
+    overflow: auto;
+    margin: 0;
+    padding: 12px;
+    background: rgba(18, 32, 45, 0.04);
+    border: 1px solid rgba(33, 49, 64, 0.08);
+    border-radius: 16px;
+    color: var(--ink);
+    font-family: "Consolas", "Cascadia Code", monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .cognition-timeline__meta {

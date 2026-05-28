@@ -507,7 +507,8 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             context.task().id(),
             worker.workerId(),
             plan.toolName(),
-            plan.toolArguments()
+            plan.toolArguments(),
+            context.task().metadata()
         );
 
         long startedAt = System.currentTimeMillis();
@@ -1447,6 +1448,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             finalized.executionStatus(),
             finalized.evidenceRefs(),
             finalized.unfinishedItems(),
+            finalized.proposedActions(),
+            finalized.contextRequests(),
+            finalized.completionClaim(),
+            finalized.handoffTarget(),
+            finalized.riskFlags(),
             finalized.tokenUsage(),
             totalDurationMs,
             metadata
@@ -1460,6 +1466,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "summary (string), output_text (string), produced_artifact (boolean), "
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
             + "confidence (high|medium|low). "
+            + boundedAutonomyJsonFields()
             + "Do not invent actions that are not present in the tool chain trace. "
             + "If a grounded output already exists as a file or directory, you may mark produced_artifact=true. "
             + "If the tool chain stopped because of repetition, failure, or max rounds, say so clearly. "
@@ -1692,6 +1699,11 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
                 json.path("execution_status").asText("completed"),
                 readStringList(json.path("evidence_refs")),
                 readStringList(json.path("unfinished_items")),
+                readActionDrafts(json.path("proposed_actions")),
+                readStringList(json.path("context_requests")),
+                json.path("completion_claim").asText(""),
+                json.path("handoff_target").asText(""),
+                readStringList(json.path("risk_flags")),
                 0,
                 durationMs,
                 metadata
@@ -1727,6 +1739,33 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             }
         }
         return List.copyOf(items);
+    }
+
+    private List<com.agentcloud.model.AgentActionDraft> readActionDrafts(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<com.agentcloud.model.AgentActionDraft> drafts = new ArrayList<>();
+        for (JsonNode item : node) {
+            if (item == null || !item.isObject()) {
+                continue;
+            }
+            Map<String, Object> payload = item.has("payload") && item.get("payload").isObject()
+                ? MAPPER.convertValue(item.get("payload"), Map.class)
+                : Map.of();
+            drafts.add(new com.agentcloud.model.AgentActionDraft(
+                item.path("action_type").asText(item.path("actionType").asText("")),
+                item.path("summary").asText(""),
+                payload,
+                item.path("risk_level").asText(item.path("riskLevel").asText("low")),
+                item.has("requires_approval")
+                    ? item.path("requires_approval").asBoolean(false)
+                    : item.path("requiresApproval").asBoolean(false),
+                item.path("reason").asText(""),
+                item.path("confidence").asText("")
+            ));
+        }
+        return List.copyOf(drafts);
     }
 
     private AutoWriteDraft parseAutoWriteDraft(String raw) {
@@ -2643,6 +2682,7 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             + "summary (string), output_text (string), produced_artifact (boolean), "
             + "artifact_title (string), artifact_content (string), suggested_next_step (string), "
             + "confidence (high|medium|low). "
+            + boundedAutonomyJsonFields()
             + "Ground every claim in the provided tool result and grounded output state. "
             + "Never claim that a grounded output was written unless the current tool is "
             + groundedWriteToolHint(registeredToolCapabilities(worker))
@@ -2808,10 +2848,20 @@ public class ToolAwareWorkerExecutor implements WorkerExecutor {
             result.executionStatus(),
             result.evidenceRefs(),
             result.unfinishedItems(),
+            result.proposedActions(),
+            result.contextRequests(),
+            result.completionClaim(),
+            result.handoffTarget(),
+            result.riskFlags(),
             result.tokenUsage(),
             result.durationMs(),
             metadata
         );
+    }
+
+    private String boundedAutonomyJsonFields() {
+        return "Optional bounded-autonomy fields: proposed_actions (array of {action_type, summary, payload, risk_level, requires_approval, reason, confidence}), "
+            + "context_requests (array), completion_claim (string), handoff_target (string), risk_flags (array). ";
     }
 
     private List<String> formatRecentMessages(List<SessionMessage> messages, int limit) {

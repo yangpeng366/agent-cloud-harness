@@ -27,6 +27,7 @@ function selectVisibleEntries(entries, normalized) {
 function messageSignalEntries(metadata = {}) {
     const route = messageRouteSignal(metadata);
     const tools = messageToolSignal(metadata);
+    const provider = messageProviderSignal(metadata);
     const modelMode = firstNonBlank(metadata.model_mode, metadata.modelMode);
     const actionLabel = firstNonBlank(metadata.action_label, metadata.actionLabel);
     const preferredWorkerHint = firstNonBlank(
@@ -43,6 +44,7 @@ function messageSignalEntries(metadata = {}) {
         { value: metadata.completion_status || metadata.completionStatus, tone: "done", label: "completion", priority: "high" },
         { value: metadata.acceptance_result || metadata.acceptanceResult, tone: "done", label: "accept", priority: "high" },
         { value: metadata.judgment_action || metadata.judgmentAction, tone: "auto", label: "action", priority: "high" },
+        { value: provider, tone: "manual", label: "provider", priority: "high" },
         { value: route, tone: "active", label: "route", priority: "medium" },
         { value: tools, tone: "default", label: "tools", priority: "medium" },
         { value: modelMode ? humanizeToken(modelMode) || modelMode : null, tone: "active", label: "mode", priority: "low" },
@@ -103,6 +105,20 @@ function messageToolSignal(metadata = {}) {
         !terminationReason && executionMode ? humanizeToken(executionMode) || executionMode : null
     ].filter(Boolean);
     return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function messageProviderSignal(metadata = {}) {
+    const providerText = firstNonBlank(
+        metadata.provider_error,
+        metadata.providerError,
+        metadata.provider_failure_reason,
+        metadata.providerFailureReason,
+        metadata.provider_turn_status,
+        metadata.providerTurnStatus,
+        metadata.provider_failure_class,
+        metadata.providerFailureClass
+    );
+    return providerText ? humanizeToken(String(providerText)) || providerText : null;
 }
 
 function messageLearningSignal(preferredWorkerHint, learningHintApplied) {

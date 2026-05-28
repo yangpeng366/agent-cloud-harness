@@ -709,7 +709,9 @@ class PromptBasedJudgmentServiceTest {
                 null,
                 null,
                 null,
-                null
+                null,
+                null,
+                List.of()
             ),
             Map.of(
                 "has_route_preview", true,

@@ -1,4 +1,10 @@
-﻿const state = {
+﻿import { buildRecoveryJobPlan } from "../dialogue/recovery-job-plan.js";
+
+import { buildToolTraceStatusLabel, buildToolTraceSummary } from "../dialogue/tool-trace-plan.js";
+import { buildProviderRunFilePlan } from "../dialogue/provider-run-file-plan.js";
+import { buildAgentActionPlan } from "../dialogue/agent-action-plan.js";
+
+const state = {
     sessions: [],
     tasks: [],
     workers: [],
@@ -14,6 +20,7 @@
     agentRunSearchResults: [],
     selectedAgentId: null,
     selectedAgent: null,
+    selectedWorkerReadiness: null,
     selectedAgentRuns: [],
     selectedAgentRunId: null,
     selectedAgentRun: null,
@@ -23,10 +30,12 @@
     selectedTaskId: null,
     followupParentTaskId: null,
     liveFlow: null,
+    recoveryJobs: [],
     providerSelection: null,
     agentRun: null,
     agentRunEvents: [],
     agentRunArtifacts: [],
+    agentActions: [],
     experimentSummary: null,
     toastTimer: null,
     pollingTimer: null
@@ -77,6 +86,7 @@ const dom = {
     experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
     artifactList: document.getElementById("artifactList"),
+    agentActionList: document.getElementById("agentActionList"),
     toolList: document.getElementById("toolList"),
     rawJson: document.getElementById("rawJson"),
     refreshTaskButton: document.getElementById("refreshTaskButton"),
@@ -114,6 +124,9 @@ function bindEvents() {
     dom.taskTimeline.addEventListener("keydown", onTimelineKeydown);
     dom.chainContext.addEventListener("click", onChainContextClick);
     dom.taskActions.addEventListener("click", onTaskActionClick);
+    dom.toolList.addEventListener("click", (event) => {
+        onProviderRunFileClick(event).catch(handleError);
+    });
     dom.refreshTaskButton.addEventListener("click", () => {
         if (state.selectedTaskId) {
             loadSelectedTask(state.selectedTaskId, true).catch(handleError);
@@ -168,6 +181,7 @@ async function loadAgents(loud) {
     if (state.selectedAgentId && !state.agents.some((agent) => providerIdOf(agent) === state.selectedAgentId)) {
         state.selectedAgentId = null;
         state.selectedAgent = null;
+        state.selectedWorkerReadiness = null;
         state.selectedAgentRuns = [];
     }
     renderAgentInventory();
@@ -187,12 +201,15 @@ async function loadRuntimeHealth(loud) {
 
 async function loadAgentDetail(providerId, loud = false) {
     const encodedProviderId = encodeURIComponent(providerId);
-    const [agent, runs] = await Promise.all([
+    const workerId = workerIdForProvider(providerId);
+    const [agent, runs, workerReadiness] = await Promise.all([
         api(`/api/v1/agents/${encodedProviderId}`),
-        apiOrNull(`/api/v1/agents/${encodedProviderId}/runs?limit=20`)
+        apiOrNull(`/api/v1/agents/${encodedProviderId}/runs?limit=20`),
+        workerId ? apiOrNull(`/api/v1/workers/${encodeURIComponent(workerId)}/readiness?mode=dispatch`) : Promise.resolve(null)
     ]);
     state.selectedAgentId = providerId;
     state.selectedAgent = agent;
+    state.selectedWorkerReadiness = workerReadiness;
     state.selectedAgentRuns = runs || [];
     renderAgentInventory();
     renderAgentDetail();
@@ -250,7 +267,7 @@ async function loadSessions() {
     const sessions = await api("/api/v1/sessions");
     state.sessions = sessions
         .slice()
-        .sort((a, b) => new Date(b.updated_at || b.updatedAt || 0) - new Date(a.updated_at || a.updatedAt || 0));
+        .sort((a, b) => timestampMs(b.updated_at || b.updatedAt || 0) - timestampMs(a.updated_at || a.updatedAt || 0));
 
     if (!state.selectedSessionId || !state.sessions.some((session) => session.id === state.selectedSessionId)) {
         state.selectedSessionId = state.sessions[0]?.id ?? null;
@@ -279,7 +296,7 @@ async function loadTasks() {
 
     state.tasks = state.tasks
         .slice()
-        .sort((a, b) => new Date(a.created_at || a.createdAt || 0) - new Date(b.created_at || b.createdAt || 0));
+        .sort((a, b) => timestampMs(a.created_at || a.createdAt || 0) - timestampMs(b.created_at || b.createdAt || 0));
 
     if (state.selectedTaskId && !state.tasks.some((task) => task.id === state.selectedTaskId)) {
         state.selectedTaskId = state.tasks[state.tasks.length - 1]?.id ?? null;
@@ -322,7 +339,13 @@ async function loadSelectedTask(taskId, loud) {
             ? apiOrNull(`/api/v1/agent_runs/${encodeURIComponent(runId)}/artifacts?limit=6`)
             : Promise.resolve([])
     ]);
+    const [recoveryJobs, agentActions] = await Promise.all([
+        apiOrNull(`/api/v1/tasks/${encodedTaskId}/recovery_jobs?limit=5`),
+        apiOrNull(`/api/v1/agent_actions?task_id=${encodedTaskId}&limit=20`)
+    ]);
     state.liveFlow = flow;
+    state.recoveryJobs = Array.isArray(recoveryJobs) ? recoveryJobs : [];
+    state.agentActions = Array.isArray(agentActions) ? agentActions : [];
     state.providerSelection = providerSelection;
     state.agentRun = agentRun;
     state.agentRunEvents = agentRunEvents || [];
@@ -426,13 +449,18 @@ async function onTaskActionClick(event) {
     }
 
     const action = button.dataset.taskAction;
-    await api(`/api/v1/tasks/${encodeURIComponent(state.selectedTaskId)}/${action}`, {
+    const body = action === "recover"
+        ? JSON.stringify({ mode: "auto", reason: "manual recovery from console" })
+        : "{}";
+    const actionPath = action === "recover" ? "recover?async=true" : action;
+    const result = await api(`/api/v1/tasks/${encodeURIComponent(state.selectedTaskId)}/${actionPath}`, {
         method: "POST",
-        body: "{}"
+        body
     });
     await loadTasks();
     await loadSelectedTask(state.selectedTaskId, false);
-    showToast(`已执行 ${action}`);
+    const requestId = result?.request_id || result?.requestId;
+    showToast(requestId ? `已触发 ${action}: ${requestId}` : `已执行 ${action}`);
 }
 
 async function onHandoff() {
@@ -797,12 +825,15 @@ function renderInspector() {
         dom.experimentSummary.innerHTML = emptyState("当前任务没有实验信息");
         dom.decisionList.innerHTML = emptyState("当前任务没有判断 judgment");
         dom.artifactList.innerHTML = emptyState("当前任务没有实验 artifact");
+        dom.agentActionList.innerHTML = emptyState("当前任务没有 reconciled action");
         dom.toolList.innerHTML = emptyState("当前任务没有实验 tool trace");
         dom.rawJson.textContent = "";
         state.providerSelection = null;
+        state.recoveryJobs = [];
         state.agentRun = null;
         state.agentRunEvents = [];
         state.agentRunArtifacts = [];
+        state.agentActions = [];
         renderAgentInventory();
         renderAgentDetail();
         renderRuntimeHealth();
@@ -832,6 +863,7 @@ function renderInspector() {
     const toolLabel = toolChainLabel(flow, tools);
     const toolSummary = toolChainNarrative(flow, tools);
     const executionFacts = executionBoundaryFacts(flow, tools);
+    const recoveryJobPlan = buildRecoveryJobPlan(state.recoveryJobs, { formatTime });
 
     dom.inspectorTitle.textContent = task.title || task.id;
     dom.taskOverview.innerHTML = [
@@ -842,7 +874,8 @@ function renderInspector() {
         overviewCard("实验模式", humanizeToken(experimentMode) || experimentMode),
         overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none"),
         overviewCard("Tool chain", toolLabel || "none"),
-        overviewCard("Execution", executionFacts.label || "none")
+        overviewCard("Execution", executionFacts.label || "none"),
+        renderRecoveryJobPanel(recoveryJobPlan)
     ].join("");
     dom.agentExecution.innerHTML = renderAgentExecution(flow, task);
     renderAgentDetail();
@@ -899,15 +932,17 @@ function renderInspector() {
         `).join("")
         : emptyState("暂无 artifact");
 
+    dom.agentActionList.innerHTML = renderAgentActions(state.agentActions);
+
     const toolCards = tools.map((tool) => `
             <div class="tool-item">
                 <div class="tool-item__meta">
-                    <span class="task-badge" data-tone="${tool.success ? "active" : "failed"}">${tool.success ? "success" : "failed"}</span>
+                    <span class="task-badge" data-tone="${tool.success ? "active" : "failed"}">${escapeHtml(toolTraceStatusLabel(tool))}</span>
                     <span class="task-badge">${escapeHtml(tool.tool_name || tool.toolName)}</span>
                     <span>${formatTime(tool.created_at || tool.createdAt)}</span>
                     ${tool.elapsed_ms || tool.elapsedMs ? `<span>${escapeHtml(String(tool.elapsed_ms || tool.elapsedMs))} ms</span>` : ""}
                 </div>
-                <p>${escapeHtml(preview(tool.result_summary || tool.resultSummary || "", 220))}</p>
+                <p>${escapeHtml(toolTraceSummary(tool))}</p>
             </div>
         `);
     if (toolSummary) {
@@ -915,6 +950,10 @@ function renderInspector() {
     }
     if (executionFacts.label || executionFacts.traceSummary || executionFacts.executionId) {
         toolCards.unshift(renderExecutionSummaryCard(executionFacts));
+    }
+    const providerRunFiles = renderProviderRunFiles(flow);
+    if (providerRunFiles) {
+        toolCards.unshift(providerRunFiles);
     }
     dom.toolList.innerHTML = toolCards.length > 0 ? toolCards.join("") : emptyState("暂无 tool trace");
 
@@ -1331,6 +1370,7 @@ function renderAgentDetail() {
     const lastSeenAt = firstNonBlank(agent.checked_at, agent.checkedAt, agent.last_seen_at, agent.lastSeenAt);
     const capabilities = normalizeTextList(agent.capabilities);
     const runs = state.selectedAgentRuns || [];
+    const workerId = workerIdForProvider(providerId);
     const chips = capabilities.length > 0
         ? capabilities.map((capability) => `<span class="chip">${escapeHtml(capability)}</span>`).join("")
         : `<span class="chip">no capability</span>`;
@@ -1353,6 +1393,7 @@ function renderAgentDetail() {
             <div class="chip-group">${chips}</div>
             <p>${escapeHtml(preview(readinessReason, 220))}</p>
             ${renderProviderRuntimeDiagnostics(agent, runs)}
+            ${renderWorkerDispatchReadiness(state.selectedWorkerReadiness, workerId)}
             ${renderMetadataGrid(agent.metadata, 6)}
             <div class="agent-action-row">
                 <button class="link-button" type="button" data-provider-action="refresh" data-provider-id="${escapeHtml(providerId)}">刷新 Provider</button>
@@ -1363,6 +1404,85 @@ function renderAgentDetail() {
         <div class="agent-trace-list">
             <div class="decision-item__type">recent provider runs</div>
             ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 provider 暂无 run 记录。")}
+        </div>
+    `;
+}
+
+function renderWorkerDispatchReadiness(readiness, workerId) {
+    if (!readiness) {
+        return "";
+    }
+    const ready = booleanValue(readiness.ready) === true;
+    const mode = firstNonBlank(readiness.mode, "dispatch");
+    const reason = firstNonBlank(readiness.reason, readiness.dispatch_preflight_reason, readiness.dispatchPreflightReason, "no readiness reason");
+    const dispatchReady = booleanValue(readiness.dispatch_preflight_ready, readiness.dispatchPreflightReady);
+    const cached = booleanValue(readiness.dispatch_preflight_cached, readiness.dispatchPreflightCached);
+    const activeProbe = booleanValue(readiness.dispatch_preflight_active_probe, readiness.dispatchPreflightActiveProbe);
+    const probeMode = firstNonBlank(readiness.dispatch_preflight_mode, readiness.dispatchPreflightMode, "unknown");
+    const metadata = readiness.dispatch_preflight_metadata || readiness.dispatchPreflightMetadata || {};
+    const cliProfile = readiness.cli_profile || readiness.cliProfile || {};
+    const probeArgs = normalizeTextList(metadata.dispatch_preflight_probe_args, metadata.dispatchPreflightProbeArgs);
+    const commandShape = normalizeTextList(metadata.dispatch_preflight_command_shape, metadata.dispatchPreflightCommandShape);
+    const launchMode = firstNonBlank(metadata.launch_mode, metadata.launchMode);
+    const launchTarget = firstNonBlank(metadata.launch_target, metadata.launchTarget);
+    const profileBadges = renderCliProfileBadges(cliProfile);
+    const providerFailureClass = firstNonBlank(readiness.provider_failure_class, readiness.providerFailureClass, metadata.provider_failure_class, metadata.providerFailureClass);
+    const providerFailureReason = firstNonBlank(readiness.provider_failure_reason, readiness.providerFailureReason, metadata.provider_failure_reason, metadata.providerFailureReason);
+    const providerRetryable = booleanValue(readiness.provider_retryable, readiness.providerRetryable, metadata.provider_retryable, metadata.providerRetryable);
+
+    return `
+        <div class="agent-trace-list provider-diagnostics">
+            <div class="decision-item__type">worker dispatch probe</div>
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "dispatch ready" : "dispatch blocked"}</span>
+                ${dispatchReady !== null ? `<span class="task-badge" data-tone="${dispatchReady ? "active" : "failed"}">${dispatchReady ? "preflight ok" : "preflight failed"}</span>` : ""}
+                ${providerFailureClass ? `<span class="task-badge" data-tone="failed">${escapeHtml(providerFailureClass)}</span>` : ""}
+                ${providerRetryable !== null ? `<span class="task-badge" data-tone="${providerRetryable ? "paused" : "failed"}">${providerRetryable ? "retryable" : "manual"}</span>` : ""}
+                <span>${escapeHtml(mode)}</span>
+                <span>${escapeHtml(probeMode)}</span>
+                ${cached !== null ? `<span>${cached ? "cached" : "fresh probe"}</span>` : ""}
+                ${activeProbe !== null ? `<span>${activeProbe ? "active probe" : "passive fallback"}</span>` : ""}
+            </div>
+            <div class="agent-detail__grid">
+                ${overviewCard("Worker", workerId || readiness.worker_id || readiness.workerId || "unknown")}
+                ${overviewCard("Launch", launchMode || "unknown")}
+                ${overviewCard("Probe Args", probeArgs.length > 0 ? probeArgs.join(" ") : "n/a")}
+                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
+            </div>
+            ${launchTarget ? `<p class="mono">${escapeHtml(preview(launchTarget, 220))}</p>` : ""}
+            ${profileBadges}
+            <p>${escapeHtml(preview(reason, 220))}</p>
+            ${providerFailureReason ? `<p>${escapeHtml(preview(providerFailureReason, 220))}</p>` : ""}
+            ${renderMetadataGrid(metadata, 8)}
+        </div>
+    `;
+}
+
+function renderCliProfileBadges(profile) {
+    if (!profile || typeof profile !== "object" || Object.keys(profile).length === 0) {
+        return "";
+    }
+    const evidence = booleanValue(profile.cli_profile_evidence_available, profile.cliProfileEvidenceAvailable);
+    const entries = [
+        ["yolo", profile.supports_yolo ?? profile.supportsYolo],
+        ["model", profile.supports_model ?? profile.supportsModel],
+        ["json", profile.supports_json_output ?? profile.supportsJsonOutput],
+        ["resume", profile.supports_resume ?? profile.supportsResume],
+        ["workspace", profile.supports_workspace_arg ?? profile.supportsWorkspaceArg],
+        ["work-dir", profile.supports_work_dir_arg ?? profile.supportsWorkDirArg],
+        ["output-file", profile.supports_output_file ?? profile.supportsOutputFile]
+    ].filter(([, value]) => value !== undefined && value !== null);
+    if (entries.length === 0 && evidence === null) {
+        return "";
+    }
+    const badges = entries.map(([label, value]) => {
+        const supported = booleanValue(value) === true;
+        return `<span class="task-badge" data-tone="${supported ? "active" : "failed"}">${escapeHtml(`${label}: ${supported ? "yes" : "no"}`)}</span>`;
+    }).join("");
+    return `
+        <div class="artifact-item__meta">
+            <span class="task-badge" data-tone="${evidence ? "active" : "paused"}">${evidence ? "cli profile" : "profile inferred"}</span>
+            ${badges}
         </div>
     `;
 }
@@ -1578,6 +1698,85 @@ function overviewCard(label, value) {
     `;
 }
 
+function renderRecoveryJobPanel(plan) {
+    if (!plan?.visible) {
+        return "";
+    }
+    return `
+        <div class="overview-card">
+            <span>Recovery Job</span>
+            <strong>${escapeHtml(plan.summary)}</strong>
+            <small class="message__hint mono">${escapeHtml(plan.requestId)}</small>
+            ${plan.chips.length > 0 ? `
+                <div class="agent-run-card__meta">
+                    ${plan.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
+                </div>
+            ` : ""}
+            ${plan.error ? `<small class="message__hint">${escapeHtml(plan.error)}</small>` : ""}
+        </div>
+    `;
+}
+
+function renderProviderRunFiles(flow) {
+    const plan = buildProviderRunFilePlan(flow);
+    if (!plan.files || plan.files.length === 0) {
+        return "";
+    }
+    const runDir = plan.runDir ? `
+        <div class="provider-run-files__path">
+            <span class="task-badge">run dir</span>
+            <code>${escapeHtml(plan.runDir)}</code>
+        </div>
+    ` : "";
+    const buttons = plan.files.map((file) => `
+        <button class="button button--ghost button--compact"
+                type="button"
+                title="${escapeHtml(file.path)}"
+                data-provider-run-task-id="${escapeHtml(plan.taskId)}"
+                data-provider-run-kind="${escapeHtml(file.kind)}">
+            ${escapeHtml(file.label)}
+        </button>
+    `).join("");
+    return `
+        <div class="tool-item provider-run-files">
+            <div class="tool-item__meta">
+                <span class="task-badge" data-tone="active">provider files</span>
+            </div>
+            ${runDir}
+            <div class="provider-run-files__actions">${buttons}</div>
+            <pre class="provider-run-files__preview" data-provider-run-preview>选择文件预览内容</pre>
+        </div>
+    `;
+}
+
+async function onProviderRunFileClick(event) {
+    const button = event.target.closest("[data-provider-run-kind]");
+    if (!button) {
+        return;
+    }
+    const taskId = button.dataset.providerRunTaskId;
+    const kind = button.dataset.providerRunKind;
+    const container = button.closest(".provider-run-files");
+    const previewBox = container?.querySelector("[data-provider-run-preview]");
+    if (!taskId || !kind || !previewBox) {
+        return;
+    }
+    button.disabled = true;
+    previewBox.textContent = "读取中...";
+    try {
+        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?kind=${encodeURIComponent(kind)}`);
+        const meta = [
+            file.kind || kind,
+            file.path,
+            file.size_bytes || file.sizeBytes ? `${file.size_bytes || file.sizeBytes} bytes` : null,
+            file.truncated ? `truncated at ${file.limit_bytes || file.limitBytes || "limit"} bytes` : null
+        ].filter(Boolean).join(" · ");
+        previewBox.textContent = [meta, file.content || ""].filter(Boolean).join("\n\n");
+    } finally {
+        button.disabled = false;
+    }
+}
+
 function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
     const boundaryFacts = executionBoundaryFacts({ execution_boundary: executionBoundary }, []);
     const diagnostics = judgmentDiagnosticFacts(decision, runtimeFacts, executionBoundary);
@@ -1673,6 +1872,7 @@ function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundar
     ].filter(Boolean);
     const cognitionRows = [
         summarizeExecutionSurface(executionSurface),
+        summarizeProviderRunFiles(executionSurface),
         summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
         summarizeJudgmentSurface("done judge", completionJudgmentSurface)
     ].filter(Boolean);
@@ -2575,6 +2775,25 @@ function summarizeExecutionSurface(surface) {
     return { label: "execution", value: parts.join(" · ") };
 }
 
+function summarizeProviderRunFiles(surface) {
+    if (!surface || Object.keys(surface).length === 0) {
+        return null;
+    }
+    const paths = [
+        ["run", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
+        ["last", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
+        ["events", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
+        ["stdout", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
+        ["meta", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
+    ]
+        .filter(([, value]) => value)
+        .map(([label, value]) => `${label}: ${preview(value, 140)}`);
+    if (paths.length === 0) {
+        return null;
+    }
+    return { label: "run files", value: paths.join(" · ") };
+}
+
 function summarizeJudgmentSurface(label, surface) {
     if (!surface || Object.keys(surface).length === 0) {
         return null;
@@ -2861,6 +3080,56 @@ function renderExecutionSummaryCard(facts) {
     `;
 }
 
+function renderAgentActions(actions) {
+    const plan = buildAgentActionPlan(actions);
+    if (!plan.hasActions) {
+        return emptyState("暂无 reconciled action");
+    }
+    return `
+        <div class="action-summary-card">
+            <strong>${escapeHtml(plan.summary)}</strong>
+            <span>${escapeHtml(String(plan.counts.total))} total</span>
+        </div>
+        ${plan.visible.map(renderAgentActionCard).join("")}
+    `;
+}
+
+function renderAgentActionCard(action) {
+    const tone = action.status === "accepted"
+        ? "active"
+        : action.status === "rejected"
+            ? "failed"
+            : "paused";
+    const meta = [
+        action.actionType,
+        `risk=${action.riskLevel}`,
+        action.requiresApproval ? "requires approval" : null,
+        formatTime(action.createdAt)
+    ].filter(Boolean).join(" · ");
+    const payload = Object.keys(action.payload || {}).length > 0
+        ? `<pre>${escapeHtml(JSON.stringify(action.payload, null, 2))}</pre>`
+        : "";
+    return `
+        <div class="artifact-item action-item">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${tone}">${escapeHtml(action.status)}</span>
+                <span>${escapeHtml(meta)}</span>
+            </div>
+            <strong>${escapeHtml(action.summary || action.actionType)}</strong>
+            ${action.rejectionReason ? `<p>${escapeHtml(action.rejectionReason)}</p>` : ""}
+            ${payload}
+        </div>
+    `;
+}
+
+function toolTraceStatusLabel(tool) {
+    return buildToolTraceStatusLabel(tool);
+}
+
+function toolTraceSummary(tool) {
+    return buildToolTraceSummary(tool, { preview });
+}
+
 function numericValue(...values) {
     for (const value of values) {
         const number = Number(value);
@@ -3068,6 +3337,17 @@ function providerIdOf(value) {
         value?.selected_provider,
         value?.selectedProvider
     );
+}
+
+function workerIdForProvider(providerId) {
+    const normalized = firstNonBlank(providerId);
+    if (!normalized) {
+        return null;
+    }
+    if (normalized === "openclaw") {
+        return "openclaw-native";
+    }
+    return normalized;
 }
 
 function runIdOf(value) {
@@ -3355,8 +3635,7 @@ function mapById(items) {
 }
 
 function createdAtMillis(task) {
-    const date = new Date(task?.created_at || task?.createdAt || 0);
-    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+    return timestampMs(task?.created_at || task?.createdAt || 0);
 }
 
 function toChipLines(prefix, lines) {
@@ -3417,7 +3696,8 @@ function formatTime(value) {
     if (!value) {
         return "unknown";
     }
-    const date = new Date(value);
+    const normalized = normalizeTimestampValue(value);
+    const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) {
         return String(value);
     }
@@ -3427,6 +3707,36 @@ function formatTime(value) {
         hour: "2-digit",
         minute: "2-digit"
     });
+}
+
+function normalizeTimestampValue(value) {
+    if (value == null || value === "") {
+        return value;
+    }
+    if (typeof value === "number") {
+        return normalizeEpochNumber(value);
+    }
+    if (value instanceof Date) {
+        return value;
+    }
+    const text = String(value).trim();
+    if (/^-?\d+(\.\d+)?$/.test(text)) {
+        return normalizeEpochNumber(Number(text));
+    }
+    return text;
+}
+
+function normalizeEpochNumber(value) {
+    if (!Number.isFinite(value)) {
+        return value;
+    }
+    return Math.abs(value) < 1e12 ? value * 1000 : value;
+}
+
+function timestampMs(value) {
+    const normalized = normalizeTimestampValue(value);
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
 }
 
 function formatDurationMs(value) {

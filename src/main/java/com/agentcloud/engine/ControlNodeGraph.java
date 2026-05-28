@@ -2,6 +2,7 @@ package com.agentcloud.engine;
 
 import com.agentcloud.engine.memory.PacketBuilder;
 import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.judgment.JudgmentContext;
 import com.agentcloud.judgment.JudgmentService;
 import com.agentcloud.model.*;
@@ -70,6 +71,7 @@ public class ControlNodeGraph {
     private final DecisionDao decisionDao;
     private final LearningMemoryService learningMemoryService;
     private final AgentRunService agentRunService;
+    private final AgentActionReconciler agentActionReconciler;
 
     public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
                             ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
@@ -80,7 +82,7 @@ public class ControlNodeGraph {
                             LearningMemoryService learningMemoryService) {
         this(taskDao, eventDao, sessionDao, packetDao, router, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
-            learningMemoryService, null);
+            learningMemoryService, null, null);
     }
 
     public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
@@ -91,6 +93,20 @@ public class ControlNodeGraph {
                             ArtifactDao artifactDao, DecisionDao decisionDao,
                             LearningMemoryService learningMemoryService,
                             AgentRunService agentRunService) {
+        this(taskDao, eventDao, sessionDao, packetDao, router, packetBuilder, consolidation,
+            workerExecutor, runtimeContextBuilder, judgmentService, artifactDao, decisionDao,
+            learningMemoryService, agentRunService, null);
+    }
+
+    public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
+                            ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
+                            ConsolidationService consolidation,
+                            WorkerExecutor workerExecutor, TaskRuntimeContextBuilder runtimeContextBuilder,
+                            JudgmentService judgmentService,
+                            ArtifactDao artifactDao, DecisionDao decisionDao,
+                            LearningMemoryService learningMemoryService,
+                            AgentRunService agentRunService,
+                            AgentActionReconciler agentActionReconciler) {
         this.taskDao = taskDao;
         this.eventDao = eventDao;
         this.sessionDao = sessionDao;
@@ -105,6 +121,7 @@ public class ControlNodeGraph {
         this.decisionDao = decisionDao;
         this.learningMemoryService = learningMemoryService;
         this.agentRunService = agentRunService;
+        this.agentActionReconciler = agentActionReconciler;
     }
 
     public Task enter(Task task) {
@@ -152,13 +169,26 @@ public class ControlNodeGraph {
         WorkerExecutionResult executionResult = null;
         WorkerRouter.RouteResult route = null;
 
-        // 自动路由 worker（如果还没分配）
-        if (task.assignedWorker() == null || task.assignedWorker().isBlank()) {
-            route = router.selectWorker(task);
-            if (route.selectedWorker() != null) {
-                task = syncAssignedWorkerMetadata(task.withAssignedWorker(route.selectedWorker()));
-                log.info("[Scheduler] task={} routed to worker={}", task.id(), route.selectedWorker());
+        // 分发前做主动验活，失败后临时摘除该 worker 并重新路由。
+        for (int dispatchAttempt = 0; dispatchAttempt < 3; dispatchAttempt++) {
+            if (task.assignedWorker() == null || task.assignedWorker().isBlank()) {
+                route = router.selectWorker(task);
+                if (route.selectedWorker() != null) {
+                    task = syncAssignedWorkerMetadata(task.withAssignedWorker(route.selectedWorker()));
+                    log.info("[Scheduler] task={} routed to worker={}", task.id(), route.selectedWorker());
+                }
             }
+            Task checkedTask = ensureDispatchReadyBeforeExecution(task);
+            if (checkedTask.assignedWorker() != null && !checkedTask.assignedWorker().isBlank()) {
+                task = checkedTask;
+                break;
+            }
+            boolean changedByPreflight = !sameState(task, checkedTask);
+            task = checkedTask;
+            if (!changedByPreflight) {
+                break;
+            }
+            route = null;
         }
 
         // 执行一轮 worker work
@@ -196,6 +226,7 @@ public class ControlNodeGraph {
                 }
                 agentRun = recordCompletedAgentRun(task, route, selectedWorker, executionResult, runStartedAt, Instant.now());
             } catch (RuntimeException e) {
+                log.warn("Worker round post-processing failed. task={} worker={}", task.id(), task.assignedWorker(), e);
                 AgentRunRecord failedRun = recordFailedAgentRun(task, route, selectedWorker, runStartedAt, Instant.now(), e);
                 emitEvent(task, "worker_round_failed",
                     "Worker round failed. worker=" + task.assignedWorker()
@@ -231,12 +262,17 @@ public class ControlNodeGraph {
                     "selected_worker", task.assignedWorker()
                 ));
 
+            ActionReconciliationOutcome actionOutcome = reconcileAgentActions(task, executionResult);
+            executionResult = actionOutcome.executionResult();
+            task = applyAcceptedAgentActionFlow(task, actionOutcome.reconciliation());
+
             // 将输出写入 artifact
-            if (hasMeaningfulOutput(executionResult)) {
+            if (hasMeaningfulOutput(executionResult) || hasAgentActionSurface(executionResult)) {
                 String summary = firstNonBlank(
                     executionResult.summary(),
                     executionResult.outputText(),
-                    executionResult.artifactContent()
+                    executionResult.artifactContent(),
+                    agentActionSummary(executionResult)
                 );
                 Artifact artifact = new Artifact(
                     IdGenerator.newId("art"), task.sessionId(), task.id(), Instant.now(),
@@ -271,7 +307,15 @@ public class ControlNodeGraph {
                         "execution_status", executionResult.executionStatus(),
                         "evidence_refs", executionResult.evidenceRefs(),
                         "unfinished_items", executionResult.unfinishedItems(),
-                        "output_text", executionResult.outputText(),
+                        "proposed_actions", executionResult.metadata().get("proposed_actions"),
+                        "accepted_actions", executionResult.metadata().get("accepted_actions"),
+                        "rejected_actions", executionResult.metadata().get("rejected_actions"),
+                        "approval_needed_actions", executionResult.metadata().get("approval_needed_actions"),
+                        "context_requests", executionResult.contextRequests(),
+                        "completion_claim", executionResult.completionClaim(),
+                        "handoff_target", executionResult.handoffTarget(),
+                        "risk_flags", executionResult.riskFlags(),
+                        "output_text", artifactOutputText(executionResult),
                         "artifact_content", executionResult.artifactContent(),
                         "parser", executionResult.metadata().getOrDefault("parser", "unknown")
                     )
@@ -759,6 +803,175 @@ public class ControlNodeGraph {
         return new OrchestrationJudgment(task, executionDecision, completionDecision);
     }
 
+    private ActionReconciliationOutcome reconcileAgentActions(Task task, WorkerExecutionResult executionResult) {
+        if (executionResult == null) {
+            return new ActionReconciliationOutcome(null, AgentActionReconciliationResult.empty());
+        }
+        AgentActionReconciliationResult reconciliation = agentActionReconciler != null
+            ? agentActionReconciler.reconcile(task, executionResult)
+            : AgentActionReconciliationResult.empty();
+        if (reconciliation.decisions().isEmpty()
+            && executionResult.proposedActions().isEmpty()
+            && executionResult.contextRequests().isEmpty()
+            && executionResult.completionClaim().isBlank()
+            && executionResult.handoffTarget().isBlank()
+            && executionResult.riskFlags().isEmpty()) {
+            return new ActionReconciliationOutcome(executionResult, reconciliation);
+        }
+
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (executionResult.metadata() != null && !executionResult.metadata().isEmpty()) {
+            metadata.putAll(executionResult.metadata());
+        }
+        metadata.put("proposed_actions", AgentActionReconciler.draftMaps(executionResult.proposedActions()));
+        metadata.put("accepted_actions", AgentActionReconciler.actionMaps(reconciliation.acceptedActions()));
+        metadata.put("rejected_actions", AgentActionReconciler.actionMaps(reconciliation.rejectedActions()));
+        metadata.put("approval_needed_actions", AgentActionReconciler.actionMaps(reconciliation.approvalNeededActions()));
+        metadata.put("agent_action_decision_count", reconciliation.decisions().size());
+        metadata.put("agent_action_accepted_count", reconciliation.acceptedActions().size());
+        metadata.put("agent_action_rejected_count", reconciliation.rejectedActions().size());
+        metadata.put("agent_action_approval_needed_count", reconciliation.approvalNeededActions().size());
+        if (!executionResult.contextRequests().isEmpty()) {
+            metadata.put("context_requests", executionResult.contextRequests());
+        }
+        if (!executionResult.completionClaim().isBlank()) {
+            metadata.put("completion_claim", executionResult.completionClaim());
+        }
+        if (!executionResult.handoffTarget().isBlank()) {
+            metadata.put("handoff_target", executionResult.handoffTarget());
+        }
+        if (!executionResult.riskFlags().isEmpty()) {
+            metadata.put("risk_flags", executionResult.riskFlags());
+        }
+        WorkerExecutionResult enriched = new WorkerExecutionResult(
+            executionResult.summary(),
+            executionResult.outputText(),
+            executionResult.producedArtifact(),
+            executionResult.artifactTitle(),
+            executionResult.artifactContent(),
+            executionResult.suggestedNextStep(),
+            executionResult.confidence(),
+            executionResult.executionStatus(),
+            executionResult.evidenceRefs(),
+            executionResult.unfinishedItems(),
+            executionResult.proposedActions(),
+            executionResult.contextRequests(),
+            executionResult.completionClaim(),
+            executionResult.handoffTarget(),
+            executionResult.riskFlags(),
+            executionResult.tokenUsage(),
+            executionResult.durationMs(),
+            metadata
+        );
+        return new ActionReconciliationOutcome(enriched, reconciliation);
+    }
+
+    private Task applyAcceptedAgentActionFlow(Task task, AgentActionReconciliationResult reconciliation) {
+        if (task == null || reconciliation == null || reconciliation.acceptedActions().isEmpty()) {
+            return task;
+        }
+        Task updated = task;
+        for (AgentAction action : reconciliation.acceptedActions()) {
+            updated = switch (action.actionType()) {
+                case "MARK_COMPLETE" -> applyMarkCompleteAction(updated, action);
+                case "HANDOFF" -> applyHandoffAction(updated, action);
+                case "ASK_HUMAN" -> applyAskHumanAction(updated, action);
+                case "MARK_BLOCKED" -> applyMarkBlockedAction(updated, action);
+                default -> appendAcceptedAgentActionMetadata(updated, action);
+            };
+        }
+        return updated;
+    }
+
+    private Task applyMarkCompleteAction(Task task, AgentAction action) {
+        Task marked = finalizeCompletedTask(task);
+        return appendAcceptedAgentActionMetadata(marked, action);
+    }
+
+    private Task applyHandoffAction(Task task, AgentAction action) {
+        String targetWorker = firstNonBlank(
+            metadataString(action.payload(), "to_worker"),
+            metadataString(action.payload(), "target_worker")
+        );
+        Task handedOff = targetWorker == null ? task : task.withAssignedWorker(targetWorker);
+        persistTransitionPacket(handedOff, "handoff_before");
+        return appendAcceptedAgentActionMetadata(
+            handedOff.withControlNode("handoff"),
+            action,
+            "target_worker", targetWorker,
+            "auto_continue_handoff", true
+        );
+    }
+
+    private Task applyAskHumanAction(Task task, AgentAction action) {
+        return appendAcceptedAgentActionMetadata(
+            task.withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withWaitingReason(firstNonBlank(metadataString(action.payload(), "reason"), action.summary(), "agent action requested human input")),
+            action
+        );
+    }
+
+    private Task applyMarkBlockedAction(Task task, AgentAction action) {
+        return appendAcceptedAgentActionMetadata(
+            task.withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withWaitingReason(firstNonBlank(metadataString(action.payload(), "reason"), action.summary(), "agent action marked task blocked")),
+            action,
+            "blocked_by_agent_action", true
+        );
+    }
+
+    private Task appendAcceptedAgentActionMetadata(Task task, AgentAction action, Object... extraEntries) {
+        List<Map<String, Object>> accepted = new ArrayList<>();
+        Object existing = task.metadata() != null ? task.metadata().get("accepted_agent_actions") : null;
+        if (existing instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    LinkedHashMap<String, Object> copied = new LinkedHashMap<>();
+                    for (Map.Entry<?, ?> entry : map.entrySet()) {
+                        if (entry.getKey() != null) {
+                            copied.put(entry.getKey().toString(), entry.getValue());
+                        }
+                    }
+                    accepted.add(copied);
+                }
+            }
+        }
+        accepted.add(actionMapForTaskMetadata(action));
+        ArrayList<Object> entries = new ArrayList<>();
+        entries.add("last_agent_action_id");
+        entries.add(action.id());
+        entries.add("last_agent_action_type");
+        entries.add(action.actionType());
+        entries.add("last_agent_action_status");
+        entries.add(action.status());
+        entries.add("accepted_agent_actions");
+        entries.add(accepted);
+        if (extraEntries != null) {
+            for (Object entry : extraEntries) {
+                entries.add(entry);
+            }
+        }
+        return withMetadataEntries(task, entries.toArray());
+    }
+
+    private Map<String, Object> actionMapForTaskMetadata(AgentAction action) {
+        LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+        putIfNonBlank(map, "id", action.id());
+        putIfNonBlank(map, "action_type", action.actionType());
+        putIfNonBlank(map, "status", action.status());
+        putIfNonBlank(map, "summary", action.summary());
+        if (action.payload() != null && !action.payload().isEmpty()) {
+            map.put("payload", action.payload());
+        }
+        putIfNonBlank(map, "risk_level", action.riskLevel());
+        if (action.requiresApproval() != null) {
+            map.put("requires_approval", action.requiresApproval());
+        }
+        return map;
+    }
+
     private boolean plannerOutputValidForDelegation(Task task,
                                                     Map<String, Object> latestWorkerMetadata,
                                                     WorkerExecutionResult executionResult,
@@ -772,12 +985,18 @@ public class ControlNodeGraph {
         if (task == null || !isOrchestrated(task) || !isPlannerStage(orchestrationStage(task))) {
             return null;
         }
+        if (successfulCurrentRound(task, latestWorkerMetadata, latestOutput)) {
+            return null;
+        }
         String failureSummary = firstNonBlank(
             metadataString(latestWorkerMetadata, "failure_summary_readable"),
             metadataString(latestWorkerMetadata, "output_text"),
             metadataString(latestWorkerMetadata, "artifact_content"),
             latestOutput
         );
+        if (looksLikeLocalWorkspaceAccessRefusal(task, latestWorkerMetadata, failureSummary)) {
+            return "local_workspace_access_refusal";
+        }
         if (!looksLikeTransientWorkerRuntimeFailure(failureSummary)) {
             return null;
         }
@@ -931,6 +1150,11 @@ public class ControlNodeGraph {
         copyMetadataKey(executionResult.metadata(), enriched, "auto_handoff_count");
         copyMetadataKey(executionResult.metadata(), enriched, "auto_handoff_target");
         copyMetadataKey(executionResult.metadata(), enriched, "previous_worker");
+        copyMetadataKey(executionResult.metadata(), enriched, "provider_error");
+        copyMetadataKey(executionResult.metadata(), enriched, "provider_turn_status");
+        copyMetadataKey(executionResult.metadata(), enriched, "provider_failure_class");
+        copyMetadataKey(executionResult.metadata(), enriched, "provider_failure_reason");
+        copyMetadataKey(executionResult.metadata(), enriched, "provider_retryable");
         return enriched.isEmpty() ? Map.of() : enriched;
     }
 
@@ -1052,6 +1276,16 @@ public class ControlNodeGraph {
         copyMetadataKey(latestWorkerMetadata, metadata, "mounted_index_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "mounted_archive_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "selected_worker");
+        copyMetadataKey(latestWorkerMetadata, metadata, "execution_backend");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_session_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_thread_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "resume_provider_session_id");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_error");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_status");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_class");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_reason");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_retryable");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_execution_mode");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_step_count");
         copyMetadataKey(latestWorkerMetadata, metadata, "tool_chain_termination_reason");
@@ -1121,8 +1355,10 @@ public class ControlNodeGraph {
             null,
             null,
             null,
+            metadataString(latestWorkerMetadata, "recovery_execution_mode"),
             null,
-            null
+            null,
+            routeSkippedWorkers(latestWorkerMetadata.get("dispatch_skipped_workers"))
         );
     }
 
@@ -1219,6 +1455,54 @@ public class ControlNodeGraph {
         return firstNonBlank(result.summary(), result.outputText(), result.artifactContent()) != null;
     }
 
+    private boolean hasAgentActionSurface(WorkerExecutionResult result) {
+        if (result == null) {
+            return false;
+        }
+        Map<String, Object> metadata = result.metadata();
+        return !result.proposedActions().isEmpty()
+            || !result.contextRequests().isEmpty()
+            || !result.completionClaim().isBlank()
+            || !result.handoffTarget().isBlank()
+            || !result.riskFlags().isEmpty()
+            || metadataInt(metadata, "agent_action_decision_count") != null;
+    }
+
+    private String agentActionSummary(WorkerExecutionResult result) {
+        if (result == null) {
+            return null;
+        }
+        Map<String, Object> metadata = result.metadata();
+        Integer accepted = metadataInt(metadata, "agent_action_accepted_count");
+        Integer rejected = metadataInt(metadata, "agent_action_rejected_count");
+        Integer approval = metadataInt(metadata, "agent_action_approval_needed_count");
+        Integer total = metadataInt(metadata, "agent_action_decision_count");
+        if (total == null) {
+            total = result.proposedActions().size()
+                + result.contextRequests().size()
+                + (!result.completionClaim().isBlank() ? 1 : 0)
+                + (!result.handoffTarget().isBlank() ? 1 : 0);
+        }
+        if (total <= 0 && result.riskFlags().isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        parts.add("Agent actions proposed=" + total);
+        if (accepted != null) {
+            parts.add("accepted=" + accepted);
+        }
+        if (rejected != null) {
+            parts.add("rejected=" + rejected);
+        }
+        if (approval != null) {
+            parts.add("needs_approval=" + approval);
+        }
+        if (!result.riskFlags().isEmpty()) {
+            parts.add("risk_flags=" + String.join(",", result.riskFlags()));
+        }
+        return String.join("; ", parts);
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -1242,6 +1526,48 @@ public class ControlNodeGraph {
             && java.util.Objects.equals(left.assignedWorker(), right.assignedWorker())
             && java.util.Objects.equals(left.waitingReason(), right.waitingReason())
             && java.util.Objects.equals(left.metadata(), right.metadata());
+    }
+
+    private Task ensureDispatchReadyBeforeExecution(Task task) {
+        if (task == null || router == null || task.assignedWorker() == null || task.assignedWorker().isBlank()) {
+            return task;
+        }
+        WorkerRegistry.ReadinessCheck readiness = router.checkDispatchReadiness(task.assignedWorker());
+        if (readiness == null || readiness.ready()) {
+            return task;
+        }
+        String previousWorker = task.assignedWorker();
+        String reason = firstNonBlank(readiness.reason(), "dispatch preflight failed");
+        log.warn(
+            "[Scheduler] task={} worker={} dispatch preflight failed reason={}",
+            task.id(),
+            previousWorker,
+            reason
+        );
+        emitEvent(task, "worker_dispatch_preflight_failed",
+            "Worker dispatch preflight failed. worker=" + previousWorker,
+            metadataOf(
+                "control_node", "worker_dispatch_preflight_failed",
+                "worker_id", previousWorker,
+                "readiness_mode", readiness.mode(),
+                "dispatch_preflight_ready", readiness.dispatchPreflightReady(),
+                "dispatch_preflight_reason", readiness.dispatchPreflightReason(),
+                "dispatch_preflight_cached", readiness.dispatchPreflightCached(),
+                "dispatch_preflight_mode", readiness.dispatchPreflightMode(),
+                "dispatch_preflight_active_probe", readiness.dispatchPreflightActiveProbe(),
+                "dispatch_preflight_metadata", readiness.dispatchPreflightMetadata(),
+                "reason", reason
+            ));
+        Task unassigned = withMetadataEntries(
+            task.withAssignedWorker(null),
+            "assigned_worker", null,
+            "target_worker", null,
+            "previous_worker", previousWorker,
+            "dispatch_preflight_failed_worker", previousWorker,
+            "dispatch_preflight_reason", reason
+        );
+        taskDao.updateState(unassigned);
+        return unassigned;
     }
 
     // === Packet Node ===
@@ -1453,10 +1779,7 @@ public class ControlNodeGraph {
         if (!"continue".equalsIgnoreCase(firstNonBlank(resolvedAction, ""))) {
             return false;
         }
-        if (!Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("tool_aware_executor")))) {
-            return false;
-        }
-        if (!"multi_tool_round".equalsIgnoreCase(stringValue(latestWorkerMetadata.get("tool_execution_mode")))) {
+        if (!isAutoContinuableExecutionRound(latestWorkerMetadata)) {
             return false;
         }
         String terminationReason = stringValue(latestWorkerMetadata.get("tool_chain_termination_reason"));
@@ -1523,6 +1846,27 @@ public class ControlNodeGraph {
         log.info("[AutoContinue] task={} can_continue={} burst_count={} burst_limit={}",
             task.id(), canContinue, autoContinueBurstCount(task), autoContinueBurstLimit(task, executionResult, latestWorkerMetadata));
         return canContinue;
+    }
+
+    private boolean isAutoContinuableExecutionRound(Map<String, Object> latestWorkerMetadata) {
+        if (latestWorkerMetadata == null || latestWorkerMetadata.isEmpty()) {
+            return false;
+        }
+        boolean toolAwareRound = Boolean.parseBoolean(stringValue(latestWorkerMetadata.get("tool_aware_executor")))
+            && "multi_tool_round".equalsIgnoreCase(stringValue(latestWorkerMetadata.get("tool_execution_mode")));
+        if (toolAwareRound) {
+            return true;
+        }
+        String executionBackend = stringValue(latestWorkerMetadata.get("execution_backend"));
+        if ("provider_app_server".equalsIgnoreCase(executionBackend)
+            || "provider_native_cli".equalsIgnoreCase(executionBackend)) {
+            return true;
+        }
+        return firstNonBlank(
+            stringValue(latestWorkerMetadata.get("provider_id")),
+            stringValue(latestWorkerMetadata.get("provider_session_id")),
+            stringValue(latestWorkerMetadata.get("provider_thread_id"))
+        ) != null;
     }
 
     private boolean isOrchestrated(Task task) {
@@ -1993,9 +2337,52 @@ public class ControlNodeGraph {
             executionResult != null ? executionResult.metadata() : null
         );
         if (!latestWorkerMetadata.isEmpty()) {
+            copyProviderDiagnosticMetadata(latestWorkerMetadata, metadata);
             metadata.put("latest_worker_metadata", latestWorkerMetadata);
         }
         return metadata;
+    }
+
+    private String artifactOutputText(WorkerExecutionResult executionResult) {
+        if (executionResult == null) {
+            return "";
+        }
+        Map<String, Object> metadata = executionResult.metadata();
+        boolean providerOutputTruncated = Boolean.parseBoolean(String.valueOf(
+            metadata != null ? metadata.get("provider_output_truncated") : null
+        ));
+        String outputText = executionResult.outputText() == null ? "" : executionResult.outputText();
+        if (!providerOutputTruncated) {
+            return outputText;
+        }
+        Object limit = metadata != null ? metadata.get("provider_output_sqlite_limit_chars") : null;
+        String suffix = "\n\n[provider output truncated; full output is available via provider_stdout_path]";
+        if (limit != null) {
+            suffix = "\n\n[provider output truncated at " + limit + " chars; full output is available via provider_stdout_path]";
+        }
+        return outputText + suffix;
+    }
+
+    private void copyProviderDiagnosticMetadata(Map<String, Object> source, Map<String, Object> target) {
+        copyMetadataKey(source, target, "provider_session_id");
+        copyMetadataKey(source, target, "provider_thread_id");
+        copyMetadataKey(source, target, "resume_provider_session_id");
+        copyMetadataKey(source, target, "provider_error");
+        copyMetadataKey(source, target, "provider_turn_status");
+        copyMetadataKey(source, target, "provider_failure_class");
+        copyMetadataKey(source, target, "provider_failure_reason");
+        copyMetadataKey(source, target, "provider_retryable");
+        copyMetadataKey(source, target, "provider_protocol_trace");
+        copyMetadataKey(source, target, "provider_output_truncated");
+        copyMetadataKey(source, target, "provider_output_total_bytes");
+        copyMetadataKey(source, target, "provider_output_capture_limit_bytes");
+        copyMetadataKey(source, target, "provider_output_sqlite_limit_chars");
+        copyMetadataKey(source, target, "provider_run_dir");
+        copyMetadataKey(source, target, "provider_prompt_path");
+        copyMetadataKey(source, target, "provider_stdout_path");
+        copyMetadataKey(source, target, "provider_event_log_path");
+        copyMetadataKey(source, target, "provider_last_message_path");
+        copyMetadataKey(source, target, "provider_run_metadata_path");
     }
 
     private WorkerExecutionResult enrichCurrentRoundWorkerMetadata(Task task,
@@ -2028,18 +2415,24 @@ public class ControlNodeGraph {
         putIfNonBlank(metadata, "model_mode", metadataString(task != null ? task.metadata() : null, "model_mode"));
         putIfNonBlank(metadata, "orchestration_stage", metadataString(task != null ? task.metadata() : null, "orchestration_stage"));
         putIfNonBlank(metadata, "planner_worker", metadataString(task != null ? task.metadata() : null, "planner_worker"));
+        putIfNonBlank(metadata, "planner_model_tier", metadataString(task != null ? task.metadata() : null, "planner_model_tier"));
         putIfNonBlank(metadata, "executor_worker", metadataString(task != null ? task.metadata() : null, "executor_worker"));
+        putIfNonBlank(metadata, "executor_model_tier", metadataString(task != null ? task.metadata() : null, "executor_model_tier"));
         putIfNonBlank(metadata, "target_worker", metadataString(task != null ? task.metadata() : null, "target_worker"));
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_class");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_summary_readable");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_policy");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_execution_mode");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_same_worker_retry_count");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_count");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_target");
-        copyMetadataKey(task != null ? task.metadata() : null, metadata, "previous_worker");
         String taskRecoveryStage = metadataString(task != null ? task.metadata() : null, "recovery_stage");
-        if (!isFailedExecutionStatus(executionResult.executionStatus()) && taskRecoveryStage != null) {
+        boolean currentRoundFailed = isFailedExecutionStatus(executionResult.executionStatus());
+        putIfNonBlank(metadata, "execution_status", executionResult.executionStatus());
+        if (currentRoundFailed) {
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_class");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "failure_summary_readable");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_policy");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "recovery_execution_mode");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_same_worker_retry_count");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_count");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "auto_handoff_target");
+            copyMetadataKey(task != null ? task.metadata() : null, metadata, "previous_worker");
+        }
+        if (!currentRoundFailed && taskRecoveryStage != null) {
             metadata.put("recovery_stage", taskRecoveryStage + "_succeeded");
             metadata.remove("recovery_execution_mode");
         } else {
@@ -2050,6 +2443,9 @@ public class ControlNodeGraph {
         }
         if (route != null && route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
             metadata.putIfAbsent("fallback_workers", route.fallbackWorkers());
+        }
+        if (route != null && route.dispatchSkippedWorkers() != null && !route.dispatchSkippedWorkers().isEmpty()) {
+            metadata.putIfAbsent("dispatch_skipped_workers", routeSkippedWorkerMetadata(route.dispatchSkippedWorkers()));
         }
         return new WorkerExecutionResult(
             executionResult.summary(),
@@ -2068,6 +2464,51 @@ public class ControlNodeGraph {
         );
     }
 
+    private List<Map<String, Object>> routeSkippedWorkerMetadata(List<WorkerRouter.RouteSkippedWorker> skippedWorkers) {
+        if (skippedWorkers == null || skippedWorkers.isEmpty()) {
+            return List.of();
+        }
+        return skippedWorkers.stream()
+            .map(skipped -> {
+                LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+                putIfNonBlank(metadata, "worker_id", skipped.workerId());
+                putIfNonBlank(metadata, "reason", skipped.reason());
+                putIfNonBlank(metadata, "provider_failure_class", skipped.providerFailureClass());
+                putIfNonBlank(metadata, "provider_failure_reason", skipped.providerFailureReason());
+                if (skipped.providerRetryable() != null) {
+                    metadata.put("provider_retryable", skipped.providerRetryable());
+                }
+                return (Map<String, Object>) metadata;
+            })
+            .filter(metadata -> !metadata.isEmpty())
+            .toList();
+    }
+
+    private List<WorkerRouter.RouteSkippedWorker> routeSkippedWorkers(Object value) {
+        if (!(value instanceof Iterable<?> iterable)) {
+            return List.of();
+        }
+        List<WorkerRouter.RouteSkippedWorker> skippedWorkers = new ArrayList<>();
+        for (Object item : iterable) {
+            if (!(item instanceof Map<?, ?> map)) {
+                continue;
+            }
+            String workerId = stringValue(map.get("worker_id"));
+            String reason = stringValue(map.get("reason"));
+            if (workerId == null || workerId.isBlank()) {
+                continue;
+            }
+            skippedWorkers.add(new WorkerRouter.RouteSkippedWorker(
+                workerId,
+                reason,
+                stringValue(map.get("provider_failure_class")),
+                stringValue(map.get("provider_failure_reason")),
+                booleanValue(map.get("provider_retryable"))
+            ));
+        }
+        return skippedWorkers.isEmpty() ? List.of() : List.copyOf(skippedWorkers);
+    }
+
     private Map<String, Object> mergeLatestWorkerMetadata(Map<String, Object> primarySource,
                                                           Map<String, Object> secondarySource) {
         Map<String, Object> merged = new LinkedHashMap<>();
@@ -2078,8 +2519,32 @@ public class ControlNodeGraph {
         Map<String, Object> secondary = selectLatestWorkerMetadata(secondarySource);
         if (!secondary.isEmpty()) {
             merged.putAll(secondary);
+            if (!isFailedExecutionStatus(metadataString(secondary, "execution_status"))
+                && !hasProviderFailureSignal(secondary)) {
+                merged.remove("failure_class");
+                merged.remove("failure_summary_readable");
+                merged.remove("provider_failure_class");
+                merged.remove("provider_failure_reason");
+                merged.remove("provider_retryable");
+            }
         }
         return merged.isEmpty() ? Map.of() : merged;
+    }
+
+    private boolean hasProviderFailureSignal(Map<String, Object> metadata) {
+        if (metadata == null || metadata.isEmpty()) {
+            return false;
+        }
+        String providerError = metadataString(metadata, "provider_error");
+        if (providerError != null && !providerError.isBlank()) {
+            return true;
+        }
+        String turnStatus = metadataString(metadata, "provider_turn_status");
+        return turnStatus != null
+            && ("failed".equalsIgnoreCase(turnStatus)
+            || "error".equalsIgnoreCase(turnStatus)
+            || "timeout".equalsIgnoreCase(turnStatus)
+            || "timed_out".equalsIgnoreCase(turnStatus));
     }
 
     private Map<String, Object> selectLatestWorkerMetadata(Map<String, Object> source) {
@@ -2140,10 +2605,28 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "provider_session_id");
         copyMetadataKey(source, selected, "provider_thread_id");
         copyMetadataKey(source, selected, "resume_provider_session_id");
+        copyMetadataKey(source, selected, "provider_error");
+        copyMetadataKey(source, selected, "provider_turn_status");
+        copyMetadataKey(source, selected, "provider_failure_class");
+        copyMetadataKey(source, selected, "provider_failure_reason");
+        copyMetadataKey(source, selected, "provider_retryable");
+        copyMetadataKey(source, selected, "provider_protocol_trace");
+        copyMetadataKey(source, selected, "provider_output_truncated");
+        copyMetadataKey(source, selected, "provider_output_total_bytes");
+        copyMetadataKey(source, selected, "provider_output_capture_limit_bytes");
+        copyMetadataKey(source, selected, "provider_output_sqlite_limit_chars");
+        copyMetadataKey(source, selected, "provider_run_dir");
+        copyMetadataKey(source, selected, "provider_prompt_path");
+        copyMetadataKey(source, selected, "provider_stdout_path");
+        copyMetadataKey(source, selected, "provider_event_log_path");
+        copyMetadataKey(source, selected, "provider_last_message_path");
+        copyMetadataKey(source, selected, "provider_run_metadata_path");
         copyMetadataKey(source, selected, "model_mode");
         copyMetadataKey(source, selected, "orchestration_stage");
         copyMetadataKey(source, selected, "planner_worker");
+        copyMetadataKey(source, selected, "planner_model_tier");
         copyMetadataKey(source, selected, "executor_worker");
+        copyMetadataKey(source, selected, "executor_model_tier");
         copyMetadataKey(source, selected, "target_worker");
         copyMetadataKey(source, selected, "tool_name");
         copyMetadataKey(source, selected, "tool_success");
@@ -2265,12 +2748,16 @@ public class ControlNodeGraph {
     private RecoveryDirective maybePlanFailureRecovery(Task task,
                                                        Map<String, Object> latestWorkerMetadata,
                                                        String latestOutput) {
-        if (!isFailedExecutionStatus(metadataString(latestWorkerMetadata, "execution_status"))
-            && plannerOutputRecoveryReason(task, latestWorkerMetadata, latestOutput) == null) {
+        if (successfulCurrentRound(task, latestWorkerMetadata, latestOutput)) {
             return null;
         }
         String failureSummary = resolveRecoveryFailureText(latestWorkerMetadata, latestOutput);
-        String failureClass = classifyFailureClass(latestWorkerMetadata, failureSummary);
+        if (!isFailedExecutionStatus(metadataString(latestWorkerMetadata, "execution_status"))
+            && plannerOutputRecoveryReason(task, latestWorkerMetadata, latestOutput) == null
+            && !looksLikeLocalWorkspaceAccessRefusal(task, latestWorkerMetadata, failureSummary)) {
+            return null;
+        }
+        String failureClass = classifyFailureClass(task, latestWorkerMetadata, failureSummary);
         String recoveryPolicy = "same_worker_retry_then_auto_handoff";
         String previousWorker = firstNonBlank(
             task != null ? task.assignedWorker() : null,
@@ -2430,6 +2917,20 @@ public class ControlNodeGraph {
     }
 
     private String resolveRecoveryFailureText(Map<String, Object> latestWorkerMetadata, String latestOutput) {
+        String worker = firstNonBlank(
+            metadataString(latestWorkerMetadata, "selected_worker"),
+            metadataString(latestWorkerMetadata, "assigned_worker"),
+            metadataString(latestWorkerMetadata, "provider_id"),
+            "worker"
+        );
+        String providerRaw = firstNonBlank(
+            metadataString(latestWorkerMetadata, "provider_error"),
+            metadataString(latestWorkerMetadata, "provider_failure_reason"),
+            metadataString(latestWorkerMetadata, "provider_turn_status")
+        );
+        if (providerRaw != null) {
+            return sanitizeStructuredProviderFailureSummary(worker, providerRaw);
+        }
         String raw = firstNonBlank(
             metadataString(latestWorkerMetadata, "failure_summary_readable"),
             metadataString(latestWorkerMetadata, "output_text"),
@@ -2439,16 +2940,22 @@ public class ControlNodeGraph {
             metadataString(latestWorkerMetadata, "tool_plan_reason"),
             "worker execution failed"
         );
-        String worker = firstNonBlank(
-            metadataString(latestWorkerMetadata, "selected_worker"),
-            metadataString(latestWorkerMetadata, "assigned_worker"),
-            metadataString(latestWorkerMetadata, "provider_id"),
-            "worker"
-        );
         return sanitizeReadableFailureSummary(worker, raw);
     }
 
-    private String classifyFailureClass(Map<String, Object> latestWorkerMetadata, String failureSummary) {
+    private String classifyFailureClass(Task task, Map<String, Object> latestWorkerMetadata, String failureSummary) {
+        String providerFailureClass = metadataString(latestWorkerMetadata, "provider_failure_class");
+        if (looksLikeLocalWorkspaceAccessRefusal(task, latestWorkerMetadata, failureSummary)) {
+            return "worker_backend_deterministic";
+        }
+        if ("provider_runtime_transient".equals(providerFailureClass)
+            || "provider_protocol_error".equals(providerFailureClass)) {
+            return "worker_runtime_transient";
+        }
+        if ("provider_auth_required".equals(providerFailureClass)
+            || "provider_not_installed".equals(providerFailureClass)) {
+            return "task_environment_blocked";
+        }
         if (looksLikeEmptyOutputFailure(latestWorkerMetadata)) {
             return "worker_runtime_transient";
         }
@@ -2575,12 +3082,72 @@ public class ControlNodeGraph {
         return !metadataStringList(latestWorkerMetadata, "tool_invocation_ids").isEmpty();
     }
 
+    private boolean looksLikeLocalWorkspaceAccessRefusal(Task task,
+                                                         Map<String, Object> latestWorkerMetadata,
+                                                         String text) {
+        if (!prefersCodingRecovery(task, latestWorkerMetadata)) {
+            return false;
+        }
+        String normalized = blankToNull(text);
+        if (normalized == null) {
+            normalized = firstNonBlank(
+                metadataString(latestWorkerMetadata, "output_text"),
+                metadataString(latestWorkerMetadata, "artifact_content"),
+                metadataString(latestWorkerMetadata, "summary")
+            );
+        }
+        if (normalized == null) {
+            return false;
+        }
+        String lower = normalized.toLowerCase();
+        return lower.contains("cannot access local file")
+            || lower.contains("cannot access local path")
+            || lower.contains("cannot access your local")
+            || lower.contains("cannot access the local")
+            || lower.contains("cannot directly access")
+            || lower.contains("unable to access local")
+            || lower.contains("unable to access your local")
+            || lower.contains("no access to your local")
+            || lower.contains("paste the document")
+            || lower.contains("paste the content")
+            || lower.contains("provide the document")
+            || lower.contains("provide the file contents")
+            || normalized.contains("无法直接访问")
+            || normalized.contains("无法访问本地")
+            || normalized.contains("无法访问您本地")
+            || normalized.contains("无法访问你的本地")
+            || normalized.contains("请补充以下信息")
+            || normalized.contains("请粘贴")
+            || normalized.contains("粘贴在这里");
+    }
+
     private boolean isFailedExecutionStatus(String status) {
         String normalized = blankToNull(status);
         if (normalized == null) {
             return false;
         }
         return List.of("failed", "error", "timeout", "cancelled", "blocked", "empty").contains(normalized.toLowerCase());
+    }
+
+    private boolean successfulCurrentRound(Task task, Map<String, Object> latestWorkerMetadata, String latestOutput) {
+        String executionStatus = metadataString(latestWorkerMetadata, "execution_status");
+        if (isFailedExecutionStatus(executionStatus)) {
+            return false;
+        }
+        boolean hasSuccessSignal = metadataBoolean(latestWorkerMetadata, "grounded_output_present")
+            || List.of("completed", "complete", "succeeded", "success", "done")
+                .contains(java.util.Optional.ofNullable(executionStatus).orElse("").toLowerCase());
+        if (!hasSuccessSignal) {
+            return false;
+        }
+        String currentOutput = firstNonBlank(
+            latestOutput,
+            metadataString(latestWorkerMetadata, "output_text"),
+            metadataString(latestWorkerMetadata, "artifact_content"),
+            metadataString(latestWorkerMetadata, "summary")
+        );
+        return !looksLikeTransientWorkerRuntimeFailure(currentOutput)
+            && !looksLikeLocalWorkspaceAccessRefusal(task, latestWorkerMetadata, currentOutput);
     }
 
     private String sanitizeReadableFailureSummary(String worker, String raw) {
@@ -2600,6 +3167,27 @@ public class ControlNodeGraph {
             core = core.substring(0, FAILURE_SUMMARY_LIMIT).trim() + "...";
         }
         return core.isBlank() ? "worker " + firstNonBlank(worker, "worker") + " failed" : core;
+    }
+
+    private String sanitizeStructuredProviderFailureSummary(String worker, String raw) {
+        String normalized = blankToNull(raw);
+        String normalizedWorker = firstNonBlank(worker, "worker");
+        if (normalized == null) {
+            return "worker " + normalizedWorker + " failed";
+        }
+        String compact = normalized
+            .replace('\r', '\n')
+            .replace('\u0000', ' ')
+            .trim();
+        String core = firstFailureLine(compact);
+        core = stripNoise(core);
+        core = compressWhitespace(core);
+        if (core.length() > FAILURE_SUMMARY_LIMIT) {
+            core = core.substring(0, FAILURE_SUMMARY_LIMIT).trim() + "...";
+        }
+        return core.isBlank()
+            ? "worker " + normalizedWorker + " failed"
+            : "worker " + normalizedWorker + " failed: " + core;
     }
 
     private String firstFailureLine(String raw) {
@@ -2817,7 +3405,7 @@ public class ControlNodeGraph {
             return false;
         }
         String failureSummary = resolveRecoveryFailureText(latestWorkerMetadata, null);
-        String failureClass = classifyFailureClass(latestWorkerMetadata, failureSummary);
+        String failureClass = classifyFailureClass(task, latestWorkerMetadata, failureSummary);
         if (!"worker_runtime_transient".equals(failureClass)) {
             return false;
         }
@@ -2926,33 +3514,84 @@ public class ControlNodeGraph {
                                                 Task task,
                                                 Map<String, Object> latestWorkerMetadata,
                                                 String currentWorker) {
-        addRecoveryCandidate(ordered, metadataString(task != null ? task.metadata() : null, "preferred_worker"), currentWorker);
-        addRecoveryCandidate(ordered, "codex", currentWorker);
-        addRecoveryCandidate(ordered, "cursor", currentWorker);
-        addRecoveryCandidate(ordered, "copilot", currentWorker);
-        addRecoveryCandidate(ordered, "opencode", currentWorker);
-        addRecoveryCandidate(ordered, "codebuddy", currentWorker);
-        addRecoveryCandidate(ordered, "trae", currentWorker);
-        addRecoveryCandidate(ordered, "deepseek", currentWorker);
-        addRecoveryCandidate(ordered, "claude", currentWorker);
+        addRecoveryCandidate(ordered, task, metadataString(task != null ? task.metadata() : null, "preferred_worker"), currentWorker);
+        addRecoveryCandidate(ordered, task, "codex", currentWorker);
+        addRecoveryCandidate(ordered, task, "cursor", currentWorker);
+        addRecoveryCandidate(ordered, task, "copilot", currentWorker);
+        addRecoveryCandidate(ordered, task, "opencode", currentWorker);
+        addRecoveryCandidate(ordered, task, "codebuddy", currentWorker);
+        addRecoveryCandidate(ordered, task, "trae", currentWorker);
+        addRecoveryCandidate(ordered, task, "deepseek", currentWorker);
+        addRecoveryCandidate(ordered, task, "claude", currentWorker);
         for (String candidate : metadataStringList(latestWorkerMetadata, "candidate_workers")) {
             if (isCodingCapableWorker(candidate) && !"openclaw-native".equals(candidate)) {
-                addRecoveryCandidate(ordered, candidate, currentWorker);
+                addRecoveryCandidate(ordered, task, candidate, currentWorker);
             }
         }
         for (String candidate : metadataStringList(latestWorkerMetadata, "fallback_workers")) {
             if (isCodingCapableWorker(candidate) && !"openclaw-native".equals(candidate)) {
-                addRecoveryCandidate(ordered, candidate, currentWorker);
+                addRecoveryCandidate(ordered, task, candidate, currentWorker);
             }
         }
     }
 
-    private void addRecoveryCandidate(List<String> ordered, String candidate, String currentWorker) {
+    private void addRecoveryCandidate(List<String> ordered, Task task, String candidate, String currentWorker) {
         String normalized = blankToNull(candidate);
         if (normalized == null || normalized.equals(currentWorker) || ordered.contains(normalized)) {
             return;
         }
+        if (requiresLocalWorkspaceAccess(task) && !workerHasLocalWorkspaceAccess(normalized)) {
+            log.info(
+                "[Recovery] skip candidate worker={} because local workspace access is required",
+                normalized
+            );
+            return;
+        }
         ordered.add(normalized);
+    }
+
+    private boolean requiresLocalWorkspaceAccess(Task task) {
+        if (!TaskTypeHeuristics.looksLikeCodingTask(task)) {
+            return false;
+        }
+        String text = firstNonBlank(
+            task != null ? task.goal() : null,
+            task != null ? task.title() : null,
+            metadataString(task != null ? task.metadata() : null, "workspace_root"),
+            metadataString(task != null ? task.metadata() : null, "workspace"),
+            metadataString(task != null ? task.metadata() : null, "working_directory"),
+            metadataString(task != null ? task.metadata() : null, "cwd"),
+            metadataString(task != null ? task.metadata() : null, "repo_path")
+        );
+        if (text == null) {
+            return false;
+        }
+        String lower = text.toLowerCase();
+        return lower.contains("\\gitall\\")
+            || lower.contains("\\src\\main\\")
+            || lower.contains("/src/main/")
+            || lower.contains("pom.xml")
+            || lower.contains("package.json")
+            || metadataString(task != null ? task.metadata() : null, "workspace_root") != null
+            || metadataString(task != null ? task.metadata() : null, "workspace") != null
+            || metadataString(task != null ? task.metadata() : null, "working_directory") != null
+            || metadataString(task != null ? task.metadata() : null, "cwd") != null;
+    }
+
+    private boolean workerHasLocalWorkspaceAccess(String workerId) {
+        if (blankToNull(workerId) == null || router == null) {
+            return false;
+        }
+        Worker worker = router.getWorker(workerId);
+        if (worker == null) {
+            return false;
+        }
+        String explicit = workerMetadata(worker, "local_workspace_access");
+        if (explicit != null) {
+            return Boolean.parseBoolean(explicit);
+        }
+        return worker.toolScope() != null && !worker.toolScope().isEmpty()
+            && worker.toolCapabilities() != null && !worker.toolCapabilities().isEmpty();
     }
 
     private boolean isCodingCapableWorker(String workerId) {
@@ -3008,6 +3647,14 @@ public class ControlNodeGraph {
 
     private String stringValue(Object value) {
         return value == null ? null : value.toString();
+    }
+
+    private Boolean booleanValue(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String text = stringValue(value);
+        return text == null || text.isBlank() ? null : Boolean.parseBoolean(text);
     }
 
     private void emitEvent(Task task, String eventType, String summary) {
@@ -3209,5 +3856,10 @@ public class ControlNodeGraph {
         Task task,
         com.agentcloud.judgment.model.ExecutionDecision executionDecision,
         com.agentcloud.judgment.model.CompletionDecision completionDecision
+    ) {}
+
+    private record ActionReconciliationOutcome(
+        WorkerExecutionResult executionResult,
+        AgentActionReconciliationResult reconciliation
     ) {}
 }

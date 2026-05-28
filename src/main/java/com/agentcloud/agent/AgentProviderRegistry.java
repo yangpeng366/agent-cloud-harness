@@ -15,6 +15,7 @@ public class AgentProviderRegistry {
 
     private final Map<String, AgentProvider> providers = new LinkedHashMap<>();
     private final Map<String, CachedStatus> statusCache = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Object>> cliProfileCache = new ConcurrentHashMap<>();
 
     public AgentProviderRegistry register(AgentProvider provider) {
         if (provider == null) {
@@ -60,8 +61,83 @@ public class AgentProviderRegistry {
             throw new IllegalArgumentException("provider not found");
         }
         AgentProviderStatus status = provider.refreshStatus();
-        statusCache.put(providerId, new CachedStatus(status, Instant.now()));
-        return status;
+        AgentProviderStatus merged = mergeCachedCliProfile(providerId, status);
+        rememberCliProfile(providerId, merged);
+        statusCache.put(providerId, new CachedStatus(merged, Instant.now()));
+        return merged;
+    }
+
+    public AgentProviderStatus dispatchPreflight(String providerId) {
+        AgentProvider provider = providers.get(providerId);
+        if (provider == null) {
+            throw new IllegalArgumentException("provider not found");
+        }
+        AgentProviderStatus status = provider.dispatchPreflight();
+        rememberCliProfile(providerId, status);
+        AgentProviderStatus merged = mergeCachedCliProfile(providerId, status);
+        statusCache.put(providerId, new CachedStatus(merged, Instant.now()));
+        return merged;
+    }
+
+    public Map<String, Object> cliProfileMetadata(String providerId) {
+        Map<String, Object> cached = cliProfileCache.get(providerId);
+        return cached == null ? Map.of() : cached;
+    }
+
+    private void rememberCliProfile(String providerId, AgentProviderStatus status) {
+        if (providerId == null || status == null || status.metadata() == null || status.metadata().isEmpty()) {
+            return;
+        }
+        LinkedHashMap<String, Object> profile = new LinkedHashMap<>();
+        copyProfileKey(status.metadata(), profile, "cli_profile_evidence_available");
+        copyProfileKey(status.metadata(), profile, "supports_yolo");
+        copyProfileKey(status.metadata(), profile, "supports_model");
+        copyProfileKey(status.metadata(), profile, "supports_json_output");
+        copyProfileKey(status.metadata(), profile, "supports_resume");
+        copyProfileKey(status.metadata(), profile, "supports_workspace_arg");
+        copyProfileKey(status.metadata(), profile, "supports_work_dir_arg");
+        copyProfileKey(status.metadata(), profile, "supports_output_file");
+        if (!profile.isEmpty()) {
+            profile.put("cli_profile_cached_at", Instant.now().toString());
+            cliProfileCache.put(providerId, Map.copyOf(profile));
+        }
+    }
+
+    private AgentProviderStatus mergeCachedCliProfile(String providerId, AgentProviderStatus status) {
+        if (status == null) {
+            return null;
+        }
+        Map<String, Object> cached = cliProfileCache.get(providerId);
+        if (cached == null || cached.isEmpty()) {
+            return status;
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (status.metadata() != null) {
+            metadata.putAll(status.metadata());
+        }
+        for (Map.Entry<String, Object> entry : cached.entrySet()) {
+            metadata.putIfAbsent(entry.getKey(), entry.getValue());
+        }
+        return new AgentProviderStatus(
+            status.providerId(),
+            status.installed(),
+            status.version(),
+            status.authStatus(),
+            status.ready(),
+            status.readinessReason(),
+            status.checkedAt(),
+            Map.copyOf(metadata)
+        );
+    }
+
+    private void copyProfileKey(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source == null || target == null || key == null || !source.containsKey(key)) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private boolean cacheExpired(CachedStatus cached, Instant now) {

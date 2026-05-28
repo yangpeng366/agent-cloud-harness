@@ -70,10 +70,23 @@ class TaskHandler implements HttpHandler {
                     default -> throw new IllegalArgumentException("unsupported control action");
                 };
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(result));
+            } else if ("POST".equals(method) && path.matches("/api/v1/tasks/[^/]+/recover")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                Map<String, Object> body = readJsonBodyAsMap(ex);
+                Map<String, Object> request = new LinkedHashMap<>(body);
+                request.putAll(requestMetadata("POST", path, false));
+                boolean async = isAsyncRecoveryRequested(query, body);
+                TaskRecoveryResult result = async ? svc.recoverTaskAsync(id, request) : svc.recoverTask(id, request);
+                NioHttpServer.sendJson(ex, async ? 202 : 200, ApiResponse.ok(result));
             } else if ("GET".equals(method) && path.equals("/api/v1/tasks")) {
                 Map<String, String> params = parseQuery(query);
                 String status = params.get("status") != null ? params.get("status") : params.get("state");
                 var list = svc.listTasks(status, params.get("task_type"), params.get("assigned_worker"));
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(list));
+            } else if ("GET".equals(method) && path.equals("/api/v1/tasks/recoverable")) {
+                Map<String, String> params = parseQuery(query);
+                int limit = parseLimit(params.get("limit"));
+                var list = svc.listRecoverableTasks(limit);
                 NioHttpServer.sendJson(ex, 200, ApiResponse.ok(list));
             } else if ("GET".equals(method) && path.startsWith("/api/v1/tasks/")) {
                 String id = NioHttpServer.pathVar(ex, 4);
@@ -107,6 +120,10 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var flow = svc.getLiveFlow(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(flow));
+                } else if (path.endsWith("/provider_run_file")) {
+                    Map<String, String> params = parseQuery(query);
+                    var file = svc.getProviderRunFile(id, params.get("kind"));
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(file));
                 } else if (path.endsWith("/experiment_run")) {
                     var run = svc.getExperimentRun(id);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(run));
@@ -131,6 +148,11 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var trace = svc.listToolInvocations(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(trace));
+                } else if (path.endsWith("/recovery_jobs")) {
+                    Map<String, String> params = parseQuery(query);
+                    int limit = parseLimit(params.get("limit"));
+                    var jobs = svc.listRecoveryJobs(id, limit);
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(jobs));
                 } else if (path.endsWith("/handoff_packet")) {
                     Map<String, String> params = parseQuery(query);
                     String target = params.getOrDefault("target_worker", "codex");
@@ -204,6 +226,31 @@ class TaskHandler implements HttpHandler {
         }
     }
 
+    private boolean isAsyncRecoveryRequested(String query, Map<String, Object> body) {
+        Map<String, String> params = parseQuery(query);
+        if (isTruthy(params.get("async")) || isTruthy(params.get("background"))) {
+            return true;
+        }
+        Object async = body != null ? body.get("async") : null;
+        if (async instanceof Boolean bool) {
+            return bool;
+        }
+        if (isTruthy(stringValue(async))) {
+            return true;
+        }
+        Object wait = body != null ? body.get("wait") : null;
+        if (wait instanceof Boolean bool) {
+            return !bool;
+        }
+        String waitValue = stringValue(wait);
+        return waitValue != null && ("false".equalsIgnoreCase(waitValue) || "0".equals(waitValue));
+    }
+
+    private boolean isTruthy(String value) {
+        return value != null
+            && ("true".equalsIgnoreCase(value) || "1".equals(value) || "yes".equalsIgnoreCase(value));
+    }
+
     private Map<String, Object> readJsonBodyAsMap(HttpExchange ex) throws IOException {
         String body = NioHttpServer.readBody(ex);
         if (body == null || body.isBlank()) {
@@ -229,6 +276,10 @@ class TaskHandler implements HttpHandler {
         }
         Object value = body.get(key);
         return value == null || value.toString().isBlank() ? fallback : value.toString();
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : value.toString();
     }
 
     private ProviderSelectionView providerSelectionView(WorkerRouter.RouteResult route) {

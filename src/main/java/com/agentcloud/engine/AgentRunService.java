@@ -349,7 +349,7 @@ public class AgentRunService {
             ? result.durationMs()
             : Math.max(0L, Duration.between(runStartedAt, runEndedAt).toMillis());
         int artifactCount = result != null && result.producedArtifact() ? 1 : 0;
-        String summary = summarize(result, error);
+        String summary = summarize(result, error, status);
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source", "worker_execution_projection");
@@ -363,6 +363,9 @@ public class AgentRunService {
             metadata.put("learning_hint_applied", route.learningHintApplied());
             metadata.put("candidate_workers", route.candidateWorkers());
             metadata.put("fallback_workers", route.fallbackWorkers());
+            if (route.dispatchSkippedWorkers() != null && !route.dispatchSkippedWorkers().isEmpty()) {
+                metadata.put("dispatch_skipped_workers", routeSkippedWorkerMetadata(route.dispatchSkippedWorkers()));
+            }
         }
         putIfNotBlank(metadata, "worker_execution_status", rawExecutionStatus);
         if (result != null) {
@@ -377,6 +380,11 @@ public class AgentRunService {
             }
             if (result.metadata() != null && !result.metadata().isEmpty()) {
                 metadata.put("worker_metadata", result.metadata());
+                copyMetadataKey(result.metadata(), metadata, "provider_error");
+                copyMetadataKey(result.metadata(), metadata, "provider_turn_status");
+                copyMetadataKey(result.metadata(), metadata, "provider_failure_class");
+                copyMetadataKey(result.metadata(), metadata, "provider_failure_reason");
+                copyMetadataKey(result.metadata(), metadata, "provider_retryable");
             }
         }
         metadata.put("provider_registered", provider != null);
@@ -422,14 +430,22 @@ public class AgentRunService {
         };
     }
 
-    private String summarize(WorkerExecutionResult result, Throwable error) {
+    private String summarize(WorkerExecutionResult result, Throwable error, String runStatus) {
         if (error != null) {
             return "Worker execution failed: " + error.getClass().getSimpleName();
         }
         if (result == null) {
             return null;
         }
-        String summary = firstNonBlank(result.summary(), result.outputText(), result.artifactContent());
+        String summary = countsAsProviderFailureStatus(runStatus)
+            ? firstNonBlank(
+                metadataString(result.metadata(), "provider_error"),
+                metadataString(result.metadata(), "provider_failure_reason"),
+                result.summary(),
+                result.outputText(),
+                result.artifactContent()
+            )
+            : firstNonBlank(result.summary(), result.outputText(), result.artifactContent());
         if (summary != null && summary.length() > 500) {
             return summary.substring(0, 500) + "...";
         }
@@ -446,6 +462,36 @@ public class AgentRunService {
         }
         Object value = metadata.get(key);
         return value == null ? null : value.toString();
+    }
+
+    private List<Map<String, Object>> routeSkippedWorkerMetadata(List<WorkerRouter.RouteSkippedWorker> skippedWorkers) {
+        if (skippedWorkers == null || skippedWorkers.isEmpty()) {
+            return List.of();
+        }
+        return skippedWorkers.stream()
+            .map(skipped -> {
+                LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+                putIfNotBlank(metadata, "worker_id", skipped.workerId());
+                putIfNotBlank(metadata, "reason", skipped.reason());
+                putIfNotBlank(metadata, "provider_failure_class", skipped.providerFailureClass());
+                putIfNotBlank(metadata, "provider_failure_reason", skipped.providerFailureReason());
+                if (skipped.providerRetryable() != null) {
+                    metadata.put("provider_retryable", skipped.providerRetryable());
+                }
+                return (Map<String, Object>) metadata;
+            })
+            .filter(metadata -> !metadata.isEmpty())
+            .toList();
+    }
+
+    private void copyMetadataKey(Map<String, Object> source, Map<String, Object> target, String key) {
+        if (source == null || target == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     private boolean matchesAgentRun(Map<String, Object> metadata, String runId) {
@@ -481,6 +527,11 @@ public class AgentRunService {
         if (run == null) {
             return false;
         }
+        String providerFailureClass = metadataString(run.metadata(), "provider_failure_class");
+        if ("provider_runtime_transient".equals(providerFailureClass)
+            || "provider_protocol_error".equals(providerFailureClass)) {
+            return true;
+        }
         String executionStatus = metadataString(run.metadata(), "worker_execution_status");
         if (isTransientFailureStatus(executionStatus)) {
             return true;
@@ -489,6 +540,7 @@ public class AgentRunService {
             return true;
         }
         String text = firstNonBlank(
+            metadataString(run.metadata(), "provider_failure_reason"),
             metadataString(run.metadata(), "failure_summary_readable"),
             run.summary(),
             metadataString(run.metadata(), "provider_readiness_reason"),

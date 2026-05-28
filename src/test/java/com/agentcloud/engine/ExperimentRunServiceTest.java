@@ -272,6 +272,10 @@ class ExperimentRunServiceTest {
             assertEquals(1, service.listRuns("baseline-min", null, null, null, 10).size());
             assertEquals(0, service.listRuns("baseline-min", null, null, "small_only", 10).size());
             assertTrue(run.metadata().containsKey("cost_basis"));
+            assertEquals("codex", run.metadata().get("planner_worker"));
+            assertEquals("strong", run.metadata().get("planner_model_tier"));
+            assertEquals("kimi", run.metadata().get("executor_worker"));
+            assertEquals("small", run.metadata().get("executor_model_tier"));
             assertEquals("kimi", run.metadata().get("selected_worker"));
             assertEquals("learning_memory", run.metadata().get("route_source"));
             assertEquals("kimi", run.metadata().get("preferred_worker_hint"));

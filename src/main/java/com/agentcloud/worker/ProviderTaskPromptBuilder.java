@@ -39,9 +39,11 @@ final class ProviderTaskPromptBuilder {
 
         List<String> workspacePaths = collectOrderedValues(metadata,
             "cwd",
+            "repo_path",
             "workspace",
             "workspace_root",
             "working_directory",
+            "workspace_roots",
             "workspaces",
             "workspace_paths"
         );
@@ -56,7 +58,9 @@ final class ProviderTaskPromptBuilder {
         List<String> references = collectOrderedValues(metadata,
             "reference_docs",
             "reference_files",
+            "reference_paths",
             "context_files",
+            "input_files",
             "input_paths"
         );
         if (!references.isEmpty()) {
@@ -67,16 +71,18 @@ final class ProviderTaskPromptBuilder {
             }
         }
 
-        List<String> outputs = collectOrderedValues(metadata,
+        List<String> outputs = new ArrayList<>(collectOrderedValues(metadata,
             "deliverables",
             "expected_outputs",
             "output_files",
-            "output_paths"
-        );
+            "output_paths",
+            "desired_output_dir"
+        ));
         String singleOutput = firstNonBlank(
             metadataString(metadata, "desired_output_file"),
             metadataString(metadata, "output_file"),
-            metadataString(metadata, "output_dir")
+            metadataString(metadata, "output_dir"),
+            metadataString(metadata, "desired_output_dir")
         );
         if (singleOutput != null) {
             outputs.add(singleOutput);
@@ -103,6 +109,59 @@ final class ProviderTaskPromptBuilder {
             }
         }
 
+        List<String> validationCommands = collectOrderedValues(metadata,
+            "validation_commands",
+            "validation_command",
+            "verification_commands",
+            "verification_command",
+            "test_commands",
+            "test_command",
+            "acceptance_commands",
+            "acceptance_command",
+            "build_commands",
+            "build_command",
+            "check_commands",
+            "check_command"
+        );
+        if (!validationCommands.isEmpty()) {
+            appendBlankLine(sb);
+            appendLine(sb, "Validation Commands:");
+            for (String command : validationCommands) {
+                appendLine(sb, "- " + command);
+            }
+        }
+
+        List<String> acceptanceCriteria = collectOrderedValues(metadata,
+            "acceptance_criteria",
+            "baseline_acceptance_criteria",
+            "done_criteria",
+            "success_criteria"
+        );
+        if (!acceptanceCriteria.isEmpty()) {
+            appendBlankLine(sb);
+            appendLine(sb, "Acceptance Criteria:");
+            for (String criterion : acceptanceCriteria) {
+                appendLine(sb, "- " + criterion);
+            }
+        }
+
+        List<String> modificationScope = collectOrderedValues(metadata,
+            "allowed_paths",
+            "write_scope",
+            "edit_scope",
+            "owned_paths",
+            "target_files",
+            "target_paths",
+            "modifiable_paths"
+        );
+        if (!modificationScope.isEmpty()) {
+            appendBlankLine(sb);
+            appendLine(sb, "Allowed Modification Scope:");
+            for (String scope : modificationScope) {
+                appendLine(sb, "- " + scope);
+            }
+        }
+
         if (context.activeContext() != null && context.activeContext().synthesizedContext() != null
             && !context.activeContext().synthesizedContext().isBlank()) {
             appendBlankLine(sb);
@@ -126,7 +185,11 @@ final class ProviderTaskPromptBuilder {
         appendBlankLine(sb);
         appendLine(sb, "Execution Contract:");
         appendLine(sb, "- You may choose the implementation strategy, tool usage, and investigation order.");
-        appendLine(sb, "- Use the provided workspaces and references as the primary operating context.");
+        appendLine(sb, "- Use the provided local workspaces and references as the primary operating context.");
+        appendLine(sb, "- The harness passes local paths and execution boundaries, not file contents.");
+        appendLine(sb, "- Inspect the listed local paths directly and run appropriate local search/command-line checks yourself before answering.");
+        appendLine(sb, "- When validation commands are listed, run them if safe and report exact results or blockers.");
+        appendLine(sb, "- When deliverables or allowed modification scope are listed, keep changes inside that scope unless the task explicitly requires otherwise.");
         appendLine(sb, "- Prefer making real progress on the target repository over only describing a plan.");
         appendLine(sb, "- If build, debug, or release steps are discoverable from the repo, surface them concretely.");
         appendLine(sb, "- Return the best concrete execution result for this task.");

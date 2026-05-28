@@ -204,6 +204,45 @@ class ApiErrorContractHttpTest {
     }
 
     @Test
+    void listWorkersExposesCapabilityMatrixMetadata() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-capability-matrix.db"))) {
+            ApiCall response = fixture.get("/api/v1/workers");
+
+            assertEquals(200, response.statusCode());
+            JsonNode workers = response.body().path("data");
+            JsonNode codex = workerById(workers, "codex");
+            JsonNode kimi = workerById(workers, "kimi");
+            JsonNode openclaw = workerById(workers, "openclaw-native");
+
+            assertEquals("provider_app_server", codex.path("metadata").path("execution_backend").asText());
+            assertEquals("codex app-server --listen stdio://", codex.path("metadata").path("command_shape").asText());
+            assertEquals("json_rpc", codex.path("metadata").path("input_mode").asText());
+            assertEquals("json_rpc_events", codex.path("metadata").path("output_mode").asText());
+            assertEquals("provider_app_server_events", codex.path("metadata").path("output_contract").asText());
+            assertEquals("fresh_on_recovery", codex.path("metadata").path("recovery_resume_policy").asText());
+            assertTrue(codex.path("metadata").path("supports_resume").asBoolean(false));
+            assertEquals("coding", codex.path("metadata").path("auto_route_task_types").get(0).asText());
+
+            assertEquals("provider_native_cli", kimi.path("metadata").path("execution_backend").asText());
+            assertEquals("kimi --print --output-format stream-json --work-dir <cwd> --prompt <prompt>",
+                kimi.path("metadata").path("command_shape").asText());
+            assertEquals("argv_prompt", kimi.path("metadata").path("input_mode").asText());
+            assertEquals("stream_json", kimi.path("metadata").path("output_mode").asText());
+            assertEquals("provider_native_cli_events", kimi.path("metadata").path("output_contract").asText());
+            assertEquals("resume_if_session_id", kimi.path("metadata").path("recovery_resume_policy").asText());
+            assertTrue(kimi.path("metadata").path("supports_resume").asBoolean(false));
+            assertEquals("research", kimi.path("metadata").path("auto_route_task_types").get(1).asText());
+
+            assertEquals("tool_aware", openclaw.path("metadata").path("execution_backend").asText());
+            assertEquals("harness tool registry", openclaw.path("metadata").path("command_shape").asText());
+            assertEquals("tool_request", openclaw.path("metadata").path("input_mode").asText());
+            assertEquals("tool_result", openclaw.path("metadata").path("output_mode").asText());
+            assertEquals("harness_tool_trace", openclaw.path("metadata").path("output_contract").asText());
+            assertEquals("message", openclaw.path("metadata").path("auto_route_task_types").get(2).asText());
+        }
+    }
+
+    @Test
     void workerReadinessIncludesProviderFailureForBuiltInCodexWorker() throws Exception {
         try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
             tempDir.resolve("worker-provider-readiness.db"),
@@ -232,6 +271,80 @@ class ApiErrorContractHttpTest {
             assertFalse(readiness.body().path("data").path("checks")
                 .path("executor_backend:provider_native_cli").asBoolean(true));
             assertTrue(readiness.body().path("data").path("reason").asText().contains("executor backend not supported"));
+        }
+    }
+
+    @Test
+    void workerReadinessDispatchModeProjectsPreflightFields() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-provider-dispatch-preflight.db"),
+            new AgentProviderRegistry().register(new PreflightProvider("codex", true, false, "fresh turn rejected"))
+        )) {
+            ApiCall readiness = fixture.get("/api/v1/workers/codex/readiness?mode=dispatch");
+
+            assertEquals(200, readiness.statusCode());
+            assertFalse(readiness.body().path("data").path("ready").asBoolean(true));
+            assertEquals("dispatch", readiness.body().path("data").path("mode").asText());
+            assertFalse(readiness.body().path("data").path("checks").path("dispatch_preflight").asBoolean(true));
+            assertFalse(readiness.body().path("data").path("dispatch_preflight_ready").asBoolean(true));
+            assertEquals("fresh turn rejected", readiness.body().path("data").path("dispatch_preflight_reason").asText());
+            assertEquals("active_probe", readiness.body().path("data").path("dispatch_preflight_mode").asText());
+            assertTrue(readiness.body().path("data").path("dispatch_preflight_active_probe").asBoolean(false));
+            JsonNode metadata = readiness.body().path("data").path("dispatch_preflight_metadata");
+            assertEquals("cli_help", metadata.path("dispatch_preflight_probe_kind").asText());
+            assertEquals("--version", metadata.path("dispatch_preflight_probe_args").get(0).asText());
+            assertEquals("direct", metadata.path("dispatch_preflight_command_shape").get(0).asText());
+            assertEquals(1, metadata.path("dispatch_preflight_exit_code").asInt());
+            JsonNode cliProfile = readiness.body().path("data").path("cli_profile");
+            assertTrue(cliProfile.path("cli_profile_evidence_available").asBoolean(false));
+            assertFalse(cliProfile.path("supports_yolo").asBoolean(true));
+            assertEquals("provider_protocol_error", readiness.body().path("data").path("provider_failure_class").asText());
+            assertTrue(readiness.body().path("data").path("provider_failure_reason").asText().contains("fresh turn rejected"));
+            assertTrue(readiness.body().path("data").path("provider_retryable").asBoolean(false));
+        }
+    }
+
+    @Test
+    void workerReadinessDispatchModeProjectsPassiveFallbackProbeMode() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-provider-dispatch-passive-preflight.db"),
+            new AgentProviderRegistry().register(new StaticProvider("codex", true, true, "ready"))
+        )) {
+            ApiCall readiness = fixture.get("/api/v1/workers/codex/readiness?mode=dispatch");
+
+            assertEquals(200, readiness.statusCode());
+            assertTrue(readiness.body().path("data").path("ready").asBoolean(false));
+            assertTrue(readiness.body().path("data").path("dispatch_preflight_ready").asBoolean(false));
+            assertEquals("passive_status", readiness.body().path("data").path("dispatch_preflight_mode").asText());
+            assertFalse(readiness.body().path("data").path("dispatch_preflight_active_probe").asBoolean(true));
+        }
+    }
+
+    @Test
+    void workerReadinessPassiveModeDoesNotRunDispatchPreflight() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-provider-passive-readiness.db"),
+            new AgentProviderRegistry().register(new PreflightProvider("codex", true, false, "fresh turn rejected"))
+        )) {
+            ApiCall readiness = fixture.get("/api/v1/workers/codex/readiness");
+
+            assertEquals(200, readiness.statusCode());
+            assertTrue(readiness.body().path("data").path("ready").asBoolean(false));
+            assertEquals("passive", readiness.body().path("data").path("mode").asText());
+            assertTrue(readiness.body().path("data").path("dispatch_preflight_ready").isMissingNode()
+                || readiness.body().path("data").path("dispatch_preflight_ready").isNull());
+            assertTrue(readiness.body().path("data").path("checks").path("dispatch_preflight").isMissingNode());
+        }
+    }
+
+    @Test
+    void workerReadinessRejectsUnknownMode() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("worker-readiness-invalid-mode.db"))) {
+            ApiCall response = fixture.get("/api/v1/workers/codex/readiness?mode=disptach");
+
+            assertEquals(400, response.statusCode());
+            assertFalse(response.body().path("success").asBoolean());
+            assertEquals("mode must be passive or dispatch", response.body().path("message").asText());
         }
     }
 
@@ -433,6 +546,15 @@ class ApiErrorContractHttpTest {
     private record ApiCall(int statusCode, JsonNode body) {
     }
 
+    private JsonNode workerById(JsonNode workers, String workerId) {
+        for (JsonNode worker : workers) {
+            if (workerId.equals(worker.path("worker_id").asText())) {
+                return worker;
+            }
+        }
+        throw new AssertionError("worker not found: " + workerId);
+    }
+
     private List<String> supportedCommandToolCapabilities() {
         return HostToolAvailability.supportedCommandToolCapabilities();
     }
@@ -497,6 +619,63 @@ class ApiErrorContractHttpTest {
                 reason,
                 null,
                 java.util.Map.of("source", "test")
+            );
+        }
+    }
+
+    private record PreflightProvider(String providerId,
+                                     boolean passiveReady,
+                                     boolean dispatchReady,
+                                     String dispatchReason) implements AgentProvider {
+        @Override
+        public AgentProviderDescriptor descriptor() {
+            return new AgentProviderDescriptor(
+                providerId,
+                providerId,
+                "local_cli",
+                "process",
+                java.util.List.of("chat"),
+                java.util.Map.of()
+            );
+        }
+
+        @Override
+        public AgentProviderStatus detect() {
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "0.0.0-test",
+                "ready",
+                passiveReady,
+                passiveReady ? null : "passive not ready",
+                null,
+                java.util.Map.of("source", "test")
+            );
+        }
+
+        @Override
+        public AgentProviderStatus dispatchPreflight() {
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "0.0.0-test",
+                "ready",
+                dispatchReady,
+                dispatchReady ? null : dispatchReason,
+                null,
+                java.util.Map.ofEntries(
+                    java.util.Map.entry("source", "dispatch_preflight_test"),
+                    java.util.Map.entry("dispatch_preflight_mode", "active_probe"),
+                    java.util.Map.entry("dispatch_preflight_probe_kind", "cli_help"),
+                    java.util.Map.entry("dispatch_preflight_probe_args", java.util.List.of("--version")),
+                    java.util.Map.entry("dispatch_preflight_command_shape", java.util.List.of("direct", "--version")),
+                    java.util.Map.entry("dispatch_preflight_exit_code", dispatchReady ? 0 : 1),
+                    java.util.Map.entry("cli_profile_evidence_available", true),
+                    java.util.Map.entry("supports_yolo", false),
+                    java.util.Map.entry("provider_failure_class", dispatchReady ? "" : "provider_protocol_error"),
+                    java.util.Map.entry("provider_failure_reason", dispatchReady ? "" : dispatchReason),
+                    java.util.Map.entry("provider_retryable", !dispatchReady)
+                )
             );
         }
     }

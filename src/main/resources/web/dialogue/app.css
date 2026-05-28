@@ -325,6 +325,10 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
     gap: 8px;
 }
 
+.field--wide {
+    grid-column: 1 / -1;
+}
+
 .sidebar__form .field {
     gap: 4px;
 }
@@ -752,6 +756,10 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
 
 .message-panel__body--stream-only {
     justify-content: flex-end;
+}
+
+.message-panel__body--stream-only .message-stream {
+    margin-top: auto;
 }
 
 .message-stream {
@@ -2444,6 +2452,81 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
     line-height: 1.75;
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.provider-run-files {
+    display: grid;
+    gap: 10px;
+}
+
+.provider-run-files__path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-soft);
+    font-size: 12px;
+}
+
+.provider-run-files__path code {
+    white-space: normal;
+    word-break: break-all;
+}
+
+.provider-run-files__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.provider-run-files__preview {
+    max-height: 320px;
+    overflow: auto;
+    margin: 0;
+    padding: 14px;
+    background: rgba(26, 35, 50, 0.04);
+    border: 1px solid rgba(28, 41, 52, 0.08);
+    border-radius: var(--radius-md);
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.artifact-card {
+    gap: 10px;
+}
+
+.artifact-card__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.artifact-card__chips span {
+    padding: 4px 8px;
+    border: 1px solid rgba(28, 41, 52, 0.08);
+    border-radius: 999px;
+    background: rgba(26, 35, 50, 0.04);
+    color: var(--ink-soft);
+    font-size: 11px;
+    line-height: 1.2;
+}
+
+.artifact-card__files {
+    padding: 10px;
+    border: 1px solid rgba(28, 41, 52, 0.08);
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.62);
+}
+
+.artifact-output-drawer {
+    margin-top: 2px;
+}
+
+.artifact-output-drawer__preview {
+    max-height: 420px;
 }
 
 .modal-footer {

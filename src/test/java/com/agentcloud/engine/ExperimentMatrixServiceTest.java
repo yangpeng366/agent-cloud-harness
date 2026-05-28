@@ -46,6 +46,10 @@ class ExperimentMatrixServiceTest {
             assertEquals(3, cases.stream().filter(taskCase -> "short".equals(taskCase.taskLengthBucket())).count());
             assertEquals(3, cases.stream().filter(taskCase -> "medium".equals(taskCase.taskLengthBucket())).count());
             assertEquals(3, cases.stream().filter(taskCase -> "long".equals(taskCase.taskLengthBucket())).count());
+            assertTrue(cases.stream().allMatch(taskCase -> !taskCase.workspacePreconditions().isEmpty()));
+            assertTrue(cases.stream().allMatch(taskCase -> !taskCase.acceptanceCriteria().isEmpty()));
+            assertTrue(cases.stream().allMatch(taskCase -> !taskCase.expectedArtifacts().isEmpty()));
+            assertTrue(cases.stream().allMatch(taskCase -> !taskCase.recoveryPolicy().isBlank()));
         }
     }
 
@@ -84,6 +88,12 @@ class ExperimentMatrixServiceTest {
             assertEquals("baseline-matrix-a", strongShort.metadata().get("experiment_name"));
             assertEquals("short", strongShort.metadata().get("task_length_bucket"));
             assertEquals("baseline_v1", strongShort.metadata().get("baseline_matrix_source"));
+            assertEquals("retry_once_then_human_review", strongShort.metadata().get("baseline_recovery_policy"));
+            assertTrue(strongShort.metadata().get("baseline_workspace_preconditions") instanceof List<?>);
+            assertTrue(strongShort.metadata().get("baseline_acceptance_criteria") instanceof List<?>);
+            assertTrue(strongShort.metadata().get("baseline_expected_artifacts") instanceof List<?>);
+            assertTrue(((List<?>) strongShort.metadata().get("baseline_acceptance_criteria")).stream()
+                .anyMatch(value -> String.valueOf(value).contains("regression test")));
 
             harness.artifactDao().insert(new com.agentcloud.model.Artifact(
                 IdGenerator.newId("art"),
@@ -178,6 +188,11 @@ class ExperimentMatrixServiceTest {
                     Map.entry("preferred_worker_hint", "kimi"),
                     Map.entry("learning_hint_applied", true),
                     Map.entry("orchestration_closed_loop_observed", true),
+                    Map.entry("planner_worker", "codex"),
+                    Map.entry("planner_model_tier", "strong"),
+                    Map.entry("executor_worker", "kimi"),
+                    Map.entry("executor_model_tier", "small"),
+                    Map.entry("evaluator_model_tier", "strong"),
                     Map.entry("execution_judgment_action", "checkpoint"),
                     Map.entry("completion_judgment_status", "partially_done"),
                     Map.entry("completion_alignment_level", "medium"),
@@ -375,6 +390,11 @@ class ExperimentMatrixServiceTest {
             assertEquals(1, modeSummaries.get("orchestrated").completionAlignmentLevelCounts().get("medium"));
             assertEquals(2, modeSummaries.get("orchestrated").orchestratedRunCount());
             assertEquals(1, modeSummaries.get("orchestrated").orchestrationClosedLoopObservedCount());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithStrongPlannerEvidence());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithSmallExecutorEvidence());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithStrongEvaluatorEvidence());
+            assertEquals(1, modeSummaries.get("orchestrated").runsWithStrongSmallStrongLoop());
+            assertEquals(1, modeSummaries.get("orchestrated").evaluatorModelTierCounts().get("strong"));
             assertEquals(1, modeSummaries.get("orchestrated").runsWithLearningHint());
             assertEquals(1, modeSummaries.get("orchestrated").learningHintAppliedCount());
             assertEquals(1.0, modeSummaries.get("orchestrated").learningHintAppliedRate());

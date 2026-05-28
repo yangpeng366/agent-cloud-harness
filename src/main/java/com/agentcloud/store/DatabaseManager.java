@@ -53,6 +53,8 @@ public class DatabaseManager implements AutoCloseable {
         this.jdbi.registerRowMapper(com.agentcloud.model.ToolInvocationRecord.class, Mappers.TOOL_INVOCATION);
         this.jdbi.registerRowMapper(com.agentcloud.model.ExperimentRunRecord.class, Mappers.EXPERIMENT_RUN);
         this.jdbi.registerRowMapper(com.agentcloud.model.AgentRunRecord.class, Mappers.AGENT_RUN);
+        this.jdbi.registerRowMapper(com.agentcloud.model.AgentAction.class, Mappers.AGENT_ACTION);
+        this.jdbi.registerRowMapper(com.agentcloud.model.TaskRecoveryJob.class, Mappers.TASK_RECOVERY_JOB);
 
         initSchema();
         log.info("Database initialized at {}", dbPath);

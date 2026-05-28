@@ -213,6 +213,39 @@ class WorkerExecutorRouterProviderNativeTest {
         throw new AssertionError("expected IllegalStateException");
     }
 
+    @Test
+    void unsupportedBackendFailsFastInsteadOfFallingBackToDefault() {
+        WorkerRegistry registry = new WorkerRegistry();
+        registry.register(new com.agentcloud.model.Worker(
+            "unsupported-worker",
+            "experimental",
+            List.of("coding"),
+            List.of(),
+            List.of(),
+            Map.of("installed", true),
+            Map.of("execution_backend", "unsupported"),
+            false,
+            true
+        ));
+        RecordingExecutor defaultExecutor = new RecordingExecutor("default");
+        WorkerExecutorRouter router = new WorkerExecutorRouter(
+            registry,
+            defaultExecutor,
+            new RecordingExecutor("tool-aware"),
+            new StubProviderCliWorkerExecutor("provider-native"),
+            new StubCodexAppServerWorkerExecutor("codex-app-server")
+        );
+
+        try {
+            router.executeOneRound(runtimeContext("unsupported-worker"), "unsupported-worker");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage().contains("unsupported execution backend"));
+            assertEquals(0, defaultExecutor.calls);
+            return;
+        }
+        throw new AssertionError("expected IllegalStateException");
+    }
+
     private TaskRuntimeContext runtimeContext(String workerId) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("task_type", "coding");

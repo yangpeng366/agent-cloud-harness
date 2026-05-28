@@ -6,6 +6,7 @@ param(
     [int]$StartupTimeoutSec = 20,
     [string]$ScreenshotDir = '',
     [int]$NodeMaxOldSpaceMb = 768,
+    [string]$NodePath = '',
     [ValidateSet('both', 'chat', 'responses')]
     [string]$Surface = 'both'
 )
@@ -50,10 +51,44 @@ function Wait-DebugEndpoint {
     throw "Edge debug endpoint did not become ready within $TimeoutSec seconds"
 }
 
+function Resolve-NodeExecutable {
+    param([string]$PreferredPath)
+
+    if (-not [string]::IsNullOrWhiteSpace($PreferredPath)) {
+        $resolvedPreferred = [System.IO.Path]::GetFullPath($PreferredPath)
+        Assert-True -Condition (Test-Path -LiteralPath $resolvedPreferred) -Message "node not found: $resolvedPreferred"
+        return $resolvedPreferred
+    }
+
+    $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+    if ($null -ne $nodeCommand -and -not [string]::IsNullOrWhiteSpace($nodeCommand.Source)) {
+        return $nodeCommand.Source
+    }
+
+    $candidatePaths = @(
+        "$env:ProgramFiles\nodejs\node.exe",
+        "$env:LOCALAPPDATA\Programs\nodejs\node.exe",
+        "$env:USERPROFILE\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
+        "$env:USERPROFILE\.trae-cn\sdks\workspaces\1b5d04cd\versions\node\current\node.exe",
+        "$env:USERPROFILE\.trae-cn\sdks\versions\node\current\node.exe",
+        'C:\nvm4w\nodejs\node.exe'
+    )
+
+    foreach ($candidate in $candidatePaths) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
+    }
+
+    throw "node executable not found. Install Node.js, add it to PATH, or pass -NodePath <path-to-node.exe>."
+}
+
 function Invoke-BrowserProbeRunner {
     param(
         [string]$ScriptPath,
-        [hashtable]$Payload
+        [hashtable]$Payload,
+        [string]$NodeExecutable,
+        [string]$SurfaceName = ''
     )
 
     $payloadPath = Join-Path '.tmp' ('dialogue-browser-probe-' + [Guid]::NewGuid().ToString('N') + '.json')
@@ -65,14 +100,18 @@ function Invoke-BrowserProbeRunner {
             (New-Object System.Text.UTF8Encoding($false))
         )
         $nodeArgs = @("--max-old-space-size=$NodeMaxOldSpaceMb", $ScriptPath, $resolvedPayloadPath)
-        $output = & node @nodeArgs
+        $output = & $NodeExecutable @nodeArgs
     } finally {
         Remove-Item -LiteralPath $resolvedPayloadPath -Force -ErrorAction SilentlyContinue
     }
     if ($LASTEXITCODE -ne 0) {
-        throw "browser probe runner failed"
+        throw "browser probe runner failed surface=$SurfaceName"
     }
-    return $output | ConvertFrom-Json
+    $outputText = ($output | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($outputText)) {
+        throw "browser probe runner produced empty output surface=$SurfaceName"
+    }
+    return $outputText | ConvertFrom-Json
 }
 
 function Assert-Health {
@@ -85,9 +124,67 @@ function Assert-Health {
     }
 }
 
+function Start-ProbeBrowser {
+    param(
+        [int]$Port,
+        [string]$ProfileDir
+    )
+
+    Assert-PortFree -Port $Port
+    New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
+    $args = @(
+        '--headless=new',
+        "--remote-debugging-port=$Port",
+        "--user-data-dir=$ProfileDir",
+        'about:blank'
+    )
+    $process = Start-Process -FilePath $BrowserPath -ArgumentList $args -PassThru
+    $version = Wait-DebugEndpoint -Port $Port -TimeoutSec $StartupTimeoutSec
+    return [pscustomobject]@{
+        Process = $process
+        Version = $version
+    }
+}
+
+function Stop-ProbeBrowser {
+    param($Browser)
+
+    $process = $Browser.Process
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-SurfaceProbe {
+    param(
+        [string]$SurfaceName,
+        [int]$Port,
+        [string]$ProfileDir,
+        [string]$DialoguePath,
+        [string]$ExpectedSurface
+    )
+
+    $browser = $null
+    try {
+        $browser = Start-ProbeBrowser -Port $Port -ProfileDir $ProfileDir
+        return Invoke-BrowserProbeRunner -ScriptPath $runnerScript -Payload @{
+            wsUrl = $browser.Version.webSocketDebuggerUrl
+            dialogueUrl = "$BaseUrl$DialoguePath"
+            expectedSurface = $ExpectedSurface
+            mode = $SurfaceName
+            screenshotDir = $resolvedScreenshotDir
+        } -NodeExecutable $nodeExecutable -SurfaceName $SurfaceName
+    } finally {
+        if ($browser) {
+            Stop-ProbeBrowser -Browser $browser
+        }
+    }
+}
+
 Assert-Health -TargetBaseUrl $BaseUrl
 Assert-True -Condition (Test-Path -LiteralPath $BrowserPath) -Message "browser not found: $BrowserPath"
 Assert-PortFree -Port $DebugPort
+$nodeExecutable = Resolve-NodeExecutable -PreferredPath $NodePath
 
 New-Item -ItemType Directory -Force -Path '.tmp' | Out-Null
 $resolvedUserDataDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $UserDataDir))
@@ -103,48 +200,51 @@ if (-not [string]::IsNullOrWhiteSpace($ScreenshotDir)) {
 }
 
 $runnerScript = Join-Path $PSScriptRoot 'dialogue-browser-acceptance-probe-runner.cjs'
-$edgeArgs = @(
-    '--headless=new',
-    "--remote-debugging-port=$DebugPort",
-    "--user-data-dir=$resolvedUserDataDir",
-    'about:blank'
-)
-
-$edgeProcess = $null
-try {
-    $edgeProcess = Start-Process -FilePath $BrowserPath -ArgumentList $edgeArgs -PassThru
-    $versionInfo = Wait-DebugEndpoint -Port $DebugPort -TimeoutSec $StartupTimeoutSec
-
-    $chatResult = $null
-    $responsesResult = $null
-    if ($Surface -in @('both', 'chat')) {
-        $chatResult = Invoke-BrowserProbeRunner -ScriptPath $runnerScript -Payload @{
-            wsUrl = $versionInfo.webSocketDebuggerUrl
-            dialogueUrl = "$BaseUrl/dialogue/"
-            expectedSurface = 'chat_completions'
-            mode = 'chat'
-            screenshotDir = $resolvedScreenshotDir
-        }
+$chatResult = $null
+$responsesResult = $null
+if ($Surface -in @('both', 'chat')) {
+    $chatResult = Invoke-SurfaceProbe `
+        -SurfaceName 'chat' `
+        -Port $DebugPort `
+        -ProfileDir $resolvedUserDataDir `
+        -DialoguePath '/dialogue/' `
+        -ExpectedSurface 'chat_completions'
+}
+if ($Surface -in @('both', 'responses')) {
+    $responsesPort = if ($Surface -eq 'both') { $DebugPort + 1 } else { $DebugPort }
+    $responsesProfileDir = if ($Surface -eq 'both') {
+        [System.IO.Path]::GetFullPath("$resolvedUserDataDir-responses")
+    } else {
+        $resolvedUserDataDir
     }
-    if ($Surface -in @('both', 'responses')) {
-        $responsesResult = Invoke-BrowserProbeRunner -ScriptPath $runnerScript -Payload @{
-            wsUrl = $versionInfo.webSocketDebuggerUrl
-            dialogueUrl = "$BaseUrl/dialogue/#facade=responses"
-            expectedSurface = 'responses'
-            mode = 'responses'
-            screenshotDir = $resolvedScreenshotDir
-        }
+    $responsesResult = Invoke-SurfaceProbe `
+        -SurfaceName 'responses' `
+        -Port $responsesPort `
+        -ProfileDir $responsesProfileDir `
+        -DialoguePath '/dialogue/#facade=responses' `
+        -ExpectedSurface 'responses'
+}
+
+    $chatSurface = if ($null -ne $chatResult -and $null -ne $chatResult.chat_surface) {
+        $chatResult.chat_surface
+    } else {
+        $chatResult
+    }
+    $responsesSurface = if ($null -ne $responsesResult -and $null -ne $responsesResult.responses_surface) {
+        $responsesResult.responses_surface
+    } else {
+        $responsesResult
     }
 
     if ($Surface -eq 'both') {
-        if ($null -eq $chatResult) {
+        if ($null -eq $chatSurface) {
             throw "browser probe surface=both did not produce chat_surface"
         }
-        if ($null -eq $responsesResult) {
+        if ($null -eq $responsesSurface) {
             throw "browser probe surface=both did not produce responses_surface"
         }
-        $chatPropCount = @($chatResult.PSObject.Properties).Count
-        $responsesPropCount = @($responsesResult.PSObject.Properties).Count
+        $chatPropCount = @($chatSurface.PSObject.Properties).Count
+        $responsesPropCount = @($responsesSurface.PSObject.Properties).Count
         if ($chatPropCount -eq 0) {
             throw "browser probe surface=both produced empty chat_surface"
         }
@@ -160,12 +260,8 @@ try {
         responses_dialogue_url = "$BaseUrl/dialogue/#facade=responses"
         surface = $Surface
         debug_port = $DebugPort
+        node_path = $nodeExecutable
         screenshot_dir = $resolvedScreenshotDir
-        chat_surface = $chatResult
-        responses_surface = $responsesResult
+        chat_surface = $chatSurface
+        responses_surface = $responsesSurface
     } | ConvertTo-Json -Depth 10
-} finally {
-    if ($edgeProcess -and -not $edgeProcess.HasExited) {
-        Stop-Process -Id $edgeProcess.Id -Force -ErrorAction SilentlyContinue
-    }
-}

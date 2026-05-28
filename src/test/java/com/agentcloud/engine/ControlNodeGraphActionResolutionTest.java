@@ -49,6 +49,16 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    void doneExecutionWithUnfinishedCompletionResolvesToCheckpoint() throws Exception {
+        assertEquals("checkpoint", invokeResolveAction("done", "partially_done", "medium", false, false, false));
+    }
+
+    @Test
+    void doneExecutionWithLowAlignmentCompletionResolvesToCheckpoint() throws Exception {
+        assertEquals("checkpoint", invokeResolveAction("done", "done", "low", false, false, false));
+    }
+
+    @Test
     void continuePlusContextReopenResolvesToCheckpoint() throws Exception {
         assertEquals("reopen", invokeResolveAction("continue", "partially_done", "medium", true, false, false));
     }
@@ -82,6 +92,58 @@ class ControlNodeGraphActionResolutionTest {
         assertEquals("end", finalized.controlNode());
         assertNull(finalized.nextStep());
         assertNotNull(finalized.completedAt());
+    }
+
+    @Test
+    void workerArtifactMetadataProjectsProviderRunFilesAndBoundedOutputText() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        WorkerExecutionResult result = new WorkerExecutionResult(
+            "summary",
+            "x".repeat(16_384),
+            false,
+            "",
+            "",
+            "",
+            "medium",
+            "failed",
+            List.of(),
+            List.of(),
+            0,
+            10L,
+            Map.of(
+                "provider_output_truncated", true,
+                "provider_output_total_bytes", 1_050_000L,
+                "provider_output_sqlite_limit_chars", 16_384,
+                "provider_stdout_path", "D:\\tmp\\provider-runs\\stdout.log",
+                "provider_last_message_path", "D:\\tmp\\provider-runs\\last_message.md"
+            )
+        );
+
+        Method outputMethod = ControlNodeGraph.class.getDeclaredMethod("artifactOutputText", WorkerExecutionResult.class);
+        outputMethod.setAccessible(true);
+        String outputText = (String) outputMethod.invoke(graph, result);
+
+        Method metadataMethod = ControlNodeGraph.class.getDeclaredMethod(
+            "buildWorkerArtifactMetadata",
+            WorkerExecutionResult.class,
+            Object[].class
+        );
+        metadataMethod.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metadata = (Map<String, Object>) metadataMethod.invoke(
+            graph,
+            result,
+            new Object[]{"output_text", outputText}
+        );
+
+        assertTrue(outputText.length() < 17_000);
+        assertTrue(outputText.contains("provider output truncated"));
+        assertEquals(true, metadata.get("provider_output_truncated"));
+        assertEquals("D:\\tmp\\provider-runs\\stdout.log", metadata.get("provider_stdout_path"));
+        assertTrue(metadata.get("latest_worker_metadata") instanceof Map<?, ?>);
     }
 
     @Test
@@ -125,6 +187,90 @@ class ControlNodeGraphActionResolutionTest {
         assertEquals(Boolean.TRUE, selected.get("mounted_render_used"));
         assertEquals(7, selected.get("mounted_context_panel_count"));
         assertTrue(!selected.containsKey("ignored"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void selectLatestWorkerMetadataKeepsProviderErrorDiagnostics() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("selectLatestWorkerMetadata", Map.class);
+        method.setAccessible(true);
+
+        Map<String, Object> selected = (Map<String, Object>) method.invoke(graph, Map.ofEntries(
+            Map.entry("provider_id", "codex"),
+            Map.entry("execution_backend", "provider_app_server"),
+            Map.entry("provider_session_id", "thread-codex-001"),
+            Map.entry("provider_thread_id", "thread-codex-001"),
+            Map.entry("resume_provider_session_id", "thread-codex-001"),
+            Map.entry("provider_error", "codex turn completion timed out"),
+            Map.entry("provider_turn_status", "timeout"),
+            Map.entry("provider_failure_class", "provider_runtime_transient"),
+            Map.entry("provider_failure_reason", "turn timed out"),
+            Map.entry("provider_retryable", true),
+            Map.entry("raw_provider_payload", "should not leak")
+        ));
+
+        assertEquals("codex", selected.get("provider_id"));
+        assertEquals("provider_app_server", selected.get("execution_backend"));
+        assertEquals("thread-codex-001", selected.get("provider_session_id"));
+        assertEquals("thread-codex-001", selected.get("provider_thread_id"));
+        assertEquals("thread-codex-001", selected.get("resume_provider_session_id"));
+        assertEquals("codex turn completion timed out", selected.get("provider_error"));
+        assertEquals("timeout", selected.get("provider_turn_status"));
+        assertEquals("provider_runtime_transient", selected.get("provider_failure_class"));
+        assertEquals("turn timed out", selected.get("provider_failure_reason"));
+        assertEquals(Boolean.TRUE, selected.get("provider_retryable"));
+        assertTrue(!selected.containsKey("raw_provider_payload"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void augmentLatestWorkerMetadataKeepsProviderErrorDiagnostics() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "augmentLatestWorkerMetadata",
+            Map.class,
+            WorkerExecutionResult.class
+        );
+        method.setAccessible(true);
+
+        WorkerExecutionResult result = new WorkerExecutionResult(
+            "thread not found: 27316",
+            "thread not found: 27316",
+            false,
+            null,
+            null,
+            null,
+            "low",
+            "timeout",
+            List.of(),
+            List.of(),
+            0,
+            120_000L,
+            Map.of(
+                "provider_error", "codex turn completion timed out",
+                "provider_turn_status", "timeout",
+                "provider_failure_class", "provider_runtime_transient",
+                "provider_failure_reason", "turn timed out",
+                "provider_retryable", true
+            )
+        );
+
+        Map<String, Object> metadata = (Map<String, Object>) method.invoke(graph, Map.of(), result);
+
+        assertEquals("timeout", metadata.get("execution_status"));
+        assertEquals(120_000L, metadata.get("duration_ms"));
+        assertEquals("codex turn completion timed out", metadata.get("provider_error"));
+        assertEquals("timeout", metadata.get("provider_turn_status"));
+        assertEquals("provider_runtime_transient", metadata.get("provider_failure_class"));
+        assertEquals("turn timed out", metadata.get("provider_failure_reason"));
+        assertEquals(Boolean.TRUE, metadata.get("provider_retryable"));
     }
 
     @Test
@@ -179,6 +325,68 @@ class ControlNodeGraphActionResolutionTest {
         assertEquals(4, boundary.metadata().get("mounted_active_count"));
         assertEquals(2, boundary.metadata().get("mounted_evidence_count"));
         assertEquals(1, boundary.metadata().get("mounted_archive_count"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void buildExecutionBoundaryKeepsProviderBackendFields() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("buildExecutionBoundary", Map.class);
+        method.setAccessible(true);
+
+        Object raw = method.invoke(graph, Map.ofEntries(
+            Map.entry("execution_status", "timeout"),
+            Map.entry("selected_worker", "codex"),
+            Map.entry("execution_backend", "provider_app_server"),
+            Map.entry("provider_id", "codex"),
+            Map.entry("provider_session_id", "thread-codex-001"),
+            Map.entry("provider_thread_id", "thread-codex-001"),
+            Map.entry("resume_provider_session_id", "thread-codex-001"),
+            Map.entry("provider_error", "codex turn completion timed out"),
+            Map.entry("provider_turn_status", "timeout"),
+            Map.entry("provider_failure_class", "provider_runtime_transient"),
+            Map.entry("provider_failure_reason", "turn timed out"),
+            Map.entry("provider_retryable", true)
+        ));
+
+        assertNotNull(raw);
+        com.agentcloud.runtime.model.RuntimeFactSet.ExecutionBoundary boundary =
+            (com.agentcloud.runtime.model.RuntimeFactSet.ExecutionBoundary) raw;
+        assertEquals("provider_app_server", boundary.metadata().get("execution_backend"));
+        assertEquals("codex", boundary.metadata().get("provider_id"));
+        assertEquals("thread-codex-001", boundary.metadata().get("provider_session_id"));
+        assertEquals("thread-codex-001", boundary.metadata().get("provider_thread_id"));
+        assertEquals("thread-codex-001", boundary.metadata().get("resume_provider_session_id"));
+        assertEquals("codex turn completion timed out", boundary.metadata().get("provider_error"));
+        assertEquals("timeout", boundary.metadata().get("provider_turn_status"));
+        assertEquals("provider_runtime_transient", boundary.metadata().get("provider_failure_class"));
+        assertEquals("turn timed out", boundary.metadata().get("provider_failure_reason"));
+        assertEquals(Boolean.TRUE, boundary.metadata().get("provider_retryable"));
+    }
+
+    @Test
+    void resolveRecoveryFailureTextPrefersProviderErrorOverThreadNoise() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("resolveRecoveryFailureText", Map.class, String.class);
+        method.setAccessible(true);
+
+        String summary = (String) method.invoke(graph, Map.of(
+            "selected_worker", "codex",
+            "provider_error", "codex turn completion timed out",
+            "provider_failure_reason", "turn timed out",
+            "provider_turn_status", "timeout",
+            "failure_summary_readable", "worker codex failed: thread not found (27316)",
+            "output_text", "thread not found: 27316"
+        ), "thread not found: 27316");
+
+        assertEquals("worker codex failed: codex turn completion timed out", summary);
+        assertTrue(!summary.contains("thread not found"));
     }
 
     @Test
@@ -529,6 +737,85 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    void enrichTaskFromJudgmentUsesExecutionJudgmentNextStepBeforeCompletionAndWorkerOutput() throws Exception {
+        Task updated = invokeEnrichTaskFromJudgment(
+            Task.create("task_1", "session_1", "demo", "active", "high")
+                .withNextStep("旧下一步"),
+            new WorkerExecutionResult(
+                "summary",
+                "output",
+                false,
+                "",
+                "",
+                "worker suggested next",
+                "medium",
+                "succeeded",
+                List.of(),
+                List.of(),
+                0,
+                0L,
+                Map.of()
+            ),
+            "latest output",
+            "execution judgment next",
+            "completion judgment next"
+        );
+
+        assertEquals("execution judgment next", updated.nextStep());
+    }
+
+    @Test
+    void enrichTaskFromJudgmentFallsBackToCompletionThenWorkerNextStep() throws Exception {
+        Task completionUpdated = invokeEnrichTaskFromJudgment(
+            Task.create("task_1", "session_1", "demo", "active", "high")
+                .withNextStep("旧下一步"),
+            new WorkerExecutionResult(
+                "summary",
+                "output",
+                false,
+                "",
+                "",
+                "worker suggested next",
+                "medium",
+                "succeeded",
+                List.of(),
+                List.of(),
+                0,
+                0L,
+                Map.of()
+            ),
+            "latest output",
+            "",
+            "completion judgment next"
+        );
+        assertEquals("completion judgment next", completionUpdated.nextStep());
+
+        Task workerUpdated = invokeEnrichTaskFromJudgment(
+            Task.create("task_2", "session_1", "demo", "active", "high")
+                .withNextStep("旧下一步"),
+            new WorkerExecutionResult(
+                "summary",
+                "output",
+                false,
+                "",
+                "",
+                "worker suggested next",
+                "medium",
+                "succeeded",
+                List.of(),
+                List.of(),
+                0,
+                0L,
+                Map.of()
+            ),
+            "latest output",
+            "",
+            ""
+        );
+        assertEquals("worker suggested next", workerUpdated.nextStep());
+    }
+
+    @Test
     void maybePlanFailureRecoverySchedulesAutoHandoffAfterRetryBudget() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
@@ -693,6 +980,11 @@ class ControlNodeGraphActionResolutionTest {
         handoffTarget.setAccessible(true);
 
         assertEquals("codex", handoffTarget.invoke(directive));
+        WorkerRegistry.ReadinessCheck previousWorkerReadiness = registry.checkReadiness("claude");
+        assertFalse(previousWorkerReadiness.ready());
+        assertFalse(previousWorkerReadiness.checks().getOrDefault("runtime_available", true));
+        assertTrue(previousWorkerReadiness.reason().contains("temporarily unavailable"));
+        assertTrue(previousWorkerReadiness.reason().contains("thread not found"));
     }
 
     @Test
@@ -766,6 +1058,7 @@ class ControlNodeGraphActionResolutionTest {
 
         assertEquals("codex", updated.assignedWorker());
         assertEquals("same_worker_retry_scheduled", updated.metadata().get("recovery_stage"));
+        assertEquals("fresh_session", updated.metadata().get("recovery_execution_mode"));
         assertEquals(1, updated.metadata().get("auto_same_worker_retry_count"));
         assertEquals("codex", updated.metadata().get("assigned_worker"));
         assertEquals("codex", updated.metadata().get("previous_worker"));
@@ -818,6 +1111,7 @@ class ControlNodeGraphActionResolutionTest {
 
         assertEquals(handoffTarget, updated.assignedWorker());
         assertEquals("auto_handoff_scheduled", updated.metadata().get("recovery_stage"));
+        assertEquals("fresh_session", updated.metadata().get("recovery_execution_mode"));
         assertEquals(1, updated.metadata().get("auto_same_worker_retry_count"));
         assertEquals(handoffTarget, updated.metadata().get("assigned_worker"));
         assertEquals("codex", updated.metadata().get("previous_worker"));
@@ -908,6 +1202,51 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    void maybePlanFailureRecoverySchedulesAutoHandoffForLocalWorkspaceAccessRefusal() throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "maybePlanFailureRecovery", Task.class, Map.class, String.class
+        );
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("deepseek")
+            .withMetadata(Map.of(
+                "task_type", "coding",
+                "workspace_root", "D:\\gitAll\\articleeditor"
+            ));
+        String refusal = "我目前无法直接访问本地文件或路径，请粘贴文档内容。";
+        Object directive = method.invoke(graph, task, Map.of(
+            "execution_status", "completed",
+            "output_text", refusal,
+            "selected_worker", "deepseek",
+            "candidate_workers", List.of("deepseek", "codex")
+        ), refusal);
+
+        assertNotNull(directive);
+        Class<?> directiveClass = directive.getClass();
+        Method failureClass = directiveClass.getDeclaredMethod("failureClass");
+        Method recoveryStage = directiveClass.getDeclaredMethod("recoveryStage");
+        Method sameWorkerRetry = directiveClass.getDeclaredMethod("sameWorkerRetry");
+        Method autoHandoff = directiveClass.getDeclaredMethod("autoHandoff");
+        Method handoffTarget = directiveClass.getDeclaredMethod("handoffTarget");
+        failureClass.setAccessible(true);
+        recoveryStage.setAccessible(true);
+        sameWorkerRetry.setAccessible(true);
+        autoHandoff.setAccessible(true);
+        handoffTarget.setAccessible(true);
+
+        assertEquals("worker_backend_deterministic", failureClass.invoke(directive));
+        assertEquals("auto_handoff_scheduled", recoveryStage.invoke(directive));
+        assertEquals(Boolean.FALSE, sameWorkerRetry.invoke(directive));
+        assertEquals(Boolean.TRUE, autoHandoff.invoke(directive));
+        assertEquals("codex", handoffTarget.invoke(directive));
+    }
+
+    @Test
     void maybePlanFailureRecoveryClassifiesPartialResultOrQualityRisk() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
@@ -970,6 +1309,34 @@ class ControlNodeGraphActionResolutionTest {
             needsContextReopen,
             needsArchiveRetrieval,
             needsExternalFactRefresh
+        );
+    }
+
+    private Task invokeEnrichTaskFromJudgment(Task task,
+                                             WorkerExecutionResult result,
+                                             String latestOutput,
+                                             String executionNextStep,
+                                             String completionNextAction) throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "enrichTaskFromJudgment",
+            Task.class,
+            WorkerExecutionResult.class,
+            String.class,
+            String.class,
+            String.class
+        );
+        method.setAccessible(true);
+        return (Task) method.invoke(
+            graph,
+            task,
+            result,
+            latestOutput,
+            executionNextStep,
+            completionNextAction
         );
     }
 

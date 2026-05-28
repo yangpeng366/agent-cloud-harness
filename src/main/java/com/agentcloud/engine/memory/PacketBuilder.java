@@ -25,20 +25,29 @@ public class PacketBuilder {
     private final ResumePacketDao resumePacketDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeFactSurfaceExporter runtimeFactSurfaceExporter;
+    private final AgentActionDao agentActionDao;
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao) {
-        this(decisionDao, artifactDao, taskDao, null, null, null);
+        this(decisionDao, artifactDao, taskDao, null, null, null, null);
     }
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
                          ResumePacketDao resumePacketDao) {
-        this(decisionDao, artifactDao, taskDao, resumePacketDao, null, null);
+        this(decisionDao, artifactDao, taskDao, resumePacketDao, null, null, null);
     }
 
     public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
                          ResumePacketDao resumePacketDao,
                          RuntimeFactSetAssembler runtimeFactSetAssembler,
                          RuntimeFactSurfaceExporter runtimeFactSurfaceExporter) {
+        this(decisionDao, artifactDao, taskDao, resumePacketDao, runtimeFactSetAssembler, runtimeFactSurfaceExporter, null);
+    }
+
+    public PacketBuilder(DecisionDao decisionDao, ArtifactDao artifactDao, TaskDao taskDao,
+                         ResumePacketDao resumePacketDao,
+                         RuntimeFactSetAssembler runtimeFactSetAssembler,
+                         RuntimeFactSurfaceExporter runtimeFactSurfaceExporter,
+                         AgentActionDao agentActionDao) {
         this.decisionDao = decisionDao;
         this.artifactDao = artifactDao;
         this.taskDao = taskDao;
@@ -47,11 +56,13 @@ public class PacketBuilder {
         this.runtimeFactSurfaceExporter = runtimeFactSurfaceExporter != null
             ? runtimeFactSurfaceExporter
             : new RuntimeFactSurfaceExporter();
+        this.agentActionDao = agentActionDao;
     }
 
     public ResumePacket buildResumePacket(Task task, Session session) {
         List<Decision> decisions = decisionDao.listBySessionAndTask(session.id(), task.id(), 10);
         List<Artifact> artifacts = artifactDao.listBySessionAndTask(session.id(), task.id(), 10);
+        List<AgentAction> actions = loadRecentActions(task, 10);
         PacketTaskIdentity taskIdentity = buildTaskIdentity(task);
         List<PacketDecisionRef> recentDecisions = decisions.stream()
             .limit(5)
@@ -101,6 +112,7 @@ public class PacketBuilder {
         payload.put("key_constraints", List.of());
         putPromptModeContinuityFields(payload, task);
         attachRuntimeFactSurface(payload, task);
+        payload.putAll(AgentActionContinuityProjection.from(actions));
 
         return new ResumePacket(
             java.util.UUID.randomUUID().toString(),
@@ -123,6 +135,7 @@ public class PacketBuilder {
     public HandoffPacket buildHandoffPacket(Task task, Session session, String fromWorker, String toWorker) {
         List<Decision> decisions = decisionDao.listBySessionAndTask(session.id(), task.id(), 10);
         List<Artifact> artifacts = artifactDao.listBySessionAndTask(session.id(), task.id(), 10);
+        List<AgentAction> actions = loadRecentActions(task, 10);
         List<Task> subTasks = taskDao.listBySession(session.id()).stream()
             .filter(t -> task.id().equals(t.parentTaskId()))
             .toList();
@@ -152,6 +165,7 @@ public class PacketBuilder {
         copyMetadata(task.metadata(), metadata, "fallback_reason");
         putPromptModeContinuityFields(metadata, task);
         attachRuntimeFactSurface(metadata, task);
+        metadata.putAll(AgentActionContinuityProjection.from(actions));
 
         log.info("Handoff packet built for task={} from={} to={}", task.id(), fromWorker, toWorker);
         return new HandoffPacket(
@@ -428,6 +442,13 @@ public class PacketBuilder {
         if (!runtimeCognitionSurface.isEmpty()) {
             target.put("runtime_cognition_surface", runtimeCognitionSurface);
         }
+    }
+
+    private List<AgentAction> loadRecentActions(Task task, int limit) {
+        if (agentActionDao == null || task == null) {
+            return List.of();
+        }
+        return agentActionDao.listByTask(task.id(), limit);
     }
 
     private Map<String, Object> currentContinuityMetadata(Task task) {

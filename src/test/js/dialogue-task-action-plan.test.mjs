@@ -14,10 +14,16 @@ test("task action plan switches paused tasks to resume-first", () => {
     assert.deepEqual(plan.secondary.map((item) => item.action), ["continue", "escalate", "handoff"]);
 });
 
-test("task action plan switches human-gate tasks to resume-first", () => {
+test("task action plan switches human-gate tasks to recover-first", () => {
     const plan = buildTaskActionPlan({ status: "waiting_human", control_node: "human_gate" });
-    assert.equal(plan.primary.action, "resume");
-    assert.deepEqual(plan.secondary.map((item) => item.action), ["continue", "handoff"]);
+    assert.equal(plan.primary.action, "recover");
+    assert.deepEqual(plan.secondary.map((item) => item.action), ["resume", "continue", "handoff"]);
+});
+
+test("task action plan keeps failed interrupted tasks recoverable", () => {
+    const plan = buildTaskActionPlan({ status: "failed", control_node: "human_gate" });
+    assert.equal(plan.primary.action, "recover");
+    assert.deepEqual(plan.secondary.map((item) => item.action), ["handoff"]);
 });
 
 test("task action plan removes primary action for terminal tasks", () => {

@@ -175,4 +175,41 @@ public final class Mappers {
         rs.getObject("artifact_count") != null ? rs.getInt("artifact_count") : null,
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
+
+    public static final RowMapper<AgentAction> AGENT_ACTION = (rs, ctx) -> new AgentAction(
+        rs.getString("id"),
+        rs.getString("session_id"),
+        rs.getString("task_id"),
+        rs.getString("source_execution_id"),
+        rs.getString("action_type"),
+        rs.getString("status"),
+        rs.getString("summary"),
+        JsonMapper.fromJson(rs.getString("payload_json")),
+        rs.getString("risk_level"),
+        rs.getInt("requires_approval") == 1,
+        rs.getString("accepted_by"),
+        rs.getString("rejection_reason"),
+        instant(rs, "created_at"),
+        instant(rs, "updated_at"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
+    public static final RowMapper<TaskRecoveryJob> TASK_RECOVERY_JOB = (rs, ctx) -> new TaskRecoveryJob(
+        rs.getString("id"),
+        rs.getString("task_id"),
+        rs.getString("session_id"),
+        rs.getString("status"),
+        rs.getString("mode"),
+        rs.getString("recommended_action"),
+        rs.getString("target_worker"),
+        rs.getString("recovery_execution_mode"),
+        rs.getString("failure_class"),
+        rs.getString("provider_failure_class"),
+        rs.getString("status_url"),
+        instant(rs, "accepted_at"),
+        instant(rs, "started_at"),
+        instant(rs, "completed_at"),
+        rs.getString("error_message"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
 }

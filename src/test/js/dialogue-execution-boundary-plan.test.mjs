@@ -29,3 +29,25 @@ test("execution boundary facts fall back to tool list size when count is absent"
     assert.equal(facts.toolInvocationCount, 1);
     assert.equal(facts.label, "Completed · 1 call");
 });
+
+test("execution boundary facts expose provider run file chips from metadata", () => {
+    const facts = buildExecutionBoundaryFacts({
+        execution_boundary: {
+            execution_status: "failed",
+            metadata: {
+                provider_run_dir: "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1",
+                provider_last_message_path: "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\last_message.md",
+                provider_event_log_path: "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\events.jsonl"
+            }
+        }
+    });
+
+    assert.equal(facts.providerRunDir, "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1");
+    assert.equal(facts.providerLastMessagePath, "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\last_message.md");
+    assert.equal(facts.providerEventLogPath, "D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\events.jsonl");
+    assert.deepEqual(facts.chips, [
+        "run: D:\\tmp\\provider-runs\\codex\\task-1\\exec-1",
+        "last: D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\last_message.md",
+        "events: D:\\tmp\\provider-runs\\codex\\task-1\\exec-1\\events.jsonl"
+    ]);
+});

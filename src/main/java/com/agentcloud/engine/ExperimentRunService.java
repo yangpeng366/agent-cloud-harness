@@ -276,7 +276,9 @@ public class ExperimentRunService {
             copyMetadata(task.metadata(), metadata, "model_mode");
             copyMetadata(task.metadata(), metadata, "orchestration_stage");
             copyMetadata(task.metadata(), metadata, "planner_worker");
+            copyMetadata(task.metadata(), metadata, "planner_model_tier");
             copyMetadata(task.metadata(), metadata, "executor_worker");
+            copyMetadata(task.metadata(), metadata, "executor_model_tier");
         }
 
         Instant createdAt = existing != null ? existing.createdAt() : Instant.now();
@@ -1678,7 +1680,9 @@ public class ExperimentRunService {
         copyMetadata(source, target, "model_mode");
         copyMetadata(source, target, "orchestration_stage");
         copyMetadata(source, target, "planner_worker");
+        copyMetadata(source, target, "planner_model_tier");
         copyMetadata(source, target, "executor_worker");
+        copyMetadata(source, target, "executor_model_tier");
         copyMetadata(source, target, "target_worker");
         copyMetadata(source, target, "tool_aware_executor");
         copyMetadata(source, target, "tool_execution_mode");

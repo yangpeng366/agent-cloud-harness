@@ -42,6 +42,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
@@ -305,6 +307,175 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals("proof=tool:exec_http_cognition_1, evidence:tool:read_file:input.txt",
                 traceExecution.get("proof_summary"));
             assertEquals(List.of("tool:read_file:input.txt"), traceExecution.get("evidence_refs"));
+        }
+    }
+
+    @Test
+    void liveFlowHttpExposesProviderExecutionDiagnostics() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-provider-diagnostics.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http provider diagnostics task", "coding", "user", "high",
+                "检查 live_flow HTTP 是否透出 provider 诊断字段", "HTTP JSON should expose provider execution diagnostics",
+                null, null, Map.of(), false
+            ));
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "worker codex failed: thread not found (27984)",
+                Map.of("latest_worker_metadata", Map.ofEntries(
+                    Map.entry("selected_worker", "codex"),
+                    Map.entry("execution_status", "timeout"),
+                    Map.entry("execution_backend", "provider_app_server"),
+                    Map.entry("provider_id", "codex"),
+                    Map.entry("provider_session_id", "019e4401-f18c-7fa2-b63d-8544108edcf5"),
+                    Map.entry("provider_thread_id", "019e4401-f18c-7fa2-b63d-8544108edcf5"),
+                    Map.entry("resume_provider_session_id", "019e4401-f18c-7fa2-b63d-8544108edcf5"),
+                    Map.entry("provider_error", "codex turn completion timed out"),
+                    Map.entry("provider_turn_status", "timeout"),
+                    Map.entry("provider_failure_class", "provider_runtime_transient"),
+                    Map.entry("provider_failure_reason", "turn timed out"),
+                    Map.entry("provider_retryable", true),
+                    Map.entry("provider_protocol_trace", List.of("thread/started", "turn/started")),
+                    Map.entry("provider_run_dir", "D:\\tmp\\provider-runs\\codex\\task-http"),
+                    Map.entry("provider_prompt_path", "D:\\tmp\\provider-runs\\codex\\task-http\\prompt.txt"),
+                    Map.entry("provider_event_log_path", "D:\\tmp\\provider-runs\\codex\\task-http\\events.jsonl"),
+                    Map.entry("provider_last_message_path", "D:\\tmp\\provider-runs\\codex\\task-http\\last_message.md"),
+                    Map.entry("provider_run_metadata_path", "D:\\tmp\\provider-runs\\codex\\task-http\\metadata.json")
+                ))
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=8"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> flowSurface = harness.map(flowData.get("runtime_cognition_surface"));
+            Map<String, Object> flowExecution = harness.map(flowSurface.get("execution"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("provider_app_server", flowExecution.get("execution_backend"));
+            assertEquals("codex", flowExecution.get("provider_id"));
+            assertEquals("019e4401-f18c-7fa2-b63d-8544108edcf5", flowExecution.get("provider_session_id"));
+            assertEquals("019e4401-f18c-7fa2-b63d-8544108edcf5", flowExecution.get("provider_thread_id"));
+            assertEquals("019e4401-f18c-7fa2-b63d-8544108edcf5", flowExecution.get("resume_provider_session_id"));
+            assertEquals("codex turn completion timed out", flowExecution.get("provider_error"));
+            assertEquals("timeout", flowExecution.get("provider_turn_status"));
+            assertEquals("provider_runtime_transient", flowExecution.get("provider_failure_class"));
+            assertEquals("turn timed out", flowExecution.get("provider_failure_reason"));
+            assertEquals(Boolean.TRUE, flowExecution.get("provider_retryable"));
+            assertEquals(List.of("thread/started", "turn/started"), flowExecution.get("provider_protocol_trace"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-http", flowExecution.get("provider_run_dir"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-http\\prompt.txt", flowExecution.get("provider_prompt_path"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-http\\events.jsonl", flowExecution.get("provider_event_log_path"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-http\\last_message.md", flowExecution.get("provider_last_message_path"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-http\\metadata.json", flowExecution.get("provider_run_metadata_path"));
+        }
+    }
+
+    @Test
+    void providerRunFileHttpReadsBoundedLastMessageFromLatestExecutionMetadata() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider run file", "coding", "user", "high",
+                "读取 provider run 文件", "HTTP should read provider run file content",
+                null, null, Map.of(), false
+            ));
+            Path runDir = tempDir.resolve("provider-run").toAbsolutePath().normalize();
+            Files.createDirectories(runDir);
+            Path promptPath = runDir.resolve("prompt.txt");
+            Path lastMessagePath = runDir.resolve("last_message.md");
+            Path metadataPath = runDir.resolve("metadata.json");
+            Files.writeString(promptPath, "prompt", StandardCharsets.UTF_8);
+            Files.writeString(lastMessagePath, "codex final answer", StandardCharsets.UTF_8);
+            Files.writeString(metadataPath, "{\"status\":\"done\"}", StandardCharsets.UTF_8);
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "codex final answer",
+                Map.of("latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "succeeded",
+                    "provider_run_dir", runDir.toString(),
+                    "provider_prompt_path", promptPath.toString(),
+                    "provider_last_message_path", lastMessagePath.toString(),
+                    "provider_run_metadata_path", metadataPath.toString()
+                ))
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/provider_run_file?kind=last_message"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            assertEquals(200, response.statusCode());
+            assertEquals("last_message", data.get("kind"));
+            assertEquals(lastMessagePath.toString(), data.get("path"));
+            assertEquals("codex final answer", data.get("content"));
+            assertEquals(Boolean.FALSE, data.get("truncated"));
+        }
+    }
+
+    @Test
+    void providerRunFileHttpRejectsPathOutsideProviderRunDir() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file-outside.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider run file outside", "coding", "user", "high",
+                "拒绝 provider run 外部文件", "HTTP should reject provider run file outside run dir",
+                null, null, Map.of(), false
+            ));
+            Path runDir = tempDir.resolve("provider-run-safe").toAbsolutePath().normalize();
+            Path outside = tempDir.resolve("outside-last-message.md").toAbsolutePath().normalize();
+            Files.createDirectories(runDir);
+            Files.writeString(outside, "secret", StandardCharsets.UTF_8);
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "worker output",
+                Map.of("latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "failed",
+                    "provider_run_dir", runDir.toString(),
+                    "provider_last_message_path", outside.toString()
+                ))
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/provider_run_file?kind=last_message"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            assertEquals(400, response.statusCode());
         }
     }
 
@@ -684,6 +855,77 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals("small", routePreview.get("selected_model_tier"));
             assertEquals("executor", routePreview.get("selection_scope"));
             assertTrue(String.valueOf(routePreview.get("why_selected")).contains("task-pinned worker"));
+        }
+    }
+
+    @Test
+    void liveFlowRoutePreviewExposesDispatchSkippedWorkers() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-dispatch-skipped.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "dispatch skipped route task", "coding", "user", "high",
+                "确认 live_flow 透出 dispatch skipped worker 结构化诊断",
+                "route trace should expose provider failure metadata",
+                null, null, Map.of(), false
+            ));
+            harness.db.jdbi().onDemand(TaskDao.class).updateState(task.withAssignedWorker("kimi"));
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                "art_dispatch_skipped",
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-22T08:00:00Z"),
+                "worker_artifact",
+                "dispatch skipped worker artifact",
+                null,
+                null,
+                "worker route diagnostics",
+                Map.of(
+                    "latest_worker_metadata", Map.ofEntries(
+                        Map.entry("selected_worker", "kimi"),
+                        Map.entry("selected_worker_type", "kimi"),
+                        Map.entry("selected_model_tier", "small"),
+                        Map.entry("execution_role", "executor"),
+                        Map.entry("selection_scope", "executor"),
+                        Map.entry("route_source", "capability_match"),
+                        Map.entry("why_selected", "selected by capability match: taskType=coding, worker=kimi"),
+                        Map.entry("candidate_workers", List.of("codex", "kimi")),
+                        Map.entry("fallback_reason", "dispatch readiness skipped worker(s): codex skipped: thread not found during dispatch preflight"),
+                        Map.entry("dispatch_skipped_workers", List.of(Map.of(
+                            "worker_id", "codex",
+                            "reason", "thread not found during dispatch preflight",
+                            "provider_failure_class", "provider_runtime_transient",
+                            "provider_failure_reason", "thread not found during dispatch preflight",
+                            "provider_retryable", true
+                        ))),
+                        Map.entry("execution_status", "succeeded")
+                    )
+                )
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+            Map<String, Object> runtimeFacts = harness.map(flowData.get("runtime_facts"));
+            Map<String, Object> runtimeMetadata = harness.map(runtimeFacts.get("metadata"));
+            Map<String, Object> surface = harness.map(flowData.get("runtime_cognition_surface"));
+            Map<String, Object> routeSurface = harness.map(surface.get("route"));
+            List<Map<String, Object>> routeSkipped = harness.list(routePreview.get("dispatch_skipped_workers"));
+            List<Map<String, Object>> metadataSkipped = harness.list(runtimeMetadata.get("dispatch_skipped_workers"));
+            List<Map<String, Object>> surfaceSkipped = harness.list(routeSurface.get("dispatch_skipped_workers"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("kimi", routePreview.get("selected_worker"));
+            assertEquals("codex", routeSkipped.getFirst().get("worker_id"));
+            assertEquals("provider_runtime_transient", routeSkipped.getFirst().get("provider_failure_class"));
+            assertEquals(Boolean.TRUE, routeSkipped.getFirst().get("provider_retryable"));
+            assertEquals("codex", metadataSkipped.getFirst().get("worker_id"));
+            assertEquals("provider_runtime_transient", surfaceSkipped.getFirst().get("provider_failure_class"));
         }
     }
 

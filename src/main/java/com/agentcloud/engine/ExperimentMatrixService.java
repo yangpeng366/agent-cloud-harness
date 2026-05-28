@@ -128,6 +128,10 @@ public class ExperimentMatrixService {
                 metadata.put("baseline_matrix_source", "baseline_v1");
                 metadata.put("baseline_case_title", taskCase.title());
                 metadata.put("baseline_case_version", "v1");
+                metadata.put("baseline_workspace_preconditions", taskCase.workspacePreconditions());
+                metadata.put("baseline_acceptance_criteria", taskCase.acceptanceCriteria());
+                metadata.put("baseline_expected_artifacts", taskCase.expectedArtifacts());
+                metadata.put("baseline_recovery_policy", taskCase.recoveryPolicy());
 
                 Task createdTask = taskService.createTask(new TaskCreateRequest(
                     taskCase.title() + " [" + mode + "]",
@@ -587,6 +591,25 @@ public class ExperimentMatrixService {
                 .map(ExperimentRunRecord::metadata)
                 .filter(metadata -> Boolean.TRUE.equals(metadataBoolean(metadata, "orchestration_closed_loop_observed")))
                 .count();
+            int runsWithStrongPlannerEvidence = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasStrongPlannerEvidence)
+                .count();
+            int runsWithSmallExecutorEvidence = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasSmallExecutorEvidence)
+                .count();
+            int runsWithStrongEvaluatorEvidence = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(this::hasStrongEvaluatorEvidence)
+                .count();
+            int runsWithStrongSmallStrongLoop = (int) runsByMode.stream()
+                .map(ExperimentRunRecord::metadata)
+                .filter(metadata -> hasStrongPlannerEvidence(metadata)
+                    && hasSmallExecutorEvidence(metadata)
+                    && hasStrongEvaluatorEvidence(metadata))
+                .count();
+            Map<String, Integer> evaluatorModelTierCounts = countMetadataValues(runsByMode, "evaluator_model_tier");
             modeSummaries.add(new ExperimentMatrixSummary.ModeSummary(
                 mode,
                 runCount,
@@ -603,6 +626,11 @@ public class ExperimentMatrixService {
                 acceptanceRate,
                 orchestrationClosedLoopObservedCount,
                 orchestratedRunCount,
+                runsWithStrongPlannerEvidence,
+                runsWithSmallExecutorEvidence,
+                runsWithStrongEvaluatorEvidence,
+                runsWithStrongSmallStrongLoop,
+                evaluatorModelTierCounts,
                 runsWithRouteData,
                 runsWithExecutionJudgment,
                 runsWithCompletionJudgment,
@@ -773,6 +801,53 @@ public class ExperimentMatrixService {
                                                  String lengthBucket,
                                                  String intent,
                                                  String goal) {
+        List<String> workspacePreconditions = switch (lengthBucket) {
+            case "short" -> List.of(
+                "Use the current repository worktree as the only source of truth.",
+                "Limit the proposed change to one focused code path and its nearest regression test."
+            );
+            case "medium" -> List.of(
+                "Use the current repository worktree as the only source of truth.",
+                "Assume a clean temporary SQLite database is available for service or handler tests.",
+                "Keep the implementation within the existing HttpServer/Jdbi/record architecture."
+            );
+            case "long" -> List.of(
+                "Use the current repository worktree as the only source of truth.",
+                "Plan across routing, execution, judgment, packet, and UI evidence surfaces when relevant.",
+                "Preserve existing dirty worktree changes that are unrelated to the case."
+            );
+            default -> List.of("Use the current repository worktree as the only source of truth.");
+        };
+        List<String> acceptanceCriteria = switch (lengthBucket) {
+            case "short" -> List.of(
+                "The answer identifies the exact file or contract surface to change.",
+                "The proposed assertion is concrete enough to become a regression test.",
+                "No broad architecture or unrelated behavior change is introduced."
+            );
+            case "medium" -> List.of(
+                "The endpoint, trace, or packet contract is described with stable field names.",
+                "At least one regression test or probe path is named.",
+                "The result explains how to verify the behavior from persisted or HTTP-visible evidence."
+            );
+            case "long" -> List.of(
+                "The work is split into ordered phases with explicit handoff and recovery boundaries.",
+                "The comparison or continuity evidence can be read from experiment_run, live_flow, packet, or tool trace surfaces.",
+                "The final output states what remains manual and what can be accepted automatically."
+            );
+            default -> List.of("The result has an explicit, verifiable acceptance condition.");
+        };
+        List<String> expectedArtifacts = switch (lengthBucket) {
+            case "short" -> List.of("fix_plan", "regression_assertion");
+            case "medium" -> List.of("contract_summary", "verification_path", "test_plan");
+            case "long" -> List.of("phased_plan", "risk_register", "acceptance_gate");
+            default -> List.of("evaluation_result");
+        };
+        String recoveryPolicy = switch (lengthBucket) {
+            case "short" -> "retry_once_then_human_review";
+            case "medium" -> "retry_once_or_auto_handoff_if_provider_transient";
+            case "long" -> "allow_pause_resume_and_handoff_with_packet_before_human_gate";
+            default -> "manual_review";
+        };
         return new BaselineTaskCase(
             caseKey,
             title,
@@ -780,6 +855,10 @@ public class ExperimentMatrixService {
             lengthBucket,
             intent,
             goal,
+            workspacePreconditions,
+            acceptanceCriteria,
+            expectedArtifacts,
+            recoveryPolicy,
             Map.of(
                 "task_pack", "baseline_matrix_v1",
                 "length_bucket", lengthBucket
@@ -927,6 +1006,47 @@ public class ExperimentMatrixService {
 
     private boolean hasToolTraceSurfaceRefs(Map<String, Object> metadata) {
         return metadataString(taskSurfaceRefs(metadata), "tool_trace_path") != null;
+    }
+
+    private boolean hasStrongPlannerEvidence(Map<String, Object> metadata) {
+        String plannerWorker = firstNonBlank(
+            metadataString(metadata, "planner_worker"),
+            metadataString(metadata, "planning_worker")
+        );
+        String plannerTier = firstNonBlank(
+            metadataString(metadata, "planner_model_tier"),
+            metadataString(metadata, "planning_model_tier")
+        );
+        String orchestrationStage = metadataString(metadata, "orchestration_stage");
+        String selectedTier = metadataString(metadata, "selected_model_tier");
+        return "strong".equalsIgnoreCase(plannerTier)
+            || (plannerWorker != null && !plannerWorker.isBlank()
+            && !"small".equalsIgnoreCase(plannerTier))
+            || (orchestrationStage != null
+            && orchestrationStage.toLowerCase().startsWith("plan")
+            && "strong".equalsIgnoreCase(selectedTier));
+    }
+
+    private boolean hasSmallExecutorEvidence(Map<String, Object> metadata) {
+        String executorWorker = firstNonBlank(
+            metadataString(metadata, "executor_worker"),
+            metadataString(metadata, "execution_worker")
+        );
+        String executorTier = firstNonBlank(
+            metadataString(metadata, "executor_model_tier"),
+            metadataString(metadata, "execution_model_tier")
+        );
+        String selectedTier = metadataString(metadata, "selected_model_tier");
+        String executionRole = metadataString(metadata, "execution_role");
+        return "small".equalsIgnoreCase(executorTier)
+            || (executorWorker != null && !executorWorker.isBlank()
+            && !"strong".equalsIgnoreCase(executorTier))
+            || ("small".equalsIgnoreCase(selectedTier)
+            && (executionRole == null || !"planner".equalsIgnoreCase(executionRole)));
+    }
+
+    private boolean hasStrongEvaluatorEvidence(Map<String, Object> metadata) {
+        return "strong".equalsIgnoreCase(metadataString(metadata, "evaluator_model_tier"));
     }
 
     @SuppressWarnings("unchecked")

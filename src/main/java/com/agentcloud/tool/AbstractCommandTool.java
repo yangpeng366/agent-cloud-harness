@@ -40,7 +40,7 @@ abstract class AbstractCommandTool implements Tool {
     }
 
     protected Path resolveWorkingDirectory(ToolRequest request, Worker worker) {
-        Path cwd = toolPolicy.resolveWorkingDirectory(worker, request.arguments());
+        Path cwd = toolPolicy.resolveWorkingDirectory(worker, request.arguments(), request.taskMetadata());
         if (!java.nio.file.Files.exists(cwd)) {
             throw new IllegalArgumentException("cwd does not exist: " + cwd);
         }

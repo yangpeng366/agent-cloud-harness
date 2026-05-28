@@ -44,6 +44,11 @@ public record ExperimentMatrixSummary(
         Double acceptanceRate,
         Integer orchestrationClosedLoopObservedCount,
         Integer orchestratedRunCount,
+        Integer runsWithStrongPlannerEvidence,
+        Integer runsWithSmallExecutorEvidence,
+        Integer runsWithStrongEvaluatorEvidence,
+        Integer runsWithStrongSmallStrongLoop,
+        Map<String, Integer> evaluatorModelTierCounts,
         Integer runsWithRouteData,
         Integer runsWithExecutionJudgment,
         Integer runsWithCompletionJudgment,
@@ -134,6 +139,19 @@ public record ExperimentMatrixSummary(
                 orchestrationClosedLoopObservedCount = 0;
             }
             if (orchestratedRunCount == null || orchestratedRunCount < 0) orchestratedRunCount = 0;
+            if (runsWithStrongPlannerEvidence == null || runsWithStrongPlannerEvidence < 0) {
+                runsWithStrongPlannerEvidence = 0;
+            }
+            if (runsWithSmallExecutorEvidence == null || runsWithSmallExecutorEvidence < 0) {
+                runsWithSmallExecutorEvidence = 0;
+            }
+            if (runsWithStrongEvaluatorEvidence == null || runsWithStrongEvaluatorEvidence < 0) {
+                runsWithStrongEvaluatorEvidence = 0;
+            }
+            if (runsWithStrongSmallStrongLoop == null || runsWithStrongSmallStrongLoop < 0) {
+                runsWithStrongSmallStrongLoop = 0;
+            }
+            if (evaluatorModelTierCounts == null) evaluatorModelTierCounts = Map.of();
             if (runsWithRouteData == null || runsWithRouteData < 0) runsWithRouteData = 0;
             if (runsWithExecutionJudgment == null || runsWithExecutionJudgment < 0) runsWithExecutionJudgment = 0;
             if (runsWithCompletionJudgment == null || runsWithCompletionJudgment < 0) runsWithCompletionJudgment = 0;

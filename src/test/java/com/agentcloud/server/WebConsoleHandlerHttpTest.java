@@ -71,6 +71,27 @@ class WebConsoleHandlerHttpTest {
         }
     }
 
+    @Test
+    void consoleRouteDeclaresEmptyFavicon() throws Exception {
+        try (HttpFixture fixture = new HttpFixture()) {
+            HttpResponse<String> response = fixture.get("/console/");
+
+            assertEquals(200, response.statusCode());
+            assertEquals("text/html; charset=UTF-8", response.headers().firstValue("Content-Type").orElse(null));
+            assertTrue(response.body().contains("<link rel=\"icon\" href=\"data:,\">"));
+        }
+    }
+
+    @Test
+    void rootFaviconReturnsNoContentForAcceptanceNoise() throws Exception {
+        try (HttpFixture fixture = new HttpFixture()) {
+            HttpResponse<String> response = fixture.get("/favicon.ico");
+
+            assertEquals(204, response.statusCode());
+            assertTrue(response.body().isEmpty());
+        }
+    }
+
     private static final class HttpFixture implements AutoCloseable {
         private final HttpServer server;
         private final ExecutorService executor;
@@ -81,7 +102,16 @@ class WebConsoleHandlerHttpTest {
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = Executors.newCachedThreadPool();
             this.server.setExecutor(executor);
+            this.server.createContext("/", exchange -> {
+                if ("/favicon.ico".equals(exchange.getRequestURI().getPath())) {
+                    exchange.sendResponseHeaders(204, -1);
+                    exchange.close();
+                    return;
+                }
+                NioHttpServer.sendNotFound(exchange);
+            });
             this.server.createContext("/dialogue", new WebConsoleHandler("/dialogue", "web/dialogue"));
+            this.server.createContext("/console", new WebConsoleHandler("/console", "web/console"));
             this.server.start();
             this.client = HttpClient.newHttpClient();
             this.baseUrl = "http://localhost:" + server.getAddress().getPort();

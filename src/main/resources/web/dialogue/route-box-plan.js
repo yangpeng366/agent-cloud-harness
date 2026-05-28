@@ -7,11 +7,13 @@ export function buildRouteBoxPlan(input) {
     const candidateWorkers = normalizeTextList(source.candidateWorkers);
     const routeChips = normalizeTextList(source.routeChips);
     const providerDeprioritization = source.providerDeprioritization || null;
+    const hasProviderDeprioritization = providerDeprioritization?.providerDeprioritized === true;
     const timelineCount = Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline.length : 0;
     const detailGroupCount = [
         taskType ? 1 : 0,
         candidateWorkers.length > 0 ? 1 : 0,
-        routeChips.length > 0 ? 1 : 0
+        routeChips.length > 0 ? 1 : 0,
+        hasProviderDeprioritization ? 1 : 0
     ].reduce((sum, count) => sum + count, 0);
 
     return {

@@ -44,6 +44,8 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Instant;
+import java.util.Map;
 
 public class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
@@ -76,6 +78,15 @@ public class Main {
         SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
         ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
         AgentRunDao agentRunDao = db.jdbi().onDemand(AgentRunDao.class);
+        AgentActionDao agentActionDao = db.jdbi().onDemand(AgentActionDao.class);
+        TaskRecoveryJobDao recoveryJobDao = db.jdbi().onDemand(TaskRecoveryJobDao.class);
+        int interruptedRecoveryJobs = recoveryJobDao.markActiveJobsInterrupted(
+            Instant.now(),
+            "harness restarted before async recovery completed"
+        );
+        if (interruptedRecoveryJobs > 0) {
+            log.warn("Marked {} unfinished recovery job(s) interrupted after startup", interruptedRecoveryJobs);
+        }
 
         // 引擎
         LearningMemoryService learningMemoryService = new LearningMemoryService(learningMemoryDao);
@@ -85,6 +96,12 @@ public class Main {
         AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         WorkerRegistry workerRegistry = new WorkerRegistry(agentProviderRegistry);
+        Map<String, WorkerRegistry.ReadinessCheck> workerPreflightWarmup = workerRegistry.warmupDispatchPreflight();
+        long workerPreflightReadyCount = workerPreflightWarmup.values().stream()
+            .filter(WorkerRegistry.ReadinessCheck::ready)
+            .count();
+        log.info("Worker dispatch preflight warmup completed. ready={} total={}",
+            workerPreflightReadyCount, workerPreflightWarmup.size());
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
         ContextReconstructor reconstructor = new ContextReconstructor(taskDao, decisionDao, artifactDao, eventDao, relationDao);
         RuntimeJudgmentService runtimeJudgmentService = new RuntimeJudgmentService();
@@ -114,13 +131,14 @@ public class Main {
         RuntimeFactSurfaceExporter runtimeFactSurfaceExporter = new RuntimeFactSurfaceExporter();
 
         PacketBuilder packetBuilder = new PacketBuilder(
-            decisionDao, artifactDao, taskDao, packetDao, runtimeFactSetAssembler, runtimeFactSurfaceExporter
+            decisionDao, artifactDao, taskDao, packetDao, runtimeFactSetAssembler, runtimeFactSurfaceExporter,
+            agentActionDao
         );
 
         // 新增: Consolidation Layer
         ConsolidationService consolidation = new ConsolidationService(
             decisionDao, artifactDao, eventDao, checkpointDao, taskDao, packetDao,
-            runtimeFactSetAssembler, runtimeFactSurfaceExporter
+            runtimeFactSetAssembler, runtimeFactSurfaceExporter, agentActionDao
         );
 
         // Phase 1 新增: Judgment Layer（当前为占位实现，保留 RuntimeJudgmentService 给 TaskService 使用）
@@ -171,10 +189,18 @@ public class Main {
         log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());
 
         // 新增: Control Node Graph（注入 Phase 1 新组件）
+        AgentActionReconciler agentActionReconciler = new AgentActionReconciler(
+            eventDao,
+            artifactDao,
+            agentActionDao,
+            checkpointDao,
+            taskDao,
+            relationDao
+        );
         ControlNodeGraph controlGraph = new ControlNodeGraph(
             taskDao, eventDao, sessionDao, packetDao, workerRouter, packetBuilder, consolidation,
             workerExecutor, runtimeContextBuilder, judgmentService,
-            artifactDao, decisionDao, learningMemoryService, agentRunService
+            artifactDao, decisionDao, learningMemoryService, agentRunService, agentActionReconciler
         );
 
         // 新增: Skill Registry + Router
@@ -185,7 +211,7 @@ public class Main {
         TaskService taskService = new TaskService(
             taskDao, sessionDao, eventDao, packetDao, workerRouter, packetBuilder, controlGraph,
             runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao,
-            sessionMessageDao, experimentRunService, agentRunService
+            sessionMessageDao, experimentRunService, agentRunService, recoveryJobDao
         );
         ExperimentMatrixService experimentMatrixService = new ExperimentMatrixService(taskService, experimentRunService);
 
@@ -193,7 +219,7 @@ public class Main {
         int port = Integer.parseInt(System.getProperty("server.port", "8080"));
         NioHttpServer server = new NioHttpServer(
             port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation, learningMemoryService,
-            experimentRunService, experimentMatrixService, agentRunService
+            experimentRunService, experimentMatrixService, agentRunService, agentActionDao
         );
         server.start();
 

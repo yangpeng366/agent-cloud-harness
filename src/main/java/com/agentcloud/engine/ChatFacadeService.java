@@ -14,10 +14,11 @@ import com.agentcloud.model.openai.ResponseCreateRequest;
 import com.agentcloud.model.openai.ResponsesCreateResponse;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Locale;
+import java.nio.file.Path;
 
 public class ChatFacadeService {
     private static final String DEFAULT_MODEL = "agentcloud-default";
@@ -123,6 +124,22 @@ public class ChatFacadeService {
         }
 
         String resolvedTaskType = resolveTaskType(metadata, lastUserTurn);
+        Map<String, Object> taskMetadata = buildTaskMetadata(metadata, facadeModel, lastUserTurn);
+        List<String> workspaceRoots = workspaceRoots(taskMetadata);
+        if (parentTaskId == null && workspaceRoots.size() > 1) {
+            return createSplitWorkspaceTasks(
+                facadeModel,
+                session,
+                stagedUserTurn,
+                metadata,
+                requestPath,
+                lastUserTurn,
+                resolvedTaskType,
+                taskMetadata,
+                workspaceRoots,
+                autoStart
+            );
+        }
         TaskCreateRequest taskRequest = new TaskCreateRequest(
             firstNonBlank(blankToNull(stringValue(metadata.get("title"))), deriveTaskTitle(lastUserTurn)),
             resolvedTaskType,
@@ -132,7 +149,7 @@ public class ChatFacadeService {
             firstNonBlank(blankToNull(stringValue(metadata.get("goal"))), lastUserTurn),
             parentTaskId,
             session.id(),
-            buildTaskMetadata(metadata, facadeModel),
+            taskMetadata,
             autoStart
         );
         Task task = taskService.createTask(taskRequest, requestMetadata(requestPath));
@@ -450,7 +467,9 @@ public class ChatFacadeService {
         return metadata;
     }
 
-    private Map<String, Object> buildTaskMetadata(Map<String, Object> requestMetadata, String facadeModel) {
+    private Map<String, Object> buildTaskMetadata(Map<String, Object> requestMetadata,
+                                                  String facadeModel,
+                                                  String userTurn) {
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("source_surface", "chat_facade");
         metadata.put("created_via", "chat_facade");
@@ -463,7 +482,92 @@ public class ChatFacadeService {
         copyIfPresent(requestMetadata, metadata, "task_case_key");
         copyIfPresent(requestMetadata, metadata, "task_length_bucket");
         copyIfPresent(requestMetadata, metadata, "experiment_name");
+        copyIfPresent(requestMetadata, metadata, "workspace_root");
+        copyIfPresent(requestMetadata, metadata, "workspace_roots");
+        copyIfPresent(requestMetadata, metadata, "workspace");
+        copyIfPresent(requestMetadata, metadata, "workspaces");
+        copyIfPresent(requestMetadata, metadata, "working_directory");
+        copyIfPresent(requestMetadata, metadata, "cwd");
+        copyIfPresent(requestMetadata, metadata, "repo_path");
+        ProviderTaskContractNormalizer.copyContractFields(requestMetadata, metadata);
+        ProviderTaskContractNormalizer.normalize(metadata, userTurn);
         return metadata;
+    }
+
+    private ChatCompletionResponse createSplitWorkspaceTasks(String facadeModel,
+                                                             Session session,
+                                                             SessionMessage stagedUserTurn,
+                                                             Map<String, Object> requestMetadata,
+                                                             String requestPath,
+                                                             String userTurn,
+                                                             String resolvedTaskType,
+                                                             Map<String, Object> baseTaskMetadata,
+                                                             List<String> workspaceRoots,
+                                                             boolean childAutoStart) {
+        LinkedHashMap<String, Object> parentMetadata = new LinkedHashMap<>(baseTaskMetadata);
+        parentMetadata.put("workspace_roots", workspaceRoots);
+        parentMetadata.put("split_parent", true);
+        parentMetadata.put("split_reason", "multiple_local_workspaces");
+        parentMetadata.put("split_child_count", workspaceRoots.size());
+        parentMetadata.remove("workspace_root");
+        parentMetadata.remove("workspace");
+        parentMetadata.remove("working_directory");
+        parentMetadata.remove("cwd");
+
+        Task parent = taskService.createTask(new TaskCreateRequest(
+            firstNonBlank(blankToNull(stringValue(requestMetadata.get("title"))), deriveTaskTitle(userTurn)),
+            resolvedTaskType,
+            "user",
+            firstNonBlank(blankToNull(stringValue(requestMetadata.get("priority"))), "high"),
+            userTurn,
+            firstNonBlank(blankToNull(stringValue(requestMetadata.get("goal"))), userTurn),
+            null,
+            session.id(),
+            parentMetadata,
+            false
+        ), requestMetadata(requestPath));
+        backfillTaskBinding(session.id(), stagedUserTurn, parent);
+
+        for (int i = 0; i < workspaceRoots.size(); i++) {
+            String workspace = workspaceRoots.get(i);
+            LinkedHashMap<String, Object> childMetadata = new LinkedHashMap<>(baseTaskMetadata);
+            childMetadata.put("workspace_roots", workspaceRoots);
+            childMetadata.put("workspace_root", workspace);
+            childMetadata.put("workspace", workspace);
+            childMetadata.put("working_directory", workspace);
+            childMetadata.put("cwd", workspace);
+            childMetadata.put("repo_path", workspace);
+            childMetadata.put("split_child", true);
+            childMetadata.put("split_parent_task_id", parent.id());
+            childMetadata.put("task_scope_index", i + 1);
+            childMetadata.put("task_scope_total", workspaceRoots.size());
+            childMetadata.put("task_scope_workspace", workspace);
+
+            taskService.createTask(new TaskCreateRequest(
+                splitChildTitle(parent.title(), workspace, i + 1, workspaceRoots.size()),
+                resolvedTaskType,
+                "user",
+                firstNonBlank(blankToNull(stringValue(requestMetadata.get("priority"))), "high"),
+                userTurn,
+                scopedGoal(firstNonBlank(blankToNull(stringValue(requestMetadata.get("goal"))), userTurn), workspace),
+                parent.id(),
+                session.id(),
+                childMetadata,
+                childAutoStart
+            ), requestMetadata(requestPath));
+        }
+        return buildTaskCompletion(facadeModel, requireTask(parent.id()), session.id());
+    }
+
+    private String splitChildTitle(String parentTitle, String workspace, int index, int total) {
+        String title = firstNonBlank(blankToNull(parentTitle), "workspace task");
+        String repoName = workspace == null ? null : Path.of(workspace).getFileName().toString();
+        return title + " [" + index + "/" + total + ": " + firstNonBlank(repoName, workspace) + "]";
+    }
+
+    private String scopedGoal(String goal, String workspace) {
+        String normalized = firstNonBlank(blankToNull(goal), "");
+        return normalized + "\n\n本子任务只处理 workspace: " + workspace;
     }
 
     private String resolveTaskType(Map<String, Object> metadata, String lastUserTurn) {
@@ -483,6 +587,10 @@ public class ChatFacadeService {
             case "agentcloud-fast" -> "small_only";
             default -> "orchestrated";
         };
+    }
+
+    private List<String> workspaceRoots(Map<String, Object> metadata) {
+        return ProviderTaskContractNormalizer.workspaceRoots(metadata);
     }
 
     private Task resolveActiveSessionTask(Session session) {

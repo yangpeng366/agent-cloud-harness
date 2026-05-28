@@ -20,9 +20,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class TaskService {
     private static final Logger log = LoggerFactory.getLogger(TaskService.class);
+    private static final int PROVIDER_RUN_FILE_READ_LIMIT_BYTES = 64 * 1024;
     private final TaskDao taskDao;
     private final SessionDao sessionDao;
     private final EventDao eventDao;
@@ -38,6 +42,7 @@ public class TaskService {
     private final SessionMessageDao sessionMessageDao;
     private final ExperimentRunService experimentRunService;
     private final AgentRunService agentRunService;
+    private final TaskRecoveryJobDao recoveryJobDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
 
@@ -88,6 +93,22 @@ public class TaskService {
                        SessionMessageDao sessionMessageDao,
                        ExperimentRunService experimentRunService,
                        AgentRunService agentRunService) {
+        this(taskDao, sessionDao, eventDao, packetDao, router, packetBuilder, controlGraph, judgmentService,
+            runtimeContextBuilder, consolidationService, learningMemoryService, toolInvocationDao,
+            sessionMessageDao, experimentRunService, agentRunService, null);
+    }
+
+    public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
+                       WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
+                       RuntimeJudgmentService judgmentService,
+                       TaskRuntimeContextBuilder runtimeContextBuilder,
+                       ConsolidationService consolidationService,
+                       LearningMemoryService learningMemoryService,
+                       ToolInvocationDao toolInvocationDao,
+                       SessionMessageDao sessionMessageDao,
+                       ExperimentRunService experimentRunService,
+                       AgentRunService agentRunService,
+                       TaskRecoveryJobDao recoveryJobDao) {
         this.taskDao = taskDao;
         this.sessionDao = sessionDao;
         this.eventDao = eventDao;
@@ -103,6 +124,7 @@ public class TaskService {
         this.sessionMessageDao = sessionMessageDao;
         this.experimentRunService = experimentRunService;
         this.agentRunService = agentRunService;
+        this.recoveryJobDao = recoveryJobDao;
         this.runtimeFactSetAssembler = new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, router);
         this.runtimeCognitionSurfaceAssembler = new RuntimeCognitionSurfaceAssembler();
     }
@@ -143,7 +165,7 @@ public class TaskService {
             ensureSessionAcceptsTasks(currentSession);
         }
 
-        Map<String, Object> meta = req.metadata() != null ? new java.util.HashMap<>(req.metadata()) : new java.util.HashMap<>();
+        Map<String, Object> meta = req.metadata() != null ? new LinkedHashMap<>(req.metadata()) : new LinkedHashMap<>();
         String modelMode = normalizeModelMode(stringValue(meta.get("model_mode")));
         meta.put("task_type", req.taskType());
         meta.put("source", req.source());
@@ -160,6 +182,7 @@ public class TaskService {
         if (parentTaskId != null) {
             meta.put("parent_task_id", parentTaskId);
         }
+        ProviderTaskContractNormalizer.normalize(meta, req.intent(), req.goal(), req.title());
 
         Task t = new Task(taskId, sessionId, parentTaskId, req.title(), "active", req.priority(),
             Instant.now(), Instant.now(), Instant.now(), null, null, null, goal, null, null, "intake", null, meta);
@@ -206,6 +229,154 @@ public class TaskService {
             .filter(t -> taskType == null || (t.metadata() != null && taskType.equals(t.metadata().get("task_type"))))
             .filter(t -> assignedWorker == null || assignedWorker.equals(t.assignedWorker()))
             .toList();
+    }
+
+    public List<TaskRecoveryPlan> listRecoverableTasks(int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 100));
+        return taskDao.listRecent(Math.max(safeLimit * 4, safeLimit)).stream()
+            .filter(this::isRecoveryCandidate)
+            .map(task -> buildRecoveryPlan(task, Map.of()))
+            .limit(safeLimit)
+            .toList();
+    }
+
+    public TaskRecoveryResult recoverTask(String taskId, Map<String, Object> request) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        Map<String, Object> recoveryRequest = request != null ? request : Map.of();
+        TaskRecoveryPlan plan = buildRecoveryPlan(task, recoveryRequest);
+        if (!plan.recoverable()) {
+            throw new IllegalArgumentException("task is not recoverable: " + plan.reason());
+        }
+
+        String requestedMode = firstNonBlank(metadataString(recoveryRequest, "mode"), "auto").toLowerCase();
+        String action = resolveRecoveryAction(plan, requestedMode);
+        LinkedHashMap<String, Object> actionMetadata = mergeActionMetadata(recoveryRequest);
+        actionMetadata.put("manual_recovery_requested", true);
+        actionMetadata.put("recovery_action", action);
+        actionMetadata.put("recovery_execution_mode", "fresh_session");
+        actionMetadata.put("recovery_reason", plan.reason());
+        if (plan.failureClass() != null) {
+            actionMetadata.put("failure_class", plan.failureClass());
+        }
+        if (plan.providerFailureClass() != null) {
+            actionMetadata.put("provider_failure_class", plan.providerFailureClass());
+        }
+
+        if ("handoff".equals(action)) {
+            String targetWorker = firstNonBlank(metadataString(recoveryRequest, "target_worker"), plan.targetWorker());
+            if (targetWorker == null) {
+                throw new IllegalArgumentException("target_worker is required for handoff recovery");
+            }
+            HandoffResult handoff = handoffTask(taskId, targetWorker, actionMetadata);
+            return new TaskRecoveryResult(plan, null, handoff);
+        }
+
+        Task prepared = prepareFreshSessionRecovery(task, plan, recoveryRequest);
+        taskDao.updateState(prepared);
+        TaskControlResult control = "continue".equals(action)
+            ? continueTask(taskId, actionMetadata)
+            : resumeTask(taskId, actionMetadata);
+        return new TaskRecoveryResult(plan, control, null);
+    }
+
+    public TaskRecoveryResult recoverTaskAsync(String taskId, Map<String, Object> request) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        Map<String, Object> recoveryRequest = request != null ? new LinkedHashMap<>(request) : new LinkedHashMap<>();
+        TaskRecoveryPlan plan = buildRecoveryPlan(task, recoveryRequest);
+        if (!plan.recoverable()) {
+            throw new IllegalArgumentException("task is not recoverable: " + plan.reason());
+        }
+        String requestId = IdGenerator.newId("recovery");
+        String statusUrl = "/api/v1/tasks/" + taskId + "/live_flow";
+        String requestedMode = firstNonBlank(metadataString(recoveryRequest, "mode"), "auto").toLowerCase();
+        String action = resolveRecoveryAction(plan, requestedMode);
+        insertRecoveryJob(task, plan, recoveryRequest, requestId, statusUrl, requestedMode, action);
+        recoveryRequest.put("async_recovery", true);
+        recoveryRequest.put("async_recovery_request_id", requestId);
+        Thread.ofVirtual().name("agentcloud-recovery-", 0).start(() -> {
+            Instant startedAt = Instant.now();
+            updateRecoveryJob(requestId, "running", startedAt, null, null);
+            try {
+                recoverTask(taskId, recoveryRequest);
+                updateRecoveryJob(requestId, "succeeded", startedAt, Instant.now(), null);
+            } catch (Exception e) {
+                String sanitizedError = sanitizeRecoveryJobError(e);
+                updateRecoveryJob(requestId, "failed", startedAt, Instant.now(), sanitizedError);
+                log.warn("Async recovery failed task={} requestId={} errorClass={} summary={}",
+                    taskId, requestId, e.getClass().getSimpleName(), sanitizedError);
+            }
+        });
+        return TaskRecoveryResult.accepted(plan, requestId, statusUrl);
+    }
+
+    public List<TaskRecoveryJob> listRecoveryJobs(String taskId, int limit) {
+        taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        return recoveryJobDao != null
+            ? recoveryJobDao.listByTask(taskId, boundedLimit(limit))
+            : List.of();
+    }
+
+    private void insertRecoveryJob(Task task,
+                                   TaskRecoveryPlan plan,
+                                   Map<String, Object> request,
+                                   String requestId,
+                                   String statusUrl,
+                                   String requestedMode,
+                                   String action) {
+        if (recoveryJobDao == null) {
+            return;
+        }
+        LinkedHashMap<String, Object> metadata = mergeActionMetadata(request);
+        metadata.put("recovery_action", action);
+        metadata.put("recovery_reason", plan.reason());
+        metadata.put("failure_evidence_source", plan.failureEvidenceSource());
+        metadata.put("failure_evidence", plan.failureEvidence());
+        recoveryJobDao.insert(new TaskRecoveryJob(
+            requestId,
+            task.id(),
+            task.sessionId(),
+            "accepted",
+            requestedMode,
+            action,
+            plan.targetWorker(),
+            plan.recoveryExecutionMode(),
+            plan.failureClass(),
+            plan.providerFailureClass(),
+            statusUrl,
+            Instant.now(),
+            null,
+            null,
+            null,
+            metadata
+        ));
+    }
+
+    private void updateRecoveryJob(String requestId,
+                                   String status,
+                                   Instant startedAt,
+                                   Instant completedAt,
+                                   String errorMessage) {
+        if (recoveryJobDao == null) {
+            return;
+        }
+        try {
+            recoveryJobDao.updateStatus(requestId, status, startedAt, completedAt, truncate(errorMessage, 500));
+        } catch (Exception e) {
+            log.warn("Failed to update recovery job {} to {}: {}", requestId, status, e.toString());
+        }
+    }
+
+    private String sanitizeRecoveryJobError(Exception error) {
+        if (error == null) {
+            return null;
+        }
+        String message = firstNonBlank(error.getMessage(), error.getClass().getSimpleName());
+        if (message == null) {
+            return null;
+        }
+        String compact = message.replaceAll("\\s+", " ").trim()
+            .replaceAll("(?i)(api[_ -]?key|authorization|password|secret|token)\\s*[:=]\\s*\\S+", "$1=<redacted>");
+        return truncate(compact, 220);
     }
 
     public Task updateTaskState(String taskId, String newState, String reason) {
@@ -317,6 +488,81 @@ public class TaskService {
         );
     }
 
+    public ProviderRunFileView getProviderRunFile(String taskId, String kind) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        String normalizedKind = normalizeProviderRunFileKind(kind);
+        RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, 5);
+        Map<String, Object> metadata = facts.executionBoundary() != null && facts.executionBoundary().metadata() != null
+            ? facts.executionBoundary().metadata()
+            : Map.of();
+        String pathText = metadataString(metadata, providerRunFileMetadataKey(normalizedKind));
+        if (pathText == null || pathText.isBlank()) {
+            throw new IllegalArgumentException("provider run file not found");
+        }
+        Path path = Path.of(pathText).toAbsolutePath().normalize();
+        Path runDir = providerRunDir(metadata);
+        if (runDir != null && !path.startsWith(runDir)) {
+            throw new IllegalArgumentException("provider run file outside run directory");
+        }
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException("provider run file not found");
+        }
+        try {
+            long size = Files.size(path);
+            byte[] bytes;
+            boolean truncated = size > PROVIDER_RUN_FILE_READ_LIMIT_BYTES;
+            try (var input = Files.newInputStream(path)) {
+                bytes = input.readNBytes(PROVIDER_RUN_FILE_READ_LIMIT_BYTES);
+            }
+            return new ProviderRunFileView(
+                task.id(),
+                normalizedKind,
+                path.toString(),
+                size,
+                PROVIDER_RUN_FILE_READ_LIMIT_BYTES,
+                truncated,
+                new String(bytes, StandardCharsets.UTF_8)
+            );
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("provider run file unreadable");
+        }
+    }
+
+    private String normalizeProviderRunFileKind(String kind) {
+        String normalized = blankToNull(kind);
+        if (normalized == null) {
+            return "last_message";
+        }
+        normalized = normalized.trim().toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+        return switch (normalized) {
+            case "last", "last_message", "message" -> "last_message";
+            case "events", "event_log", "events_jsonl" -> "events";
+            case "stdout", "output" -> "stdout";
+            case "metadata", "meta" -> "metadata";
+            case "prompt" -> "prompt";
+            default -> throw new IllegalArgumentException("unsupported provider run file kind");
+        };
+    }
+
+    private String providerRunFileMetadataKey(String kind) {
+        return switch (kind) {
+            case "last_message" -> "provider_last_message_path";
+            case "events" -> "provider_event_log_path";
+            case "stdout" -> "provider_stdout_path";
+            case "metadata" -> "provider_run_metadata_path";
+            case "prompt" -> "provider_prompt_path";
+            default -> throw new IllegalArgumentException("unsupported provider run file kind");
+        };
+    }
+
+    private Path providerRunDir(Map<String, Object> metadata) {
+        String runDir = metadataString(metadata, "provider_run_dir");
+        if (runDir == null || runDir.isBlank()) {
+            return null;
+        }
+        return Path.of(runDir).toAbsolutePath().normalize();
+    }
+
     private WorkerRouter.RouteResult enrichRouteDiagnostics(Task task, WorkerRouter.RouteResult route) {
         if (task == null || route == null) {
             return route;
@@ -344,7 +590,8 @@ public class TaskService {
             recoveryDeprioritizationReason(recoveryUnpinnedRecommendation),
             recoveryExecutionMode(task),
             currentPinnedRoute,
-            recoveryUnpinnedRecommendation
+            recoveryUnpinnedRecommendation,
+            route.dispatchSkippedWorkers()
         );
     }
 
@@ -352,7 +599,7 @@ public class TaskService {
         if (task == null || route == null || blankToNull(task.assignedWorker()) == null) {
             return null;
         }
-        return buildRouteDiagnostic(route);
+        return buildRouteDiagnostic(task, route);
     }
 
     private WorkerRouter.RouteDiagnostic buildRecoveryUnpinnedRecommendation(Task task, WorkerRouter.RouteResult currentRoute) {
@@ -378,7 +625,7 @@ public class TaskService {
         return buildRecoveryRouteDiagnostic(task, currentRoute, unpinned);
     }
 
-    private WorkerRouter.RouteDiagnostic buildRouteDiagnostic(WorkerRouter.RouteResult route) {
+    private WorkerRouter.RouteDiagnostic buildRouteDiagnostic(Task task, WorkerRouter.RouteResult route) {
         if (route == null) {
             return null;
         }
@@ -1419,6 +1666,14 @@ public class TaskService {
         return compact.substring(0, 69) + "...";
     }
 
+    private String truncate(String value, int limit) {
+        if (value == null || limit <= 0) {
+            return value;
+        }
+        String compact = value.replaceAll("\\s+", " ").trim();
+        return compact.length() <= limit ? compact : compact.substring(0, Math.max(0, limit - 3)) + "...";
+    }
+
     private String reopenSummary(List<String> reopenCandidatePaths) {
         if (reopenCandidatePaths == null || reopenCandidatePaths.isEmpty()) {
             return null;
@@ -1523,10 +1778,11 @@ public class TaskService {
 
     public TaskControlResult resumeTask(String taskId, Map<String, Object> actionMetadata) {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        Task accepted = t.withStatus("active").withControlNode("scheduler").withWaitingReason(null);
+        recordControlActionEvent(accepted, "resume", null, actionMetadata);
+        recordTaskActionMessage(accepted, "resume", null, actionMetadata);
+        recordTaskStateProjection(t, accepted, null, actionMetadata);
         Task updated = controlGraph.triggerResume(t);
-        recordControlActionEvent(updated, "resume", null, actionMetadata);
-        recordTaskActionMessage(updated, "resume", null, actionMetadata);
-        recordTaskStateProjection(t, updated, null, actionMetadata);
         ExperimentRunRecord experimentRun = refreshExperimentRunRecord(updated);
         recordAssistantProgressMessage(updated, "resume", experimentRun);
         return controlResult(updated, "resume", null);
@@ -1614,6 +1870,251 @@ public class TaskService {
             packetExpected && packet != null,
             packet != null ? packet.id() : null
         );
+    }
+
+    private boolean isRecoveryCandidate(Task task) {
+        if (task == null) {
+            return false;
+        }
+        String status = task.status();
+        String controlNode = task.controlNode();
+        return "waiting_human".equals(status)
+            || "failed".equals(status)
+            || "paused".equals(status)
+            || "waiting".equals(status)
+            || "human_gate".equals(controlNode);
+    }
+
+    private TaskRecoveryPlan buildRecoveryPlan(Task task, Map<String, Object> request) {
+        Map<String, Object> taskMetadata = task.metadata() != null ? task.metadata() : Map.of();
+        AgentRunRecord latestRun = agentRunService != null ? agentRunService.latestByTask(task.id()) : null;
+        Map<String, Object> runMetadata = latestRun != null && latestRun.metadata() != null ? latestRun.metadata() : Map.of();
+        RecoveryFailureEvidence providerFailureEvidence = resolveProviderFailureEvidence(
+            request,
+            task,
+            taskMetadata,
+            latestRun,
+            runMetadata
+        );
+        String providerFailureClass = providerFailureEvidence.providerFailureClass();
+        String failureClass = firstNonBlank(
+            metadataString(request, "failure_class"),
+            metadataString(taskMetadata, "failure_class"),
+            metadataString(runMetadata, "failure_class"),
+            metadataString(runMetadata, "worker_failure_class")
+        );
+        String targetWorker = firstNonBlank(
+            metadataString(request, "target_worker"),
+            metadataString(taskMetadata, "auto_handoff_target"),
+            metadataString(taskMetadata, "target_worker")
+        );
+        boolean candidate = isRecoveryCandidate(task);
+        boolean environmentBlocked = isEnvironmentBlockedFailure(providerFailureClass);
+        boolean recoverable = candidate && !environmentBlocked;
+        String requestedMode = firstNonBlank(metadataString(request, "mode"), "auto").toLowerCase();
+        String recommendedAction = "handoff".equals(requestedMode) || targetWorker != null && !targetWorker.equals(task.assignedWorker())
+            ? "handoff"
+            : "resume";
+        if ("continue".equals(requestedMode) || "resume".equals(requestedMode)) {
+            recommendedAction = requestedMode;
+        }
+        String reason;
+        if (!candidate) {
+            reason = "task state is not recoverable";
+        } else if (environmentBlocked) {
+            reason = "provider environment requires manual repair: " + providerFailureClass;
+        } else if (targetWorker != null && !targetWorker.equals(task.assignedWorker())) {
+            reason = "recover by handoff to target worker";
+        } else {
+            reason = firstNonBlank(metadataString(request, "reason"), "recover with fresh session");
+        }
+        return new TaskRecoveryPlan(
+            task.id(),
+            task.status(),
+            task.controlNode(),
+            task.assignedWorker(),
+            recoverable,
+            recommendedAction,
+            targetWorker,
+            reason,
+            failureClass,
+            providerFailureClass,
+            providerFailureEvidence.source(),
+            providerFailureEvidence.evidence(),
+            metadataString(taskMetadata, "recovery_stage"),
+            recoverable ? "fresh_session" : metadataString(taskMetadata, "recovery_execution_mode")
+        );
+    }
+
+    private RecoveryFailureEvidence resolveProviderFailureEvidence(Map<String, Object> request,
+                                                                   Task task,
+                                                                   Map<String, Object> taskMetadata,
+                                                                   AgentRunRecord latestRun,
+                                                                   Map<String, Object> runMetadata) {
+        String requestClass = metadataString(request, "provider_failure_class");
+        if (requestClass != null) {
+            return providerFailureEvidenceWithReason(
+                requestClass,
+                request,
+                "request"
+            );
+        }
+        String taskClass = metadataString(taskMetadata, "provider_failure_class");
+        if (taskClass != null) {
+            return providerFailureEvidenceWithReason(
+                taskClass,
+                taskMetadata,
+                "task.metadata"
+            );
+        }
+        String runClass = metadataString(runMetadata, "provider_failure_class");
+        if (runClass != null) {
+            return providerFailureEvidenceWithReason(
+                runClass,
+                runMetadata,
+                "agent_run.metadata"
+            );
+        }
+        RecoveryFailureEvidence fromSummary = classifyProviderFailureEvidence(
+            latestRun != null ? latestRun.summary() : null,
+            "agent_run.summary"
+        );
+        if (fromSummary.providerFailureClass() != null) {
+            return fromSummary;
+        }
+        RecoveryFailureEvidence fromWaitingReason = classifyProviderFailureEvidence(
+            task != null ? task.waitingReason() : null,
+            "task.waiting_reason"
+        );
+        if (fromWaitingReason.providerFailureClass() != null) {
+            return fromWaitingReason;
+        }
+        RecoveryFailureEvidence fromTaskSummary = classifyProviderFailureEvidence(
+            task != null ? task.summary() : null,
+            "task.summary"
+        );
+        if (fromTaskSummary.providerFailureClass() != null) {
+            return fromTaskSummary;
+        }
+        return classifyProviderFailureEvidence(
+            task != null ? task.nextStep() : null,
+            "task.next_step"
+        );
+    }
+
+    private RecoveryFailureEvidence providerFailureEvidenceWithReason(String providerFailureClass,
+                                                                      Map<String, Object> metadata,
+                                                                      String sourcePrefix) {
+        String providerError = metadataString(metadata, "provider_error");
+        if (providerError != null) {
+            return new RecoveryFailureEvidence(
+                providerFailureClass,
+                sourcePrefix + ".provider_error",
+                compactEvidence(providerError)
+            );
+        }
+        String providerFailureReason = metadataString(metadata, "provider_failure_reason");
+        if (providerFailureReason != null) {
+            return new RecoveryFailureEvidence(
+                providerFailureClass,
+                sourcePrefix + ".provider_failure_reason",
+                compactEvidence(providerFailureReason)
+            );
+        }
+        return new RecoveryFailureEvidence(
+            providerFailureClass,
+            sourcePrefix + ".provider_failure_class",
+            providerFailureClass
+        );
+    }
+
+    private RecoveryFailureEvidence classifyProviderFailureEvidence(String text, String source) {
+        String providerFailureClass = classifyProviderFailureFromText(text);
+        return new RecoveryFailureEvidence(providerFailureClass, providerFailureClass != null ? source : null, compactEvidence(text));
+    }
+
+    private String resolveRecoveryAction(TaskRecoveryPlan plan, String requestedMode) {
+        return switch (requestedMode) {
+            case "auto" -> plan.recommendedAction();
+            case "resume", "continue", "handoff" -> requestedMode;
+            default -> throw new IllegalArgumentException("unsupported recovery mode: " + requestedMode);
+        };
+    }
+
+    private Task prepareFreshSessionRecovery(Task task, TaskRecoveryPlan plan, Map<String, Object> request) {
+        Map<String, Object> metadata = task.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(task.metadata());
+        metadata.remove("provider_session_id");
+        metadata.remove("provider_thread_id");
+        metadata.remove("codex_thread_id");
+        metadata.remove("resume_provider_session_id");
+        metadata.put("manual_recovery_requested", true);
+        metadata.put("recovery_stage", "manual_recover_scheduled");
+        metadata.put("recovery_execution_mode", "fresh_session");
+        metadata.put("recovery_reason", firstNonBlank(metadataString(request, "reason"), plan.reason()));
+        if (plan.failureClass() != null) {
+            metadata.put("failure_class", plan.failureClass());
+        }
+        if (plan.providerFailureClass() != null) {
+            metadata.put("provider_failure_class", plan.providerFailureClass());
+        }
+        return task.withMetadata(metadata)
+            .withStatus("active")
+            .withControlNode("scheduler")
+            .withWaitingReason(null);
+    }
+
+    private boolean isEnvironmentBlockedFailure(String providerFailureClass) {
+        if (providerFailureClass == null) {
+            return false;
+        }
+        return providerFailureClass.contains("auth")
+            || providerFailureClass.contains("not_installed")
+            || providerFailureClass.contains("unsupported")
+            || providerFailureClass.contains("permission")
+            || providerFailureClass.contains("configuration");
+    }
+
+    private String classifyProviderFailureFromText(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.toLowerCase();
+        if (normalized.contains("thread not found")
+            || normalized.contains("provider unavailable")
+            || normalized.contains("timeout")
+            || normalized.contains("failed to start")
+            || normalized.contains("output too large")
+            || normalized.contains("output exceeds")
+            || normalized.contains("output exceeded")
+            || normalized.contains("output limit")
+            || normalized.contains("max output")
+            || normalized.contains("maximum output")
+            || normalized.contains("response too large")
+            || normalized.contains("context length exceeded")
+            || normalized.contains("context window exceeded")
+            || normalized.contains("输出过大")
+            || normalized.contains("输出超过")
+            || normalized.contains("上下文超限")) {
+            return "provider_runtime_transient";
+        }
+        if (normalized.contains("auth") || normalized.contains("unauthorized") || normalized.contains("api key")) {
+            return "provider_auth_failed";
+        }
+        if (normalized.contains("not installed") || normalized.contains("command not found")) {
+            return "provider_not_installed";
+        }
+        return null;
+    }
+
+    private String compactEvidence(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String compact = text.replaceAll("\\s+", " ").trim();
+        int limit = 220;
+        return compact.length() <= limit ? compact : compact.substring(0, limit) + "...";
     }
 
     private Decision latestDecision(TaskRuntimeContext runtimeContext, String decisionType) {
@@ -2209,11 +2710,21 @@ public class TaskService {
         TaskRuntimeContext runtimeContext = facts != null ? facts.runtimeContext() : null;
         Decision executionJudgment = facts != null ? facts.executionJudgment() : null;
         Decision completionJudgment = facts != null ? facts.completionJudgment() : null;
+        Map<String, Object> latestArtifactMetadata = latestArtifact != null ? latestArtifact.metadata() : null;
+        Map<String, Object> taskMetadata = task != null ? task.metadata() : null;
+        String providerFailure = hasProviderFailureDiagnostics(latestArtifactMetadata)
+                || hasProviderFailureDiagnostics(taskMetadata)
+            ? resolveProviderReadableFailure(
+                latestArtifactMetadata,
+                taskMetadata
+            )
+            : null;
         return sanitizeReadableProgressSummary(
             task,
             facts,
             latestArtifact,
             firstNonBlank(
+                providerFailure,
                 task.summary(),
                 facts != null ? facts.latestOutput() : null,
                 latestArtifact != null ? latestArtifact.summary() : null,
@@ -2339,6 +2850,7 @@ public class TaskService {
             copyMetadataKey(task.metadata(), target, "auto_handoff_count");
             copyMetadataKey(task.metadata(), target, "auto_handoff_target");
             copyMetadataKey(task.metadata(), target, "previous_worker");
+            copyProviderDiagnostics(task.metadata(), target);
         }
         if (facts == null) {
             return;
@@ -2371,6 +2883,7 @@ public class TaskService {
         copyMetadataKey(factMetadata, target, "evidence_gap_detected");
         copyMetadataKey(factMetadata, target, "reopen_candidate_paths");
         copyMetadataKey(factMetadata, target, "reopen_summary");
+        copyProviderDiagnostics(factMetadata, target);
 
         WorkerRouter.RouteResult routePreview = facts.routePreview();
         if (routePreview != null) {
@@ -2381,6 +2894,9 @@ public class TaskService {
             putIfNonBlank(target, "why_selected", routePreview.whySelected());
             putIfPresent(target, "learning_hint_applied", routePreview.learningHintApplied());
             putIfNonBlank(target, "fallback_reason", routePreview.fallbackReason());
+            if (routePreview.dispatchSkippedWorkers() != null && !routePreview.dispatchSkippedWorkers().isEmpty()) {
+                target.put("dispatch_skipped_workers", routeSkippedWorkerMetadata(routePreview.dispatchSkippedWorkers()));
+            }
         }
 
         RuntimeFactSet.ExecutionBoundary executionBoundary = facts.executionBoundary();
@@ -2404,7 +2920,20 @@ public class TaskService {
             copyMetadataKey(latestArtifact.metadata(), target, "auto_same_worker_retry_count");
             copyMetadataKey(latestArtifact.metadata(), target, "auto_handoff_count");
             copyMetadataKey(latestArtifact.metadata(), target, "auto_handoff_target");
+            copyProviderDiagnostics(latestArtifact.metadata(), target);
         }
+    }
+
+    private void copyProviderDiagnostics(Map<String, Object> source, Map<String, Object> target) {
+        copyMetadataKey(source, target, "provider_session_id");
+        copyMetadataKey(source, target, "provider_thread_id");
+        copyMetadataKey(source, target, "resume_provider_session_id");
+        copyMetadataKey(source, target, "provider_error");
+        copyMetadataKey(source, target, "provider_turn_status");
+        copyMetadataKey(source, target, "provider_failure_class");
+        copyMetadataKey(source, target, "provider_failure_reason");
+        copyMetadataKey(source, target, "provider_retryable");
+        copyMetadataKey(source, target, "provider_protocol_trace");
     }
 
     private String buildAssistantExpandedContent(Task task,
@@ -2428,10 +2957,7 @@ public class TaskService {
                 blankToNull(metadataString(latestArtifactMetadata, "artifact_content")),
                 blankToNull(metadataString(taskMetadata, "artifact_content"))
             );
-            String readableFailure = firstNonBlank(
-                blankToNull(metadataString(latestArtifactMetadata, "failure_summary_readable")),
-                blankToNull(metadataString(taskMetadata, "failure_summary_readable"))
-            );
+            String readableFailure = resolveProviderReadableFailure(latestArtifactMetadata, taskMetadata);
             boolean failedExecutionBoundary = isFailedExecutionBoundary(facts, latestArtifact);
             boolean suppressUnreadableOutput = failedExecutionBoundary
                 && readableFailure != null
@@ -2467,6 +2993,24 @@ public class TaskService {
             return null;
         }
         return String.join("\n\n", parts);
+    }
+
+    private String resolveProviderReadableFailure(Map<String, Object> latestArtifactMetadata,
+                                                  Map<String, Object> taskMetadata) {
+        return firstNonBlank(
+            blankToNull(metadataString(latestArtifactMetadata, "provider_error")),
+            blankToNull(metadataString(taskMetadata, "provider_error")),
+            blankToNull(metadataString(latestArtifactMetadata, "provider_failure_reason")),
+            blankToNull(metadataString(taskMetadata, "provider_failure_reason")),
+            blankToNull(metadataString(latestArtifactMetadata, "failure_summary_readable")),
+            blankToNull(metadataString(taskMetadata, "failure_summary_readable"))
+        );
+    }
+
+    private boolean hasProviderFailureDiagnostics(Map<String, Object> metadata) {
+        return blankToNull(metadataString(metadata, "provider_error")) != null
+            || blankToNull(metadataString(metadata, "provider_failure_class")) != null
+            || blankToNull(metadataString(metadata, "provider_failure_reason")) != null;
     }
 
     private void putIfAbsent(List<String> parts, String value) {
@@ -2613,6 +3157,26 @@ public class TaskService {
         copyMetadataKey(metadata, target, "tool_chain_tools");
     }
 
+    private List<Map<String, Object>> routeSkippedWorkerMetadata(List<WorkerRouter.RouteSkippedWorker> skippedWorkers) {
+        if (skippedWorkers == null || skippedWorkers.isEmpty()) {
+            return List.of();
+        }
+        return skippedWorkers.stream()
+            .map(skipped -> {
+                LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+                putIfNonBlank(metadata, "worker_id", skipped.workerId());
+                putIfNonBlank(metadata, "reason", skipped.reason());
+                putIfNonBlank(metadata, "provider_failure_class", skipped.providerFailureClass());
+                putIfNonBlank(metadata, "provider_failure_reason", skipped.providerFailureReason());
+                if (skipped.providerRetryable() != null) {
+                    metadata.put("provider_retryable", skipped.providerRetryable());
+                }
+                return (Map<String, Object>) metadata;
+            })
+            .filter(metadata -> !metadata.isEmpty())
+            .toList();
+    }
+
     private void copyMetadataKey(Map<String, Object> source, Map<String, Object> target, String key) {
         if (source == null || target == null || key == null || key.isBlank()) {
             return;
@@ -2644,4 +3208,10 @@ public class TaskService {
         }
         return merged;
     }
+
+    private record RecoveryFailureEvidence(
+        String providerFailureClass,
+        String source,
+        String evidence
+    ) {}
 }

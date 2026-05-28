@@ -92,6 +92,10 @@ public class WorkerExecutorRouter implements WorkerExecutor {
                 worker.workerId(), worker.workerType());
             return toolAwareExecutor;
         }
+        if (isUnsupportedBackend(worker)) {
+            throw new IllegalStateException("worker declares unsupported execution backend: "
+                + worker.workerId() + " backend=" + metadataString(worker, "execution_backend"));
+        }
         if (isExplicitProviderBackend(worker)) {
             throw new IllegalStateException("worker declares provider backend but no supported executor is available: "
                 + worker.workerId() + " backend=" + metadataString(worker, "execution_backend"));
@@ -111,6 +115,11 @@ public class WorkerExecutorRouter implements WorkerExecutor {
         String backend = metadataString(worker, "execution_backend");
         return "provider_native_cli".equalsIgnoreCase(backend)
             || "provider_app_server".equalsIgnoreCase(backend);
+    }
+
+    private boolean isUnsupportedBackend(Worker worker) {
+        String backend = metadataString(worker, "execution_backend");
+        return "unsupported".equalsIgnoreCase(backend);
     }
 
     private String metadataString(Worker worker, String key) {

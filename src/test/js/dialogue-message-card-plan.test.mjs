@@ -33,6 +33,21 @@ test("compact transcript plan can still surface route context when signal count 
     );
 });
 
+test("provider diagnostics surface before route in message signals", () => {
+    const plan = buildMessageSignalPlan({
+        provider_error: "codex turn completion timed out",
+        provider_turn_status: "timeout",
+        selected_worker: "kimi",
+        route_source: "capability_match"
+    });
+
+    assert.deepEqual(
+        plan.entries.map((entry) => entry.label),
+        ["provider", "route"]
+    );
+    assert.equal(plan.texts[0], "provider · codex turn completion timed…");
+});
+
 test("related-message plan keeps richer context including route and tools", () => {
     const plan = buildMessageSignalPlan({
         trigger: "continue",

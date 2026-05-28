@@ -1,5 +1,9 @@
 package com.agentcloud.engine;
 
+import com.agentcloud.agent.AgentProvider;
+import com.agentcloud.agent.AgentProviderDescriptor;
+import com.agentcloud.agent.AgentProviderRegistry;
+import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.judgment.JudgmentContext;
@@ -8,6 +12,7 @@ import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
+import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
@@ -322,6 +327,84 @@ class ControlNodeGraphOrchestrationFlowTest {
     }
 
     @Test
+    void schedulerReroutesWhenAssignedWorkerFailsDispatchPreflight() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("dispatch-preflight-reroute.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_dispatch_preflight", "dispatch preflight flow", "active"));
+
+            AgentProviderRegistry providers = new AgentProviderRegistry()
+                .register(new PreflightProvider("codex", true, false, "fresh turn rejected"))
+                .register(new PreflightProvider("kimi", true, true, null));
+            WorkerRegistry workerRegistry = new WorkerRegistry(providers);
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+            RecordingWorkerExecutor workerExecutor = new RecordingWorkerExecutor();
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new DoneJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_dispatch_preflight",
+                "session_dispatch_preflight",
+                null,
+                "continue long coding task",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                null,
+                "complete the long coding task",
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "assigned_worker", "codex",
+                    "model_mode", "small_only"
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(List.of("kimi"), workerExecutor.workerIds());
+            assertEquals("done", finalTask.status());
+            assertEquals("kimi", persisted.assignedWorker());
+            assertEquals("codex", persisted.metadata().get("previous_worker"));
+            assertEquals("codex", persisted.metadata().get("dispatch_preflight_failed_worker"));
+            assertEquals("fresh turn rejected", persisted.metadata().get("dispatch_preflight_reason"));
+            Event preflightEvent = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 10).stream()
+                .filter(event -> "worker_dispatch_preflight_failed".equals(event.eventType()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("active_probe", preflightEvent.payload().get("dispatch_preflight_mode"));
+            assertEquals(Boolean.TRUE, preflightEvent.payload().get("dispatch_preflight_active_probe"));
+        }
+    }
+
+    @Test
     void continueAutoRunsAdditionalDeclaredRoundsBeforeStopping() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("auto-continue-declared-rounds.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -469,7 +552,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             assertEquals("done", finalTask.status());
             assertEquals("done", persisted.status());
             assertEquals("end", persisted.controlNode());
-            assertEquals("1", String.valueOf(persisted.metadata().get("auto_continue_burst_count")));
+            assertEquals("2", String.valueOf(persisted.metadata().get("auto_continue_burst_count")));
         }
     }
 
@@ -730,6 +813,120 @@ class ControlNodeGraphOrchestrationFlowTest {
     }
 
     @Test
+    void providerRuntimeTransientClassificationTriggersColdRetryWithoutTextGuessing() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("provider-failure-class-recovery.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_provider_failure_class", "provider failure class recovery", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "provider failed with classified transient",
+                        "",
+                        false,
+                        "",
+                        "",
+                        "",
+                        "low",
+                        "failed",
+                        List.of(),
+                        List.of(),
+                        0,
+                        7L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("provider_failure_class", "provider_runtime_transient"),
+                            Map.entry("provider_failure_reason", "codex app-server lost continuation state"),
+                            Map.entry("provider_retryable", true)
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "retry completed",
+                        "retry completed",
+                        false,
+                        "",
+                        "",
+                        "mark done",
+                        "high",
+                        "completed",
+                        List.of(),
+                        List.of(),
+                        0,
+                        8L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor"),
+                            Map.entry("grounded_output_present", true)
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_provider_failure_class",
+                "session_provider_failure_class",
+                null,
+                "recover based on provider failure class",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "finish the work",
+                null,
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "recover from provider-classified transient failure"
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(2, workerExecutor.callCount());
+            assertEquals("done", finalTask.status());
+            assertEquals("done", persisted.status());
+            assertEquals("worker_runtime_transient", persisted.metadata().get("failure_class"));
+            assertEquals("same_worker_retry_scheduled", persisted.metadata().get("recovery_stage"));
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_same_worker_retry_count")));
+        }
+    }
+
+    @Test
     void sameWorkerRetryColdStartClearsProviderContinuationMetadataBeforeNextRoundExecution() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("recovery-clears-provider-continuation.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -960,6 +1157,130 @@ class ControlNodeGraphOrchestrationFlowTest {
     }
 
     @Test
+    void localWorkspaceAccessRefusalDoesNotLeaveTaskActiveScheduler() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("local-workspace-access-refusal.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_local_refusal", "local workspace refusal", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            String refusal = "您提到按文档计划执行，但我目前无法直接访问您本地的文件或路径。请补充以下信息之一，或将完整文档的文本内容粘贴在这里。";
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "worker codex failed: thread not found (27316)",
+                        "thread not found: 27316",
+                        false,
+                        "",
+                        "thread not found: 27316",
+                        "Retry with a fresh session.",
+                        "low",
+                        "failed",
+                        List.of(),
+                        List.of("worker runtime failed"),
+                        0,
+                        5L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "codex"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "planner"),
+                            Map.entry("execution_status", "failed"),
+                            Map.entry("provider_failure_class", "provider_runtime_transient"),
+                            Map.entry("candidate_workers", List.of("codex", "deepseek"))
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        refusal,
+                        refusal,
+                        false,
+                        "",
+                        "",
+                        "Handoff to a local coding worker.",
+                        "low",
+                        "completed",
+                        List.of(),
+                        List.of("local workspace inaccessible"),
+                        0,
+                        5L,
+                        Map.ofEntries(
+                            Map.entry("selected_worker", "deepseek"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "planner"),
+                            Map.entry("execution_status", "completed"),
+                            Map.entry("output_text", refusal),
+                            Map.entry("candidate_workers", List.of("codex", "deepseek"))
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new FakeJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_local_refusal",
+                "session_local_refusal",
+                null,
+                "按文档计划 D:\\gitAll\\articleeditor 修改代码",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "按文档计划 D:\\gitAll\\articleeditor\\docs\\XINHUA_CNML_ADAPTER_IMPLEMENTATION_PLAN_2026-05-15.md 修改代码",
+                null,
+                "codex",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "修改本地 articleeditor 仓库代码",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "plan_pending",
+                    "auto_same_worker_retry_count", 1
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(2, workerExecutor.callCount());
+            assertEquals("waiting_human", finalTask.status());
+            assertEquals("waiting_human", persisted.status());
+            assertEquals("human_gate", persisted.controlNode());
+            assertEquals("rejected", persisted.metadata().get("planner_delegation_gate"));
+            assertEquals("local_workspace_access_refusal", persisted.metadata().get("planner_delegation_gate_reason"));
+            assertEquals("worker_backend_deterministic", persisted.metadata().get("failure_class"));
+            assertEquals("human_gate_required", persisted.metadata().get("recovery_stage"));
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_handoff_count")));
+        }
+    }
+
+    @Test
     void schedulerPersistsProviderContinuationMetadataIntoTaskAndArtifactTrace() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("provider-continuation-flow.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -1040,7 +1361,149 @@ class ControlNodeGraphOrchestrationFlowTest {
                 artifact.metadata().get("latest_worker_metadata") instanceof Map<?, ?> latest
                     && "thread-codex-001".equals(String.valueOf(latest.get("provider_thread_id")))
                     && "provider_app_server".equals(String.valueOf(latest.get("execution_backend")))
+                    && "timeout".equals(String.valueOf(latest.get("provider_turn_status")))
+                    && latest.get("provider_protocol_trace") instanceof List<?> trace
+                    && trace.contains("thread/started")
+                    && "thread-codex-001".equals(String.valueOf(artifact.metadata().get("provider_thread_id")))
+                    && "codex turn completion timed out".equals(String.valueOf(artifact.metadata().get("provider_error")))
+                    && "timeout".equals(String.valueOf(artifact.metadata().get("provider_turn_status")))
+                    && "provider_runtime_transient".equals(String.valueOf(artifact.metadata().get("provider_failure_class")))
+                    && artifact.metadata().get("provider_protocol_trace") instanceof List<?> topTrace
+                    && topTrace.contains("turn/started")
             ));
+        }
+    }
+
+    @Test
+    void providerBackedRoundAutoContinuesWhenNextStepIsPresent() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("provider-auto-continue-flow.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_provider_auto_continue", "provider auto continue flow", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "codex-app",
+                "codex",
+                List.of("coding"),
+                List.of(),
+                List.of(tempDir.toString()),
+                Map.of(),
+                Map.of("model_tier", "strong", "execution_backend", "provider_app_server"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "Codex prepared the continuation round",
+                        "Provider thread has context but still needs the final implementation pass.",
+                        false,
+                        "",
+                        "",
+                        "continue the same codex thread and finish the implementation",
+                        "medium",
+                        "completed",
+                        List.of(),
+                        List.of("finish implementation"),
+                        0,
+                        20L,
+                        Map.ofEntries(
+                            Map.entry("provider_id", "codex"),
+                            Map.entry("execution_backend", "provider_app_server"),
+                            Map.entry("provider_session_id", "thread-codex-auto-001"),
+                            Map.entry("provider_thread_id", "thread-codex-auto-001"),
+                            Map.entry("provider_output_parser", "codex_json_rpc"),
+                            Map.entry("selected_worker", "codex-app"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    ),
+                    new WorkerExecutionResult(
+                        "Codex completed the resumed thread",
+                        "The implementation is complete after the resumed provider round.",
+                        true,
+                        "Provider Auto Continue Result",
+                        "Provider-backed task completed after automatic continuation.",
+                        "mark complete",
+                        "high",
+                        "completed",
+                        List.of(),
+                        List.of(),
+                        0,
+                        18L,
+                        Map.ofEntries(
+                            Map.entry("provider_id", "codex"),
+                            Map.entry("execution_backend", "provider_app_server"),
+                            Map.entry("provider_session_id", "thread-codex-auto-001"),
+                            Map.entry("provider_thread_id", "thread-codex-auto-001"),
+                            Map.entry("provider_output_parser", "codex_json_rpc"),
+                            Map.entry("grounded_output_present", true),
+                            Map.entry("selected_worker", "codex-app"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_provider_auto_continue",
+                "session_provider_auto_continue",
+                null,
+                "auto continue provider-backed codex round",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Finish the provider-backed long task without manual continue.",
+                null,
+                "codex-app",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Continue provider-backed codex thread until the implementation is complete."
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+
+            assertEquals(2, workerExecutor.callCount());
+            assertEquals("done", finalTask.status());
+            assertEquals("done", persisted.status());
+            assertEquals("end", persisted.controlNode());
+            assertEquals("1", String.valueOf(persisted.metadata().get("auto_continue_burst_count")));
+            assertEquals("thread-codex-auto-001", persisted.metadata().get("provider_thread_id"));
+            assertEquals("provider_app_server", persisted.metadata().get("execution_backend"));
         }
     }
 
@@ -1388,7 +1851,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             if (result == null) {
                 throw new AssertionError("unexpected worker execution call " + callCount);
             }
-            if (callCount == 2) {
+            if (callCount == 2 && outputFile != null) {
                 try {
                     java.nio.file.Files.writeString(outputFile, "Auto-continued grounded output.");
                 } catch (java.io.IOException e) {
@@ -1400,6 +1863,40 @@ class ControlNodeGraphOrchestrationFlowTest {
 
         private int callCount() {
             return callCount;
+        }
+    }
+
+    private static final class RecordingWorkerExecutor implements WorkerExecutor {
+        private final List<String> workerIds = new java.util.ArrayList<>();
+
+        @Override
+        public WorkerExecutionResult executeOneRound(TaskRuntimeContext context, String workerId) {
+            workerIds.add(workerId);
+            return new WorkerExecutionResult(
+                "dispatch-ready worker completed",
+                "worker " + workerId + " completed after dispatch preflight",
+                true,
+                "Dispatch Ready Result",
+                "Dispatch-ready worker completed the task.",
+                "mark complete",
+                "high",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                5L,
+                Map.ofEntries(
+                    Map.entry("selected_worker", workerId),
+                    Map.entry("selected_model_tier", "small"),
+                    Map.entry("execution_role", "executor"),
+                    Map.entry("execution_status", "completed"),
+                    Map.entry("grounded_output_present", true)
+                )
+            );
+        }
+
+        private List<String> workerIds() {
+            return List.copyOf(workerIds);
         }
     }
 
@@ -1638,6 +2135,12 @@ class ControlNodeGraphOrchestrationFlowTest {
                     Map.entry("provider_session_id", "thread-codex-001"),
                     Map.entry("provider_thread_id", "thread-codex-001"),
                     Map.entry("provider_output_parser", "codex_json_rpc"),
+                    Map.entry("provider_error", "codex turn completion timed out"),
+                    Map.entry("provider_turn_status", "timeout"),
+                    Map.entry("provider_failure_class", "provider_runtime_transient"),
+                    Map.entry("provider_failure_reason", "codex turn completion timed out"),
+                    Map.entry("provider_retryable", true),
+                    Map.entry("provider_protocol_trace", List.of("thread/started", "turn/started")),
                     Map.entry("selected_worker", workerId),
                     Map.entry("selected_model_tier", "strong"),
                     Map.entry("execution_role", "executor")
@@ -1666,6 +2169,54 @@ class ControlNodeGraphOrchestrationFlowTest {
                 "high",
                 "the task produced a reusable provider continuation token",
                 "Complete the task."
+            );
+        }
+    }
+
+    private record PreflightProvider(String providerId,
+                                     boolean passiveReady,
+                                     boolean dispatchReady,
+                                     String dispatchReason) implements AgentProvider {
+        @Override
+        public AgentProviderDescriptor descriptor() {
+            return new AgentProviderDescriptor(
+                providerId,
+                providerId,
+                "local_cli",
+                "process",
+                List.of("chat"),
+                Map.of()
+            );
+        }
+
+        @Override
+        public AgentProviderStatus detect() {
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "0.0.0-test",
+                "ready",
+                passiveReady,
+                passiveReady ? null : "passive not ready",
+                null,
+                Map.of("source", "test")
+            );
+        }
+
+        @Override
+        public AgentProviderStatus dispatchPreflight() {
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "0.0.0-test",
+                "ready",
+                dispatchReady,
+                dispatchReady ? null : dispatchReason,
+                null,
+                Map.of(
+                    "source", "dispatch_preflight_test",
+                    "dispatch_preflight_mode", "active_probe"
+                )
             );
         }
     }
