@@ -33,7 +33,7 @@ test("message role summary keeps only the strongest lifecycle signal and shorter
     assert.equal(summary.role, "assistant");
     assert.equal(summary.count, 2);
     assert.equal(summary.latestTaskId, "task_1");
-    assert.equal(summary.primarySignal, "completion · done");
+    assert.equal(summary.primarySignal, "完成 · done");
     assert.equal(summary.topTypeLine, "top types · task progress × 1 / task result × 1");
     assert.ok(summary.latestText.length <= 96);
 });
@@ -55,7 +55,7 @@ test("message role summary surfaces provider diagnostics from latest outcome", (
         }
     ], "assistant");
 
-    assert.equal(summary.primarySignal, "provider · codex turn completion timed…");
+    assert.equal(summary.primarySignal, "诊断 · codex turn completion timed…");
 });
 
 test("message role summary returns null when role has no messages", () => {

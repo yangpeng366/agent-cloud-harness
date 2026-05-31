@@ -8,14 +8,14 @@ test("message summary stack plan keeps only the freshest summary as primary", ()
             role: "assistant",
             count: 3,
             latestAt: "2026-05-10T10:01:00Z",
-            primarySignal: "completion · done",
+            primarySignal: "完成 · done",
             latestText: "assistant latest"
         },
         {
             role: "system",
             count: 2,
             latestAt: "2026-05-10T10:00:00Z",
-            primarySignal: "action · paused",
+            primarySignal: "动作 · paused",
             latestText: "system latest"
         }
     ]);
@@ -23,7 +23,7 @@ test("message summary stack plan keeps only the freshest summary as primary", ()
     assert.equal(plan.primary.role, "assistant");
     assert.equal(plan.secondary.length, 1);
     assert.equal(plan.secondary[0].role, "system");
-    assert.equal(plan.secondary[0].primarySignal, "action · paused");
+    assert.equal(plan.secondary[0].primarySignal, "动作 · paused");
 });
 
 test("message summary stack plan stays empty when there are no summaries", () => {
@@ -39,14 +39,14 @@ test("message summary stack plan sorts epoch-second timestamps correctly", () =>
             role: "assistant",
             count: 1,
             latestAt: 1778640974.6171476,
-            primarySignal: "completion · active",
+            primarySignal: "完成 · active",
             latestText: "newer"
         },
         {
             role: "system",
             count: 1,
             latestAt: 1778640000.0,
-            primarySignal: "action · paused",
+            primarySignal: "动作 · paused",
             latestText: "older"
         }
     ]);

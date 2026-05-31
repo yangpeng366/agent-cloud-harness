@@ -1,5 +1,5 @@
 import { buildComposerSubmissionPlan } from "./composer-plan.js";
-import { buildMessageSignalPlan } from "./message-card-plan.js";
+import { buildMessageSignalPlan, humanizeSignalLabel } from "./message-card-plan.js";
 import { buildFacadeReplyFeedback } from "./facade-reply-plan.js";
 import { scopedFacadeReply } from "./facade-reply-scope.js";
 import { buildMessageRoleSummary } from "./message-summary-plan.js";
@@ -2367,7 +2367,7 @@ function signalBadge(value, tone, label) {
     if (!text) {
         return "";
     }
-    return `<span class="task-badge" data-tone="${escapeHtml(tone || "default")}">${escapeHtml(`${label} · ${preview(text, 24)}`)}</span>`;
+    return `<span class="task-badge" data-tone="${escapeHtml(tone || "default")}">${escapeHtml(`${humanizeSignalLabel(label)} · ${preview(text, 24)}`)}</span>`;
 }
 
 function overviewCard(label, value) {

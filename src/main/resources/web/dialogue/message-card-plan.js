@@ -170,7 +170,34 @@ function messageLearningSignal(preferredWorkerHint, learningHintApplied) {
 
 function signalText(value, label) {
     const text = firstNonBlank(value);
-    return text ? `${label} · ${preview(text, 28)}` : null;
+    return text ? `${humanizeSignalLabel(label)} · ${preview(text, 28)}` : null;
+}
+
+export function humanizeSignalLabel(label) {
+    switch (String(label || "").trim().toLowerCase()) {
+        case "provider":
+            return "诊断";
+        case "route":
+            return "路由";
+        case "trigger":
+            return "触发";
+        case "event":
+            return "事件";
+        case "completion":
+            return "完成";
+        case "accept":
+            return "验收";
+        case "action":
+            return "动作";
+        case "tools":
+            return "工具";
+        case "mode":
+            return "模式";
+        case "hint":
+            return "提示";
+        default:
+            return label || "";
+    }
 }
 
 function firstNonBlank(...values) {

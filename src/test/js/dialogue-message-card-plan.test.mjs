@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildMessageSignalPlan } from "../../main/resources/web/dialogue/message-card-plan.js";
+import {
+    buildMessageSignalPlan,
+    humanizeSignalLabel
+} from "../../main/resources/web/dialogue/message-card-plan.js";
 
 test("default transcript plan prefers lifecycle signals over route and mode noise", () => {
     const plan = buildMessageSignalPlan({
@@ -45,7 +48,7 @@ test("provider diagnostics surface before route in message signals", () => {
         plan.entries.map((entry) => entry.label),
         ["provider", "route"]
     );
-    assert.equal(plan.texts[0], "provider · codex turn completion timed…");
+    assert.equal(plan.texts[0], "诊断 · codex turn completion timed…");
 });
 
 test("backfilled worker round diagnostics remain visible in transcript signals", () => {
@@ -62,7 +65,7 @@ test("backfilled worker round diagnostics remain visible in transcript signals",
         plan.entries.map((entry) => entry.label),
         ["provider", "route"]
     );
-    assert.equal(plan.texts[0], "provider · codex turn completion timed…");
+    assert.equal(plan.texts[0], "诊断 · codex turn completion timed…");
 });
 
 test("partial timeout diagnostics include output threshold in provider signal", () => {
@@ -78,9 +81,27 @@ test("partial timeout diagnostics include output threshold in provider signal", 
         plan.entries.map((entry) => entry.label),
         ["provider", "route"]
     );
-    assert.equal(plan.texts[0], "provider · 部分结果待确认 · 达到最大时长 · 已有输出 640…");
+    assert.equal(plan.texts[0], "诊断 · 部分结果待确认 · 达到最大时长 · 已有输出 640…");
     assert.equal(plan.entries[0].value, "部分结果待确认 · 达到最大时长 · 已有输出 640/200 字符");
     assert.equal(plan.entries[0].value.includes("partial timeout"), false);
+});
+
+test("message signal display labels are localized without changing entry keys", () => {
+    const plan = buildMessageSignalPlan({
+        trigger: "continue",
+        completion_status: "done",
+        selected_worker: "codex",
+        route_source: "task_pinned"
+    }, { relatedOnly: true });
+
+    assert.deepEqual(plan.entries.map((entry) => entry.label), ["trigger", "completion", "route"]);
+    assert.deepEqual(plan.texts, [
+        "触发 · continue",
+        "完成 · done",
+        "路由 · codex via task pinned"
+    ]);
+    assert.equal(humanizeSignalLabel("provider"), "诊断");
+    assert.equal(humanizeSignalLabel("unknown_key"), "unknown_key");
 });
 
 test("related-message plan keeps richer context including route and tools", () => {
