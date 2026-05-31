@@ -417,16 +417,35 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
     }
     const workerLabel = activeWorkerLabel(task, flow);
     const executionStrip = buildThreadExecutionStrip(task, flow, workerLabel);
-    const outputPreview = assistantOutputPreview(task, flow, 280);
-    if (!executionStrip && !outputPreview) {
+    const outcomeStrip = buildThreadOutcomeStrip(task, flow, 260);
+    const outputPreview = pinnedTaskOutcomePreview(task, flow, 240);
+    if (!executionStrip && !outcomeStrip && !outputPreview) {
         return null;
     }
     const taskMetadata = flow?.task?.metadata || task?.metadata || {};
     const detail = messageCardRecoveryDetail(taskMetadata, true);
+    const showBody = Boolean(outputPreview) && !outcomeStrip;
     return {
         workerLabel,
         executionStrip,
+        outcomeStrip,
         outputPreview,
+        detail,
+        showBody
+    };
+}
+
+function buildThreadOutcomeStrip(task, flow, max = 220) {
+    const outputPreview = assistantOutputPreview(task, flow, max);
+    const taskStatus = firstNonBlank(task?.status, "active");
+    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
+    const detail = [taskStatus, controlNode].filter(Boolean).join(" / ");
+    if (!outputPreview && !detail) {
+        return null;
+    }
+    return {
+        label: "最近输出",
+        title: outputPreview,
         detail
     };
 }
@@ -973,6 +992,9 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(pinned.executionStrip.label, "最近执行");
     assert.equal(pinned.executionStrip.title.includes("worker claude"), true);
     assert.equal(pinned.executionStrip.detail.includes("waiting_human / human_gate"), true);
+    assert.equal(pinned.outcomeStrip.label, "最近输出");
+    assert.equal(pinned.outcomeStrip.title.includes("thread not found (19120)"), true);
+    assert.equal(pinned.showBody, false);
     assert.equal(flow.task.metadata.failure_class, "worker_runtime_transient");
     const compactPreview = pinnedTaskOutcomePreview(task, flow, 240);
     assert.equal(compactPreview.includes("thread not found (19120)"), true);
