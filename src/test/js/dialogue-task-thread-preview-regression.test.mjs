@@ -535,6 +535,43 @@ function messageCardWorkerOutcomePreview(message, max = 220) {
     return candidate ? preview(candidate, max) : "";
 }
 
+function focusedTaskOutcomeProjection(message, flow) {
+    const taskId = message?.task_id || message?.taskId;
+    const flowTask = flow?.task;
+    if (!taskId || !flowTask || firstNonBlank(flowTask?.id) !== taskId) {
+        return null;
+    }
+    const type = (message?.message_type || message?.messageType || "").toLowerCase();
+    if (!isWorkerOutcomeMessageType(type)) {
+        return null;
+    }
+    return {
+        preview: assistantOutputPreview(flowTask, flow, 220),
+        fullContent: effectiveTaskOutcomeFullContent(flowTask, flow)
+    };
+}
+
+function buildMessageDisplayViewForFocusedFlow(message, flow) {
+    const projection = focusedTaskOutcomeProjection(message, flow);
+    if (!projection) {
+        return message;
+    }
+    const metadata = { ...(message?.metadata || {}) };
+    if (projection.preview) {
+        metadata.summary_preview = projection.preview;
+        metadata.summaryPreview = projection.preview;
+    }
+    const currentFullContent = firstNonBlank(metadata.full_content, metadata.fullContent);
+    if (projection.fullContent && (!currentFullContent || isStaleTaskOutcomeShell(currentFullContent))) {
+        metadata.full_content = projection.fullContent;
+        metadata.fullContent = projection.fullContent;
+    }
+    return {
+        ...message,
+        metadata
+    };
+}
+
 function messageCardOutcomeStrip(message, compact = false) {
     const type = (message?.message_type || "").toLowerCase();
     if (!isWorkerOutcomeMessageType(type)) {
@@ -862,6 +899,37 @@ test("focused task transcript card prefers projected outcome preview over stale 
     assert.equal(projectedFullContent.includes("thread not found (19120)"), true);
     assert.equal(projectedFullContent.includes("下一步"), true);
     assert.equal(projectedFullContent.includes("Worker Output"), false);
+});
+
+test("focused task transcript projection only needs live flow task identity, not selected task id", () => {
+    const message = {
+        message_type: "task_progress",
+        task_id: "task_demo",
+        content: "failed",
+        metadata: {
+            summary_preview: "failed",
+            full_content: "failed\n\nWorker Output\n\n\nArtifact Content\n\n\n下一步\nInspect failure trace."
+        }
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md"
+            }
+        },
+        related_messages: [message]
+    };
+
+    const projected = buildMessageDisplayViewForFocusedFlow(message, flow);
+    const outcomeStrip = messageCardOutcomeStrip(projected, false);
+
+    assert.equal(projected.metadata.summary_preview.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(projected.metadata.summary_preview.includes("ARCHITECTURE"), false);
+    assert.equal(projected.metadata.full_content.includes("thread not found (19120)"), true);
+    assert.equal(projected.metadata.full_content.includes("Worker Output"), false);
+    assert.equal(outcomeStrip.title.includes("thread not found (19120)"), true);
 });
 
 test("selected task gets a pinned latest-round output summary before message list history", () => {
