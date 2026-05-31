@@ -4,6 +4,7 @@ export function buildTaskFocusLineBase(task, flow = {}) {
     const taskMetadata = flow?.task?.metadata || task?.metadata || {};
     const recoveryStage = firstNonBlank(taskMetadata.recovery_stage, taskMetadata.recoveryStage);
     const autoHandoffTarget = firstNonBlank(taskMetadata.auto_handoff_target, taskMetadata.autoHandoffTarget);
+    const failureClass = humanizeFailureClass(firstNonBlank(taskMetadata.failure_class, taskMetadata.failureClass));
     const executionStatus = firstNonBlank(
         taskMetadata.execution_status,
         taskMetadata.executionStatus,
@@ -14,7 +15,7 @@ export function buildTaskFocusLineBase(task, flow = {}) {
     if (String(executionStatus).toLowerCase() === "partial_timeout") {
         parts.push("partial timeout");
     } else if (recoveryStage === "human_gate_required") {
-        parts.push("human gate");
+        parts.push(failureClass ? `human gate · ${failureClass}` : "human gate");
     } else if (taskStatus.toLowerCase() === "active"
         && controlNode === "scheduler"
         && recoveryStage === "auto_handoff_scheduled"
@@ -22,6 +23,23 @@ export function buildTaskFocusLineBase(task, flow = {}) {
         parts.push("handoff queued");
     }
     return parts.filter(Boolean).join(" / ");
+}
+
+function humanizeFailureClass(value) {
+    switch (firstNonBlank(value)) {
+        case "worker_runtime_transient":
+            return "临时运行失败";
+        case "task_environment_blocked":
+            return "环境阻塞";
+        case "worker_backend_deterministic":
+            return "能力不匹配";
+        case "partial_result_or_quality_risk":
+            return "部分结果待确认";
+        case "worker_execution_failed":
+            return "执行失败";
+        default:
+            return "";
+    }
 }
 
 function firstNonBlank(...values) {
