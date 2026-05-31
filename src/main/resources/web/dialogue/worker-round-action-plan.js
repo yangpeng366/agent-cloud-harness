@@ -39,8 +39,9 @@ export function buildWorkerRoundActionPlan(message) {
         metadata.resumeProviderSessionId,
         providerThreadId
     );
-    return [
-        {
+    const actions = [];
+    if (providerThreadId) {
+        actions.push({
             action: "continue-worker-thread",
             label: `继续 ${workerLabel} thread`,
             taskId,
@@ -52,14 +53,15 @@ export function buildWorkerRoundActionPlan(message) {
                 resume_provider_session_id: resumeProviderSessionId,
                 source_worker_round_message_id: firstNonBlank(message?.id)
             })
-        },
-        {
-            action: "prepare-worker-handoff",
-            label: "手动移交",
-            taskId,
-            tone: "secondary"
-        }
-    ];
+        });
+    }
+    actions.push({
+        action: "prepare-worker-handoff",
+        label: "手动移交",
+        taskId,
+        tone: providerThreadId ? "secondary" : "primary"
+    });
+    return actions;
 }
 
 function normalizeMessageType(value) {

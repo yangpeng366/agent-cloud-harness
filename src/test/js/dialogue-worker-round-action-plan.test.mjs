@@ -43,6 +43,21 @@ test("worker round completed status keeps transcript actions quiet", () => {
     assert.deepEqual(actions, []);
 });
 
+test("worker round partial timeout without thread only exposes manual handoff", () => {
+    const actions = buildWorkerRoundActionPlan({
+        message_type: "worker_round",
+        id: "msg_round_2",
+        task_id: "task_123",
+        metadata: {
+            worker_id: "codex",
+            execution_status: "partial_timeout"
+        }
+    });
+
+    assert.deepEqual(actions.map((item) => item.action), ["prepare-worker-handoff"]);
+    assert.equal(actions[0].tone, "primary");
+});
+
 test("non worker messages do not expose worker round actions", () => {
     const actions = buildWorkerRoundActionPlan({
         message_type: "task_progress",
