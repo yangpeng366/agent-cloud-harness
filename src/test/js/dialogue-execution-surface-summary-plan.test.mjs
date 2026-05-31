@@ -31,3 +31,28 @@ test("execution surface summary accepts legacy activity timeout alias", () => {
 
     assert.equal(plan.value, "活动超时 45s · 最大时长 2m");
 });
+
+test("execution surface summary localizes mounted context diagnostics", () => {
+    const plan = buildExecutionSurfaceSummaryPlan({
+        prompt_mode: "mounted_primary",
+        mounted_context_rendered: true,
+        mounted_render_used: false,
+        mounted_context_injected: true,
+        mounted_context_panel_count: 3,
+        mounted_context_non_empty_panel_count: 2,
+        mounted_context_rendered_object_count: 5,
+        mounted_context_hidden_object_count: 1,
+        mounted_context_rendered_selection_trace_count: 4,
+        mounted_context_hidden_selection_trace_count: 2,
+        mounted_context_budget_truncated: true,
+        mounted_active_count: 6,
+        mounted_evidence_count: 7,
+        mounted_archive_count: 8
+    });
+
+    assert.equal(
+        plan.value,
+        "提示词 mounted primary · 上下文已渲染 · 上下文未使用 · 上下文已注入 · 3 个面板 · 2 个非空 · 对象 5/1 · 选择轨迹 4/2 · 预算已截断 · 6 条活跃上下文 · 7 条证据 · 8 条归档"
+    );
+    assert.equal(/mounted rendered|panels|objects|traces|budget truncated/.test(plan.value), false);
+});

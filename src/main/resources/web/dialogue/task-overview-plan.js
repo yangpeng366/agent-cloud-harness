@@ -1,6 +1,6 @@
 export function buildTaskOverviewPlan(task, context = {}) {
     const experimentMode = context.experimentMode || "ad hoc";
-    const toolLabel = context.toolLabel || "none";
+    const toolLabel = humanizeToolLabel(context.toolLabel || "none");
     const workerLabel = context.workerLabel || task?.assigned_worker || task?.assignedWorker || "unassigned";
     const focusWorker = context.focusWorker || "";
     const focusLineBase = context.focusLineBase || `${task?.status || "active"} / ${task?.control_node || task?.controlNode || "intake"}`;
@@ -10,7 +10,19 @@ export function buildTaskOverviewPlan(task, context = {}) {
             { label: "任务 ID", value: task?.id || "n/a" },
             { label: "Worker", value: workerLabel },
             { label: "实验模式", value: experimentMode },
-            { label: "Tool chain", value: toolLabel }
+            { label: "工具链", value: toolLabel }
         ]
     };
+}
+
+function humanizeToolLabel(value) {
+    const text = String(value || "").trim();
+    const match = text.match(/^(\d+)\s+calls?$/i);
+    if (match) {
+        return `${match[1]} 次工具调用`;
+    }
+    if (!text || text.toLowerCase() === "none") {
+        return "无";
+    }
+    return text;
 }

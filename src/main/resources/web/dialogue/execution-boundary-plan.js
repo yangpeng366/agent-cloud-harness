@@ -69,14 +69,14 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         durationMs !== null ? formatDurationMs(durationMs) : null
     ].filter(Boolean);
     const chips = [
-        executionId ? `exec: ${executionId}` : null,
+        executionId ? `执行: ${executionId}` : null,
         workerId ? `worker: ${workerId}` : null,
-        providerRunDir ? `run: ${providerRunDir}` : null,
-        providerLastMessagePath ? `last: ${providerLastMessagePath}` : null,
-        providerEventLogPath ? `events: ${providerEventLogPath}` : null,
-        providerStdoutPath ? `stdout: ${providerStdoutPath}` : null,
-        providerRunMetadataPath ? `meta: ${providerRunMetadataPath}` : null,
-        providerPromptPath ? `prompt: ${providerPromptPath}` : null
+        providerRunDir ? `运行目录: ${providerRunDir}` : null,
+        providerLastMessagePath ? `最后输出: ${providerLastMessagePath}` : null,
+        providerEventLogPath ? `事件日志: ${providerEventLogPath}` : null,
+        providerStdoutPath ? `标准输出: ${providerStdoutPath}` : null,
+        providerRunMetadataPath ? `运行元数据: ${providerRunMetadataPath}` : null,
+        providerPromptPath ? `提示词: ${providerPromptPath}` : null
     ].filter(Boolean);
     return {
         status,
@@ -110,6 +110,25 @@ function humanizeToken(value) {
     if (!text) {
         return "";
     }
+    switch (text.trim().toLowerCase()) {
+        case "tool_running":
+            return "工具执行中";
+        case "completed":
+        case "done":
+        case "success":
+            return "完成";
+        case "failed":
+        case "error":
+            return "失败";
+        case "timeout":
+            return "超时";
+        case "partial_timeout":
+            return "部分结果待确认";
+        case "cancelled":
+            return "已取消";
+        default:
+            break;
+    }
     return text
         .split(/[_\s-]+/)
         .filter(Boolean)
@@ -141,10 +160,10 @@ function formatCount(value, unit) {
     if (!Number.isFinite(value)) {
         return null;
     }
-    if (value === 1) {
-        return `1 ${unit}`;
+    if (unit === "call") {
+        return `${value} 次工具调用`;
     }
-    return `${value} ${unit}s`;
+    return `${value} ${unit}`;
 }
 
 function formatDurationMs(value) {

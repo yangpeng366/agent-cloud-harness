@@ -2505,20 +2505,20 @@ function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundar
         boundaryMetadata.unfinishedItems
     );
     const metrics = [
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        promptMode ? `提示词 ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedRendered === false ? "上下文未渲染" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedInjected === false ? "上下文未注入" : null,
+        panelCount ? `${panelCount} 个面板` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} 个非空` : null,
         renderedObjectCount !== null || hiddenObjectCount !== null
-            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            ? `对象 ${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0}`
             : null,
         renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
-            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
-        budgetTruncated === true ? "budget truncated" : null
+        budgetTruncated === true ? "预算已截断" : null
     ].filter(Boolean);
     const cognitionRows = [
         summarizeExecutionSurface(executionSurface),
@@ -4173,7 +4173,7 @@ function cognitionTimelineChips(entry) {
         checkpointType ? `checkpoint: ${humanizeToken(checkpointType) || checkpointType}` : null,
         targetWorker ? `target: ${targetWorker}` : null,
         routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
-        promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
+        promptMode ? `提示词: ${humanizeToken(promptMode) || promptMode}` : null,
         executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
         needsArchiveRetrieval === true ? "archive retrieval requested" : null,
         needsExternalFactRefresh === true ? "external fact refresh requested" : null,
@@ -4182,16 +4182,16 @@ function cognitionTimelineChips(entry) {
         reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} reopen targets` : null,
         reopenSummary ? `reopen: ${preview(reopenSummary, 72)}` : null,
         toolCount === null ? null : `${toolCount} tools`,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedPanelCount === null ? null : `${mountedPanelCount} panels`,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedPanelCount === null ? null : `${mountedPanelCount} 个面板`,
         renderedObjectCount !== null || hiddenObjectCount !== null
-            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            ? `对象 ${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0}`
             : null,
         renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
-            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
-        budgetTruncated === true ? "budget truncated" : null,
+        budgetTruncated === true ? "预算已截断" : null,
         aligned === true ? "prompt aligned" : null,
         aligned === false ? "prompt diverged" : null,
         reason ? `reason: ${preview(reason, 48)}` : null,
@@ -4348,20 +4348,20 @@ function summarizeJudgmentSurface(label, surface) {
     const evidenceRefs = normalizeTextList(surface.evidence_refs, surface.evidenceRefs);
     const unfinishedItems = normalizeTextList(surface.unfinished_items, surface.unfinishedItems);
     const parts = [
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedRenderUsed === true ? "mounted used" : null,
-        mountedRenderUsed === false ? "mounted unused" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
-        activeCount ? `${activeCount} active` : null,
-        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
-        evidenceCount ? `${evidenceCount} evidence budget` : null,
-        archiveCount ? `${archiveCount} archive` : null,
-        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+        promptMode ? `提示词 ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedRendered === false ? "上下文未渲染" : null,
+        mountedRenderUsed === true ? "上下文已使用" : null,
+        mountedRenderUsed === false ? "上下文未使用" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedInjected === false ? "上下文未注入" : null,
+        panelCount ? `${panelCount} 个面板` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} 个非空` : null,
+        activeCount ? `${activeCount} 条活跃上下文` : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} 条证据` : null,
+        evidenceCount ? `${evidenceCount} 条证据预算` : null,
+        archiveCount ? `${archiveCount} 条归档` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} 项未完成` : null
     ].filter(Boolean);
     if (parts.length === 0) {
         return null;
@@ -4848,7 +4848,7 @@ function renderMountedContext(view) {
     return `
         <div class="mounted-context">
             <div class="stack-item__meta mounted-context__meta">
-                <span class="task-badge">${escapeHtml(`${nonEmptyPanels.length} panels`)}</span>
+                <span class="task-badge">${escapeHtml(`${nonEmptyPanels.length} 个面板`)}</span>
                 ${view.task_id || view.taskId ? `<span class="task-badge mono">${escapeHtml(view.task_id || view.taskId)}</span>` : ""}
             </div>
             ${traceHtml}

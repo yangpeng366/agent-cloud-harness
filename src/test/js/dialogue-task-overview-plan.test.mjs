@@ -14,10 +14,10 @@ test("task overview plan keeps focus line separate and reduces cards to stable e
     });
 
     assert.equal(plan.focusLine, "active / scheduler");
-    assert.deepEqual(plan.cards.map((item) => item.label), ["任务 ID", "Worker", "实验模式", "Tool chain"]);
+    assert.deepEqual(plan.cards.map((item) => item.label), ["任务 ID", "Worker", "实验模式", "工具链"]);
     assert.equal(plan.cards[1].value, "codex");
     assert.equal(plan.cards[2].value, "orchestrated");
-    assert.equal(plan.cards[3].value, "2 calls");
+    assert.equal(plan.cards[3].value, "2 次工具调用");
 });
 
 test("task overview plan accepts caller-provided focus line base for queued recovery states", () => {
@@ -34,4 +34,5 @@ test("task overview plan accepts caller-provided focus line base for queued reco
     });
 
     assert.equal(plan.focusLine, "active / scheduler / handoff queued / worker openclaw-native");
+    assert.equal(plan.cards[3].value, "无");
 });

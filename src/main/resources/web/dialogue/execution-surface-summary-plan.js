@@ -55,25 +55,25 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
         maxDurationMs !== null ? `最大时长 ${formatDuration(maxDurationMs)}` : null,
         outputChars !== null && threshold !== null ? `已有输出 ${outputChars}/${threshold} 字符` : null,
         abortReason ? `中断原因 ${humanizeAbortReason(abortReason)}` : null,
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedRenderUsed === true ? "mounted used" : null,
-        mountedRenderUsed === false ? "mounted unused" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        promptMode ? `提示词 ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedRendered === false ? "上下文未渲染" : null,
+        mountedRenderUsed === true ? "上下文已使用" : null,
+        mountedRenderUsed === false ? "上下文未使用" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedInjected === false ? "上下文未注入" : null,
+        panelCount ? `${panelCount} 个面板` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} 个非空` : null,
         renderedObjectCount !== null || hiddenObjectCount !== null
-            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            ? `对象 ${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0}`
             : null,
         renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
-            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
-        budgetTruncated === true ? "budget truncated" : null,
-        activeCount ? `${activeCount} active` : null,
-        evidenceCount ? `${evidenceCount} evidence` : null,
-        archiveCount ? `${archiveCount} archive` : null
+        budgetTruncated === true ? "预算已截断" : null,
+        activeCount ? `${activeCount} 条活跃上下文` : null,
+        evidenceCount ? `${evidenceCount} 条证据` : null,
+        archiveCount ? `${archiveCount} 条归档` : null
     ].filter(Boolean);
     return parts.length > 0 ? { label: "execution", value: parts.join(" · ") } : null;
 }
