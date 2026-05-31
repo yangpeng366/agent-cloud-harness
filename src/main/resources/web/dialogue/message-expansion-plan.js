@@ -108,16 +108,16 @@ function buildTaskOutcomeFullContent(message, metadata, content) {
         uniquePush(parts, content);
     }
     if (failureSummary) {
-        uniquePush(parts, `Failure Summary\n${failureSummary}`);
+        uniquePush(parts, `失败摘要\n${failureSummary}`);
     }
     if (providerDiagnostics) {
         uniquePush(parts, providerDiagnostics);
     }
     if (outputText) {
-        uniquePush(parts, `Worker Output\n${outputText}`);
+        uniquePush(parts, `worker 输出\n${outputText}`);
     }
     if (artifactContent) {
-        uniquePush(parts, `Artifact Content\n${artifactContent}`);
+        uniquePush(parts, `产物内容\n${artifactContent}`);
     }
     if (nextStep) {
         uniquePush(parts, `下一步\n${nextStep}`);

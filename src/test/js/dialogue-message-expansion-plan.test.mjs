@@ -21,9 +21,10 @@ test("task progress expands to include worker output and next step", () => {
     );
 
     assert.equal(plan.needsExpand, true);
-    assert.equal(plan.fullContent.includes("Worker Output"), true);
+    assert.equal(plan.fullContent.includes("worker 输出"), true);
     assert.equal(plan.fullContent.includes("line 1"), true);
     assert.equal(plan.fullContent.includes("下一步"), true);
+    assert.equal(plan.fullContent.includes("Worker Output"), false);
 });
 
 test("failure summary alone still enables expandable task outcome content", () => {
@@ -39,8 +40,9 @@ test("failure summary alone still enables expandable task outcome content", () =
     );
 
     assert.equal(plan.needsExpand, true);
-    assert.equal(plan.fullContent.includes("Failure Summary"), true);
+    assert.equal(plan.fullContent.includes("失败摘要"), true);
     assert.equal(plan.fullContent.includes("thread not found (19120)"), true);
+    assert.equal(plan.fullContent.includes("Failure Summary"), false);
     assert.equal(hasExpandedTaskOutcomeContent({
         message_type: "task_progress",
         metadata: {
@@ -89,7 +91,7 @@ test("stale shell full content falls back to readable failure summary for expans
     );
 
     assert.equal(plan.needsExpand, true);
-    assert.equal(plan.fullContent.startsWith("Failure Summary"), true);
+    assert.equal(plan.fullContent.startsWith("失败摘要"), true);
     assert.equal(plan.fullContent.includes("thread not found (19120)"), true);
     assert.equal(plan.fullContent.includes("Worker Output"), false);
     assert.equal(plan.fullContent.includes("Artifact Content"), false);
