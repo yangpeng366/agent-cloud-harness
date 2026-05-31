@@ -407,9 +407,11 @@ class TaskHandlerLiveFlowHttpTest {
             Path runDir = tempDir.resolve("provider-run").toAbsolutePath().normalize();
             Files.createDirectories(runDir);
             Path promptPath = runDir.resolve("prompt.txt");
+            Path stdoutPath = runDir.resolve("stdout.log");
             Path lastMessagePath = runDir.resolve("last_message.md");
             Path metadataPath = runDir.resolve("metadata.json");
             Files.writeString(promptPath, "prompt", StandardCharsets.UTF_8);
+            Files.writeString(stdoutPath, "codex stdout", StandardCharsets.UTF_8);
             Files.writeString(lastMessagePath, "codex final answer", StandardCharsets.UTF_8);
             Files.writeString(metadataPath, "{\"status\":\"done\"}", StandardCharsets.UTF_8);
 
@@ -428,26 +430,38 @@ class TaskHandlerLiveFlowHttpTest {
                     "execution_status", "succeeded",
                     "provider_run_dir", runDir.toString(),
                     "provider_prompt_path", promptPath.toString(),
+                    "provider_stdout_path", stdoutPath.toString(),
                     "provider_last_message_path", lastMessagePath.toString(),
                     "provider_run_metadata_path", metadataPath.toString()
                 ))
             ));
 
-            HttpResponse<String> response = harness.client.send(
-                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/provider_run_file?kind=last_message"))
-                    .GET()
-                    .build(),
-                HttpResponse.BodyHandlers.ofString()
-            );
-
-            Map<String, Object> payload = harness.readJson(response.body());
-            Map<String, Object> data = harness.map(payload.get("data"));
-            assertEquals(200, response.statusCode());
-            assertEquals("last_message", data.get("kind"));
-            assertEquals(lastMessagePath.toString(), data.get("path"));
-            assertEquals("codex final answer", data.get("content"));
-            assertEquals(Boolean.FALSE, data.get("truncated"));
+            assertProviderRunFile(harness, task.id(), "last_message", lastMessagePath.toString(), "codex final answer");
+            assertProviderRunFile(harness, task.id(), "prompt", promptPath.toString(), "prompt");
+            assertProviderRunFile(harness, task.id(), "stdout", stdoutPath.toString(), "codex stdout");
+            assertProviderRunFile(harness, task.id(), "metadata", metadataPath.toString(), "{\"status\":\"done\"}");
         }
+    }
+
+    private void assertProviderRunFile(HttpHarness harness,
+                                       String taskId,
+                                       String kind,
+                                       String expectedPath,
+                                       String expectedContent) throws Exception {
+        HttpResponse<String> response = harness.client.send(
+            HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + taskId + "/provider_run_file?kind=" + kind))
+                .GET()
+                .build(),
+            HttpResponse.BodyHandlers.ofString()
+        );
+
+        Map<String, Object> payload = harness.readJson(response.body());
+        Map<String, Object> data = harness.map(payload.get("data"));
+        assertEquals(200, response.statusCode());
+        assertEquals(kind, data.get("kind"));
+        assertEquals(expectedPath, data.get("path"));
+        assertEquals(expectedContent, data.get("content"));
+        assertEquals(Boolean.FALSE, data.get("truncated"));
     }
 
     @Test
