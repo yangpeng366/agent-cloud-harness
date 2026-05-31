@@ -66,6 +66,7 @@
 - 对当前选中的失败态 task，如果历史 `task_progress.full_content` 还是旧空壳，而 `live_flow.task.metadata.failure_summary_readable` 已经更完整，thread output 也应优先回退到这条更新后的失败摘要，而不是继续只显示 `failed / Worker Output / Artifact Content`
 - 如果历史 `failure_summary_readable` 本身还是长噪声，主 thread output 也不应整段照抄；第一页应先压成短可读失败摘要，把原始 trace / listing / prompt echo 继续留在 details 与 live flow
 - 已知 provider/runtime 失败摘要应在 Dialogue 第一屏人话化：`thread not found` 显示为 `线程未找到 (...)`，`timeout / timed out` 显示为 `执行超时`，避免用户只能看到 `worker failed: timeout` 这类内部英文诊断
+- 顶部状态 focus line 里的新增恢复状态也应人话化：partial timeout 显示为 `部分结果待确认`，human gate 显示为 `等待人工确认`，auto handoff pending 显示为 `移交已排队`
 - 对当前选中的 active task，`Harness` 结果气泡上沿现在应优先形成更明显的运行态条带：直接露出 `执行中/最近执行 worker` 与当前 `status / control node`，更接近 `codex/openclaw` 的 first-screen execution strip
 - 这条 execution strip 不应只剩一层普通摘要文本；更合理的第一页形态是两层结构：`执行中/最近执行 worker + status/control node`，再加一层独立的 `最近输出 + short failure/result`
 - 这两层不应只是“两个色块里塞长句”；更接近执行面的做法是优先突出 `label / worker / short result`，把长叙述继续留在正文或展开态
