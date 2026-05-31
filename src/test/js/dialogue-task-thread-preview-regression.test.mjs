@@ -181,6 +181,10 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         metadata.auto_handoff_target,
         metadata.autoHandoffTarget
     );
+    const manualHandoffCandidate = firstNonBlank(
+        metadata.manual_handoff_candidate,
+        metadata.manualHandoffCandidate
+    );
     const sameWorkerRetryCount = numericValue(
         metadata.auto_same_worker_retry_count,
         metadata.autoSameWorkerRetryCount
@@ -213,6 +217,8 @@ function messageCardRecoveryDetail(metadata, compact = false) {
                 ? `handoff ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
                 : `handoff ${autoHandoffCount}`
         );
+    } else if (manualHandoffCandidate) {
+        recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
         recoveryParts.push("recovery · fresh session");
@@ -863,12 +869,15 @@ test("active worker label prefers current assigned worker over provider name aft
 test("human gate recovery detail explains next action for partial-result risk", () => {
     const detail = messageCardRecoveryDetail({
         failure_class: "partial_result_or_quality_risk",
-        recovery_stage: "human_gate_required"
+        recovery_stage: "human_gate_required",
+        manual_handoff_candidate: "deepseek"
     }, true);
 
     assert.equal(detail.includes("部分结果待确认"), true);
     assert.equal(detail.includes("等待人工确认"), true);
     assert.equal(detail.includes("先复核已有结果"), true);
+    assert.equal(detail.includes("manual handoff candidate -> deepseek"), true);
+    assert.equal(detail.includes("handoff 1"), false);
 });
 
 

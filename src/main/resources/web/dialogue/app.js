@@ -2013,6 +2013,7 @@ function effectiveMessageMetadata(message) {
         "auto_same_worker_retry_count",
         "auto_handoff_count",
         "auto_handoff_target",
+        "manual_handoff_candidate",
         "previous_worker",
         "assigned_worker"
     ];
@@ -2254,6 +2255,10 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         metadata.auto_handoff_target,
         metadata.autoHandoffTarget
     );
+    const manualHandoffCandidate = firstNonBlank(
+        metadata.manual_handoff_candidate,
+        metadata.manualHandoffCandidate
+    );
     const sameWorkerRetryCount = numericValue(
         metadata.auto_same_worker_retry_count,
         metadata.autoSameWorkerRetryCount,
@@ -2288,6 +2293,8 @@ function messageCardRecoveryDetail(metadata, compact = false) {
                 ? `handoff ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
                 : `handoff ${autoHandoffCount}`
         );
+    } else if (manualHandoffCandidate) {
+        recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
         recoveryParts.push("recovery · fresh session");
