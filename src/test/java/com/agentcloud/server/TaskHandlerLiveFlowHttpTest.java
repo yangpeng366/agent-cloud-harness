@@ -85,6 +85,10 @@ class TaskHandlerLiveFlowHttpTest {
                 Map.ofEntries(
                     Map.entry("execution_status", "succeeded"),
                     Map.entry("tool_execution_mode", "single_tool_round"),
+                    Map.entry("provider_timeout_kind", "max_duration"),
+                    Map.entry("provider_abort_reason", "user_interrupted"),
+                    Map.entry("partial_output_chars", 640),
+                    Map.entry("partial_timeout_min_output_chars", 200),
                     Map.entry("prompt_mode", "mounted_context_primary"),
                     Map.entry("mounted_context_rendered", true),
                     Map.entry("mounted_render_used", true),
@@ -235,6 +239,10 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(200, traceResponse.statusCode());
             assertEquals("codex", flowRoute.get("selected_worker"));
             assertEquals("codex", flowExecution.get("worker_id"));
+            assertEquals("max_duration", flowExecution.get("provider_timeout_kind"));
+            assertEquals("user_interrupted", flowExecution.get("provider_abort_reason"));
+            assertEquals(640, ((Number) flowExecution.get("partial_output_chars")).intValue());
+            assertEquals(200, ((Number) flowExecution.get("partial_timeout_min_output_chars")).intValue());
             assertEquals("mounted_context_primary", flowExecution.get("prompt_mode"));
             assertEquals(Boolean.TRUE, flowExecution.get("mounted_render_used"));
             assertEquals(2, ((Number) flowExecution.get("mounted_context_non_empty_panel_count")).intValue());
