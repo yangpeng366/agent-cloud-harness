@@ -108,6 +108,10 @@ function messageToolSignal(metadata = {}) {
 }
 
 function messageProviderSignal(metadata = {}) {
+    const partial = partialTimeoutSignal(metadata);
+    if (partial) {
+        return partial;
+    }
     const providerText = firstNonBlank(
         metadata.provider_error,
         metadata.providerError,
@@ -119,6 +123,30 @@ function messageProviderSignal(metadata = {}) {
         metadata.providerFailureClass
     );
     return providerText ? humanizeToken(String(providerText)) || providerText : null;
+}
+
+function partialTimeoutSignal(metadata = {}) {
+    const status = firstNonBlank(
+        metadata.execution_status,
+        metadata.executionStatus,
+        metadata.provider_turn_status,
+        metadata.providerTurnStatus
+    );
+    if (String(status || "").toLowerCase() !== "partial_timeout") {
+        return null;
+    }
+    const kind = firstNonBlank(metadata.provider_timeout_kind, metadata.providerTimeoutKind);
+    const outputChars = numberOrNull(metadata.partial_output_chars, metadata.partialOutputChars);
+    const threshold = numberOrNull(
+        metadata.partial_timeout_min_output_chars,
+        metadata.partialTimeoutMinOutputChars
+    );
+    const parts = [
+        "partial timeout",
+        kind ? humanizeToken(String(kind)) || kind : null,
+        outputChars != null && threshold != null ? `${outputChars}/${threshold} chars` : null
+    ].filter(Boolean);
+    return parts.join(" · ");
 }
 
 function messageLearningSignal(preferredWorkerHint, learningHintApplied) {

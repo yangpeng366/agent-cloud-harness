@@ -820,13 +820,21 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     }
 
     private long turnMaxDurationMs(CodexExecutionPlan plan) {
-        long defaultValue = looksLikeCodingPlan(plan)
-            ? DEFAULT_CODING_TURN_MAX_DURATION_MS
-            : DEFAULT_TURN_MAX_DURATION_MS;
+        if (looksLikeCodingPlan(plan)) {
+            return longProperty(
+                List.of("agentcloud.providers.codex.coding_turn_max_duration_ms", "agentcloud.codex.codingTurnMaxDurationMs"),
+                List.of("AGENTCLOUD_CODEX_CODING_TURN_MAX_DURATION_MS"),
+                longProperty(
+                    List.of("agentcloud.providers.codex.turn_max_duration_ms", "agentcloud.codex.turnMaxDurationMs"),
+                    List.of("AGENTCLOUD_CODEX_TURN_MAX_DURATION_MS"),
+                    DEFAULT_CODING_TURN_MAX_DURATION_MS
+                )
+            );
+        }
         return longProperty(
             List.of("agentcloud.providers.codex.turn_max_duration_ms", "agentcloud.codex.turnMaxDurationMs"),
             List.of("AGENTCLOUD_CODEX_TURN_MAX_DURATION_MS"),
-            defaultValue
+            DEFAULT_TURN_MAX_DURATION_MS
         );
     }
 
@@ -845,7 +853,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             return true;
         }
         String lower = prompt.toLowerCase(Locale.ROOT);
-        return lower.contains("workspace")
+        return lower.contains("task type: coding")
+            || lower.contains("task type: research")
+            || lower.contains("task type: investigation")
+            || lower.contains("workspace")
             || lower.contains("代码")
             || lower.contains("code")
             || lower.contains("repo")

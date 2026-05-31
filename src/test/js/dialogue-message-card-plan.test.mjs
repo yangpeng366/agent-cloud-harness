@@ -65,6 +65,23 @@ test("backfilled worker round diagnostics remain visible in transcript signals",
     assert.equal(plan.texts[0], "provider · codex turn completion timed…");
 });
 
+test("partial timeout diagnostics include output threshold in provider signal", () => {
+    const plan = buildMessageSignalPlan({
+        execution_status: "partial_timeout",
+        provider_timeout_kind: "max_duration",
+        partial_output_chars: 640,
+        partial_timeout_min_output_chars: 200,
+        selected_worker: "codex"
+    });
+
+    assert.deepEqual(
+        plan.entries.map((entry) => entry.label),
+        ["provider", "route"]
+    );
+    assert.equal(plan.texts[0], "provider · partial timeout · max durat…");
+    assert.equal(plan.entries[0].value, "partial timeout · max duration · 640/200 chars");
+});
+
 test("related-message plan keeps richer context including route and tools", () => {
     const plan = buildMessageSignalPlan({
         trigger: "continue",

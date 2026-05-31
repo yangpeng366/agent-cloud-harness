@@ -321,15 +321,19 @@ class CodexAppServerWorkerExecutorTest {
         String legacyActivityKey = "agentcloud.codex.turnActivityTimeoutMs";
         String maxKey = "agentcloud.providers.codex.turn_max_duration_ms";
         String legacyMaxKey = "agentcloud.codex.turnMaxDurationMs";
+        String codingMaxKey = "agentcloud.providers.codex.coding_turn_max_duration_ms";
+        String legacyCodingMaxKey = "agentcloud.codex.codingTurnMaxDurationMs";
         String partialKey = "agentcloud.providers.codex.partial_timeout_min_output_chars";
         String legacyPartialKey = "agentcloud.codex.partialTimeoutMinOutputChars";
         Map<String, String> originals = snapshotProperties(
-            activityKey, legacyActivityKey, maxKey, legacyMaxKey, partialKey, legacyPartialKey
+            activityKey, legacyActivityKey, maxKey, legacyMaxKey, codingMaxKey, legacyCodingMaxKey, partialKey, legacyPartialKey
         );
         System.setProperty(activityKey, "345000");
         System.setProperty(legacyActivityKey, "111000");
         System.setProperty(maxKey, "1200000");
         System.setProperty(legacyMaxKey, "222000");
+        System.setProperty(codingMaxKey, "1500000");
+        System.setProperty(legacyCodingMaxKey, "333000");
         System.setProperty(partialKey, "321");
         System.setProperty(legacyPartialKey, "123");
         try {
@@ -346,7 +350,7 @@ class CodexAppServerWorkerExecutorTest {
             partial.setAccessible(true);
 
             assertEquals(345_000L, activity.invoke(executor));
-            assertEquals(1_200_000L, max.invoke(executor, plan));
+            assertEquals(1_500_000L, max.invoke(executor, plan));
             assertEquals(321, partial.invoke(executor));
         } finally {
             restoreProperties(originals);
