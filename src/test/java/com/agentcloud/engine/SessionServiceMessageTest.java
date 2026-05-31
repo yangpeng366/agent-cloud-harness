@@ -163,6 +163,7 @@ class SessionServiceMessageTest {
                     "provider_thread_id", "thread-codex-001",
                     "provider_failure_reason", "codex turn completion timed out",
                     "provider_retryable", true,
+                    "provider_protocol_trace", List.of("thread/started", "turn/started", "item/agentMessage/delta"),
                     "latest_worker_metadata", Map.of(
                         "execution_backend", "provider_app_server",
                         "provider_timeout_kind", "activity_timeout",
@@ -183,6 +184,10 @@ class SessionServiceMessageTest {
             assertEquals("provider_app_server", workerRound.metadata().get("execution_backend"));
             assertEquals("activity_timeout", workerRound.metadata().get("provider_timeout_kind"));
             assertEquals("codex_json_rpc", workerRound.metadata().get("provider_output_parser"));
+            assertEquals(3, workerRound.metadata().get("provider_protocol_trace_count"));
+            assertEquals(List.of("thread/started", "turn/started", "item/agentMessage/delta"),
+                workerRound.metadata().get("provider_protocol_trace_preview"));
+            assertEquals(false, workerRound.metadata().containsKey("provider_protocol_trace"));
 
             List<SessionMessage> secondRead = service.listMessages(session.id(), 20, "task_backfill");
             long workerRoundCount = secondRead.stream()
@@ -228,6 +233,46 @@ class SessionServiceMessageTest {
             assertEquals("task_session_backfill", workerRound.taskId());
             assertEquals("art_session_backfill", workerRound.metadata().get("artifact_id"));
             assertEquals("codex", workerRound.metadata().get("provider_id"));
+        }
+    }
+
+    @Test
+    void listMessagesCompactsExistingWorkerRoundProtocolTraceMetadata() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-worker-round-trace-compact.db"))) {
+            SessionService service = service(db);
+            Session session = service.createSession("worker round trace compact");
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            taskDao.insert(Task.create("task_trace_compact", session.id(), "worker task", "active", "medium"));
+
+            messageDao.insert(new SessionMessage(
+                "msg_trace_compact",
+                session.id(),
+                "task_trace_compact",
+                "assistant",
+                "worker_round",
+                "worker codex timed out",
+                Instant.now(),
+                Map.of(
+                    "artifact_id", "art_trace_compact",
+                    "provider_id", "codex",
+                    "provider_protocol_trace", List.of("thread/started", "turn/started", "item/agentMessage/delta")
+                )
+            ));
+
+            SessionMessage compacted = service.listMessages(session.id(), 20).stream()
+                .filter(message -> "msg_trace_compact".equals(message.id()))
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals(false, compacted.metadata().containsKey("provider_protocol_trace"));
+            assertEquals(3, compacted.metadata().get("provider_protocol_trace_count"));
+            assertEquals(List.of("thread/started", "turn/started", "item/agentMessage/delta"),
+                compacted.metadata().get("provider_protocol_trace_preview"));
+
+            SessionMessage persisted = messageDao.findById("msg_trace_compact");
+            assertEquals(false, persisted.metadata().containsKey("provider_protocol_trace"));
+            assertEquals(3, persisted.metadata().get("provider_protocol_trace_count"));
         }
     }
 

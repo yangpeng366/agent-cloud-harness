@@ -184,10 +184,10 @@ public class SessionService {
         ensureMessageStoreAvailable();
         if (normalizedTaskId == null) {
             backfillWorkerRoundMessagesForSession(sessionId);
-            return sessionMessageDao.listBySession(sessionId, safeLimit);
+            return compactWorkerRoundMessageMetadata(sessionMessageDao.listBySession(sessionId, safeLimit));
         }
         backfillWorkerRoundMessages(sessionId, normalizedTaskId);
-        return sessionMessageDao.listBySessionAndTask(sessionId, normalizedTaskId, safeLimit);
+        return compactWorkerRoundMessageMetadata(sessionMessageDao.listBySessionAndTask(sessionId, normalizedTaskId, safeLimit));
     }
 
     public SessionMessage bindMessageToTask(String sessionId, String messageId, String taskId) {
@@ -324,6 +324,56 @@ public class SessionService {
             || metadata.containsKey("provider_thread_id");
     }
 
+    private List<SessionMessage> compactWorkerRoundMessageMetadata(List<SessionMessage> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return messages;
+        }
+        return messages.stream()
+            .map(this::compactWorkerRoundMessageMetadata)
+            .toList();
+    }
+
+    private SessionMessage compactWorkerRoundMessageMetadata(SessionMessage message) {
+        if (message == null || !"worker_round".equalsIgnoreCase(firstNonBlank(message.messageType(), ""))) {
+            return message;
+        }
+        Map<String, Object> metadata = metadataOrEmpty(message.metadata());
+        Object trace = metadata.get("provider_protocol_trace");
+        if (!(trace instanceof List<?> values) || values.isEmpty()) {
+            return message;
+        }
+        LinkedHashMap<String, Object> compacted = new LinkedHashMap<>(metadata);
+        compacted.remove("provider_protocol_trace");
+        compacted.putIfAbsent("provider_protocol_trace_count", values.size());
+        compacted.putIfAbsent("provider_protocol_trace_preview", values.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(String::valueOf)
+            .limit(20)
+            .toList());
+        persistCompactedWorkerRoundMetadata(message, compacted);
+        return new SessionMessage(
+            message.id(),
+            message.sessionId(),
+            message.taskId(),
+            message.role(),
+            message.messageType(),
+            message.content(),
+            message.createdAt(),
+            compacted
+        );
+    }
+
+    private void persistCompactedWorkerRoundMetadata(SessionMessage message, Map<String, Object> metadata) {
+        if (sessionMessageDao == null || message == null || metadata == null) {
+            return;
+        }
+        try {
+            sessionMessageDao.updateBinding(message.id(), message.taskId(), JsonMapper.toJson(metadata));
+        } catch (Exception e) {
+            log.warn("Failed to compact worker_round message metadata for message={}", message.id(), e);
+        }
+    }
+
     private SessionMessage projectWorkerRoundMessage(Artifact artifact) {
         Map<String, Object> artifactMetadata = metadataOrEmpty(artifact.metadata());
         Map<String, Object> latestWorkerMetadata = nestedMetadata(artifactMetadata, "latest_worker_metadata");
@@ -355,7 +405,7 @@ public class SessionService {
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_reason");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_retryable");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_parser");
-        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_protocol_trace");
+        copyProviderProtocolTraceSummary(metadata, artifactMetadata, latestWorkerMetadata);
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "execution_backend");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_dir");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_prompt_path");
@@ -419,6 +469,36 @@ public class SessionService {
         if (!target.containsKey(key)) {
             copyIfPresent(target, latestWorkerMetadata, key);
         }
+    }
+
+    private void copyProviderProtocolTraceSummary(Map<String, Object> target,
+                                                  Map<String, Object> artifactMetadata,
+                                                  Map<String, Object> latestWorkerMetadata) {
+        Object trace = firstNonNull(
+            artifactMetadata != null ? artifactMetadata.get("provider_protocol_trace") : null,
+            latestWorkerMetadata != null ? latestWorkerMetadata.get("provider_protocol_trace") : null
+        );
+        if (!(trace instanceof List<?> values) || values.isEmpty()) {
+            return;
+        }
+        target.put("provider_protocol_trace_count", values.size());
+        target.put("provider_protocol_trace_preview", values.stream()
+            .filter(java.util.Objects::nonNull)
+            .map(String::valueOf)
+            .limit(20)
+            .toList());
+    }
+
+    private Object firstNonNull(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private void copyIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {

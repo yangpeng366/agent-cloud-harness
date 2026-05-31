@@ -1387,8 +1387,10 @@ class ControlNodeGraphOrchestrationFlowTest {
             assertEquals("codex turn completion timed out", workerRoundMessage.metadata().get("provider_failure_reason"));
             assertEquals("codex_json_rpc", workerRoundMessage.metadata().get("provider_output_parser"));
             assertEquals(Boolean.TRUE, workerRoundMessage.metadata().get("provider_retryable"));
-            assertTrue(workerRoundMessage.metadata().get("provider_protocol_trace") instanceof List<?> trace
+            assertEquals(2, workerRoundMessage.metadata().get("provider_protocol_trace_count"));
+            assertTrue(workerRoundMessage.metadata().get("provider_protocol_trace_preview") instanceof List<?> trace
                 && trace.contains("turn/started"));
+            assertFalse(workerRoundMessage.metadata().containsKey("provider_protocol_trace"));
         }
     }
 
