@@ -1689,6 +1689,17 @@ function looksLikeTerseOutcomeToken(value) {
     return /^(failed|done|ok|success|succeeded|completed?)$/i.test(text);
 }
 
+function looksLikeTerseOutcomeNarrative(value) {
+    const text = firstNonBlank(value, "");
+    if (!text) {
+        return false;
+    }
+    if (looksLikeTerseOutcomeToken(text)) {
+        return true;
+    }
+    return /进展[:：]\s*(failed|done|ok|success|succeeded|completed?)\b/i.test(text);
+}
+
 function onMessageFilterClick(event) {
     const button = event.target.closest("[data-filter-group][data-filter-value]");
     if (!button) {
@@ -3018,10 +3029,15 @@ function buildAssistantMessage(task, flow) {
     const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment || {};
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment || {};
+    const latestNarrative = latestTaskOutcomeNarrative(task, flow, 320);
+    const failureFallback = failureNarrativeFallback(taskMetadata);
+    const preferredNarrative = failureFallback && looksLikeTerseOutcomeNarrative(latestNarrative)
+        ? ""
+        : latestNarrative;
     return preview(
         firstNonBlank(
-            latestTaskOutcomeNarrative(task, flow, 320),
-            failureNarrativeFallback(taskMetadata),
+            preferredNarrative,
+            failureFallback,
             activeContext.continuity_summary,
             activeContext.continuitySummary,
             assistantOutputPreview(task, flow, 320),

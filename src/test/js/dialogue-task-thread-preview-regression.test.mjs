@@ -439,6 +439,17 @@ function looksLikeTerseOutcomeToken(value) {
     return /^(failed|done|ok|success|succeeded|completed?)$/i.test(text);
 }
 
+function looksLikeTerseOutcomeNarrative(value) {
+    const text = firstNonBlank(value, "");
+    if (!text) {
+        return false;
+    }
+    if (looksLikeTerseOutcomeToken(text)) {
+        return true;
+    }
+    return /进展[:：]\s*(failed|done|ok|success|succeeded|completed?)\b/i.test(text);
+}
+
 function pinnedTaskOutcomePreview(task, flow, max = 240) {
     const latestOutcome = (Array.isArray(flow?.related_messages) ? flow.related_messages : [])
         .filter((message) => message?.task_id === task?.id && ["task_progress", "task_result"].includes((message?.message_type || "").toLowerCase()))
@@ -577,9 +588,16 @@ function messageCardExecutionStrip(message, compact = false) {
 
 function buildAssistantMessage(task, flow) {
     const activeContext = flow?.runtime_context?.active_context || {};
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const latestNarrative = latestTaskOutcomeNarrative(task, flow, 320);
+    const failureFallback = failureNarrativeFallback(taskMetadata);
+    const preferredNarrative = failureFallback && looksLikeTerseOutcomeNarrative(latestNarrative)
+        ? ""
+        : latestNarrative;
     return preview(
         firstNonBlank(
-            latestTaskOutcomeNarrative(task, flow, 320),
+            preferredNarrative,
+            failureFallback,
             activeContext.continuity_summary,
             activeContext.continuitySummary,
             task?.summary,
@@ -649,6 +667,42 @@ test("selected task thread bubble prefers focused task failure fallback over sta
     assert.equal(message.includes("worker claude failed: thread not found (19120)"), true);
     assert.equal(message.includes("ARCHITECTURE"), false);
     assert.equal(message.includes("我会先把"), false);
+});
+
+test("selected task thread bubble prefers live failure summary over terse stale outcome narrative", () => {
+    const task = {
+        id: "task_demo",
+        summary: "failed",
+        next_step: "Inspect failure trace."
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��\nD:\\gitAll\\agent-cloud-harness\\docs\\ARCHITECTURE.md"
+            }
+        },
+        runtime_context: {
+            active_context: {
+                continuity_summary: "failed"
+            }
+        },
+        related_messages: [
+            {
+                id: "msg_1",
+                task_id: "task_demo",
+                message_type: "task_progress",
+                created_at: 1778680176.4381566,
+                content: "任务《demo》已完成一轮推进。进展：failed。下一步：Inspect failure trace.。当前：waiting_human / human_gate · worker claude。"
+            }
+        ]
+    };
+
+    const message = buildAssistantMessage(task, flow);
+    assert.equal(message.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(message.includes("已完成一轮推进"), false);
+    assert.equal(message.includes("ARCHITECTURE"), false);
 });
 
 test("selected task thread preview falls back to live flow failure summary when latest outcome full content is a stale shell", () => {
