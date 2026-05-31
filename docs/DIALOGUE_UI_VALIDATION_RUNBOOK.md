@@ -224,7 +224,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 如果后端已经把失败细分成 `worker_runtime_transient / task_environment_blocked / worker_backend_deterministic / partial_result_or_quality_risk`，第一页至少要直接露出这条 `failure_class`；否则用户只能看到“auto handoff / human_gate”，但看不出为什么系统会做这个决定
 - 但第一页也不该直接把这些恢复信号按原始枚举串裸露出来；像 `worker_runtime_transient / human_gate_required` 这种 token 只适合留在 API / live_flow / details，主视图更合理的行为是显示成短的人话标签，例如“临时运行失败 / 等待人工确认”
 - 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
-- richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；像 `/favicon.ico` 这种非功能性噪声也应收掉，避免污染验收信号
+- richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；`/favicon.ico` 已通过 HTML data icon 与服务端 `204 No Content` 收口，后续新增稳定 `404` 应按回归处理
 - 真实页首屏还应避免“先闪旧态再收敛”：如果 hash 已经带了 `task=...`，第一页不应先短暂显示 `selectedStatus=idle`、主卡正文=`failed`，几秒后才回到正确 worker/result；首轮加载应尽量先拿到 selected task 的 `live_flow` 再渲染主聊天流
 
 ### Step C：再跑 light business smoke
@@ -513,7 +513,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - `default task_auto` 仍会 materialize 新 task 并及时切进 task 视图
   - `continue-current note` 现在会继续当前 task，而不是再新建 task
   - `scripts/dialogue-business-smoke.js` 在 `18352` 上已完整通过四条主路径
-  - 当前 console 里剩余的一条 headless `404` 资源报错没有阻断页面功能，可先视为低优先级静态资源尾项
+  - 后续已收口当时的 headless `404` 静态资源噪声：页面声明空 favicon，服务端 `/favicon.ico` 返回 `204 No Content`
+  - 对应回归证据是 `WebConsoleHandlerHttpTest.rootFaviconReturnsNoContentForAcceptanceNoise()`
 - fresh `18362` 这轮又把边界收得更细了一层：
   - `/dialogue/` 第一屏的 pinned `latest round output` 与 active task thread 现在已经能直接显示：
     - 当前/最近执行 worker
@@ -625,7 +626,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 
 - `/dialogue/` 已有 fresh 隔离实例下的 shell / layout 验证证据
 - `/dialogue/` 已有 fresh 隔离实例下的 light business smoke 证据
-- 第三轮默认密度收口已经落到真实 HTML/CSS/JS，但更进一步的 details/status surface 收窄仍未完成
+- 第三轮默认密度收口已经落到真实 HTML/CSS/JS；details/status surface 已开始收口，当前已覆盖 partial timeout provider 诊断、worker recovery action 与 header recovery state
 - richer continuity / acceptance 仍需独立 acceptance 工具链
 
 ---
