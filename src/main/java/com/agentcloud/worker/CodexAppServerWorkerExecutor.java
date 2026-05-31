@@ -754,7 +754,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                                 ProviderRunFiles runFiles) {
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         metadata.put("provider_error", errorText);
-        metadata.put("provider_output_parser", "codex_json_rpc");
+        metadata.put("provider_output_parser", outputParserFor(plan));
+        if ("provider_native_cli_json".equalsIgnoreCase(plan.executionBackend())) {
+            metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
+        }
         appendRunFileMetadata(metadata, runFiles);
         attachProviderFailureClassification(metadata, status, errorText);
         if (exitCode != null) {
@@ -783,6 +786,12 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             durationMs,
             Map.copyOf(metadata)
         );
+    }
+
+    private String outputParserFor(CodexExecutionPlan plan) {
+        return plan != null && "provider_native_cli_json".equalsIgnoreCase(plan.executionBackend())
+            ? "codex_exec_json"
+            : "codex_json_rpc";
     }
 
     private String summarize(String outputText, String errorText, String status) {

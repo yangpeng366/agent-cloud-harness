@@ -150,6 +150,36 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    void execJsonFailureKeepsExecJsonParserMetadata() throws Exception {
+        String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
+        String maxDurationKey = "agentcloud.providers.codex.turn_max_duration_ms";
+        Map<String, String> originals = snapshotProperties(propertyKey, runDirKey, modeKey, maxDurationKey);
+        Path cli = fakeFailingCodexExecJsonCli();
+        System.setProperty(propertyKey, cli.toString());
+        System.setProperty(runDirKey, tempDir.resolve("codex-exec-json-failure-runs").toString());
+        System.setProperty(modeKey, "exec_json");
+        System.setProperty(maxDurationKey, "902000");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("codex"), "codex");
+
+            assertEquals("failed", result.executionStatus());
+            assertEquals("provider_native_cli_json", result.metadata().get("execution_backend"));
+            assertEquals("codex_exec_json", result.metadata().get("provider_output_parser"));
+            assertEquals(902_000L, result.metadata().get("provider_turn_max_duration_ms"));
+            assertEquals(7, result.metadata().get("exit_code"));
+            assertTrue(result.metadata().get("provider_error").toString().contains("codex exec json failed"));
+        } finally {
+            restoreProperties(originals);
+        }
+    }
+
+    @Test
     void appServerKeepsCompletedTurnWhenProviderProcessStaysAlive() {
         String propertyKey = "agentcloud.providers.codex.path";
         String runDirKey = "agentcloud.provider_runs.dir";
@@ -694,6 +724,28 @@ class CodexAppServerWorkerExecutorTest {
             exit /b 0
             """;
         return Files.writeString(tempDir.resolve("codex-exec-json.cmd"), body);
+    }
+
+    private Path fakeFailingCodexExecJsonCli() throws Exception {
+        String body = """
+            @echo off
+            set OUT=
+            :loop
+            if "%1"=="" goto done
+            if "%1"=="-o" (
+              set OUT=%2
+              shift
+              shift
+              goto loop
+            )
+            shift
+            goto loop
+            :done
+            echo {"type":"error","message":"codex exec json failed"}
+            if not "%OUT%"=="" echo.> "%OUT%"
+            exit /b 7
+            """;
+        return Files.writeString(tempDir.resolve("codex-exec-json-fail.cmd"), body);
     }
 
     private Path fakeStickyCodexAppServerCli() throws Exception {
