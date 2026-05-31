@@ -416,8 +416,8 @@ curl "http://localhost:8080/api/v1/workers"
   2. 最新 `task_progress / task_result` 进入主聊天流时，默认仍可先显示摘要
   3. 但若后端已提供 `full_content / output_text / artifact_content`，页面必须明确给出“展开完整结果”入口，并让最新结果卡更容易被看到
   4. 若最新 worker artifact 的 `output_text / artifact_content` 为空，但 `failure_summary_readable` 已存在，后端也不应生成空壳 `full_content`；应回退拼上这条可读失败摘要
-  4.1 即使当前消息还没有显式 `full_content / output_text / artifact_content`，只要已有 `failure_summary_readable`，前端也不应因此失去“展开完整结果”入口；最少应能展开出 `Failure Summary`
-  4.2 同样地，如果当前 message 自己的 `full_content` 只是旧的 `Worker Output / Artifact Content` 空壳，而 metadata 里已经有更可读的 `failure_summary_readable`，前端展开态也不应继续照抄旧壳；应优先展开成 `Failure Summary (+ 下一步)`
+  4.1 即使当前消息还没有显式 `full_content / output_text / artifact_content`，只要已有 `failure_summary_readable`，前端也不应因此失去“展开完整结果”入口；最少应能展开出 `失败摘要`
+  4.2 同样地，如果当前 message 自己的 `full_content` 只是旧的 `Worker Output / Artifact Content` 空壳，而 metadata 里已经有更可读的 `failure_summary_readable`，前端展开态也不应继续照抄旧壳；应优先展开成 `失败摘要 (+ 下一步)`
   5. 如果数据库里旧 `task_progress.full_content` 已经持久化成空壳，而当前 `live_flow.task.metadata.failure_summary_readable` 与恢复元数据更完整，前端在“当前选中的 task thread”里也不应继续盲信旧消息；应优先回退到当前 live flow / task metadata 的可读失败摘要与恢复状态
   6. 如果 `output_text / artifact_content` 本身就是长噪声或 mojibake，而 `failure_summary_readable` 已经更干净，后端也不该在 `full_content` 里继续原样拼回这两段；否则前端展开后还是会重新看到脏结果
   7. 同样地，`task.summary` 自身也不应继续保留旧的 provider/runtime 噪声；如果当前轮已经有更干净的 `failure_summary_readable`，后端更新 task 快照时应优先写回这条短失败摘要，避免第一页 task bubble、continuity summary、modal details 继续先吃旧乱码

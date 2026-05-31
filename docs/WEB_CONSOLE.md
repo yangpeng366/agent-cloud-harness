@@ -62,7 +62,7 @@
 - 对当前选中的 active task，task thread 里的 `round output` 也应支持显式展开；如果 `full_content / failure_summary_readable` 已存在，用户不应只能切到 related messages 或 details 才能看到完整结果
 - 这块 `round output` 的展开态也不应只复用“message card 的展开状态”；如果它本质上绑定的是当前 `task id`，轮询刷新后就不能再被“只保留可见 message id”的清理逻辑误删，否则会出现“下半区点开完整结果，过几秒自己收回”的假回归
 - 当前实现已经按这条规则拆成独立展开键：主聊天流继续按 `message id` 维持，task thread 的 `round output` 则单独按 `task id` 维持
-- 上半区 transcript 主卡的展开态也不应继续盲信历史 `full_content`。如果当前 `full_content` 只是旧的 `Worker Output / Artifact Content` 空壳，而同一条 message metadata 已经有更可读的 `failure_summary_readable`，展开后应优先显示 `Failure Summary (+ 下一步)`，而不是把空壳正文重新暴露出来
+- 上半区 transcript 主卡的展开态也不应继续盲信历史 `full_content`。如果当前 `full_content` 只是旧的 `Worker Output / Artifact Content` 空壳，而同一条 message metadata 已经有更可读的 `failure_summary_readable`，展开后应优先显示 `失败摘要 (+ 下一步)`，而不是把空壳正文重新暴露出来
 - 对当前选中的失败态 task，如果历史 `task_progress.full_content` 还是旧空壳，而 `live_flow.task.metadata.failure_summary_readable` 已经更完整，thread output 也应优先回退到这条更新后的失败摘要，而不是继续只显示 `failed / Worker Output / Artifact Content`
 - 如果历史 `failure_summary_readable` 本身还是长噪声，主 thread output 也不应整段照抄；第一页应先压成短可读失败摘要，把原始 trace / listing / prompt echo 继续留在 details 与 live flow
 - 已知 provider/runtime 失败摘要应在 Dialogue 第一屏人话化：`thread not found` 显示为 `线程未找到 (...)`，`timeout / timed out` 显示为 `执行超时`，避免用户只能看到 `worker failed: timeout` 这类内部英文诊断
@@ -124,7 +124,7 @@
 - 对当前选中 task 的最新 `task_progress / task_result`，如果后端已经提供 `metadata.full_content / output_text / artifact_content`，主聊天流里至少要做到两件事：
   - 明确露出“展开完整结果”入口，而不是只给一条模糊摘要
   - 对最新结果卡给予更强的默认可见性，避免用户误判成“没拿到 agent 返回结果”
-- 这条“可展开结果”不只看 `full_content / output_text / artifact_content`。如果失败态消息只有 `failure_summary_readable`，主聊天流也会把它当成第一等展开源，至少展开出 `Failure Summary`，而不是只留一条 `failed`
+- 这条“可展开结果”不只看 `full_content / output_text / artifact_content`。如果失败态消息只有 `failure_summary_readable`，主聊天流也会把它当成第一等展开源，至少展开出 `失败摘要`，而不是只留一条 `failed`
 - 若当前 worker 返回的是不可读失败输出（例如 provider/runtime 侧 mojibake），主聊天流应优先退化成可读失败摘要，而不是直接把原始乱码暴露给用户；原始 trace 继续下沉到 `details / live_flow / judgment_trace`
 - 对真实任务流来说，主聊天流现在不只给一条可读失败摘要；如果系统已经自动重试或自动切 worker，消息卡和 pinned outcome 会露出人话化的 `failure_class / retry / handoff / human_gate` 恢复状态
 - 当前验证入口：`node --test src/test/js/dialogue-task-thread-preview-regression.test.mjs`
