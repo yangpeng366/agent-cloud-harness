@@ -1408,7 +1408,7 @@ function renderMessageCard(message, options = {}) {
                 <span class="task-badge">${escapeHtml(formatMessageType(type))}</span>
                 ${continuityScope === "session" ? `<span class="task-badge" data-tone="manual">session continuity</span>` : ""}
                 ${continuityScope === "task" ? `<span class="task-badge" data-tone="active">task-bound</span>` : ""}
-                ${failureClass ? `<span class="task-badge" data-tone="warn">${escapeHtml(`failure · ${preview(failureClass, 22)}`)}</span>` : ""}
+                ${failureClass ? `<span class="task-badge" data-tone="warn">${escapeHtml(`失败 · ${preview(failureClass, 22)}`)}</span>` : ""}
                 ${isLatestFacadeReply ? renderFacadeReplyBadgeHtml(options.facadeReplyHighlight, { escapeHtml }) : ""}
                 ${renderMessageSignals(signalPlan)}
                 ${taskId ? `<span class="task-badge" data-tone="${isRelated ? "active" : "default"}">${escapeHtml(`task · ${preview(taskId, 18)}`)}</span>` : ""}
@@ -1619,7 +1619,7 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
                 <span class="task-badge" data-tone="active">latest round output</span>
                 <span>${escapeHtml(preview(task.title || task.id, 32))}</span>
                 ${workerLabel ? `<span>${escapeHtml(`worker · ${workerLabel}`)}</span>` : ""}
-                ${failureClass ? `<span>${escapeHtml(`failure · ${preview(failureClass, 28)}`)}</span>` : ""}
+                ${failureClass ? `<span>${escapeHtml(`失败 · ${preview(failureClass, 28)}`)}</span>` : ""}
                 <span>${escapeHtml(formatTime(task.updated_at || task.updatedAt || task.created_at || task.createdAt))}</span>
             </div>
             ${executionStrip ? `
