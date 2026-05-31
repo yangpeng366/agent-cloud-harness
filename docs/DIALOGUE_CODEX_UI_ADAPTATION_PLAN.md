@@ -313,6 +313,7 @@ header 只保留：
 - `ControlNodeGraph` 已在 worker artifact 写入后同步投影 `message_type=worker_round` 的 session message。
 - Codex app-server executor 已改为活动超时 + 最大硬上限，并在有输出的超时场景标记 `partial_timeout`；turn 已完成但 app-server 进程继续常驻时，不再把进程清理阶段误判成本轮 timeout/failed。
 - `codex exec --json` 兼容路径已复用同一套 `turn_max_duration_ms / coding_turn_max_duration_ms` 配置，避免绕过 15 分钟默认硬上限回到固定 180s。
+- `codex exec --json` 失败路径已保留 `provider_output_parser=codex_exec_json` 与本轮硬上限 metadata，避免 UI / 排障把 native CLI JSON 模式误读成 app-server JSON-RPC。
 - Dialogue 主 transcript 已支持 `worker_round` 卡片、provider run 路径摘要、`partial_timeout` 的“部分结果”文案。
 - `partial_timeout` worker round 卡片已提供“继续 Codex thread”和“手动移交”入口：继续入口触发当前 task 的 `POST /continue`，移交入口打开 details 的 handoff 控件。
 - `SessionService.listMessages(session, task_id)` 已补历史回填：当旧任务已有 `worker_output/worker_round` artifact 但缺少 `worker_round` session message 时，读取消息流会按 `artifact_id` 去重补投影，保证旧 Codex/DeepSeek 回合也进入主 transcript。
