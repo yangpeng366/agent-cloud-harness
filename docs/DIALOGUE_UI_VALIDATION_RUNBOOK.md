@@ -212,6 +212,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - transcript 主聊天流里的 `task_progress / task_result` 卡也应遵守同一条原则：在默认折叠态下就露出 `worker + 短结果预览`，而不是只剩 `failed / done` 一词；点击 `>` 只负责展开完整正文，不负责补回“这是谁跑出来的”这种第一屏关键信息
 - 如果历史 `task_progress` 自己的 `metadata` 仍是旧壳，但当前已选中 task 的 `live_flow.task.metadata.failure_summary_readable` 更完整，transcript 主卡也应允许借用这份当前 task metadata，先把默认折叠态和展开态补成可读失败摘要，而不是机械继续显示 `failed`
 - 这条 transcript 主卡纠偏规则不应只依赖 URL/hash 里的 `selectedTaskId`；只要当前页面已经聚焦到同一条 `live_flow.task`，主卡就应允许借用这条 focused task 的最新 outcome projection，避免因为前端选择态短暂漂移而继续显示旧 `failed`
+- 当前已用 `dialogue-task-thread-preview-regression.test.mjs` 锁住这条边界：focused task transcript projection 只要求 `live_flow.task.id` 与 message task id 匹配，不依赖 hash 或 `selectedTaskId`，并会把旧 `Worker Output / Artifact Content` 空壳替换成清洗后的 failure summary。
 - transcript 主卡的默认折叠态还应保持“短摘要优先”：`worker + short failure/result` 留在正文和 outcome strip；`failure_class / retry / handoff / human_gate / next step` 这类恢复细节继续留在 hint 或展开正文，不要重新把第一屏压成长句
 - 多轮任务第一页的 worker 可见性还应再前置一层：不论是上半区 transcript 主卡，还是下半区 active task thread，都应形成稳定的 `worker / status / short output` 执行条带；用户不该先读一段自然语言后，才推断出“是谁在跑、跑到了哪一轮”
 - 对当前选中的 active task，`task_progress / task_result` 默认折叠态最好接近 `codex/openclaw` 的 round output block：第一眼先看到 `执行中/最近执行 worker`、当前 `status / control node`、以及最近一轮短输出；展开 `>` 只负责补完整正文，不负责补第一屏关键信息
