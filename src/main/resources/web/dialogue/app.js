@@ -19,6 +19,7 @@ import { buildTaskActionPlan } from "./task-action-plan.js";
 import { renderTaskActionHtml } from "./task-action-render-plan.js";
 import { buildTaskOverviewPlan } from "./task-overview-plan.js";
 import { renderTaskHeaderHtml } from "./task-header-render-plan.js";
+import { buildTaskFocusLineBase } from "./task-focus-line-plan.js";
 import { buildRecoveryJobPlan } from "./recovery-job-plan.js";
 import { buildToolTraceStatusLabel, buildToolTraceSummary } from "./tool-trace-plan.js";
 import { renderComposerInlineSignalsHtml } from "./composer-inline-render-plan.js";
@@ -2740,18 +2741,6 @@ function buildThreadExecutionStrip(task, flow, workerLabel) {
     return title || detail
         ? { label, title, detail, summary: [title, detail].filter(Boolean).join(" · ") }
         : null;
-}
-
-function buildTaskFocusLineBase(task, flow) {
-    const taskStatus = firstNonBlank(task?.status, "active");
-    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
-    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
-    const recoveryStage = firstNonBlank(taskMetadata.recovery_stage, taskMetadata.recoveryStage);
-    const autoHandoffTarget = firstNonBlank(taskMetadata.auto_handoff_target, taskMetadata.autoHandoffTarget);
-    if (taskStatus.toLowerCase() === "active" && controlNode === "scheduler" && recoveryStage === "auto_handoff_scheduled" && autoHandoffTarget) {
-        return `${taskStatus} / ${controlNode} / handoff queued`;
-    }
-    return `${taskStatus} / ${controlNode}`;
 }
 
 function buildThreadOutcomeStrip(task, flow, max = 220) {
