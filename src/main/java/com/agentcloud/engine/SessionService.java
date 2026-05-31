@@ -183,6 +183,7 @@ public class SessionService {
         }
         ensureMessageStoreAvailable();
         if (normalizedTaskId == null) {
+            backfillWorkerRoundMessagesForSession(sessionId);
             return sessionMessageDao.listBySession(sessionId, safeLimit);
         }
         backfillWorkerRoundMessages(sessionId, normalizedTaskId);
@@ -288,6 +289,22 @@ public class SessionService {
             }
         } catch (Exception e) {
             log.warn("Failed to backfill worker_round messages for session={} task={}", sessionId, taskId, e);
+        }
+    }
+
+    private void backfillWorkerRoundMessagesForSession(String sessionId) {
+        if (artifactDao == null || sessionMessageDao == null || taskDao == null) {
+            return;
+        }
+        try {
+            List<Task> tasks = taskDao.listBySession(sessionId);
+            for (Task task : tasks) {
+                if (task != null && sessionId.equals(task.sessionId())) {
+                    backfillWorkerRoundMessages(sessionId, task.id());
+                }
+            }
+        } catch (Exception e) {
+            log.warn("Failed to backfill worker_round messages for session={}", sessionId, e);
         }
     }
 

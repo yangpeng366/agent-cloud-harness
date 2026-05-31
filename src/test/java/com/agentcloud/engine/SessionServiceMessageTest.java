@@ -193,6 +193,45 @@ class SessionServiceMessageTest {
     }
 
     @Test
+    void listSessionMessagesBackfillsWorkerRoundMessagesWithoutTaskFilter() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-worker-round-session-backfill.db"))) {
+            SessionService service = service(db);
+            Session session = service.createSession("session level worker round backfill");
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            taskDao.insert(Task.create("task_session_backfill", session.id(), "worker task", "active", "medium"));
+
+            artifactDao.insert(new Artifact(
+                "art_session_backfill",
+                session.id(),
+                "task_session_backfill",
+                Instant.now(),
+                "worker_output",
+                "Worker Output",
+                null,
+                null,
+                "Codex timed out after producing useful diagnostics.",
+                Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "timeout",
+                    "provider_id", "codex",
+                    "provider_error", "codex turn completion timed out"
+                )
+            ));
+
+            List<SessionMessage> messages = service.listMessages(session.id(), 20);
+            SessionMessage workerRound = messages.stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("task_session_backfill", workerRound.taskId());
+            assertEquals("art_session_backfill", workerRound.metadata().get("artifact_id"));
+            assertEquals("codex", workerRound.metadata().get("provider_id"));
+        }
+    }
+
+    @Test
     void addMessageRejectsClosedSession() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-message-closed.db"))) {
             SessionService service = service(db);
