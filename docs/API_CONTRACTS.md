@@ -351,7 +351,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `unfinished_items`
 - `summary`
 
-其中 `runtime_cognition_surface` / `judgment_trace.runtime_cognition_surface` 当前也会稳定暴露 mounted-context prompt budget 诊断，用于对齐 worker 与 judgment 的 working-memory 消耗面，主要包括：
+其中 `runtime_cognition_surface` / `judgment_trace.runtime_cognition_surface` 当前也会稳定暴露 mounted-context prompt budget 与 provider 执行诊断，用于对齐 worker 与 judgment 的 working-memory 消耗面，并让 details/open 面板不用回退解析 raw artifact metadata。主要包括：
 
 - `mounted_render_used`
 - `mounted_context_panel_count`
@@ -364,6 +364,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `mounted_evidence_count`
 - `mounted_index_count`
 - `mounted_archive_count`
+- `execution.worker_id / execution.execution_status / execution.execution_backend`
+- `execution.provider_id / execution.provider_session_id / execution.provider_thread_id / execution.resume_provider_session_id`
+- `execution.provider_turn_status / execution.provider_timeout_kind / execution.provider_abort_reason`
+- `execution.provider_failure_class / execution.provider_failure_reason / execution.provider_retryable`
+- `execution.partial_output_chars / execution.partial_timeout_min_output_chars`
+- `execution.provider_run_dir / execution.provider_*_path`
 
 它的目的不是替代 `judgment_trace.runtime_facts`，而是把 shared runtime cognition seam 在单任务观测面里做成可直接阅读的 timeline，便于定位 route、execution、execution judgment、completion judgment 之间的认知漂移。
 
@@ -518,9 +524,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 `POST /api/v1/sessions/{id}/messages` 当前常用字段语义：
 
 - `role`：`/dialogue/` 手工写入时主要使用 `user`；后端任务回执会补 `assistant`、`system`
-- `message_type`：页面会写入 `user_note`、`task_note`、`task_brief`、`task_followup`；后端任务回执会补 `task_receipt`、`task_action`、`task_state`、`task_progress`、`task_result`
+- `message_type`：页面会写入 `user_note`、`task_note`、`task_brief`、`task_followup`；后端任务回执会补 `task_receipt`、`task_action`、`task_state`、`task_progress`、`task_result`、`worker_round`
 - `task_id`：可选，把消息附着到某个 task，供 `/dialogue/` 的 Related Messages 与消息转任务草稿能力消费
-- `metadata`：记录 `source_surface`、`created_via`、`mirrored_from` 等页面来源信息；后端补写的 assistant/system 回执还会带 `trigger`、`summary_preview`、`next_step`、`completion_status`、`judgment_action`、`action_label`、`route_source`、`tool_chain_*` 等执行信号
+- `metadata`：记录 `source_surface`、`created_via`、`mirrored_from` 等页面来源信息；后端补写的 assistant/system 回执还会带 `trigger`、`summary_preview`、`next_step`、`completion_status`、`judgment_action`、`action_label`、`route_source`、`tool_chain_*`、`provider_*`、`partial_*` 等执行信号
 
 当前与 `/dialogue/` 直接相关的 message metadata 约定已经进一步收口为：
 
@@ -529,6 +535,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
   - `next_step`：下一步提示
   - `model_mode / task_type / assigned_worker / route_source / preferred_worker_hint / learning_hint_applied`
   - `tool_execution_mode / tool_chain_step_count / tool_chain_termination_reason / tool_chain_trace_summary / tool_chain_tools`
+- `worker_round`
+  - 由 `ControlNodeGraph` 写入 worker artifact 后同步追加，存量 artifact 会在读取 session messages 时 best-effort backfill
+  - `content` 是压缩后的本轮 worker 输出摘要，不是 provider 原始长日志
+  - `metadata.artifact_id / artifact_type` 指向 worker artifact
+  - `metadata.execution_status / selected_worker / execution_backend / provider_id`
+  - `metadata.provider_thread_id / resume_provider_session_id / provider_timeout_kind / provider_abort_reason`
+  - `metadata.partial_output_chars / partial_timeout_min_output_chars`
+  - `metadata.provider_run_dir / provider_last_message_path / provider_event_log_path / provider_stdout_path / provider_run_metadata_path`
+  - 当 `execution_status=partial_timeout` 时，前端必须展示部分结果，并提供继续原 provider thread 或手动移交入口；不能把它压成普通失败
 - `task_action`
   - `action`：机器可判定的控制动作键
   - `action_label`：面向消息层的稳定可读标签，例如 `已暂停 / 已恢复执行 / 已继续推进`
