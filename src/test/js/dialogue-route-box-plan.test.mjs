@@ -46,6 +46,10 @@ test("route box plan counts recovery provider deprioritization as drawer detail"
     });
 
     assert.equal(plan.hasDrawer, true);
+    assert.deepEqual(plan.primaryRecoveryNote, {
+        headline: "恢复阶段会优先避开 claude",
+        detail: "最近窗口内出现了临时 provider 失败，恢复建议会先尝试其他 provider。"
+    });
     assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
 });
 

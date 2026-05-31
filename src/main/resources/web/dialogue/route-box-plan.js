@@ -24,6 +24,10 @@ export function buildRouteBoxPlan(input) {
         candidateWorkers,
         routeChips,
         providerDeprioritization,
+        primaryRecoveryNote: hasProviderDeprioritization ? {
+            headline: providerDeprioritization.headline,
+            detail: providerDeprioritization.detail
+        } : null,
         cognitionTimeline: Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline : [],
         hasDrawer: detailGroupCount > 0 || timelineCount > 0,
         drawerSummary: buildDrawerSummary(detailGroupCount, timelineCount)

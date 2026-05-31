@@ -3651,10 +3651,10 @@ function renderRouteBox(flow, task) {
                 ${routePlan.taskType ? `<span>${escapeHtml(routePlan.taskType)}</span>` : ""}
             </div>
             ${routePlan.routeReason ? `<strong>${escapeHtml(preview(routePlan.routeReason, 220))}</strong>` : ""}
-            ${routePlan.providerDeprioritization?.providerDeprioritized ? `
+            ${routePlan.primaryRecoveryNote ? `
                 <p class="route-box__recovery-note">
-                    <strong>${escapeHtml(routePlan.providerDeprioritization.headline)}</strong>
-                    ${routePlan.providerDeprioritization.detail ? `<span>${escapeHtml(routePlan.providerDeprioritization.detail)}</span>` : ""}
+                    <strong>${escapeHtml(routePlan.primaryRecoveryNote.headline)}</strong>
+                    ${routePlan.primaryRecoveryNote.detail ? `<span>${escapeHtml(routePlan.primaryRecoveryNote.detail)}</span>` : ""}
                 </p>
             ` : ""}
             ${routePlan.hasDrawer ? `
