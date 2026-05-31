@@ -45,6 +45,24 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         metadata.provider_event_log_path,
         metadata.providerEventLogPath
     );
+    const providerStdoutPath = firstNonBlank(
+        boundary.provider_stdout_path,
+        boundary.providerStdoutPath,
+        metadata.provider_stdout_path,
+        metadata.providerStdoutPath
+    );
+    const providerRunMetadataPath = firstNonBlank(
+        boundary.provider_run_metadata_path,
+        boundary.providerRunMetadataPath,
+        metadata.provider_run_metadata_path,
+        metadata.providerRunMetadataPath
+    );
+    const providerPromptPath = firstNonBlank(
+        boundary.provider_prompt_path,
+        boundary.providerPromptPath,
+        metadata.provider_prompt_path,
+        metadata.providerPromptPath
+    );
     const labelParts = [
         status ? humanizeToken(status) : null,
         toolInvocationCount ? formatCount(toolInvocationCount, "call") : null,
@@ -55,7 +73,10 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         workerId ? `worker: ${workerId}` : null,
         providerRunDir ? `run: ${providerRunDir}` : null,
         providerLastMessagePath ? `last: ${providerLastMessagePath}` : null,
-        providerEventLogPath ? `events: ${providerEventLogPath}` : null
+        providerEventLogPath ? `events: ${providerEventLogPath}` : null,
+        providerStdoutPath ? `stdout: ${providerStdoutPath}` : null,
+        providerRunMetadataPath ? `meta: ${providerRunMetadataPath}` : null,
+        providerPromptPath ? `prompt: ${providerPromptPath}` : null
     ].filter(Boolean);
     return {
         status,
@@ -67,6 +88,9 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         providerRunDir,
         providerLastMessagePath,
         providerEventLogPath,
+        providerStdoutPath,
+        providerRunMetadataPath,
+        providerPromptPath,
         label: labelParts.length > 0 ? labelParts.join(" · ") : null,
         chips
     };
