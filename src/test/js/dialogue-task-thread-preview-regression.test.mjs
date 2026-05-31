@@ -503,14 +503,20 @@ function messageCardCurrentState(metadata) {
     );
 }
 
+function isWorkerOutcomeMessageType(type) {
+    return type === "task_progress" || type === "task_result" || type === "worker_round";
+}
+
 function messageCardWorkerOutcomePreview(message, max = 220) {
     const type = (message?.message_type || "").toLowerCase();
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return "";
     }
     const metadata = message?.metadata || {};
     const candidate = firstNonBlank(
         failureNarrativeFallback(metadata),
+        metadata.output_preview,
+        metadata.outputPreview,
         metadata.summary_preview,
         metadata.summaryPreview,
         message?.content
@@ -520,13 +526,13 @@ function messageCardWorkerOutcomePreview(message, max = 220) {
 
 function messageCardOutcomeStrip(message, compact = false) {
     const type = (message?.message_type || "").toLowerCase();
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return null;
     }
     const metadata = message?.metadata || {};
     const stateLine = messageCardCurrentState(metadata);
     const previewText = messageCardWorkerOutcomePreview(message, compact ? 120 : 180);
-    const label = "最近输出";
+    const label = type === "worker_round" ? "执行回合" : "最近输出";
     return previewText || stateLine
         ? {
             label,
@@ -538,7 +544,7 @@ function messageCardOutcomeStrip(message, compact = false) {
 
 function messageCardExecutionStrip(message, compact = false) {
     const type = (message?.message_type || "").toLowerCase();
-    if (type !== "task_progress" && type !== "task_result") {
+    if (!isWorkerOutcomeMessageType(type)) {
         return null;
     }
     const metadata = message?.metadata || {};
@@ -555,7 +561,9 @@ function messageCardExecutionStrip(message, compact = false) {
         metadata.task_status,
         metadata.taskStatus
     ).toLowerCase();
-    const label = ["active", "running", "in_progress"].includes(executionStatus) ? "执行中" : "最近执行";
+    const label = executionStatus === "partial_timeout"
+        ? "部分结果"
+        : (["active", "running", "in_progress"].includes(executionStatus) ? "执行中" : "最近执行");
     const previewText = messageCardWorkerOutcomePreview(message, compact ? 100 : 140);
     const title = worker ? `worker ${worker}` : stateLine;
     const detail = [
@@ -735,6 +743,29 @@ test("task progress transcript card exposes worker and short outcome preview bef
     assert.equal(outcomeStrip.label, "最近输出");
     assert.equal(outcomeStrip.title.includes("thread not found (19120)"), true);
     assert.equal(outcomeStrip.detail.includes("waiting_human / human_gate"), true);
+});
+
+test("worker round transcript card exposes execution and compact round output before expansion", () => {
+    const message = {
+        message_type: "worker_round",
+        content: "Codex 执行了一轮，状态 partial_timeout，已产出部分结果。",
+        metadata: {
+            worker_id: "codex",
+            execution_status: "partial_timeout",
+            output_preview: "已修改 app.js，但测试还没跑完。",
+            partial_output_chars: 640,
+            partial_timeout_min_output_chars: 200
+        }
+    };
+
+    const executionStrip = messageCardExecutionStrip(message, false);
+    assert.equal(executionStrip.label, "部分结果");
+    assert.equal(executionStrip.title, "worker codex");
+    assert.equal(executionStrip.detail.includes("已修改 app.js"), true);
+
+    const outcomeStrip = messageCardOutcomeStrip(message, false);
+    assert.equal(outcomeStrip.label, "执行回合");
+    assert.equal(outcomeStrip.title.includes("已修改 app.js"), true);
 });
 
 test("focused task transcript card prefers projected outcome preview over stale failed summary", () => {
