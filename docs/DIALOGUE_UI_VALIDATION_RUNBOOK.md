@@ -223,6 +223,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 当 transcript 消息较少时，`message summary + message list` 这一组默认也应整体贴近底部 composer，而不是让消息卡停在上半区、把大块空白留在消息下方；若仍有剩余空白，也应优先上移到消息组之上
 - 如果 transcript 下方还保留折叠态 `任务轨迹` summary，这个 summary 也应按同一条原则收成薄 footer strip；不能因为它本身像第二块 header，就重新制造“消息组和 composer 之间断一层”的错觉
 - 如果 pinned `latest round output` 已经有独立的 `最近输出` 条带，正文应进一步退成可选 fallback，而不是和 output strip 重复同一句短结果
+- 当前 `dialogue-task-thread-preview-regression.test.mjs` 已锁住 pinned 卡去重合同：当 `outcomeStrip.label=最近输出` 且 headline 已显示短失败摘要时，`showBody=false`，正文不再重复同一句 output preview。
 - 下半区 active task thread 也应显式有一块 `最近输出` panel；如果第一页只能看到 `Harness` 正文，却没有独立的 output label / short result block，应直接判定为 **thread round-output visibility regression**
 - 如果后端已经把失败细分成 `worker_runtime_transient / task_environment_blocked / worker_backend_deterministic / partial_result_or_quality_risk`，第一页至少要直接露出这条 `failure_class`；否则用户只能看到“auto handoff / human_gate”，但看不出为什么系统会做这个决定
 - 但第一页也不该直接把这些恢复信号按原始枚举串裸露出来；像 `worker_runtime_transient / human_gate_required` 这种 token 只适合留在 API / live_flow / details，主视图更合理的行为是显示成短的人话标签，例如“临时运行失败 / 等待人工确认”
