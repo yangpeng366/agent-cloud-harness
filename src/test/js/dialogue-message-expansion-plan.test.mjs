@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
     buildMessageExpansionPlan,
-    hasExpandedTaskOutcomeContent
+    hasExpandedTaskOutcomeContent,
+    hasExpandedWorkerRoundContent
 } from "../../main/resources/web/dialogue/message-expansion-plan.js";
 
 test("task progress expands to include worker output and next step", () => {
@@ -123,6 +124,51 @@ test("non expandable user message stays collapsed", () => {
 
     assert.equal(plan.needsExpand, false);
     assert.equal(plan.fullContent, "hello world");
+});
+
+test("worker round expands to compact provider diagnostics and run file hints", () => {
+    const message = {
+        message_type: "worker_round",
+        content: "Codex 执行了一轮，状态 partial_timeout，已产出部分结果。",
+        metadata: {
+            execution_status: "partial_timeout",
+            output_preview: "已修改 app.js，但测试还没跑完。",
+            output_chars: 640,
+            partial_output_chars: 640,
+            partial_timeout_min_output_chars: 200,
+            provider_turn_status: "partial_timeout",
+            provider_failure_reason: "max duration reached",
+            provider_retryable: true,
+            provider_last_message_path: "D:\\runs\\codex\\last_message.md",
+            provider_stdout_path: "D:\\runs\\codex\\stdout.log",
+            provider_protocol_trace: ["raw trace should stay out"]
+        }
+    };
+    const plan = buildMessageExpansionPlan(message, "已修改 app.js，但测试还没跑完。");
+
+    assert.equal(plan.needsExpand, true);
+    assert.equal(plan.fullContent.includes("已修改 app.js"), true);
+    assert.equal(plan.fullContent.includes("Provider Diagnostics"), true);
+    assert.equal(plan.fullContent.includes("failure reason: max duration reached"), true);
+    assert.equal(plan.fullContent.includes("Output Metrics"), true);
+    assert.equal(plan.fullContent.includes("partial output chars: 640"), true);
+    assert.equal(plan.fullContent.includes("Provider Run Files"), true);
+    assert.equal(plan.fullContent.includes("last message: D:\\runs\\codex\\last_message.md"), true);
+    assert.equal(plan.fullContent.includes("stdout: D:\\runs\\codex\\stdout.log"), true);
+    assert.equal(plan.fullContent.includes("raw trace should stay out"), false);
+    assert.equal(hasExpandedWorkerRoundContent(message), true);
+});
+
+test("worker round without compact diagnostics stays collapsed", () => {
+    const message = {
+        message_type: "worker_round",
+        content: "Codex 执行完成。",
+        metadata: {}
+    };
+    const plan = buildMessageExpansionPlan(message, "Codex 执行完成。");
+
+    assert.equal(plan.needsExpand, false);
+    assert.equal(hasExpandedWorkerRoundContent(message), false);
 });
 
 test("task outcome helper detects full worker result payload", () => {

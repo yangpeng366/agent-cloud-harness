@@ -79,7 +79,8 @@ function isExpandableMessageType(type) {
         "system",
         "internal",
         "task_progress",
-        "task_result"
+        "task_result",
+        "worker_round"
     ].includes(normalizeMessageType(type));
 }
 
@@ -124,6 +125,53 @@ function buildTaskOutcomeFullContent(message, metadata, content) {
     return joinExpandedSections(parts);
 }
 
+function buildWorkerRoundFullContent(message, metadata, content) {
+    const explicitFullContent = firstNonBlank(metadata.full_content, metadata.fullContent);
+    if (explicitFullContent) {
+        return explicitFullContent;
+    }
+    const providerDiagnostics = buildProviderDiagnosticsSection(metadata);
+    const outputPreview = firstNonBlank(
+        metadata.output_preview,
+        metadata.outputPreview,
+        metadata.summary_preview,
+        metadata.summaryPreview,
+        content
+    );
+    const outputChars = firstNonBlank(metadata.output_chars, metadata.outputChars);
+    const partialChars = firstNonBlank(metadata.partial_output_chars, metadata.partialOutputChars);
+    const threshold = firstNonBlank(
+        metadata.partial_timeout_min_output_chars,
+        metadata.partialTimeoutMinOutputChars
+    );
+    const runFiles = [
+        ["prompt", firstNonBlank(metadata.provider_prompt_path, metadata.providerPromptPath)],
+        ["events", firstNonBlank(metadata.provider_event_log_path, metadata.providerEventLogPath)],
+        ["last message", firstNonBlank(metadata.provider_last_message_path, metadata.providerLastMessagePath)],
+        ["stdout", firstNonBlank(metadata.provider_stdout_path, metadata.providerStdoutPath)],
+        ["metadata", firstNonBlank(metadata.provider_run_metadata_path, metadata.providerRunMetadataPath)]
+    ]
+        .filter(([, value]) => value)
+        .map(([label, value]) => `${label}: ${value}`);
+    const parts = [];
+    uniquePush(parts, outputPreview);
+    if (providerDiagnostics) {
+        uniquePush(parts, providerDiagnostics);
+    }
+    if (outputChars || partialChars || threshold) {
+        const metrics = [
+            outputChars ? `output chars: ${outputChars}` : null,
+            partialChars ? `partial output chars: ${partialChars}` : null,
+            threshold ? `partial timeout threshold: ${threshold}` : null
+        ].filter(Boolean);
+        uniquePush(parts, `Output Metrics\n${metrics.join("\n")}`);
+    }
+    if (runFiles.length > 0) {
+        uniquePush(parts, `Provider Run Files\n${runFiles.join("\n")}`);
+    }
+    return joinExpandedSections(parts);
+}
+
 export function buildMessageExpansionPlan(message, body, options = {}) {
     const metadata = message?.metadata || {};
     const type = normalizeMessageType(message?.message_type || message?.messageType);
@@ -134,6 +182,8 @@ export function buildMessageExpansionPlan(message, body, options = {}) {
     let fullContent = content;
     if (type === "task_progress" || type === "task_result") {
         fullContent = buildTaskOutcomeFullContent(message, metadata, content);
+    } else if (type === "worker_round") {
+        fullContent = buildWorkerRoundFullContent(message, metadata, content);
     }
 
     if (!isExpandableMessageType(type) || !fullContent) {
@@ -179,5 +229,47 @@ export function hasExpandedTaskOutcomeContent(message) {
         metadata.outputText,
         metadata.artifact_content,
         metadata.artifactContent
+    ));
+}
+
+export function hasExpandedWorkerRoundContent(message) {
+    const metadata = message?.metadata || {};
+    const type = normalizeMessageType(message?.message_type || message?.messageType);
+    if (type !== "worker_round") {
+        return false;
+    }
+    return Boolean(firstNonBlank(
+        metadata.full_content,
+        metadata.fullContent,
+        metadata.output_preview,
+        metadata.outputPreview,
+        metadata.summary_preview,
+        metadata.summaryPreview,
+        metadata.provider_error,
+        metadata.providerError,
+        metadata.provider_turn_status,
+        metadata.providerTurnStatus,
+        metadata.provider_failure_class,
+        metadata.providerFailureClass,
+        metadata.provider_failure_reason,
+        metadata.providerFailureReason,
+        metadata.provider_retryable,
+        metadata.providerRetryable,
+        metadata.output_chars,
+        metadata.outputChars,
+        metadata.partial_output_chars,
+        metadata.partialOutputChars,
+        metadata.partial_timeout_min_output_chars,
+        metadata.partialTimeoutMinOutputChars,
+        metadata.provider_prompt_path,
+        metadata.providerPromptPath,
+        metadata.provider_event_log_path,
+        metadata.providerEventLogPath,
+        metadata.provider_last_message_path,
+        metadata.providerLastMessagePath,
+        metadata.provider_stdout_path,
+        metadata.providerStdoutPath,
+        metadata.provider_run_metadata_path,
+        metadata.providerRunMetadataPath
     ));
 }
