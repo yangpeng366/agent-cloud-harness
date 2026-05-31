@@ -6,6 +6,13 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
     const status = firstNonBlank(surface.execution_status, surface.executionStatus);
     const timeoutKind = firstNonBlank(surface.provider_timeout_kind, surface.providerTimeoutKind);
     const abortReason = firstNonBlank(surface.provider_abort_reason, surface.providerAbortReason);
+    const activityTimeoutMs = numericValue(
+        surface.provider_activity_timeout_ms,
+        surface.providerActivityTimeoutMs,
+        surface.provider_turn_activity_timeout_ms,
+        surface.providerTurnActivityTimeoutMs
+    );
+    const maxDurationMs = numericValue(surface.provider_turn_max_duration_ms, surface.providerTurnMaxDurationMs);
     const outputChars = numericValue(surface.partial_output_chars, surface.partialOutputChars);
     const threshold = numericValue(surface.partial_timeout_min_output_chars, surface.partialTimeoutMinOutputChars);
     const promptMode = firstNonBlank(surface.prompt_mode, surface.promptMode);
@@ -44,6 +51,8 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
         worker ? `worker ${worker}` : null,
         status ? humanizeToken(status) || status : null,
         timeoutKind ? humanizeToken(timeoutKind) || timeoutKind : null,
+        activityTimeoutMs !== null ? `activity ${formatDuration(activityTimeoutMs)}` : null,
+        maxDurationMs !== null ? `max ${formatDuration(maxDurationMs)}` : null,
         outputChars !== null && threshold !== null ? `${outputChars}/${threshold} chars` : null,
         abortReason ? `abort ${humanizeToken(abortReason) || abortReason}` : null,
         promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
@@ -110,6 +119,20 @@ function booleanValue(...values) {
         }
     }
     return null;
+}
+
+function formatDuration(value) {
+    const ms = Number(value);
+    if (!Number.isFinite(ms) || ms < 0) {
+        return "";
+    }
+    if (ms >= 60_000 && ms % 60_000 === 0) {
+        return `${ms / 60_000}m`;
+    }
+    if (ms >= 1_000 && ms % 1_000 === 0) {
+        return `${ms / 1_000}s`;
+    }
+    return `${ms}ms`;
 }
 
 function humanizeToken(value) {
