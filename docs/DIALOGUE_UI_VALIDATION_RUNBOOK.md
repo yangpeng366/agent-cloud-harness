@@ -204,6 +204,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 同样地，如果 `output_text / artifact_content` 虽然不为空，但本身明显是旧的长噪声或 mojibake，而 `failure_summary_readable` 已经更干净，`task_progress / task_result.full_content` 也不应把这两段原样拼回去；展开态仍应优先保留短可读 `Failure Summary`，把脏原文继续留在 details / live_flow / artifact
 - 如果 `session messages` 里的最新 `task_progress.full_content` 仍是历史空壳，但当前 `live_flow.task.metadata.failure_summary_readable` 与恢复状态已经更完整，选中 task 的 thread output 仍必须优先展示这条更新后的失败摘要与 `failure_class / retry / handoff / human_gate`，不能被旧消息壳子压回去
 - 如果历史 `failure_summary_readable` 本身仍是旧的长噪声（例如 prompt echo、目录 listing、provider 原始 trace 或 mojibake 段），第一页 thread output 也不能原样整段铺开；主视图必须先压成短可读失败摘要，把原始长文本继续留在 details / live_flow / artifact 路径
+- 对 `thread not found / authentication required / connection reset / timeout / failed to start` 这类已知 provider/runtime 失败，主视图短失败摘要应使用 operator 可读中文，例如 `worker codex 失败：执行超时`，不能再把 `worker failed: timeout` 这类英文内部摘要顶到首屏
 - 顶部 `selectedStatus` 不能只停留在 `waiting_human / human_gate` 这类低信息状态；如果当前任务 metadata 已有 `execution_status=partial_timeout`、`recovery_stage=human_gate_required` 或 `auto_handoff_scheduled`，首屏 header 应直接显示 `partial timeout / human gate / handoff queued`，让用户不用先打开 details 才知道恢复链停在哪里
 - 同样地，如果当前 focused task 的 `failure_summary_readable` 已经更干净，而 `task.summary` / `continuity_summary` 仍是历史脏摘要，第一页 `Harness` bubble、continuity 区和详情 modal 也必须优先显示这条干净失败摘要；不能继续把旧 `task.summary` 顶在最前面
 - 对当前选中的 active task，第一页还应有更强的运行态条带：至少把 `执行中/最近执行 worker` 与当前 `status / control node` 放在结果气泡上沿，而不是只混在普通 badge 里
