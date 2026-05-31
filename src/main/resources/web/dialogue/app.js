@@ -2612,14 +2612,14 @@ function artifactOutputText(artifact, metadata) {
 
 function artifactProviderRunFiles(metadata) {
     return [
-        ["run dir", metadata.provider_run_dir || metadata.providerRunDir],
-        ["prompt", metadata.provider_prompt_path || metadata.providerPromptPath],
-        ["events", metadata.provider_event_log_path || metadata.providerEventLogPath],
-        ["last message", metadata.provider_last_message_path || metadata.providerLastMessagePath],
-        ["metadata", metadata.provider_run_metadata_path || metadata.providerRunMetadataPath],
-        ["codex jsonl", metadata.provider_session_log_path || metadata.providerSessionLogPath || metadata.codex_rollout_path || metadata.codexRolloutPath]
+        ["运行目录", "run_dir", metadata.provider_run_dir || metadata.providerRunDir],
+        ["提示词", "prompt", metadata.provider_prompt_path || metadata.providerPromptPath],
+        ["事件日志", "events", metadata.provider_event_log_path || metadata.providerEventLogPath],
+        ["最后输出", "last_message", metadata.provider_last_message_path || metadata.providerLastMessagePath],
+        ["运行元数据", "metadata", metadata.provider_run_metadata_path || metadata.providerRunMetadataPath],
+        ["Codex JSONL", "codex_jsonl", metadata.provider_session_log_path || metadata.providerSessionLogPath || metadata.codex_rollout_path || metadata.codexRolloutPath]
     ]
-        .map(([label, path]) => ({ label, path: firstNonBlank(path) }))
+        .map(([label, kind, path]) => ({ label, kind, path: firstNonBlank(path) }))
         .filter((file) => file.path);
 }
 
@@ -2643,7 +2643,7 @@ function renderArtifactOutputDrawer(outputText, files) {
     const maxPreviewLength = 12000;
     const truncated = outputText.length > maxPreviewLength;
     const previewText = truncated ? `${outputText.slice(0, maxPreviewLength)}\n\n... 已截断，完整内容请查看上方 provider run 文件。` : outputText;
-    const pathHint = files.find((file) => file.label === "last message" || file.label === "events" || file.label === "codex jsonl")?.path;
+    const pathHint = files.find((file) => file.kind === "last_message" || file.kind === "events" || file.kind === "codex_jsonl")?.path;
     return `
         <details class="inline-preview-drawer artifact-output-drawer">
             <summary class="inline-preview-drawer__summary">展开 worker 输出预览${pathHint ? ` · ${escapeHtml(preview(pathHint, 72))}` : ""}</summary>
@@ -4315,18 +4315,18 @@ function summarizeProviderRunFiles(surface) {
         return null;
     }
     const paths = [
-        ["run", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
-        ["last", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
-        ["events", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
-        ["stdout", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
-        ["meta", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
+        ["运行目录", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
+        ["最后输出", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
+        ["事件日志", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
+        ["标准输出", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
+        ["运行元数据", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
     ]
         .filter(([, value]) => value)
         .map(([label, value]) => `${label}: ${preview(value, 140)}`);
     if (paths.length === 0) {
         return null;
     }
-    return { label: "run files", value: paths.join(" · ") };
+    return { label: "运行文件", value: paths.join(" · ") };
 }
 
 function summarizeJudgmentSurface(label, surface) {
@@ -5334,7 +5334,7 @@ function renderProviderRunFiles(flow) {
     }
     const runDir = plan.runDir ? `
         <div class="provider-run-files__path">
-            <span class="task-badge">run dir</span>
+            <span class="task-badge">运行目录</span>
             <code>${escapeHtml(plan.runDir)}</code>
         </div>
     ` : "";

@@ -46,15 +46,15 @@ function joinExpandedSections(parts) {
 
 function buildProviderDiagnosticsSection(metadata) {
     const lines = [
-        ["error", firstNonBlank(metadata.provider_error, metadata.providerError)],
-        ["turn status", firstNonBlank(metadata.provider_turn_status, metadata.providerTurnStatus)],
-        ["failure class", firstNonBlank(metadata.provider_failure_class, metadata.providerFailureClass)],
-        ["failure reason", firstNonBlank(metadata.provider_failure_reason, metadata.providerFailureReason)],
-        ["retryable", firstNonBlank(metadata.provider_retryable, metadata.providerRetryable)]
+        ["错误", firstNonBlank(metadata.provider_error, metadata.providerError)],
+        ["回合状态", firstNonBlank(metadata.provider_turn_status, metadata.providerTurnStatus)],
+        ["失败类型", firstNonBlank(metadata.provider_failure_class, metadata.providerFailureClass)],
+        ["失败原因", firstNonBlank(metadata.provider_failure_reason, metadata.providerFailureReason)],
+        ["可重试", firstNonBlank(metadata.provider_retryable, metadata.providerRetryable)]
     ]
         .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
         .map(([label, value]) => `${label}: ${String(value).trim()}`);
-    return lines.length > 0 ? `Provider Diagnostics\n${lines.join("\n")}` : "";
+    return lines.length > 0 ? `Provider 诊断\n${lines.join("\n")}` : "";
 }
 
 function uniquePush(parts, candidate) {
@@ -145,11 +145,11 @@ function buildWorkerRoundFullContent(message, metadata, content) {
         metadata.partialTimeoutMinOutputChars
     );
     const runFiles = [
-        ["prompt", firstNonBlank(metadata.provider_prompt_path, metadata.providerPromptPath)],
-        ["events", firstNonBlank(metadata.provider_event_log_path, metadata.providerEventLogPath)],
-        ["last message", firstNonBlank(metadata.provider_last_message_path, metadata.providerLastMessagePath)],
-        ["stdout", firstNonBlank(metadata.provider_stdout_path, metadata.providerStdoutPath)],
-        ["metadata", firstNonBlank(metadata.provider_run_metadata_path, metadata.providerRunMetadataPath)]
+        ["提示词", firstNonBlank(metadata.provider_prompt_path, metadata.providerPromptPath)],
+        ["事件日志", firstNonBlank(metadata.provider_event_log_path, metadata.providerEventLogPath)],
+        ["最后输出", firstNonBlank(metadata.provider_last_message_path, metadata.providerLastMessagePath)],
+        ["标准输出", firstNonBlank(metadata.provider_stdout_path, metadata.providerStdoutPath)],
+        ["运行元数据", firstNonBlank(metadata.provider_run_metadata_path, metadata.providerRunMetadataPath)]
     ]
         .filter(([, value]) => value)
         .map(([label, value]) => `${label}: ${value}`);
@@ -160,14 +160,14 @@ function buildWorkerRoundFullContent(message, metadata, content) {
     }
     if (outputChars || partialChars || threshold) {
         const metrics = [
-            outputChars ? `output chars: ${outputChars}` : null,
-            partialChars ? `partial output chars: ${partialChars}` : null,
-            threshold ? `partial timeout threshold: ${threshold}` : null
+            outputChars ? `输出字符数: ${outputChars}` : null,
+            partialChars ? `部分输出字符数: ${partialChars}` : null,
+            threshold ? `partial timeout 阈值: ${threshold}` : null
         ].filter(Boolean);
-        uniquePush(parts, `Output Metrics\n${metrics.join("\n")}`);
+        uniquePush(parts, `输出指标\n${metrics.join("\n")}`);
     }
     if (runFiles.length > 0) {
-        uniquePush(parts, `Provider Run Files\n${runFiles.join("\n")}`);
+        uniquePush(parts, `Provider 运行文件\n${runFiles.join("\n")}`);
     }
     return joinExpandedSections(parts);
 }

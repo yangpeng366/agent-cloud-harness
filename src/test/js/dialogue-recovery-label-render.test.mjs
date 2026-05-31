@@ -21,3 +21,14 @@ test("dialogue message meta renders Chinese continuity and task labels", () => {
     assert.doesNotMatch(appJs, /`task · \$\{preview\(/);
     assert.doesNotMatch(appJs, /`\$\{summary\.count\} msgs`/);
 });
+
+test("dialogue provider run file labels stay operator readable", () => {
+    assert.match(appJs, />运行目录</);
+    assert.match(appJs, /\{ label: "运行文件", value: paths\.join/);
+    assert.match(appJs, /\["最后输出", "last_message"/);
+    assert.match(appJs, /\["事件日志", "events"/);
+    assert.match(appJs, /\["标准输出", firstNonBlank/);
+    assert.doesNotMatch(appJs, />run dir</);
+    assert.doesNotMatch(appJs, /\{ label: "run files", value: paths\.join/);
+    assert.doesNotMatch(appJs, /\["last message", metadata\.provider_last_message_path/);
+});

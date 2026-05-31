@@ -64,12 +64,13 @@ test("provider diagnostics alone enable expandable task outcome content", () => 
     const plan = buildMessageExpansionPlan(message, "failed");
 
     assert.equal(plan.needsExpand, true);
-    assert.equal(plan.fullContent.includes("Provider Diagnostics"), true);
-    assert.equal(plan.fullContent.includes("error: codex turn completion timed out"), true);
-    assert.equal(plan.fullContent.includes("turn status: timeout"), true);
-    assert.equal(plan.fullContent.includes("failure class: provider_runtime_transient"), true);
-    assert.equal(plan.fullContent.includes("failure reason: turn timed out"), true);
-    assert.equal(plan.fullContent.includes("retryable: true"), true);
+    assert.equal(plan.fullContent.includes("Provider 诊断"), true);
+    assert.equal(plan.fullContent.includes("错误: codex turn completion timed out"), true);
+    assert.equal(plan.fullContent.includes("回合状态: timeout"), true);
+    assert.equal(plan.fullContent.includes("失败类型: provider_runtime_transient"), true);
+    assert.equal(plan.fullContent.includes("失败原因: turn timed out"), true);
+    assert.equal(plan.fullContent.includes("可重试: true"), true);
+    assert.equal(plan.fullContent.includes("Provider Diagnostics"), false);
     assert.equal(hasExpandedTaskOutcomeContent(message), true);
 });
 
@@ -148,13 +149,15 @@ test("worker round expands to compact provider diagnostics and run file hints", 
 
     assert.equal(plan.needsExpand, true);
     assert.equal(plan.fullContent.includes("已修改 app.js"), true);
-    assert.equal(plan.fullContent.includes("Provider Diagnostics"), true);
-    assert.equal(plan.fullContent.includes("failure reason: max duration reached"), true);
-    assert.equal(plan.fullContent.includes("Output Metrics"), true);
-    assert.equal(plan.fullContent.includes("partial output chars: 640"), true);
-    assert.equal(plan.fullContent.includes("Provider Run Files"), true);
-    assert.equal(plan.fullContent.includes("last message: D:\\runs\\codex\\last_message.md"), true);
-    assert.equal(plan.fullContent.includes("stdout: D:\\runs\\codex\\stdout.log"), true);
+    assert.equal(plan.fullContent.includes("Provider 诊断"), true);
+    assert.equal(plan.fullContent.includes("失败原因: max duration reached"), true);
+    assert.equal(plan.fullContent.includes("输出指标"), true);
+    assert.equal(plan.fullContent.includes("部分输出字符数: 640"), true);
+    assert.equal(plan.fullContent.includes("Provider 运行文件"), true);
+    assert.equal(plan.fullContent.includes("最后输出: D:\\runs\\codex\\last_message.md"), true);
+    assert.equal(plan.fullContent.includes("标准输出: D:\\runs\\codex\\stdout.log"), true);
+    assert.equal(plan.fullContent.includes("Provider Diagnostics"), false);
+    assert.equal(plan.fullContent.includes("last message:"), false);
     assert.equal(plan.fullContent.includes("raw trace should stay out"), false);
     assert.equal(hasExpandedWorkerRoundContent(message), true);
 });

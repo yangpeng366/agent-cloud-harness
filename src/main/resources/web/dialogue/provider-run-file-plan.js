@@ -8,11 +8,11 @@ export function buildProviderRunFilePlan(flow) {
         return { taskId: taskId || "", files: [] };
     }
     const candidates = [
-        fileCandidate("last_message", "Last message", surface.provider_last_message_path, surface.providerLastMessagePath),
-        fileCandidate("events", "Events log", surface.provider_event_log_path, surface.providerEventLogPath),
-        fileCandidate("stdout", "Stdout", surface.provider_stdout_path, surface.providerStdoutPath),
-        fileCandidate("metadata", "Metadata", surface.provider_run_metadata_path, surface.providerRunMetadataPath),
-        fileCandidate("prompt", "Prompt", surface.provider_prompt_path, surface.providerPromptPath)
+        fileCandidate("last_message", "最后输出", surface.provider_last_message_path, surface.providerLastMessagePath),
+        fileCandidate("events", "事件日志", surface.provider_event_log_path, surface.providerEventLogPath),
+        fileCandidate("stdout", "标准输出", surface.provider_stdout_path, surface.providerStdoutPath),
+        fileCandidate("metadata", "运行元数据", surface.provider_run_metadata_path, surface.providerRunMetadataPath),
+        fileCandidate("prompt", "提示词", surface.provider_prompt_path, surface.providerPromptPath)
     ];
     return {
         taskId,

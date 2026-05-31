@@ -20,7 +20,8 @@ test("provider run file plan exposes available execution surface files", () => {
     assert.equal(plan.taskId, "task_1");
     assert.equal(plan.runDir, "D:\\tmp\\provider-runs\\codex\\task_1\\exec_1");
     assert.deepEqual(plan.files.map((file) => file.kind), ["last_message", "events", "stdout", "metadata", "prompt"]);
-    assert.match(plan.files[0].previewLabel, /last_message\.md$/);
+    assert.equal(plan.files[0].label, "最后输出");
+    assert.match(plan.files[0].previewLabel, /^最后输出: .*last_message\.md$/);
 });
 
 test("provider run file plan accepts camelCase execution surface paths", () => {
@@ -41,6 +42,7 @@ test("provider run file plan accepts camelCase execution surface paths", () => {
     assert.equal(plan.taskId, "task_2");
     assert.equal(plan.runDir, "D:\\tmp\\provider-runs\\codex\\task_2\\exec_1");
     assert.deepEqual(plan.files.map((file) => file.kind), ["last_message", "events", "stdout", "metadata", "prompt"]);
+    assert.deepEqual(plan.files.map((file) => file.label), ["最后输出", "事件日志", "标准输出", "运行元数据", "提示词"]);
 });
 
 test("provider run file plan returns no actions without task id", () => {
