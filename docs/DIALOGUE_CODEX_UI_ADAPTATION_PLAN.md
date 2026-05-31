@@ -320,6 +320,7 @@ header 只保留：
 - `task_progress / task_result` 的 provider diagnostics 也已采用同一套 trace 摘要策略，避免 assistant lifecycle 回执绕过 `worker_round` 的 payload 收敛约束。
 - `/v1/chat/completions` façade 的 `agentcloud.reply_source` 已识别 `worker_round`，避免 Codex round 被降级成泛化 `task_state`。
 - Dialogue façade 反馈 helper 已将 `worker_round` 分类成“执行回合已更新”，toast / inline / latest badge 不再落回“任务已发布”。
+- `partial_timeout` 的“继续 Codex thread”入口已从普通 `POST /continue` 升级为携带 `continue_mode=provider_thread`、`provider_thread_id`、`resume_provider_session_id` 和来源 `worker_round` message id 的 provider continuation 请求；服务端会在进入控制图前把这些字段写回 task metadata。
 - 真实回归样本 `session_45e4fe12b765435d / task_e59573c1306e4e74` 已验证：session 主消息流返回 `worker_round=4`，其中 Codex 回合 `codex_worker_round=2`，且 `full_trace_messages=0`。
 
 ### 3.5 Inspector 继续当 secondary surface
