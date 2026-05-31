@@ -5,10 +5,13 @@ import { buildWorkerRoundActionPlan } from "../../main/resources/web/dialogue/wo
 test("worker round partial timeout exposes continue and manual handoff actions", () => {
     const actions = buildWorkerRoundActionPlan({
         message_type: "worker_round",
+        id: "msg_round_1",
         task_id: "task_123",
         metadata: {
             worker_id: "codex",
-            execution_status: "partial_timeout"
+            execution_status: "partial_timeout",
+            provider_id: "codex",
+            provider_thread_id: "thread_codex_123"
         }
     });
 
@@ -18,6 +21,13 @@ test("worker round partial timeout exposes continue and manual handoff actions",
     ]);
     assert.equal(actions[0].label, "继续 Codex thread");
     assert.equal(actions[0].taskId, "task_123");
+    assert.deepEqual(actions[0].requestBody, {
+        continue_mode: "provider_thread",
+        provider_id: "codex",
+        provider_thread_id: "thread_codex_123",
+        resume_provider_session_id: "thread_codex_123",
+        source_worker_round_message_id: "msg_round_1"
+    });
 });
 
 test("worker round completed status keeps transcript actions quiet", () => {

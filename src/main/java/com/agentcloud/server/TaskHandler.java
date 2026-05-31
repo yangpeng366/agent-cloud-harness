@@ -61,7 +61,8 @@ class TaskHandler implements HttpHandler {
                 String id = NioHttpServer.pathVar(ex, 4);
                 String action = NioHttpServer.pathVar(ex, 5);
                 Map<String, Object> body = readJsonBodyAsMap(ex);
-                Map<String, Object> actionMetadata = requestMetadata("POST", path, false);
+                Map<String, Object> actionMetadata = new LinkedHashMap<>(body);
+                actionMetadata.putAll(requestMetadata("POST", path, false));
                 TaskControlResult result = switch (action) {
                     case "pause" -> svc.pauseTask(id, stringValue(body, "reason", "manual pause via API"), actionMetadata);
                     case "resume" -> svc.resumeTask(id, actionMetadata);

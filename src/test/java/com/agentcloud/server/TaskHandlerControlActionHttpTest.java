@@ -201,6 +201,46 @@ class TaskHandlerControlActionHttpTest {
     }
 
     @Test
+    void postContinuePreservesProviderThreadBodyForContinuation() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-continue-provider-thread.db"))) {
+            Task task = harness.createManualTask("post continue provider thread", "coding");
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/continue"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                        {
+                          "continue_mode":"provider_thread",
+                          "provider_id":"codex",
+                          "provider_thread_id":"thread_codex_http",
+                          "resume_provider_session_id":"thread_codex_http",
+                          "source_worker_round_message_id":"msg_round_http"
+                        }
+                        """))
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            assertEquals(200, response.statusCode());
+            Task persisted = harness.taskDao.findById(task.id()).orElseThrow();
+            assertEquals("provider_thread", persisted.metadata().get("continue_mode"));
+            assertEquals("codex", persisted.metadata().get("provider_id"));
+            assertEquals("thread_codex_http", persisted.metadata().get("provider_thread_id"));
+            assertEquals("thread_codex_http", persisted.metadata().get("resume_provider_session_id"));
+            assertEquals("msg_round_http", persisted.metadata().get("source_worker_round_message_id"));
+
+            SessionMessage actionMessage = harness.messageDao.listBySessionAndTask(task.sessionId(), task.id(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "continue".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("POST", actionMessage.metadata().get("request_method"));
+            assertEquals("thread_codex_http", actionMessage.metadata().get("provider_thread_id"));
+            assertEquals("provider_thread", actionMessage.metadata().get("continue_mode"));
+        }
+    }
+
+    @Test
     void legacyGetPauseStillWorksAndIsMarkedForAudit() throws Exception {
         try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-get.db"))) {
             Task task = harness.createManualTask("legacy pause");
@@ -1191,6 +1231,15 @@ class TaskHandlerControlActionHttpTest {
 
         private void failNextResume(String message) {
             this.resumeFailureMessage = message;
+        }
+
+        @Override
+        public Task enter(Task task) {
+            Task updated = task.withStatus("active")
+                .withControlNode("scheduler")
+                .withWaitingReason(null);
+            taskDao.updateState(updated);
+            return updated;
         }
 
         @Override

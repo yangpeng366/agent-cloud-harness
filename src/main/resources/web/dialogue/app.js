@@ -743,7 +743,9 @@ async function onMessageActionClick(event) {
             showToast("这条执行回合没有关联 task", true);
             return;
         }
-        await continueWorkerRoundTask(taskId);
+        const plan = buildWorkerRoundActionPlan(buildMessageDisplayView(message))
+            .find((item) => item?.action === "continue-worker-thread");
+        await continueWorkerRoundTask(taskId, plan?.requestBody || {});
         return;
     }
 
@@ -757,11 +759,11 @@ async function onMessageActionClick(event) {
     }
 }
 
-async function continueWorkerRoundTask(taskId) {
+async function continueWorkerRoundTask(taskId, requestBody = {}) {
     state.selectedTaskId = taskId;
     const result = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/continue`, {
         method: "POST",
-        body: "{}"
+        body: JSON.stringify(requestBody && typeof requestBody === "object" ? requestBody : {})
     });
     await loadTasks();
     state.selectedTaskId = taskId;

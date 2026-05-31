@@ -1794,6 +1794,7 @@ public class TaskService {
 
     public TaskControlResult continueTask(String taskId, Map<String, Object> actionMetadata) {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        t = applyProviderThreadContinuationMetadata(t, actionMetadata);
         // Phase 1: judgment 已下沉到 ControlNodeGraph.continueNode，直接 enter 让控制图自行判断与迁移
         Task updated = controlGraph.enter(t);
         recordControlActionEvent(updated, "continue", null, actionMetadata);
@@ -1802,6 +1803,38 @@ public class TaskService {
         ExperimentRunRecord experimentRun = refreshExperimentRunRecord(updated);
         recordAssistantProgressMessage(updated, "continue", experimentRun);
         return controlResult(updated, updated.controlNode(), null);
+    }
+
+    private Task applyProviderThreadContinuationMetadata(Task task, Map<String, Object> actionMetadata) {
+        if (task == null || actionMetadata == null || actionMetadata.isEmpty()) {
+            return task;
+        }
+        String continueMode = metadataString(actionMetadata, "continue_mode");
+        String providerThreadId = firstNonBlank(
+            metadataString(actionMetadata, "provider_thread_id"),
+            metadataString(actionMetadata, "provider_session_id")
+        );
+        String resumeProviderSessionId = firstNonBlank(
+            metadataString(actionMetadata, "resume_provider_session_id"),
+            providerThreadId
+        );
+        if (!"provider_thread".equalsIgnoreCase(firstNonBlank(continueMode, ""))
+            && blankToNull(providerThreadId) == null
+            && blankToNull(resumeProviderSessionId) == null) {
+            return task;
+        }
+        LinkedHashMap<String, Object> metadata = task.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(task.metadata());
+        metadata.put("continue_mode", "provider_thread");
+        putIfNonBlank(metadata, "provider_id", metadataString(actionMetadata, "provider_id"));
+        putIfNonBlank(metadata, "provider_thread_id", providerThreadId);
+        putIfNonBlank(metadata, "provider_session_id", providerThreadId);
+        putIfNonBlank(metadata, "resume_provider_session_id", resumeProviderSessionId);
+        putIfNonBlank(metadata, "source_worker_round_message_id", metadataString(actionMetadata, "source_worker_round_message_id"));
+        Task updated = task.withMetadata(metadata);
+        taskDao.updateState(updated);
+        return updated;
     }
 
     public TaskControlResult escalateTask(String taskId, String reason) {

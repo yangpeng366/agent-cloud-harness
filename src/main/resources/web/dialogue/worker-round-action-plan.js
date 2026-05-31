@@ -28,12 +28,30 @@ export function buildWorkerRoundActionPlan(message) {
         metadata.assignedWorker
     );
     const workerLabel = worker ? displayWorker(worker) : "worker";
+    const providerThreadId = firstNonBlank(
+        metadata.provider_thread_id,
+        metadata.providerThreadId,
+        metadata.provider_session_id,
+        metadata.providerSessionId
+    );
+    const resumeProviderSessionId = firstNonBlank(
+        metadata.resume_provider_session_id,
+        metadata.resumeProviderSessionId,
+        providerThreadId
+    );
     return [
         {
             action: "continue-worker-thread",
             label: `继续 ${workerLabel} thread`,
             taskId,
-            tone: "primary"
+            tone: "primary",
+            requestBody: compactObject({
+                continue_mode: "provider_thread",
+                provider_id: firstNonBlank(metadata.provider_id, metadata.providerId, worker),
+                provider_thread_id: providerThreadId,
+                resume_provider_session_id: resumeProviderSessionId,
+                source_worker_round_message_id: firstNonBlank(message?.id)
+            })
         },
         {
             action: "prepare-worker-handoff",
@@ -66,4 +84,16 @@ function displayWorker(worker) {
         return "Codex";
     }
     return value;
+}
+
+function compactObject(source) {
+    const result = {};
+    for (const [key, value] of Object.entries(source || {})) {
+        if (typeof value === "string" && value.trim()) {
+            result[key] = value.trim();
+        } else if (value !== null && value !== undefined && typeof value !== "string") {
+            result[key] = value;
+        }
+    }
+    return result;
 }

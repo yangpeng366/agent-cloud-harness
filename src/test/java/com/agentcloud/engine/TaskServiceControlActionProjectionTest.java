@@ -257,6 +257,66 @@ class TaskServiceControlActionProjectionTest {
         }
     }
 
+    @Test
+    void continueTaskAppliesProviderThreadContinuationMetadataBeforeEnteringGraph() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-continue-provider-thread.db"))) {
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            final Task[] enteredTask = new Task[1];
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, null, null, null, null,
+                null, null, null, null, null, null
+            ) {
+                @Override
+                public Task enter(Task task) {
+                    enteredTask[0] = task;
+                    Task updated = task.withStatus("active")
+                        .withControlNode("scheduler")
+                        .withAssignedWorker("codex")
+                        .withWaitingReason(null);
+                    taskDao.updateState(updated);
+                    return updated;
+                }
+            };
+            TaskService service = service(db, graph);
+            Task task = service.createTask(new TaskCreateRequest(
+                "continue provider thread", "coding", "user", "high",
+                "继续 partial timeout 的 Codex thread", "复用原 provider thread", null, null, Map.of(), false
+            ));
+
+            Map<String, Object> requestMetadata = new LinkedHashMap<>();
+            requestMetadata.put("requested_via", "http_api");
+            requestMetadata.put("request_method", "POST");
+            requestMetadata.put("request_path", "/api/v1/tasks/" + task.id() + "/continue");
+            requestMetadata.put("continue_mode", "provider_thread");
+            requestMetadata.put("provider_id", "codex");
+            requestMetadata.put("provider_thread_id", "thread_codex_123");
+            requestMetadata.put("resume_provider_session_id", "thread_codex_123");
+            requestMetadata.put("source_worker_round_message_id", "msg_round_1");
+
+            service.continueTask(task.id(), requestMetadata);
+
+            assertNotNull(enteredTask[0]);
+            assertEquals("provider_thread", enteredTask[0].metadata().get("continue_mode"));
+            assertEquals("codex", enteredTask[0].metadata().get("provider_id"));
+            assertEquals("thread_codex_123", enteredTask[0].metadata().get("provider_thread_id"));
+            assertEquals("thread_codex_123", enteredTask[0].metadata().get("provider_session_id"));
+            assertEquals("thread_codex_123", enteredTask[0].metadata().get("resume_provider_session_id"));
+            assertEquals("msg_round_1", enteredTask[0].metadata().get("source_worker_round_message_id"));
+
+            SessionMessage actionMessage = messageDao.listBySession(task.sessionId(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "continue".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("thread_codex_123", actionMessage.metadata().get("provider_thread_id"));
+            assertEquals("provider_thread", actionMessage.metadata().get("continue_mode"));
+        }
+    }
+
     private TaskService service(DatabaseManager db) {
         TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
         SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
@@ -287,6 +347,15 @@ class TaskServiceControlActionProjectionTest {
                 return updated;
             }
         };
+
+        return service(db, graph);
+    }
+
+    private TaskService service(DatabaseManager db, ControlNodeGraph graph) {
+        TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+        SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+        EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+        SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
 
         TaskService service = new TaskService(
             taskDao, sessionDao, eventDao, null, null, null, graph,
