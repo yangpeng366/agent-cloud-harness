@@ -3259,6 +3259,7 @@ public class ControlNodeGraph {
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_metadata_path");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output_chars");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_timeout_min_output_chars");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "truncated");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_truncated");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "unfinished_items");

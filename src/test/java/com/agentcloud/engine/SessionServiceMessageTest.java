@@ -168,6 +168,7 @@ class SessionServiceMessageTest {
                         "execution_backend", "provider_app_server",
                         "provider_timeout_kind", "activity_timeout",
                         "provider_abort_reason", "user_interrupted",
+                        "partial_timeout_min_output_chars", 200,
                         "provider_output_parser", "codex_json_rpc"
                     )
                 )
@@ -185,6 +186,7 @@ class SessionServiceMessageTest {
             assertEquals("provider_app_server", workerRound.metadata().get("execution_backend"));
             assertEquals("activity_timeout", workerRound.metadata().get("provider_timeout_kind"));
             assertEquals("user_interrupted", workerRound.metadata().get("provider_abort_reason"));
+            assertEquals(200, ((Number) workerRound.metadata().get("partial_timeout_min_output_chars")).intValue());
             assertEquals("codex_json_rpc", workerRound.metadata().get("provider_output_parser"));
             assertEquals(3, workerRound.metadata().get("provider_protocol_trace_count"));
             assertEquals(List.of("thread/started", "turn/started", "item/agentMessage/delta"),

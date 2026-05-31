@@ -279,7 +279,7 @@ class CodexAppServerWorkerExecutorTest {
             java.io.OutputStream.class
         );
         constructor.setAccessible(true);
-        String output = "x".repeat(140);
+        String output = "x".repeat(240);
         StringReader input = new StringReader(
             "{\"jsonrpc\":\"2.0\",\"method\":\"codex/event\",\"params\":{\"msg\":{\"type\":\"agent_message\",\"message\":\"" + output + "\"}}}\n"
                 + "{\"jsonrpc\":\"2.0\",\"method\":\"codex/event\",\"params\":{\"msg\":{\"type\":\"turn_aborted\",\"reason\":\"user_interrupted\"}}}\n"
@@ -313,6 +313,44 @@ class CodexAppServerWorkerExecutorTest {
         assertEquals("partial_timeout", status.invoke(result));
         assertEquals("partial_timeout", turnStatus.invoke(result));
         assertEquals("user_interrupted", abortReason.invoke(result));
+    }
+
+    @Test
+    void codexTimeoutPropertiesPreferDocumentedProviderKeys() throws Exception {
+        String activityKey = "agentcloud.providers.codex.turn_activity_timeout_ms";
+        String legacyActivityKey = "agentcloud.codex.turnActivityTimeoutMs";
+        String maxKey = "agentcloud.providers.codex.turn_max_duration_ms";
+        String legacyMaxKey = "agentcloud.codex.turnMaxDurationMs";
+        String partialKey = "agentcloud.providers.codex.partial_timeout_min_output_chars";
+        String legacyPartialKey = "agentcloud.codex.partialTimeoutMinOutputChars";
+        Map<String, String> originals = snapshotProperties(
+            activityKey, legacyActivityKey, maxKey, legacyMaxKey, partialKey, legacyPartialKey
+        );
+        System.setProperty(activityKey, "345000");
+        System.setProperty(legacyActivityKey, "111000");
+        System.setProperty(maxKey, "1200000");
+        System.setProperty(legacyMaxKey, "222000");
+        System.setProperty(partialKey, "321");
+        System.setProperty(legacyPartialKey, "123");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+            Object plan = buildPlan(executor, runtimeContext("codex"), "D:\\gitAll\\agent-cloud-harness");
+
+            Method activity = CodexAppServerWorkerExecutor.class.getDeclaredMethod("turnActivityTimeoutMs");
+            Method max = CodexAppServerWorkerExecutor.class.getDeclaredMethod("turnMaxDurationMs", plan.getClass());
+            Method partial = CodexAppServerWorkerExecutor.class.getDeclaredMethod("partialTimeoutOutputThreshold");
+            activity.setAccessible(true);
+            max.setAccessible(true);
+            partial.setAccessible(true);
+
+            assertEquals(345_000L, activity.invoke(executor));
+            assertEquals(1_200_000L, max.invoke(executor, plan));
+            assertEquals(321, partial.invoke(executor));
+        } finally {
+            restoreProperties(originals);
+        }
     }
 
     @Test
@@ -541,6 +579,40 @@ class CodexAppServerWorkerExecutorTest {
             12
         );
         return new TaskRuntimeContext(task, null, null, List.of(), List.of(), List.of(), List.of(), activeContext, null);
+    }
+
+    private Object buildPlan(CodexAppServerWorkerExecutor executor, TaskRuntimeContext context, String cwd) throws Exception {
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "buildPlan",
+            LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        method.setAccessible(true);
+        return method.invoke(
+            executor,
+            new LocalCliProviderConfig("codex", "codex", "X", "Y").resolve(),
+            context,
+            cwd
+        );
+    }
+
+    private Map<String, String> snapshotProperties(String... keys) {
+        LinkedHashMap<String, String> values = new LinkedHashMap<>();
+        for (String key : keys) {
+            values.put(key, System.getProperty(key));
+        }
+        return values;
+    }
+
+    private void restoreProperties(Map<String, String> values) {
+        values.forEach((key, value) -> {
+            if (value == null) {
+                System.clearProperty(key);
+            } else {
+                System.setProperty(key, value);
+            }
+        });
     }
 
     private Path fakeCodexExecJsonCli() throws Exception {

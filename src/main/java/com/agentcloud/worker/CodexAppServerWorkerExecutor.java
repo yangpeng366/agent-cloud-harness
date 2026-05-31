@@ -45,7 +45,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final long DEFAULT_TURN_ACTIVITY_TIMEOUT_MS = 180_000L;
     private static final long DEFAULT_TURN_MAX_DURATION_MS = 900_000L;
     private static final long DEFAULT_CODING_TURN_MAX_DURATION_MS = 900_000L;
-    private static final int PARTIAL_TIMEOUT_OUTPUT_THRESHOLD = 120;
+    private static final int DEFAULT_PARTIAL_TIMEOUT_OUTPUT_THRESHOLD = 200;
 
     private final AgentProviderRegistry providerRegistry;
     private final WorkerRegistry workerRegistry;
@@ -77,12 +77,13 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         long startedAtMs = System.currentTimeMillis();
         Process process = null;
         CodexSessionOutput output;
+        int partialOutputThreshold = partialTimeoutOutputThreshold();
         try {
             ProcessBuilder builder = new ProcessBuilder(plan.command())
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
                 .redirectErrorStream(true);
             process = builder.start();
-            output = runSession(process, plan, runFiles);
+            output = runSession(process, plan, runFiles, partialOutputThreshold);
             if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
                 long durationMs = System.currentTimeMillis() - startedAtMs;
@@ -142,6 +143,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         String outputText = output.outputText() == null ? "" : output.outputText().trim();
         metadata.put("provider_turn_activity_timeout_ms", turnActivityTimeoutMs());
         metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
+        metadata.put("partial_timeout_min_output_chars", partialOutputThreshold);
         metadata.put("partial_output", "partial_timeout".equals(normalizedStatus));
         metadata.put("partial_output_chars", outputText.length());
         attachProviderFailureClassification(metadata, normalizedStatus, output.errorText());
@@ -335,11 +337,14 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         return "exec_json".equalsIgnoreCase(mode.trim());
     }
 
-    private CodexSessionOutput runSession(Process process, CodexExecutionPlan plan, ProviderRunFiles runFiles)
+    private CodexSessionOutput runSession(Process process,
+                                          CodexExecutionPlan plan,
+                                          ProviderRunFiles runFiles,
+                                          int partialOutputThreshold)
         throws IOException, InterruptedException {
         try (Writer writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8);
              BufferedReader reader = process.inputReader(StandardCharsets.UTF_8)) {
-            JsonRpcSession session = new JsonRpcSession(writer, reader, runFiles.events());
+            JsonRpcSession session = new JsonRpcSession(writer, reader, runFiles.events(), partialOutputThreshold);
             session.request("initialize", Map.of(
                 "clientInfo", Map.of(
                     "name", "agent-cloud-harness",
@@ -357,7 +362,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 turnStatus,
                 turnActivityTimeoutMs(),
                 turnMaxDurationMs(plan),
-                PARTIAL_TIMEOUT_OUTPUT_THRESHOLD
+                partialOutputThreshold
             );
             return session.toOutput(threadId, terminalTurnStatus);
         }
@@ -808,8 +813,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
     private long turnActivityTimeoutMs() {
         return longProperty(
-            "agentcloud.codex.turnActivityTimeoutMs",
-            "AGENTCLOUD_CODEX_TURN_ACTIVITY_TIMEOUT_MS",
+            List.of("agentcloud.providers.codex.turn_activity_timeout_ms", "agentcloud.codex.turnActivityTimeoutMs"),
+            List.of("AGENTCLOUD_CODEX_TURN_ACTIVITY_TIMEOUT_MS"),
             DEFAULT_TURN_ACTIVITY_TIMEOUT_MS
         );
     }
@@ -819,10 +824,19 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             ? DEFAULT_CODING_TURN_MAX_DURATION_MS
             : DEFAULT_TURN_MAX_DURATION_MS;
         return longProperty(
-            "agentcloud.codex.turnMaxDurationMs",
-            "AGENTCLOUD_CODEX_TURN_MAX_DURATION_MS",
+            List.of("agentcloud.providers.codex.turn_max_duration_ms", "agentcloud.codex.turnMaxDurationMs"),
+            List.of("AGENTCLOUD_CODEX_TURN_MAX_DURATION_MS"),
             defaultValue
         );
+    }
+
+    private int partialTimeoutOutputThreshold() {
+        long value = longProperty(
+            List.of("agentcloud.providers.codex.partial_timeout_min_output_chars", "agentcloud.codex.partialTimeoutMinOutputChars"),
+            List.of("AGENTCLOUD_CODEX_PARTIAL_TIMEOUT_MIN_OUTPUT_CHARS"),
+            DEFAULT_PARTIAL_TIMEOUT_OUTPUT_THRESHOLD
+        );
+        return value > Integer.MAX_VALUE ? DEFAULT_PARTIAL_TIMEOUT_OUTPUT_THRESHOLD : (int) value;
     }
 
     private boolean looksLikeCodingPlan(CodexExecutionPlan plan) {
@@ -839,10 +853,20 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             || lower.contains("fix");
     }
 
-    private long longProperty(String systemKey, String envKey, long defaultValue) {
+    private long longProperty(List<String> systemKeys, List<String> envKeys, long defaultValue) {
         String raw = firstNonBlank(
-            blankToNull(System.getProperty(systemKey)),
-            blankToNull(System.getenv(envKey))
+            systemKeys == null ? null : systemKeys.stream()
+                .map(System::getProperty)
+                .map(CodexAppServerWorkerExecutor::blankToNull)
+                .filter(value -> value != null)
+                .findFirst()
+                .orElse(null),
+            envKeys == null ? null : envKeys.stream()
+                .map(System::getenv)
+                .map(CodexAppServerWorkerExecutor::blankToNull)
+                .filter(value -> value != null)
+                .findFirst()
+                .orElse(null)
         );
         if (raw == null) {
             return defaultValue;
@@ -923,12 +947,18 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private String protocol = "codex_json_rpc";
         private String timeoutKind;
         private String abortReason;
+        private final int partialOutputThreshold;
         private long lastActivityAtMs = System.currentTimeMillis();
 
         private JsonRpcSession(Writer writer, BufferedReader reader, OutputStream events) {
+            this(writer, reader, events, DEFAULT_PARTIAL_TIMEOUT_OUTPUT_THRESHOLD);
+        }
+
+        private JsonRpcSession(Writer writer, BufferedReader reader, OutputStream events, int partialOutputThreshold) {
             this.writer = writer;
             this.reader = reader;
             this.events = events == null ? OutputStream.nullOutputStream() : events;
+            this.partialOutputThreshold = Math.max(1, partialOutputThreshold);
         }
 
         private JsonNode request(String method, Map<String, Object> params) throws IOException, InterruptedException {
@@ -1209,7 +1239,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                         nestedText(event, "error", "message"),
                         "turn_aborted"
                     );
-                    turnStatus = hasPartialOutput(PARTIAL_TIMEOUT_OUTPUT_THRESHOLD) ? "partial_timeout" : "cancelled";
+                    turnStatus = hasPartialOutput(partialOutputThreshold) ? "partial_timeout" : "cancelled";
                 }
                 default -> {
                 }
