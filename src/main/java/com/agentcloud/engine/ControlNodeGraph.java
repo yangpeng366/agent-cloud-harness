@@ -2417,6 +2417,7 @@ public class ControlNodeGraph {
         copyMetadataKey(source, target, "provider_error");
         copyMetadataKey(source, target, "provider_turn_status");
         copyMetadataKey(source, target, "provider_timeout_kind");
+        copyMetadataKey(source, target, "provider_abort_reason");
         copyMetadataKey(source, target, "provider_turn_activity_timeout_ms");
         copyMetadataKey(source, target, "provider_turn_max_duration_ms");
         copyMetadataKey(source, target, "provider_failure_class");
@@ -2659,6 +2660,7 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "provider_error");
         copyMetadataKey(source, selected, "provider_turn_status");
         copyMetadataKey(source, selected, "provider_timeout_kind");
+        copyMetadataKey(source, selected, "provider_abort_reason");
         copyMetadataKey(source, selected, "provider_turn_activity_timeout_ms");
         copyMetadataKey(source, selected, "provider_turn_max_duration_ms");
         copyMetadataKey(source, selected, "provider_failure_class");
@@ -3241,6 +3243,7 @@ public class ControlNodeGraph {
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_error");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_status");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_timeout_kind");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_abort_reason");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_activity_timeout_ms");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_max_duration_ms");
             copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_class");

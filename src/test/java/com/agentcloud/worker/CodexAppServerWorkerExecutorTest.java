@@ -12,10 +12,15 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.StringReader;
+import java.io.StringWriter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.lang.reflect.Method;
+import java.lang.reflect.Constructor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -263,6 +268,51 @@ class CodexAppServerWorkerExecutorTest {
 
         assertEquals(null, method.invoke(executor, sameWorkerRetry));
         assertEquals(null, method.invoke(executor, autoHandoff));
+    }
+
+    @Test
+    void legacyTurnAbortedWithOutputPreservesAbortReasonAsPartialTimeout() throws Exception {
+        Class<?> sessionClass = Class.forName("com.agentcloud.worker.CodexAppServerWorkerExecutor$JsonRpcSession");
+        Constructor<?> constructor = sessionClass.getDeclaredConstructor(
+            java.io.Writer.class,
+            BufferedReader.class,
+            java.io.OutputStream.class
+        );
+        constructor.setAccessible(true);
+        String output = "x".repeat(140);
+        StringReader input = new StringReader(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"codex/event\",\"params\":{\"msg\":{\"type\":\"agent_message\",\"message\":\"" + output + "\"}}}\n"
+                + "{\"jsonrpc\":\"2.0\",\"method\":\"codex/event\",\"params\":{\"msg\":{\"type\":\"turn_aborted\",\"reason\":\"user_interrupted\"}}}\n"
+        );
+        Object session = constructor.newInstance(
+            new StringWriter(),
+            new BufferedReader(input),
+            new ByteArrayOutputStream()
+        );
+
+        Method nextEnvelope = sessionClass.getDeclaredMethod("nextEnvelope", long.class);
+        Method handleEnvelope = sessionClass.getDeclaredMethod("handleEnvelope", com.fasterxml.jackson.databind.JsonNode.class);
+        Method toOutput = sessionClass.getDeclaredMethod("toOutput", String.class, String.class);
+        nextEnvelope.setAccessible(true);
+        handleEnvelope.setAccessible(true);
+        toOutput.setAccessible(true);
+
+        Object first = nextEnvelope.invoke(session, System.currentTimeMillis() + 1_000L);
+        handleEnvelope.invoke(session, first);
+        Object second = nextEnvelope.invoke(session, System.currentTimeMillis() + 1_000L);
+        handleEnvelope.invoke(session, second);
+        Object result = toOutput.invoke(session, "thread_abort_1", null);
+
+        Method status = result.getClass().getDeclaredMethod("status");
+        Method turnStatus = result.getClass().getDeclaredMethod("turnStatus");
+        Method abortReason = result.getClass().getDeclaredMethod("abortReason");
+        status.setAccessible(true);
+        turnStatus.setAccessible(true);
+        abortReason.setAccessible(true);
+
+        assertEquals("partial_timeout", status.invoke(result));
+        assertEquals("partial_timeout", turnStatus.invoke(result));
+        assertEquals("user_interrupted", abortReason.invoke(result));
     }
 
     @Test

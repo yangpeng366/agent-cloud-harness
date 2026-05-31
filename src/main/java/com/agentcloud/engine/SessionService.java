@@ -399,6 +399,7 @@ public class SessionService {
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_error");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_status");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_timeout_kind");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_abort_reason");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_activity_timeout_ms");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_max_duration_ms");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_class");

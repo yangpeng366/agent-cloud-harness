@@ -133,6 +133,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         if (output.timeoutKind() != null && !output.timeoutKind().isBlank()) {
             metadata.put("provider_timeout_kind", output.timeoutKind());
         }
+        if (output.abortReason() != null && !output.abortReason().isBlank()) {
+            metadata.put("provider_abort_reason", output.abortReason());
+        }
         if (output.errorText() != null && !output.errorText().isBlank()) {
             metadata.put("provider_error", output.errorText());
         }
@@ -919,6 +922,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private String errorText;
         private String protocol = "codex_json_rpc";
         private String timeoutKind;
+        private String abortReason;
         private long lastActivityAtMs = System.currentTimeMillis();
 
         private JsonRpcSession(Writer writer, BufferedReader reader, OutputStream events) {
@@ -1196,7 +1200,17 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 }
                 case "exec_command_end" -> appendOutput(text(event, "output"));
                 case "task_complete" -> turnStatus = "completed";
-                case "turn_aborted" -> turnStatus = hasPartialOutput(PARTIAL_TIMEOUT_OUTPUT_THRESHOLD) ? "partial_timeout" : "cancelled";
+                case "turn_aborted" -> {
+                    abortReason = firstNonBlank(
+                        abortReason,
+                        text(event, "reason"),
+                        text(event, "message"),
+                        text(event, "error"),
+                        nestedText(event, "error", "message"),
+                        "turn_aborted"
+                    );
+                    turnStatus = hasPartialOutput(PARTIAL_TIMEOUT_OUTPUT_THRESHOLD) ? "partial_timeout" : "cancelled";
+                }
                 default -> {
                 }
             }
@@ -1253,6 +1267,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 protocol,
                 effectiveTurnStatus,
                 timeoutKind,
+                abortReason,
                 toolInvocationCount,
                 List.copyOf(toolInvocationIds),
                 List.copyOf(protocolTrace)
@@ -1360,6 +1375,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       String protocol,
                                       String turnStatus,
                                       String timeoutKind,
+                                      String abortReason,
                                       int toolInvocationCount,
                                       List<String> toolInvocationIds,
                                       List<String> protocolTrace) {
@@ -1375,7 +1391,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private CodexSessionOutput withExitCode(int value) {
             return new CodexSessionOutput(
                 status, outputText, errorText, threadId, value, protocol, turnStatus,
-                timeoutKind, toolInvocationCount, toolInvocationIds, protocolTrace
+                timeoutKind, abortReason, toolInvocationCount, toolInvocationIds, protocolTrace
             );
         }
     }
