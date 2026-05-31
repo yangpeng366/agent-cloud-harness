@@ -41,6 +41,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(CodexAppServerWorkerExecutor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long PROCESS_TIMEOUT_MS = 180_000L;
+    private static final long APP_SERVER_SHUTDOWN_GRACE_MS = 5_000L;
     private static final long HANDSHAKE_TIMEOUT_MS = 30_000L;
     private static final long DEFAULT_TURN_ACTIVITY_TIMEOUT_MS = 180_000L;
     private static final long DEFAULT_TURN_MAX_DURATION_MS = 900_000L;
@@ -84,13 +85,14 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 .redirectErrorStream(true);
             process = builder.start();
             output = runSession(process, plan, runFiles, partialOutputThreshold);
-            if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                process.destroyForcibly();
-                long durationMs = System.currentTimeMillis() - startedAtMs;
-                return failureResult("timeout", "codex app-server timed out",
-                    providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
+            if (process.waitFor(APP_SERVER_SHUTDOWN_GRACE_MS, TimeUnit.MILLISECONDS)) {
+                output = output.withExitCode(process.exitValue());
+            } else {
+                process.destroy();
+                if (!process.waitFor(APP_SERVER_SHUTDOWN_GRACE_MS, TimeUnit.MILLISECONDS)) {
+                    process.destroyForcibly();
+                }
             }
-            output = output.withExitCode(process.exitValue());
         } catch (IOException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
             return failureResult("failed", "failed to start codex app-server: " + e.getMessage(),
@@ -115,7 +117,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         String normalizedStatus = normalizeStatus(output.status(), output.exitCode());
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         appendRunFileMetadata(metadata, runFiles);
-        metadata.put("exit_code", output.exitCode());
+        if (output.exitCode() != null) {
+            metadata.put("exit_code", output.exitCode());
+        }
         metadata.put("provider_output_parser", output.protocol());
         metadata.put("tool_invocation_count", output.toolInvocationCount());
         if (output.threadId() != null && !output.threadId().isBlank()) {
@@ -195,7 +199,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 .redirectOutput(runFiles.eventsPath().toFile())
                 .redirectErrorStream(true);
             process = builder.start();
-            if (!process.waitFor(PROCESS_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+            long processTimeoutMs = turnMaxDurationMs(plan);
+            if (!process.waitFor(processTimeoutMs, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
                 process.waitFor(5, TimeUnit.SECONDS);
                 long durationMs = System.currentTimeMillis() - startedAtMs;
@@ -224,6 +229,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         appendRunFileMetadata(metadata, runFiles);
         metadata.put("exit_code", exitCode);
+        metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
         metadata.put("provider_output_parser", "codex_exec_json");
         if (output.sessionId() != null && !output.sessionId().isBlank()) {
             metadata.put("provider_session_id", output.sessionId());

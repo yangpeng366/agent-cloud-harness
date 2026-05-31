@@ -96,13 +96,16 @@ class CodexAppServerWorkerExecutorTest {
         String propertyKey = "agentcloud.providers.codex.path";
         String runDirKey = "agentcloud.provider_runs.dir";
         String modeKey = "agentcloud.providers.codex.execution_mode";
+        String maxDurationKey = "agentcloud.providers.codex.turn_max_duration_ms";
         String original = System.getProperty(propertyKey);
         String originalRunDir = System.getProperty(runDirKey);
         String originalMode = System.getProperty(modeKey);
+        String originalMaxDuration = System.getProperty(maxDurationKey);
         Path cli = fakeCodexExecJsonCli();
         System.setProperty(propertyKey, cli.toString());
         System.setProperty(runDirKey, tempDir.resolve("codex-exec-json-runs").toString());
         System.setProperty(modeKey, "exec_json");
+        System.setProperty(maxDurationKey, "901000");
         try {
             AgentProviderRegistry registry = new AgentProviderRegistry();
             BuiltinAgentProviders.defaults().forEach(registry::register);
@@ -113,6 +116,7 @@ class CodexAppServerWorkerExecutorTest {
             assertEquals("completed", result.executionStatus());
             assertEquals("provider_native_cli_json", result.metadata().get("execution_backend"));
             assertEquals("codex_exec_json", result.metadata().get("provider_output_parser"));
+            assertEquals(901_000L, result.metadata().get("provider_turn_max_duration_ms"));
             assertEquals("session_exec_json_test", result.metadata().get("provider_session_id"));
             assertEquals("codex exec json result", result.outputText().trim());
             assertTrue(Path.of(result.metadata().get("provider_prompt_path").toString()).toFile().isFile());
@@ -121,6 +125,56 @@ class CodexAppServerWorkerExecutorTest {
             assertEquals("codex exec json result",
                 Files.readString(Path.of(result.metadata().get("provider_last_message_path").toString())).trim());
             assertTrue(result.metadata().get("cli_command_preview").toString().contains("exec --json -o"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+            if (originalRunDir == null) {
+                System.clearProperty(runDirKey);
+            } else {
+                System.setProperty(runDirKey, originalRunDir);
+            }
+            if (originalMode == null) {
+                System.clearProperty(modeKey);
+            } else {
+                System.setProperty(modeKey, originalMode);
+            }
+            if (originalMaxDuration == null) {
+                System.clearProperty(maxDurationKey);
+            } else {
+                System.setProperty(maxDurationKey, originalMaxDuration);
+            }
+        }
+    }
+
+    @Test
+    void appServerKeepsCompletedTurnWhenProviderProcessStaysAlive() {
+        String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
+        String original = System.getProperty(propertyKey);
+        String originalRunDir = System.getProperty(runDirKey);
+        String originalMode = System.getProperty(modeKey);
+        try {
+            Path cli = fakeStickyCodexAppServerCli();
+            System.setProperty(propertyKey, cli.toString());
+            System.setProperty(runDirKey, tempDir.resolve("sticky-codex-app-server-runs").toString());
+            System.clearProperty(modeKey);
+
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("codex"), "codex");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("sticky app-server result", result.outputText().trim());
+            assertEquals("thread_sticky_app_server", result.metadata().get("provider_thread_id"));
+            assertEquals(null, result.metadata().get("provider_error"));
+        } catch (Exception e) {
+            throw new AssertionError(e);
         } finally {
             if (original == null) {
                 System.clearProperty(propertyKey);
@@ -640,5 +694,24 @@ class CodexAppServerWorkerExecutorTest {
             exit /b 0
             """;
         return Files.writeString(tempDir.resolve("codex-exec-json.cmd"), body);
+    }
+
+    private Path fakeStickyCodexAppServerCli() throws Exception {
+        String body = """
+            @echo off
+            setlocal EnableExtensions
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":1,"result":{}}
+            set /p LINE=
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":2,"result":{"threadId":"thread_sticky_app_server"}}
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":3,"result":{"status":"running"}}
+            echo {"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"agentMessage","text":"sticky app-server result","phase":"final_answer"}}}
+            echo {"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed"}}}
+            ping -n 8 127.0.0.1 > nul
+            exit /b 0
+            """;
+        return Files.writeString(tempDir.resolve("codex-sticky-app-server.cmd"), body);
     }
 }
