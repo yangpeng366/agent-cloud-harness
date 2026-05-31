@@ -544,7 +544,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
   - `metadata.execution_status / selected_worker / execution_backend / provider_id`
   - `metadata.provider_thread_id / resume_provider_session_id / provider_timeout_kind / provider_abort_reason`
   - `metadata.partial_output_chars / partial_timeout_min_output_chars`
-  - `metadata.provider_run_dir / provider_last_message_path / provider_event_log_path / provider_stdout_path / provider_run_metadata_path`
+  - `metadata.provider_run_dir / provider_prompt_path / provider_last_message_path / provider_event_log_path / provider_stdout_path / provider_run_metadata_path`
   - 当 `execution_status=partial_timeout` 时，前端必须展示部分结果；若有 `provider_thread_id / provider_session_id`，提供继续原 provider thread 入口，否则只提供手动移交入口，不能把它压成普通失败
 - `task_action`
   - `action`：机器可判定的控制动作键
