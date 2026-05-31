@@ -273,8 +273,9 @@ async function refreshAll(loud) {
     await loadSessions();
     await loadTasks();
     if (state.selectedTaskId) {
+        const selectedSessionId = taskSessionId(selectedTask()) || state.selectedSessionId;
+        await loadMessages(selectedSessionId, { render: false });
         await loadSelectedTask(state.selectedTaskId, false);
-        await loadMessages(taskSessionId(selectedTask()) || state.selectedSessionId);
     } else {
         await loadMessages();
         state.liveFlow = null;
@@ -401,11 +402,14 @@ async function loadTasks() {
     syncLocationSelection();
 }
 
-async function loadMessages(sessionId = state.selectedSessionId) {
+async function loadMessages(sessionId = state.selectedSessionId, options = {}) {
+    const shouldRender = options.render !== false;
     if (!sessionId) {
         state.messages = [];
         pruneExpandedMessageIds();
-        renderMessages();
+        if (shouldRender) {
+            renderMessages();
+        }
         renderMessageComposerContext();
         return;
     }
@@ -415,7 +419,9 @@ async function loadMessages(sessionId = state.selectedSessionId) {
         .slice()
         .sort((a, b) => timestampMs(a.created_at || a.createdAt || 0) - timestampMs(b.created_at || b.createdAt || 0));
     pruneExpandedMessageIds();
-    renderMessages();
+    if (shouldRender) {
+        renderMessages();
+    }
     renderMessageComposerContext();
 }
 
