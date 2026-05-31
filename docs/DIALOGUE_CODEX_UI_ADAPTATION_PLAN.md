@@ -633,7 +633,7 @@ node .\scripts\dialogue-business-smoke.js
 - `shell/layout validation` 已有 fresh 隔离实例下的真实绿灯
 - `light business smoke` 已有 fresh 隔离实例下的真实绿灯
 - 第三轮 codex 风格壳层收口已经落到真实 `/dialogue/` HTML/CSS/JS，而不是仍停留在纯文档阶段
-- details / status surface 已开始继续收口：details/open 能展示 partial timeout provider diagnostics，header focus line 会直接露出 `partial timeout / human gate / handoff queued` 这类恢复状态
+- details / status surface 已开始继续收口：details/open 能展示 partial timeout provider diagnostics，并同步展示 activity timeout / max duration bounds；header focus line 会直接露出 `partial timeout / human gate / handoff queued` 这类恢复状态
 - 但仍不应把它写成“前端业务功能已完全验证通过”，因为 richer continuity / acceptance 仍需独立 acceptance 工具链
 
 最新这一轮继续补几个和长任务恢复直接相关的 UI 缺口：
