@@ -841,7 +841,7 @@ metadata 合同：
 | `execution_status=partial_timeout` | 本轮被时间策略截断，但已有可用中间输出 |
 | `provider_turn_status` | Codex 原始 turn 状态，例如 `running`、`cancelled`、`interrupted` |
 | `provider_timeout_kind` | `activity_timeout` / `max_duration` / `user_interrupted` |
-| `provider_activity_timeout_ms` | 本轮使用的活动超时 |
+| `provider_activity_timeout_ms` | 本轮使用的活动超时；`provider_turn_activity_timeout_ms` 作为兼容别名继续保留 |
 | `provider_turn_max_duration_ms` | 本轮使用的最大硬上限 |
 | `partial_output=true` | 明确告诉 UI / recovery 该结果不是空失败 |
 | `partial_output_chars` | 有效输出长度 |

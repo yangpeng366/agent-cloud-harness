@@ -367,6 +367,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `execution.worker_id / execution.execution_status / execution.execution_backend`
 - `execution.provider_id / execution.provider_session_id / execution.provider_thread_id / execution.resume_provider_session_id`
 - `execution.provider_turn_status / execution.provider_timeout_kind / execution.provider_abort_reason`
+- `execution.provider_activity_timeout_ms / execution.provider_turn_max_duration_ms`
 - `execution.provider_failure_class / execution.provider_failure_reason / execution.provider_retryable`
 - `execution.partial_output_chars / execution.partial_timeout_min_output_chars`
 - `execution.provider_run_dir / execution.provider_*_path`
