@@ -1406,12 +1406,12 @@ function renderMessageCard(message, options = {}) {
             <div class="message-card__meta">
                 <span class="task-badge" data-tone="${messageRoleTone(role)}">${escapeHtml(formatMessageRole(role))}</span>
                 <span class="task-badge">${escapeHtml(formatMessageType(type))}</span>
-                ${continuityScope === "session" ? `<span class="task-badge" data-tone="manual">session continuity</span>` : ""}
-                ${continuityScope === "task" ? `<span class="task-badge" data-tone="active">task-bound</span>` : ""}
+                ${continuityScope === "session" ? `<span class="task-badge" data-tone="manual">会话续跑</span>` : ""}
+                ${continuityScope === "task" ? `<span class="task-badge" data-tone="active">任务绑定</span>` : ""}
                 ${failureClass ? `<span class="task-badge" data-tone="warn">${escapeHtml(`失败 · ${preview(failureClass, 22)}`)}</span>` : ""}
                 ${isLatestFacadeReply ? renderFacadeReplyBadgeHtml(options.facadeReplyHighlight, { escapeHtml }) : ""}
                 ${renderMessageSignals(signalPlan)}
-                ${taskId ? `<span class="task-badge" data-tone="${isRelated ? "active" : "default"}">${escapeHtml(`task · ${preview(taskId, 18)}`)}</span>` : ""}
+                ${taskId ? `<span class="task-badge" data-tone="${isRelated ? "active" : "default"}">${escapeHtml(`任务 · ${preview(taskId, 18)}`)}</span>` : ""}
                 <span>${formatTime(message.created_at || message.createdAt)}</span>
             </div>
             ${executionStrip ? `
@@ -1559,8 +1559,8 @@ function renderMessageSummaryCard(summary) {
         <section class="message-summary-card" data-role="${escapeHtml(summary.role)}">
             <div class="message-summary-card__meta">
                 <span class="task-badge" data-tone="${messageRoleTone(summary.role)}">${escapeHtml(formatMessageRole(summary.role))}</span>
-                <span>${escapeHtml(`${summary.count} msgs`)}</span>
-                ${summary.latestTaskId ? `<span>${escapeHtml(`task · ${preview(summary.latestTaskId, 14)}`)}</span>` : ""}
+                <span>${escapeHtml(`${summary.count} 条消息`)}</span>
+                ${summary.latestTaskId ? `<span>${escapeHtml(`任务 · ${preview(summary.latestTaskId, 14)}`)}</span>` : ""}
                 ${summary.latestAt ? `<span>${escapeHtml(formatTime(summary.latestAt))}</span>` : ""}
             </div>
             <div class="message-summary-card__body">${escapeHtml(summary.latestText || "暂无可读摘要。")}</div>
@@ -1583,7 +1583,7 @@ function renderMessageSummaryBrief(summary) {
         <section class="message-summary-brief" data-role="${escapeHtml(summary.role)}">
             <div class="message-summary-brief__meta">
                 <span class="task-badge" data-tone="${messageRoleTone(summary.role)}">${escapeHtml(formatMessageRole(summary.role))}</span>
-                <span>${escapeHtml(`${summary.count} msgs`)}</span>
+                <span>${escapeHtml(`${summary.count} 条消息`)}</span>
                 ${summary.latestAt ? `<span>${escapeHtml(formatTime(summary.latestAt))}</span>` : ""}
             </div>
             <div class="message-summary-brief__body">

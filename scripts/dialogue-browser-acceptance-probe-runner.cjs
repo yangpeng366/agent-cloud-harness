@@ -666,7 +666,7 @@ async function main() {
           detailTitle: document.querySelector('#detailTitle')?.textContent?.trim() || '',
           noteCardText: noteCard?.textContent || '',
           noteCardTaskBadge: Array.from(noteCard?.querySelectorAll('.task-badge') || []).some((badge) =>
-            (badge.textContent || '').includes('task ·')
+            /(?:task|任务)\s*·/.test(badge.textContent || '')
           ),
           taskNoteMessageType: taskNoteMessage?.message_type || '',
           taskNoteMessageTaskId: taskNoteMessage?.task_id || '',
@@ -705,7 +705,7 @@ async function main() {
         throw new Error(`task-note attach unexpectedly changed selected task: ${JSON.stringify(afterTaskNote)}`);
       }
       if (!afterTaskNote.noteCardTaskBadge) {
-        throw new Error(`task-note attach did not render task-bound badge: ${JSON.stringify(afterTaskNote)}`);
+        throw new Error(`task-note attach did not render task identity badge: ${JSON.stringify(afterTaskNote)}`);
       }
       if (afterTaskNote.taskNoteMessageType !== 'task_note' || afterTaskNote.taskNoteMessageTaskId !== afterTask.selectedTaskId) {
         throw new Error(`task-note attach did not persist task_note message: ${JSON.stringify(afterTaskNote)}`);
