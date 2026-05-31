@@ -56,9 +56,18 @@ public class RuntimeCognitionSurfaceAssembler {
                 metadataString(executionMetadata, "resume_provider_session_id"),
                 metadataString(executionMetadata, "provider_error"),
                 metadataString(executionMetadata, "provider_turn_status"),
+                metadataString(executionMetadata, "provider_abort_reason"),
                 metadataString(executionMetadata, "provider_failure_class"),
                 metadataString(executionMetadata, "provider_failure_reason"),
                 metadataBoolean(executionMetadata, "provider_retryable", runtimeMetadata),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "partial_output_chars"),
+                    metadataInteger(runtimeMetadata, "partial_output_chars")
+                ),
+                firstNonNullInt(
+                    metadataInteger(executionMetadata, "partial_timeout_min_output_chars"),
+                    metadataInteger(runtimeMetadata, "partial_timeout_min_output_chars")
+                ),
                 metadataStringList(executionMetadata, "provider_protocol_trace"),
                 metadataString(executionMetadata, "provider_run_dir"),
                 metadataString(executionMetadata, "provider_prompt_path"),

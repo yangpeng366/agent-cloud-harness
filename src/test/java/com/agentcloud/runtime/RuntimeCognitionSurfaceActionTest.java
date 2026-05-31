@@ -24,15 +24,19 @@ class RuntimeCognitionSurfaceActionTest {
             List.of(),
             0,
             "action trace",
-            Map.of(
-                "proposed_actions", List.of(Map.of("action_type", "CHECKPOINT", "summary", "checkpoint now")),
-                "accepted_actions", List.of(Map.of("action_type", "CHECKPOINT", "status", "accepted")),
-                "rejected_actions", List.of(Map.of("action_type", "HANDOFF", "status", "rejected")),
-                "approval_needed_actions", List.of(Map.of("action_type", "SPAWN_SUBTASK", "status", "needs_approval")),
-                "context_requests", List.of("need architecture note"),
-                "completion_claim", "implementation complete",
-                "handoff_target", "kimi",
-                "risk_flags", List.of("fan_out_risk")
+            Map.ofEntries(
+                Map.entry("provider_turn_status", "cancelled"),
+                Map.entry("provider_abort_reason", "user_interrupted"),
+                Map.entry("partial_output_chars", 640),
+                Map.entry("partial_timeout_min_output_chars", 200),
+                Map.entry("proposed_actions", List.of(Map.of("action_type", "CHECKPOINT", "summary", "checkpoint now"))),
+                Map.entry("accepted_actions", List.of(Map.of("action_type", "CHECKPOINT", "status", "accepted"))),
+                Map.entry("rejected_actions", List.of(Map.of("action_type", "HANDOFF", "status", "rejected"))),
+                Map.entry("approval_needed_actions", List.of(Map.of("action_type", "SPAWN_SUBTASK", "status", "needs_approval"))),
+                Map.entry("context_requests", List.of("need architecture note")),
+                Map.entry("completion_claim", "implementation complete"),
+                Map.entry("handoff_target", "kimi"),
+                Map.entry("risk_flags", List.of("fan_out_risk"))
             )
         );
         RuntimeFactSet facts = new RuntimeFactSet(
@@ -66,5 +70,9 @@ class RuntimeCognitionSurfaceActionTest {
         assertEquals("implementation complete", surface.execution().completionClaim());
         assertEquals("kimi", surface.execution().handoffTarget());
         assertEquals(List.of("fan_out_risk"), surface.execution().riskFlags());
+        assertEquals("cancelled", surface.execution().providerTurnStatus());
+        assertEquals("user_interrupted", surface.execution().providerAbortReason());
+        assertEquals(640, surface.execution().partialOutputChars());
+        assertEquals(200, surface.execution().partialTimeoutMinOutputChars());
     }
 }

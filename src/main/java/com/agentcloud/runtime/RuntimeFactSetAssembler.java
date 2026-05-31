@@ -321,9 +321,12 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "resume_provider_session_id");
         copyMetadataKey(source, selected, "provider_error");
         copyMetadataKey(source, selected, "provider_turn_status");
+        copyMetadataKey(source, selected, "provider_abort_reason");
         copyMetadataKey(source, selected, "provider_failure_class");
         copyMetadataKey(source, selected, "provider_failure_reason");
         copyMetadataKey(source, selected, "provider_retryable");
+        copyMetadataKey(source, selected, "partial_output_chars");
+        copyMetadataKey(source, selected, "partial_timeout_min_output_chars");
         copyMetadataKey(source, selected, "provider_protocol_trace");
         copyMetadataKey(source, selected, "provider_run_dir");
         copyMetadataKey(source, selected, "provider_prompt_path");
@@ -656,9 +659,12 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(latestWorkerMetadata, metadata, "resume_provider_session_id");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_error");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_status");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_abort_reason");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_class");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_reason");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_retryable");
+        copyMetadataKey(latestWorkerMetadata, metadata, "partial_output_chars");
+        copyMetadataKey(latestWorkerMetadata, metadata, "partial_timeout_min_output_chars");
         copyMetadataKey(latestWorkerMetadata, metadata, "dispatch_skipped_workers");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_protocol_trace");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_run_dir");

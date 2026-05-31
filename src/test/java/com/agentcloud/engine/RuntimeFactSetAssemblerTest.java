@@ -260,6 +260,10 @@ class RuntimeFactSetAssemblerTest {
                         Map.of("tool_chain_step_index", 2, "tool_name", "write_file")
                     )),
                     Map.entry("execution_status", "blocked"),
+                    Map.entry("provider_turn_status", "cancelled"),
+                    Map.entry("provider_abort_reason", "user_interrupted"),
+                    Map.entry("partial_output_chars", 640),
+                    Map.entry("partial_timeout_min_output_chars", 200),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
                     Map.entry("unfinished_items", List.of("manual_review"))
                 ))
@@ -348,6 +352,10 @@ class RuntimeFactSetAssemblerTest {
         assertEquals("kimi", facts.routePreview().preferredWorkerHint());
         assertTrue(facts.routePreview().learningHintApplied());
         assertEquals("blocked", facts.metadata().get("execution_status"));
+        assertEquals("cancelled", facts.executionBoundary().metadata().get("provider_turn_status"));
+        assertEquals("user_interrupted", facts.executionBoundary().metadata().get("provider_abort_reason"));
+        assertEquals(640, ((Number) facts.executionBoundary().metadata().get("partial_output_chars")).intValue());
+        assertEquals(200, ((Number) facts.executionBoundary().metadata().get("partial_timeout_min_output_chars")).intValue());
         assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"), facts.metadata().get("evidence_refs"));
         assertEquals(List.of("manual_review"), facts.metadata().get("unfinished_items"));
     }
