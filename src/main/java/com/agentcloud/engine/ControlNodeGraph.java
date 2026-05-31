@@ -2409,14 +2409,20 @@ public class ControlNodeGraph {
     }
 
     private void copyProviderDiagnosticMetadata(Map<String, Object> source, Map<String, Object> target) {
+        copyMetadataKey(source, target, "provider_id");
+        copyMetadataKey(source, target, "execution_backend");
         copyMetadataKey(source, target, "provider_session_id");
         copyMetadataKey(source, target, "provider_thread_id");
         copyMetadataKey(source, target, "resume_provider_session_id");
         copyMetadataKey(source, target, "provider_error");
         copyMetadataKey(source, target, "provider_turn_status");
+        copyMetadataKey(source, target, "provider_timeout_kind");
+        copyMetadataKey(source, target, "provider_turn_activity_timeout_ms");
+        copyMetadataKey(source, target, "provider_turn_max_duration_ms");
         copyMetadataKey(source, target, "provider_failure_class");
         copyMetadataKey(source, target, "provider_failure_reason");
         copyMetadataKey(source, target, "provider_retryable");
+        copyMetadataKey(source, target, "provider_output_parser");
         copyMetadataKey(source, target, "provider_protocol_trace");
         copyMetadataKey(source, target, "provider_output_truncated");
         copyMetadataKey(source, target, "provider_output_total_bytes");
@@ -2652,9 +2658,13 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "resume_provider_session_id");
         copyMetadataKey(source, selected, "provider_error");
         copyMetadataKey(source, selected, "provider_turn_status");
+        copyMetadataKey(source, selected, "provider_timeout_kind");
+        copyMetadataKey(source, selected, "provider_turn_activity_timeout_ms");
+        copyMetadataKey(source, selected, "provider_turn_max_duration_ms");
         copyMetadataKey(source, selected, "provider_failure_class");
         copyMetadataKey(source, selected, "provider_failure_reason");
         copyMetadataKey(source, selected, "provider_retryable");
+        copyMetadataKey(source, selected, "provider_output_parser");
         copyMetadataKey(source, selected, "provider_protocol_trace");
         copyMetadataKey(source, selected, "provider_output_truncated");
         copyMetadataKey(source, selected, "provider_output_total_bytes");
@@ -3191,40 +3201,51 @@ public class ControlNodeGraph {
             if (sessionMessageDao.findWorkerRoundByArtifactId(task.sessionId(), task.id(), artifact.id()) != null) {
                 return;
             }
+            Map<String, Object> artifactMetadata = artifact.metadata();
+            Map<String, Object> latestWorkerMetadata = nestedMetadata(artifactMetadata, "latest_worker_metadata");
             LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("source_surface", "control_node_graph");
             metadata.put("created_via", "worker_round_projection");
             metadata.put("artifact_id", artifact.id());
             metadata.put("artifact_type", artifact.artifactType());
             metadata.put("artifact_title", artifact.title());
-            metadata.put("worker_id", firstNonBlank(task.assignedWorker(), metadataString(artifact.metadata(), "worker_id")));
-            metadata.put("execution_status", metadataString(artifact.metadata(), "execution_status"));
-            metadata.put("duration_ms", artifact.metadata().get("duration_ms"));
-            metadata.put("output_chars", safeTextLength(metadataString(artifact.metadata(), "output_text")));
+            metadata.put("worker_id", firstNonBlank(task.assignedWorker(), metadataString(artifactMetadata, "worker_id")));
+            metadata.put("execution_status", metadataString(artifactMetadata, "execution_status"));
+            metadata.put("duration_ms", artifactMetadata.get("duration_ms"));
+            metadata.put("output_chars", safeTextLength(metadataString(artifactMetadata, "output_text")));
             metadata.put("output_preview", previewText(
                 firstNonBlank(
-                    metadataString(artifact.metadata(), "summary"),
-                    metadataString(artifact.metadata(), "output_text"),
+                    metadataString(artifactMetadata, "summary"),
+                    metadataString(artifactMetadata, "output_text"),
                     artifact.summary()
                 ),
                 1_000
             ));
-            copyIfPresent(metadata, artifact.metadata(), "provider_id");
-            copyIfPresent(metadata, artifact.metadata(), "provider_thread_id");
-            copyIfPresent(metadata, artifact.metadata(), "provider_session_id");
-            copyIfPresent(metadata, artifact.metadata(), "provider_turn_status");
-            copyIfPresent(metadata, artifact.metadata(), "provider_timeout_kind");
-            copyIfPresent(metadata, artifact.metadata(), "provider_failure_class");
-            copyIfPresent(metadata, artifact.metadata(), "provider_failure_reason");
-            copyIfPresent(metadata, artifact.metadata(), "provider_run_dir");
-            copyIfPresent(metadata, artifact.metadata(), "provider_prompt_path");
-            copyIfPresent(metadata, artifact.metadata(), "provider_event_log_path");
-            copyIfPresent(metadata, artifact.metadata(), "provider_last_message_path");
-            copyIfPresent(metadata, artifact.metadata(), "provider_run_metadata_path");
-            copyIfPresent(metadata, artifact.metadata(), "partial_output");
-            copyIfPresent(metadata, artifact.metadata(), "partial_output_chars");
-            copyIfPresent(metadata, artifact.metadata(), "unfinished_items");
-            copyIfPresent(metadata, artifact.metadata(), "suggested_next_step");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_id");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_thread_id");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_session_id");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_error");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_status");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_timeout_kind");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_activity_timeout_ms");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_max_duration_ms");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_class");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_reason");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_retryable");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_parser");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_protocol_trace");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "execution_backend");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_dir");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_prompt_path");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_event_log_path");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_last_message_path");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_metadata_path");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output_chars");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "truncated");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_truncated");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "unfinished_items");
+            copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "suggested_next_step");
             if (agentRun != null) {
                 metadata.put("agent_run_id", agentRun.runId());
                 metadata.put("agent_run_status", agentRun.status());
@@ -3300,6 +3321,33 @@ public class ControlNodeGraph {
         if (value != null) {
             target.put(key, value);
         }
+    }
+
+    private void copyFromArtifactOrLatest(Map<String, Object> target,
+                                          Map<String, Object> artifactMetadata,
+                                          Map<String, Object> latestWorkerMetadata,
+                                          String key) {
+        copyIfPresent(target, artifactMetadata, key);
+        if (!target.containsKey(key)) {
+            copyIfPresent(target, latestWorkerMetadata, key);
+        }
+    }
+
+    private Map<String, Object> nestedMetadata(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return Map.of();
+        }
+        Object value = metadata.get(key);
+        if (!(value instanceof Map<?, ?> map) || map.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        map.forEach((nestedKey, nestedValue) -> {
+            if (nestedKey != null && nestedValue != null) {
+                normalized.put(String.valueOf(nestedKey), nestedValue);
+            }
+        });
+        return normalized.isEmpty() ? Map.of() : normalized;
     }
 
     private int safeTextLength(String value) {

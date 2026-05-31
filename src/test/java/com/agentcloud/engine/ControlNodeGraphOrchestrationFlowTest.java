@@ -15,6 +15,7 @@ import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
+import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
 import com.agentcloud.runtime.ActiveContextBuilder;
@@ -27,6 +28,7 @@ import com.agentcloud.store.DecisionDao;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.ResumePacketDao;
 import com.agentcloud.store.SessionDao;
+import com.agentcloud.store.SessionMessageDao;
 import com.agentcloud.store.TaskDao;
 import com.agentcloud.worker.WorkerExecutionResult;
 import com.agentcloud.worker.WorkerExecutor;
@@ -1288,6 +1290,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             EventDao eventDao = db.jdbi().onDemand(EventDao.class);
             ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
             DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
             ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
             CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
 
@@ -1316,7 +1319,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             );
 
             ControlNodeGraph graph = new ControlNodeGraph(
-                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, null, null,
                 new ProviderContinuationWorkerExecutor(), runtimeContextBuilder, new DoneJudgmentService(),
                 artifactDao, decisionDao, null
             );
@@ -1349,6 +1352,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             Task finalTask = graph.enter(task);
             Task persisted = taskDao.findById(task.id()).orElseThrow();
             List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+            List<SessionMessage> messages = sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
 
             assertEquals("done", finalTask.status());
             assertEquals("thread-codex-001", persisted.metadata().get("provider_session_id"));
@@ -1371,6 +1375,20 @@ class ControlNodeGraphOrchestrationFlowTest {
                     && artifact.metadata().get("provider_protocol_trace") instanceof List<?> topTrace
                     && topTrace.contains("turn/started")
             ));
+            SessionMessage workerRoundMessage = messages.stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("codex", workerRoundMessage.metadata().get("provider_id"));
+            assertEquals("provider_app_server", workerRoundMessage.metadata().get("execution_backend"));
+            assertEquals("thread-codex-001", workerRoundMessage.metadata().get("provider_thread_id"));
+            assertEquals("codex turn completion timed out", workerRoundMessage.metadata().get("provider_error"));
+            assertEquals("provider_runtime_transient", workerRoundMessage.metadata().get("provider_failure_class"));
+            assertEquals("codex turn completion timed out", workerRoundMessage.metadata().get("provider_failure_reason"));
+            assertEquals("codex_json_rpc", workerRoundMessage.metadata().get("provider_output_parser"));
+            assertEquals(Boolean.TRUE, workerRoundMessage.metadata().get("provider_retryable"));
+            assertTrue(workerRoundMessage.metadata().get("provider_protocol_trace") instanceof List<?> trace
+                && trace.contains("turn/started"));
         }
     }
 
@@ -2137,6 +2155,9 @@ class ControlNodeGraphOrchestrationFlowTest {
                     Map.entry("provider_output_parser", "codex_json_rpc"),
                     Map.entry("provider_error", "codex turn completion timed out"),
                     Map.entry("provider_turn_status", "timeout"),
+                    Map.entry("provider_timeout_kind", "activity_timeout"),
+                    Map.entry("provider_turn_activity_timeout_ms", 180_000L),
+                    Map.entry("provider_turn_max_duration_ms", 900_000L),
                     Map.entry("provider_failure_class", "provider_runtime_transient"),
                     Map.entry("provider_failure_reason", "codex turn completion timed out"),
                     Map.entry("provider_retryable", true),
