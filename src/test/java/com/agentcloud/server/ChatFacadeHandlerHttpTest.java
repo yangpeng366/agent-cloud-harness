@@ -32,6 +32,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Path;
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -129,6 +130,26 @@ class ChatFacadeHandlerHttpTest {
                 "task_progress".equals(message.messageType())
                     && taskId.equals(message.taskId())));
         }
+    }
+
+    @Test
+    void chatFacadeReplySourceKeepsWorkerRoundSemanticType() throws Exception {
+        ChatFacadeService service = new ChatFacadeService(null, null);
+        Method method = ChatFacadeService.class.getDeclaredMethod("replySource", SessionMessage.class, Task.class);
+        method.setAccessible(true);
+
+        Object replySource = method.invoke(service, new SessionMessage(
+            "msg_worker_round_facade",
+            "session_worker_round_facade",
+            "task_worker_round_facade",
+            "assistant",
+            "worker_round",
+            "Codex 执行回合已截断，保留部分输出。",
+            Instant.now(),
+            Map.of("execution_status", "partial_timeout")
+        ), Task.create("task_worker_round_facade", "session_worker_round_facade", "worker round task", "active", "high"));
+
+        assertEquals("worker_round", replySource);
     }
 
     @Test

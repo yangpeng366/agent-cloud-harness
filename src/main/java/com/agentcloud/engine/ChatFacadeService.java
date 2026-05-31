@@ -391,6 +391,7 @@ public class ChatFacadeService {
             case "task_receipt" -> "task_receipt";
             case "task_progress" -> "task_progress";
             case "task_result" -> "task_result";
+            case "worker_round" -> "worker_round";
             case "task_action" -> "task_action";
             case "task_state" -> "task_state";
             default -> task == null ? "session_ack" : "task_state";
