@@ -78,8 +78,9 @@ test("partial timeout diagnostics include output threshold in provider signal", 
         plan.entries.map((entry) => entry.label),
         ["provider", "route"]
     );
-    assert.equal(plan.texts[0], "provider · partial timeout · max durat…");
-    assert.equal(plan.entries[0].value, "partial timeout · max duration · 640/200 chars");
+    assert.equal(plan.texts[0], "provider · 部分结果待确认 · 达到最大时长 · 已有输出 640…");
+    assert.equal(plan.entries[0].value, "部分结果待确认 · 达到最大时长 · 已有输出 640/200 字符");
+    assert.equal(plan.entries[0].value.includes("partial timeout"), false);
 });
 
 test("related-message plan keeps richer context including route and tools", () => {

@@ -11,7 +11,8 @@ test("task focus line surfaces partial timeout in header status", () => {
         }
     });
 
-    assert.equal(focusLine, "waiting_human / human_gate / partial timeout");
+    assert.equal(focusLine, "waiting_human / human_gate / 部分结果待确认");
+    assert.equal(focusLine.includes("partial timeout"), false);
 });
 
 test("task focus line surfaces human gate recovery", () => {

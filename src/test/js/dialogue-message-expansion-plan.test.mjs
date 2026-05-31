@@ -153,6 +153,7 @@ test("worker round expands to compact provider diagnostics and run file hints", 
     assert.equal(plan.fullContent.includes("失败原因: max duration reached"), true);
     assert.equal(plan.fullContent.includes("输出指标"), true);
     assert.equal(plan.fullContent.includes("部分输出字符数: 640"), true);
+    assert.equal(plan.fullContent.includes("部分超时阈值: 200"), true);
     assert.equal(plan.fullContent.includes("Provider 运行文件"), true);
     assert.equal(plan.fullContent.includes("最后输出: D:\\runs\\codex\\last_message.md"), true);
     assert.equal(plan.fullContent.includes("标准输出: D:\\runs\\codex\\stdout.log"), true);

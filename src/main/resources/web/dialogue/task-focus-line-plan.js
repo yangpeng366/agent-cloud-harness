@@ -13,7 +13,7 @@ export function buildTaskFocusLineBase(task, flow = {}) {
     );
     const parts = [taskStatus, controlNode];
     if (String(executionStatus).toLowerCase() === "partial_timeout") {
-        parts.push("partial timeout");
+        parts.push("部分结果待确认");
     } else if (recoveryStage === "human_gate_required") {
         parts.push(failureClass ? `human gate · ${failureClass}` : "human gate");
     } else if (taskStatus.toLowerCase() === "active"

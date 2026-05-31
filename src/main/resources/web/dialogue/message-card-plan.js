@@ -142,9 +142,9 @@ function partialTimeoutSignal(metadata = {}) {
         metadata.partialTimeoutMinOutputChars
     );
     const parts = [
-        "partial timeout",
-        kind ? humanizeToken(String(kind)) || kind : null,
-        outputChars != null && threshold != null ? `${outputChars}/${threshold} chars` : null
+        "部分结果待确认",
+        kind ? humanizeTimeoutKind(kind) : null,
+        outputChars != null && threshold != null ? `已有输出 ${outputChars}/${threshold} 字符` : null
     ].filter(Boolean);
     return parts.join(" · ");
 }
@@ -234,6 +234,19 @@ function humanizeToken(value) {
         .trim()
         .replace(/[_-]+/g, " ")
         .replace(/\s+/g, " ");
+}
+
+function humanizeTimeoutKind(value) {
+    switch (String(value || "").trim().toLowerCase()) {
+        case "max_duration":
+            return "达到最大时长";
+        case "activity_timeout":
+            return "活动超时";
+        case "user_interrupted":
+            return "用户中断";
+        default:
+            return humanizeToken(String(value)) || String(value);
+    }
 }
 
 function formatCount(value, singular) {

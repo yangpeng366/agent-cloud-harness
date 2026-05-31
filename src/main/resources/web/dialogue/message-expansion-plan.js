@@ -162,7 +162,7 @@ function buildWorkerRoundFullContent(message, metadata, content) {
         const metrics = [
             outputChars ? `输出字符数: ${outputChars}` : null,
             partialChars ? `部分输出字符数: ${partialChars}` : null,
-            threshold ? `partial timeout 阈值: ${threshold}` : null
+            threshold ? `部分超时阈值: ${threshold}` : null
         ].filter(Boolean);
         uniquePush(parts, `输出指标\n${metrics.join("\n")}`);
     }

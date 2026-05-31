@@ -49,12 +49,12 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
     );
     const parts = [
         worker ? `worker ${worker}` : null,
-        status ? humanizeToken(status) || status : null,
-        timeoutKind ? humanizeToken(timeoutKind) || timeoutKind : null,
-        activityTimeoutMs !== null ? `activity ${formatDuration(activityTimeoutMs)}` : null,
-        maxDurationMs !== null ? `max ${formatDuration(maxDurationMs)}` : null,
-        outputChars !== null && threshold !== null ? `${outputChars}/${threshold} chars` : null,
-        abortReason ? `abort ${humanizeToken(abortReason) || abortReason}` : null,
+        status ? humanizeExecutionStatus(status) : null,
+        timeoutKind ? humanizeTimeoutKind(timeoutKind) : null,
+        activityTimeoutMs !== null ? `活动超时 ${formatDuration(activityTimeoutMs)}` : null,
+        maxDurationMs !== null ? `最大时长 ${formatDuration(maxDurationMs)}` : null,
+        outputChars !== null && threshold !== null ? `已有输出 ${outputChars}/${threshold} 字符` : null,
+        abortReason ? `中断原因 ${humanizeAbortReason(abortReason)}` : null,
         promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
         mountedRendered === true ? "mounted rendered" : null,
         mountedRendered === false ? "mounted not rendered" : null,
@@ -143,4 +143,50 @@ function humanizeToken(value) {
         .trim()
         .replace(/[_-]+/g, " ")
         .replace(/\s+/g, " ");
+}
+
+function humanizeExecutionStatus(value) {
+    switch (String(value || "").trim().toLowerCase()) {
+        case "partial_timeout":
+            return "部分结果待确认";
+        case "timeout":
+            return "超时";
+        case "failed":
+        case "error":
+            return "失败";
+        case "completed":
+        case "done":
+        case "success":
+            return "完成";
+        case "cancelled":
+            return "已取消";
+        default:
+            return humanizeToken(String(value)) || String(value);
+    }
+}
+
+function humanizeTimeoutKind(value) {
+    switch (String(value || "").trim().toLowerCase()) {
+        case "max_duration":
+            return "达到最大时长";
+        case "activity_timeout":
+            return "活动超时";
+        case "user_interrupted":
+            return "用户中断";
+        default:
+            return humanizeToken(String(value)) || String(value);
+    }
+}
+
+function humanizeAbortReason(value) {
+    switch (String(value || "").trim().toLowerCase()) {
+        case "user_interrupted":
+            return "用户中断";
+        case "max_duration":
+            return "达到最大时长";
+        case "activity_timeout":
+            return "活动超时";
+        default:
+            return humanizeToken(String(value)) || String(value);
+    }
 }
