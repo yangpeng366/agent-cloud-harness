@@ -2933,7 +2933,23 @@ public class TaskService {
         copyMetadataKey(source, target, "provider_failure_class");
         copyMetadataKey(source, target, "provider_failure_reason");
         copyMetadataKey(source, target, "provider_retryable");
-        copyMetadataKey(source, target, "provider_protocol_trace");
+        copyProviderProtocolTraceSummary(source, target);
+    }
+
+    private void copyProviderProtocolTraceSummary(Map<String, Object> source, Map<String, Object> target) {
+        if (source == null || target == null) {
+            return;
+        }
+        Object trace = source.get("provider_protocol_trace");
+        if (!(trace instanceof List<?> values) || values.isEmpty()) {
+            return;
+        }
+        target.put("provider_protocol_trace_count", values.size());
+        target.put("provider_protocol_trace_preview", values.stream()
+            .filter(Objects::nonNull)
+            .map(String::valueOf)
+            .limit(20)
+            .toList());
     }
 
     private String buildAssistantExpandedContent(Task task,

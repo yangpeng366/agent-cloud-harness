@@ -637,7 +637,9 @@ class TaskServiceMessageReceiptTest {
             assertEquals("turn timed out", progress.metadata().get("provider_failure_reason"));
             assertEquals(Boolean.TRUE, progress.metadata().get("provider_retryable"));
             assertEquals("019e4401-f18c-7fa2-b63d-8544108edcf5", progress.metadata().get("provider_thread_id"));
-            assertEquals(List.of("thread/started", "turn/started"), progress.metadata().get("provider_protocol_trace"));
+            assertFalse(progress.metadata().containsKey("provider_protocol_trace"));
+            assertEquals(2, progress.metadata().get("provider_protocol_trace_count"));
+            assertEquals(List.of("thread/started", "turn/started"), progress.metadata().get("provider_protocol_trace_preview"));
             assertEquals("codex turn completion timed out", progress.metadata().get("summary_preview"));
             assertTrue(progress.content().contains("codex turn completion timed out"));
             String fullContent = String.valueOf(progress.metadata().get("full_content"));
