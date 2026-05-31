@@ -25,7 +25,8 @@ test("task focus line surfaces human gate recovery", () => {
         }
     });
 
-    assert.equal(focusLine, "waiting_human / human_gate / human gate · 部分结果待确认");
+    assert.equal(focusLine, "waiting_human / human_gate / 等待人工确认 · 部分结果待确认");
+    assert.equal(focusLine.includes("human gate ·"), false);
 });
 
 test("task focus line humanizes deterministic backend failures", () => {
@@ -38,7 +39,7 @@ test("task focus line humanizes deterministic backend failures", () => {
         }
     });
 
-    assert.equal(focusLine, "waiting_human / human_gate / human gate · 能力不匹配");
+    assert.equal(focusLine, "waiting_human / human_gate / 等待人工确认 · 能力不匹配");
     assert.equal(focusLine.includes("worker_backend_deterministic"), false);
 });
 
@@ -52,5 +53,6 @@ test("task focus line keeps handoff queued state", () => {
         }
     });
 
-    assert.equal(focusLine, "active / scheduler / handoff queued");
+    assert.equal(focusLine, "active / scheduler / 移交已排队");
+    assert.equal(focusLine.includes("handoff queued"), false);
 });

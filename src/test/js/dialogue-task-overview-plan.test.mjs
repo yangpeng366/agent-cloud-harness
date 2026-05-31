@@ -28,11 +28,11 @@ test("task overview plan accepts caller-provided focus line base for queued reco
         assigned_worker: "openclaw-native"
     }, {
         focusWorker: "openclaw-native",
-        focusLineBase: "active / scheduler / handoff queued",
+        focusLineBase: "active / scheduler / 移交已排队",
         experimentMode: "orchestrated",
         toolLabel: "none"
     });
 
-    assert.equal(plan.focusLine, "active / scheduler / handoff queued / worker openclaw-native");
+    assert.equal(plan.focusLine, "active / scheduler / 移交已排队 / worker openclaw-native");
     assert.equal(plan.cards[3].value, "无");
 });

@@ -15,12 +15,12 @@ export function buildTaskFocusLineBase(task, flow = {}) {
     if (String(executionStatus).toLowerCase() === "partial_timeout") {
         parts.push("部分结果待确认");
     } else if (recoveryStage === "human_gate_required") {
-        parts.push(failureClass ? `human gate · ${failureClass}` : "human gate");
+        parts.push(failureClass ? `等待人工确认 · ${failureClass}` : "等待人工确认");
     } else if (taskStatus.toLowerCase() === "active"
         && controlNode === "scheduler"
         && recoveryStage === "auto_handoff_scheduled"
         && autoHandoffTarget) {
-        parts.push("handoff queued");
+        parts.push("移交已排队");
     }
     return parts.filter(Boolean).join(" / ");
 }
