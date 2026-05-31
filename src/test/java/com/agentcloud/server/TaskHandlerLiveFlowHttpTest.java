@@ -87,6 +87,9 @@ class TaskHandlerLiveFlowHttpTest {
                     Map.entry("tool_execution_mode", "single_tool_round"),
                     Map.entry("provider_timeout_kind", "max_duration"),
                     Map.entry("provider_abort_reason", "user_interrupted"),
+                    Map.entry("provider_activity_timeout_ms", 180_000L),
+                    Map.entry("provider_turn_activity_timeout_ms", 180_000L),
+                    Map.entry("provider_turn_max_duration_ms", 900_000L),
                     Map.entry("partial_output_chars", 640),
                     Map.entry("partial_timeout_min_output_chars", 200),
                     Map.entry("prompt_mode", "mounted_context_primary"),
@@ -241,6 +244,8 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals("codex", flowExecution.get("worker_id"));
             assertEquals("max_duration", flowExecution.get("provider_timeout_kind"));
             assertEquals("user_interrupted", flowExecution.get("provider_abort_reason"));
+            assertEquals(180_000, ((Number) flowExecution.get("provider_activity_timeout_ms")).intValue());
+            assertEquals(900_000, ((Number) flowExecution.get("provider_turn_max_duration_ms")).intValue());
             assertEquals(640, ((Number) flowExecution.get("partial_output_chars")).intValue());
             assertEquals(200, ((Number) flowExecution.get("partial_timeout_min_output_chars")).intValue());
             assertEquals("mounted_context_primary", flowExecution.get("prompt_mode"));

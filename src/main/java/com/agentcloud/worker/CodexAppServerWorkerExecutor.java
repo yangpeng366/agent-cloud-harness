@@ -145,7 +145,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             metadata.put("provider_error", output.errorText());
         }
         String outputText = output.outputText() == null ? "" : output.outputText().trim();
-        metadata.put("provider_turn_activity_timeout_ms", turnActivityTimeoutMs());
+        long activityTimeoutMs = turnActivityTimeoutMs();
+        metadata.put("provider_turn_activity_timeout_ms", activityTimeoutMs);
+        metadata.put("provider_activity_timeout_ms", activityTimeoutMs);
         metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
         metadata.put("partial_timeout_min_output_chars", partialOutputThreshold);
         metadata.put("partial_output", "partial_timeout".equals(normalizedStatus));

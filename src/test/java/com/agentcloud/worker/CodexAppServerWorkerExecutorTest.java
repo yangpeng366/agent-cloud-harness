@@ -202,6 +202,8 @@ class CodexAppServerWorkerExecutorTest {
             assertEquals("completed", result.executionStatus());
             assertEquals("sticky app-server result", result.outputText().trim());
             assertEquals("thread_sticky_app_server", result.metadata().get("provider_thread_id"));
+            assertEquals(180_000L, result.metadata().get("provider_activity_timeout_ms"));
+            assertEquals(180_000L, result.metadata().get("provider_turn_activity_timeout_ms"));
             assertEquals(null, result.metadata().get("provider_error"));
         } catch (Exception e) {
             throw new AssertionError(e);

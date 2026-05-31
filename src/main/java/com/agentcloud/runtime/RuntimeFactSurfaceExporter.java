@@ -172,9 +172,15 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "resume_provider_session_id", blankToNull(execution.resumeProviderSessionId()));
         putIfPresent(payload, "provider_error", blankToNull(execution.providerError()));
         putIfPresent(payload, "provider_turn_status", blankToNull(execution.providerTurnStatus()));
+        putIfPresent(payload, "provider_abort_reason", blankToNull(execution.providerAbortReason()));
+        putIfPresent(payload, "provider_timeout_kind", blankToNull(execution.providerTimeoutKind()));
+        putIfPresent(payload, "provider_activity_timeout_ms", execution.providerActivityTimeoutMs());
+        putIfPresent(payload, "provider_turn_max_duration_ms", execution.providerTurnMaxDurationMs());
         putIfPresent(payload, "provider_failure_class", blankToNull(execution.providerFailureClass()));
         putIfPresent(payload, "provider_failure_reason", blankToNull(execution.providerFailureReason()));
         putIfPresent(payload, "provider_retryable", execution.providerRetryable());
+        putIfPresent(payload, "partial_output_chars", execution.partialOutputChars());
+        putIfPresent(payload, "partial_timeout_min_output_chars", execution.partialTimeoutMinOutputChars());
         putIfPresent(payload, "provider_protocol_trace", copyList(execution.providerProtocolTrace()));
         putIfPresent(payload, "provider_run_dir", blankToNull(execution.providerRunDir()));
         putIfPresent(payload, "provider_prompt_path", blankToNull(execution.providerPromptPath()));

@@ -263,6 +263,9 @@ class RuntimeFactSetAssemblerTest {
                     Map.entry("provider_turn_status", "cancelled"),
                     Map.entry("provider_abort_reason", "user_interrupted"),
                     Map.entry("provider_timeout_kind", "max_duration"),
+                    Map.entry("provider_activity_timeout_ms", 180_000L),
+                    Map.entry("provider_turn_activity_timeout_ms", 180_000L),
+                    Map.entry("provider_turn_max_duration_ms", 900_000L),
                     Map.entry("partial_output_chars", 640),
                     Map.entry("partial_timeout_min_output_chars", 200),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
@@ -356,6 +359,9 @@ class RuntimeFactSetAssemblerTest {
         assertEquals("cancelled", facts.executionBoundary().metadata().get("provider_turn_status"));
         assertEquals("user_interrupted", facts.executionBoundary().metadata().get("provider_abort_reason"));
         assertEquals("max_duration", facts.executionBoundary().metadata().get("provider_timeout_kind"));
+        assertEquals(180_000L, facts.executionBoundary().metadata().get("provider_activity_timeout_ms"));
+        assertEquals(180_000L, facts.executionBoundary().metadata().get("provider_turn_activity_timeout_ms"));
+        assertEquals(900_000L, facts.executionBoundary().metadata().get("provider_turn_max_duration_ms"));
         assertEquals(640, ((Number) facts.executionBoundary().metadata().get("partial_output_chars")).intValue());
         assertEquals(200, ((Number) facts.executionBoundary().metadata().get("partial_timeout_min_output_chars")).intValue());
         assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"), facts.metadata().get("evidence_refs"));

@@ -44,6 +44,8 @@ public record RuntimeCognitionSurfaceView(
         String providerTurnStatus,
         String providerAbortReason,
         String providerTimeoutKind,
+        Long providerActivityTimeoutMs,
+        Long providerTurnMaxDurationMs,
         String providerFailureClass,
         String providerFailureReason,
         Boolean providerRetryable,

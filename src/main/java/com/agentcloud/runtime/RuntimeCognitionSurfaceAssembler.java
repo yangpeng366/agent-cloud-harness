@@ -58,6 +58,16 @@ public class RuntimeCognitionSurfaceAssembler {
                 metadataString(executionMetadata, "provider_turn_status"),
                 metadataString(executionMetadata, "provider_abort_reason"),
                 metadataString(executionMetadata, "provider_timeout_kind"),
+                firstNonNullLong(
+                    metadataLong(executionMetadata, "provider_activity_timeout_ms"),
+                    metadataLong(executionMetadata, "provider_turn_activity_timeout_ms"),
+                    metadataLong(runtimeMetadata, "provider_activity_timeout_ms"),
+                    metadataLong(runtimeMetadata, "provider_turn_activity_timeout_ms")
+                ),
+                firstNonNullLong(
+                    metadataLong(executionMetadata, "provider_turn_max_duration_ms"),
+                    metadataLong(runtimeMetadata, "provider_turn_max_duration_ms")
+                ),
                 metadataString(executionMetadata, "provider_failure_class"),
                 metadataString(executionMetadata, "provider_failure_reason"),
                 metadataBoolean(executionMetadata, "provider_retryable", runtimeMetadata),
@@ -460,6 +470,24 @@ public class RuntimeCognitionSurfaceAssembler {
         return null;
     }
 
+    private Long metadataLong(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
     @SuppressWarnings("unchecked")
     private List<String> metadataStringList(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
@@ -553,6 +581,18 @@ public class RuntimeCognitionSurfaceAssembler {
             return null;
         }
         for (Integer value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Long firstNonNullLong(Long... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Long value : values) {
             if (value != null) {
                 return value;
             }

@@ -323,6 +323,9 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(source, selected, "provider_turn_status");
         copyMetadataKey(source, selected, "provider_abort_reason");
         copyMetadataKey(source, selected, "provider_timeout_kind");
+        copyMetadataKey(source, selected, "provider_activity_timeout_ms");
+        copyMetadataKey(source, selected, "provider_turn_activity_timeout_ms");
+        copyMetadataKey(source, selected, "provider_turn_max_duration_ms");
         copyMetadataKey(source, selected, "provider_failure_class");
         copyMetadataKey(source, selected, "provider_failure_reason");
         copyMetadataKey(source, selected, "provider_retryable");
@@ -662,6 +665,9 @@ public class RuntimeFactSetAssembler {
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_status");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_abort_reason");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_timeout_kind");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_activity_timeout_ms");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_activity_timeout_ms");
+        copyMetadataKey(latestWorkerMetadata, metadata, "provider_turn_max_duration_ms");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_class");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_failure_reason");
         copyMetadataKey(latestWorkerMetadata, metadata, "provider_retryable");
