@@ -1180,6 +1180,19 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
 
 .message-card__actions {
     margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.message-card__worker-action {
+    padding: 5px 10px;
+    border: 1px solid rgba(22, 117, 103, 0.14);
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent-deep);
+    font-weight: 700;
 }
 
 .message-card--compact .message-card__body {

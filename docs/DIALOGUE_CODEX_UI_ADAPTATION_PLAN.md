@@ -308,6 +308,13 @@ header 只保留：
 - 用户不打开 details，也能知道 Codex 跑过、耗时多久、输出在哪里、下一步是继续还是移交。
 - 大输出不会默认渲染进 DOM；展开预览必须有长度上限，并指向 provider run 文件。
 
+落地记录（2026-05-31）：
+
+- `ControlNodeGraph` 已在 worker artifact 写入后同步投影 `message_type=worker_round` 的 session message。
+- Codex app-server executor 已改为活动超时 + 最大硬上限，并在有输出的超时场景标记 `partial_timeout`。
+- Dialogue 主 transcript 已支持 `worker_round` 卡片、provider run 路径摘要、`partial_timeout` 的“部分结果”文案。
+- `partial_timeout` worker round 卡片已提供“继续 Codex thread”和“手动移交”入口：继续入口触发当前 task 的 `POST /continue`，移交入口打开 details 的 handoff 控件。
+
 ### 3.5 Inspector 继续当 secondary surface
 
 保留这些能力，但不作为主阅读路径：

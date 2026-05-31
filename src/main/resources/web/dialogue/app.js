@@ -33,6 +33,7 @@ import { buildFacadeRequest } from "./composer-request-plan.js";
 import { requestFacadeCompletion } from "./facade-client-plan.js";
 import { reconcileTaskSelection } from "./task-selection-plan.js";
 import { isTrueFlag } from "./mounted-object-plan.js";
+import { buildWorkerRoundActionPlan } from "./worker-round-action-plan.js";
 import {
     readFacadeSurfaceFromHash,
     facadeSurfaceSummaryLabel,
@@ -692,7 +693,7 @@ function onComposerKeydown(event) {
     dom.taskForm.requestSubmit();
 }
 
-function onMessageActionClick(event) {
+async function onMessageActionClick(event) {
     const button = event.target.closest("[data-message-action]");
     if (!button) {
         return;
@@ -733,7 +734,51 @@ function onMessageActionClick(event) {
             return;
         }
         selectTask(taskId, false).catch(handleError);
+        return;
     }
+
+    if (action === "continue-worker-thread") {
+        const taskId = messageTaskId(message);
+        if (!taskId) {
+            showToast("这条执行回合没有关联 task", true);
+            return;
+        }
+        await continueWorkerRoundTask(taskId);
+        return;
+    }
+
+    if (action === "prepare-worker-handoff") {
+        const taskId = messageTaskId(message);
+        if (!taskId) {
+            showToast("这条执行回合没有关联 task", true);
+            return;
+        }
+        await prepareWorkerRoundHandoff(taskId);
+    }
+}
+
+async function continueWorkerRoundTask(taskId) {
+    state.selectedTaskId = taskId;
+    const result = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/continue`, {
+        method: "POST",
+        body: "{}"
+    });
+    await loadTasks();
+    state.selectedTaskId = taskId;
+    await loadSelectedTask(taskId, false);
+    await loadMessages(taskSessionId(selectedTask()) || state.selectedSessionId);
+    const requestId = result?.request_id || result?.requestId;
+    showToast(requestId ? `已继续执行回合: ${requestId}` : "已继续执行回合");
+}
+
+async function prepareWorkerRoundHandoff(taskId) {
+    state.selectedTaskId = taskId;
+    await loadSelectedTask(taskId, false);
+    setDetailsOpen(true);
+    if (dom.handoffWorker) {
+        dom.handoffWorker.focus();
+    }
+    showToast("已打开手动移交入口，请选择目标 worker 后确认");
 }
 
 async function onTaskActionClick(event) {
@@ -1327,6 +1372,11 @@ function renderMessageCard(message, options = {}) {
     if (taskId) {
         actions.push(
             `<button class="link-button" type="button" data-message-action="view-task" data-message-id="${escapeHtml(message.id)}">查看关联任务</button>`
+        );
+    }
+    for (const action of buildWorkerRoundActionPlan(messageView)) {
+        actions.push(
+            `<button class="link-button message-card__worker-action" type="button" data-message-action="${escapeHtml(action.action)}" data-message-id="${escapeHtml(message.id)}">${escapeHtml(action.label)}</button>`
         );
     }
     const classes = [
