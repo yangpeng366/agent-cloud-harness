@@ -856,7 +856,7 @@ metadata 合同：
 - 控制图落库时不得把 `partial_timeout` 的 human gate 写成已发生的 `auto_handoff_count / auto_handoff_target`；如存在候选 worker，只能记录为 `manual_handoff_candidate`，避免 Dialogue recovery 详情误报“已自动移交”。
 - Codex legacy `turn_aborted` 且已有部分输出时，executor 已保留 `provider_abort_reason`，并通过 artifact / worker_round projection 进入主消息流诊断 metadata。
 - Dialogue provider signal 已展示 `partial_timeout` 的 timeout kind 与 `partial_output_chars / partial_timeout_min_output_chars`，用于解释为什么该轮被归为 partial timeout。
-- `GET /api/v1/tasks/{id}/live_flow` 的 `runtime_cognition_surface.execution` 同步透出 `provider_abort_reason`、`partial_output_chars`、`partial_timeout_min_output_chars`，details/open 面板不用回退解析 artifact metadata。
+- `GET /api/v1/tasks/{id}/live_flow` 的 `runtime_cognition_surface.execution` 同步透出 `provider_timeout_kind`、`provider_abort_reason`、`partial_output_chars`、`partial_timeout_min_output_chars`，details/open 面板不用回退解析 artifact metadata。
 - 如果用户显式点“继续 Codex thread”，可带 `resume_provider_session_id/provider_thread_id` 继续。
 - 如果用户点“手动移交”，走现有 handoff 流，但 handoff packet 必须包含 partial output 摘要和 provider run 文件路径。
 
