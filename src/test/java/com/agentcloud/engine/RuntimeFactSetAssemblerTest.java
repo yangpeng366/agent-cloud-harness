@@ -262,6 +262,7 @@ class RuntimeFactSetAssemblerTest {
                     Map.entry("execution_status", "blocked"),
                     Map.entry("provider_turn_status", "cancelled"),
                     Map.entry("provider_abort_reason", "user_interrupted"),
+                    Map.entry("provider_timeout_kind", "max_duration"),
                     Map.entry("partial_output_chars", 640),
                     Map.entry("partial_timeout_min_output_chars", 200),
                     Map.entry("evidence_refs", List.of("tool:read_file:input.txt", "tool:write_file:draft.txt")),
@@ -354,6 +355,7 @@ class RuntimeFactSetAssemblerTest {
         assertEquals("blocked", facts.metadata().get("execution_status"));
         assertEquals("cancelled", facts.executionBoundary().metadata().get("provider_turn_status"));
         assertEquals("user_interrupted", facts.executionBoundary().metadata().get("provider_abort_reason"));
+        assertEquals("max_duration", facts.executionBoundary().metadata().get("provider_timeout_kind"));
         assertEquals(640, ((Number) facts.executionBoundary().metadata().get("partial_output_chars")).intValue());
         assertEquals(200, ((Number) facts.executionBoundary().metadata().get("partial_timeout_min_output_chars")).intValue());
         assertEquals(List.of("tool:read_file:input.txt", "tool:write_file:draft.txt"), facts.metadata().get("evidence_refs"));

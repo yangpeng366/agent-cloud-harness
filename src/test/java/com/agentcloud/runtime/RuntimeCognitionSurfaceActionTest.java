@@ -27,6 +27,7 @@ class RuntimeCognitionSurfaceActionTest {
             Map.ofEntries(
                 Map.entry("provider_turn_status", "cancelled"),
                 Map.entry("provider_abort_reason", "user_interrupted"),
+                Map.entry("provider_timeout_kind", "max_duration"),
                 Map.entry("partial_output_chars", 640),
                 Map.entry("partial_timeout_min_output_chars", 200),
                 Map.entry("proposed_actions", List.of(Map.of("action_type", "CHECKPOINT", "summary", "checkpoint now"))),
@@ -72,6 +73,7 @@ class RuntimeCognitionSurfaceActionTest {
         assertEquals(List.of("fan_out_risk"), surface.execution().riskFlags());
         assertEquals("cancelled", surface.execution().providerTurnStatus());
         assertEquals("user_interrupted", surface.execution().providerAbortReason());
+        assertEquals("max_duration", surface.execution().providerTimeoutKind());
         assertEquals(640, surface.execution().partialOutputChars());
         assertEquals(200, surface.execution().partialTimeoutMinOutputChars());
     }

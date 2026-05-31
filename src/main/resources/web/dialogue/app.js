@@ -24,6 +24,7 @@ import { buildToolTraceStatusLabel, buildToolTraceSummary } from "./tool-trace-p
 import { renderComposerInlineSignalsHtml } from "./composer-inline-render-plan.js";
 import { renderFacadeReplyBadgeHtml } from "./facade-reply-badge-render-plan.js";
 import { buildExecutionBoundaryFacts } from "./execution-boundary-plan.js";
+import { buildExecutionSurfaceSummaryPlan } from "./execution-surface-summary-plan.js";
 import { buildProviderRunFilePlan } from "./provider-run-file-plan.js";
 import { buildAgentActionPlan } from "./agent-action-plan.js";
 import { buildPendingFacadeReply } from "./facade-pending-plan.js";
@@ -4294,43 +4295,7 @@ function toolChainNarrative(flow, tools = []) {
 }
 
 function summarizeExecutionSurface(surface) {
-    if (!surface || Object.keys(surface).length === 0) {
-        return null;
-    }
-    const worker = firstNonBlank(surface.worker_id, surface.workerId);
-    const status = firstNonBlank(surface.execution_status, surface.executionStatus);
-    const promptMode = firstNonBlank(surface.prompt_mode, surface.promptMode);
-    const mountedRendered = booleanValue(surface.mounted_context_rendered, surface.mountedContextRendered);
-    const mountedRenderUsed = booleanValue(surface.mounted_render_used, surface.mountedRenderUsed);
-    const mountedInjected = booleanValue(surface.mounted_context_injected, surface.mountedContextInjected);
-    const panelCount = numericValue(surface.mounted_context_panel_count, surface.mountedContextPanelCount);
-    const nonEmptyPanelCount = numericValue(
-        surface.mounted_context_non_empty_panel_count,
-        surface.mountedContextNonEmptyPanelCount
-    );
-    const activeCount = numericValue(surface.mounted_active_count, surface.mountedActiveCount);
-    const evidenceCount = numericValue(surface.mounted_evidence_count, surface.mountedEvidenceCount);
-    const archiveCount = numericValue(surface.mounted_archive_count, surface.mountedArchiveCount);
-    const parts = [
-        worker ? `worker ${worker}` : null,
-        status ? humanizeToken(status) || status : null,
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedRenderUsed === true ? "mounted used" : null,
-        mountedRenderUsed === false ? "mounted unused" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
-        activeCount ? `${activeCount} active` : null,
-        evidenceCount ? `${evidenceCount} evidence` : null,
-        archiveCount ? `${archiveCount} archive` : null
-    ].filter(Boolean);
-    if (parts.length === 0) {
-        return null;
-    }
-    return { label: "execution", value: parts.join(" · ") };
+    return buildExecutionSurfaceSummaryPlan(surface);
 }
 
 function summarizeProviderRunFiles(surface) {

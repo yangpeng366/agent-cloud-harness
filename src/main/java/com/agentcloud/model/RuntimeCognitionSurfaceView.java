@@ -43,6 +43,7 @@ public record RuntimeCognitionSurfaceView(
         String providerError,
         String providerTurnStatus,
         String providerAbortReason,
+        String providerTimeoutKind,
         String providerFailureClass,
         String providerFailureReason,
         Boolean providerRetryable,

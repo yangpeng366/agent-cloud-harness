@@ -57,6 +57,7 @@ public class RuntimeCognitionSurfaceAssembler {
                 metadataString(executionMetadata, "provider_error"),
                 metadataString(executionMetadata, "provider_turn_status"),
                 metadataString(executionMetadata, "provider_abort_reason"),
+                metadataString(executionMetadata, "provider_timeout_kind"),
                 metadataString(executionMetadata, "provider_failure_class"),
                 metadataString(executionMetadata, "provider_failure_reason"),
                 metadataBoolean(executionMetadata, "provider_retryable", runtimeMetadata),
