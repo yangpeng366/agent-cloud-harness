@@ -2305,16 +2305,16 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`建议 · ${actionHint}`);
     }
     if (sameWorkerRetryCount && sameWorkerRetryCount > 0) {
-        recoveryParts.push(`retry ${sameWorkerRetryCount}`);
+        recoveryParts.push(`重试 ${sameWorkerRetryCount}`);
     }
     if (autoHandoffCount && autoHandoffCount > 0) {
         recoveryParts.push(
             handoffTarget
-                ? `handoff ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
-                : `handoff ${autoHandoffCount}`
+                ? `移交 ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
+                : `移交 ${autoHandoffCount}`
         );
     } else if (manualHandoffCandidate) {
-        recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
+        recoveryParts.push(`建议移交 -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
         recoveryParts.push("恢复 · fresh session");

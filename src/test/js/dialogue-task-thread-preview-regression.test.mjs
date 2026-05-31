@@ -209,16 +209,16 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`建议 · ${actionHint}`);
     }
     if (sameWorkerRetryCount && sameWorkerRetryCount > 0) {
-        recoveryParts.push(`retry ${sameWorkerRetryCount}`);
+        recoveryParts.push(`重试 ${sameWorkerRetryCount}`);
     }
     if (autoHandoffCount && autoHandoffCount > 0) {
         recoveryParts.push(
             handoffTarget
-                ? `handoff ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
-                : `handoff ${autoHandoffCount}`
+                ? `移交 ${autoHandoffCount} -> ${preview(handoffTarget, compact ? 12 : 18)}`
+                : `移交 ${autoHandoffCount}`
         );
     } else if (manualHandoffCandidate) {
-        recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
+        recoveryParts.push(`建议移交 -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
         recoveryParts.push("恢复 · fresh session");
@@ -1003,6 +1003,10 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(compactPreview.includes("恢复状态"), false);
     assert.equal(pinned.detail.includes("等待人工确认"), true);
     assert.equal(pinned.detail.includes("临时运行失败"), true);
+    assert.equal(pinned.detail.includes("重试 1"), true);
+    assert.equal(pinned.detail.includes("移交 1 -> deepseek"), true);
+    assert.equal(pinned.detail.includes("retry 1"), false);
+    assert.equal(pinned.detail.includes("handoff 1"), false);
     assert.equal(pinned.detail.includes("failure ·"), false);
     assert.equal(pinned.detail.includes("recovery ·"), false);
 });
@@ -1054,7 +1058,8 @@ test("human gate recovery detail explains next action for partial-result risk", 
     assert.equal(detail.includes("等待人工确认"), true);
     assert.equal(detail.includes("先复核已有结果"), true);
     assert.equal(detail.includes("建议 · 先复核已有结果"), true);
-    assert.equal(detail.includes("manual handoff candidate -> deepseek"), true);
+    assert.equal(detail.includes("建议移交 -> deepseek"), true);
+    assert.equal(detail.includes("manual handoff candidate -> deepseek"), false);
     assert.equal(detail.includes("handoff 1"), false);
     assert.equal(detail.includes("partial_result_or_quality_risk"), false);
     assert.equal(detail.includes("human_gate_required"), false);
