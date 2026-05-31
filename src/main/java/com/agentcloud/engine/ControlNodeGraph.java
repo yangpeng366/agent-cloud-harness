@@ -3910,6 +3910,9 @@ public class ControlNodeGraph {
         }
         String assignedWorker = blankToNull(task.assignedWorker());
         String metadataAssignedWorker = blankToNull(metadataString(task.metadata(), "assigned_worker"));
+        if (assignedWorker == null && metadataAssignedWorker != null) {
+            return task.withAssignedWorker(metadataAssignedWorker);
+        }
         if (Objects.equals(assignedWorker, metadataAssignedWorker)) {
             return task;
         }
