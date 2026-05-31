@@ -194,6 +194,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 选中 active task 时，如果 `live_flow.route_preview` / `provider_selection` 已经给出当前 route worker，第一页就必须能直接看见 `正在执行: <worker>`；不能只在 route drawer 或 modal 深处才能找到
 - 如果 `live_flow.route_preview.recovery_unpinned_recommendation.provider_deprioritized=true`，第一页 route box 也必须直接解释“恢复阶段会优先避开 <provider>`；不能要求用户只看 raw JSON 或 live_flow 才知道恢复避让原因
 - 当前 route box plan 已把 provider recovery 避让提升为 `primaryRecoveryNote`，首屏直接渲染“恢复阶段会优先避开 <provider>”与人话原因；drawer 只保留补充 chips / candidate / timeline。
+- route drawer 的诊断 chips 也已在 plan 层人话化：`mode: / hint: / learning: / route/execution` 会显示为 `模式：/ 偏好：/ 学习记忆：/ 路由/执行：`，避免 drawer 继续像 raw router trace。
 - task thread 里的 `Harness` bubble 应优先显示最近一条 `task_progress / task_result` 的叙述性内容与结果预览；如果后端已经有这类消息而 bubble 仍只剩 `failed / done` 这类单词，应直接判定为 **task-thread outcome preview seam**
 - 对当前选中的 active task，如果 `live_flow.related_messages` 或 `session messages` 里已经存在更完整的最近一轮 `task_progress / task_result.content`，主气泡正文必须优先消费这条 outcome message；`runtime_context.active_context.continuity_summary` 只能作为次级兜底，不能用一个 terse `failed / done` 覆盖真实结果正文
 - 对失败态 task，如果最新 worker artifact 的 `output_text / artifact_content` 为空，但 `failure_summary_readable` 已存在，`task_progress / task_result.full_content` 必须回退到这条可读失败摘要；展开结果不应只剩 `failed / Worker Output / Artifact Content` 这种空壳
