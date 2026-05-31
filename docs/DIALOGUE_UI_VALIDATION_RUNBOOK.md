@@ -115,7 +115,7 @@
 - 构造一个 failed task fixture
 - 在真实 `/dialogue/` 或 `/console/` 页面点击恢复入口
 - 断言浏览器请求走 `POST /api/v1/tasks/{id}/recover?async=true`
-- 断言详情区能看到 `Recovery Job`、`request_id` 和恢复 action/mode
+- 断言详情区能看到 `恢复任务`、请求 id 和恢复 action/mode 的中文摘要
 
 不负责：
 
@@ -266,7 +266,7 @@ node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:18386 --surf
 
 - report 中 `async_recover_request=true`
 - report 中 `recovery_job_visible=true`
-- 页面详情区能看到 `Recovery Job` 与 request id
+- 页面详情区能看到 `恢复任务` 与请求 id
 
 如果这一步失败，应优先判断：
 
