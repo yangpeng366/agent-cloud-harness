@@ -52,6 +52,24 @@ function humanizeRouteChip(value) {
     if (text === "recovery: fresh session") {
         return "恢复：新会话";
     }
+    if (text.startsWith("mode: ")) {
+        return `模式：${text.slice("mode: ".length)}`;
+    }
+    if (text.startsWith("hint: ")) {
+        return `偏好：${text.slice("hint: ".length)}`;
+    }
+    if (text === "learning: applied") {
+        return "学习记忆：已应用";
+    }
+    if (text === "learning: observed, not applied") {
+        return "学习记忆：已观察未应用";
+    }
+    if (text === "route/execution aligned") {
+        return "路由/执行：一致";
+    }
+    if (text === "route/execution diverged") {
+        return "路由/执行：不一致";
+    }
     return text;
 }
 

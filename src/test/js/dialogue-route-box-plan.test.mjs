@@ -16,8 +16,29 @@ test("route box plan keeps worker/source/reason primary and pushes extra context
     assert.equal(plan.worker, "codex");
     assert.equal(plan.routeSource, "task_pinned");
     assert.equal(plan.routeReason, "task pinned worker still satisfies current route constraints");
+    assert.deepEqual(plan.routeChips, ["模式：strong only", "学习记忆：已应用"]);
     assert.equal(plan.hasDrawer, true);
     assert.equal(plan.drawerSummary, "展开 route 细节 · 3 组补充 / 2 条 timeline");
+});
+
+test("route box plan humanizes route diagnostic chips", () => {
+    const plan = buildRouteBoxPlan({
+        selectedWorker: "codex",
+        routeSource: "router",
+        routeChips: [
+            "mode: orchestrated",
+            "hint: codex",
+            "learning: observed, not applied",
+            "route/execution diverged"
+        ]
+    });
+
+    assert.deepEqual(plan.routeChips, [
+        "模式：orchestrated",
+        "偏好：codex",
+        "学习记忆：已观察未应用",
+        "路由/执行：不一致"
+    ]);
 });
 
 test("route box plan omits drawer when no secondary route details exist", () => {
