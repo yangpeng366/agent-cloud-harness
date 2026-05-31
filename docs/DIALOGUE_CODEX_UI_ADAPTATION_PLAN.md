@@ -324,6 +324,7 @@ header 只保留：
 - Dialogue façade 反馈 helper 已将 `worker_round` 分类成“执行回合已更新”，toast / inline / latest badge 不再落回“任务已发布”。
 - `partial_timeout` 的“继续 Codex thread”入口已从普通 `POST /continue` 升级为携带 `continue_mode=provider_thread`、`provider_thread_id`、`resume_provider_session_id` 和来源 `worker_round` message id 的 provider continuation 请求；服务端会在进入控制图前把这些字段写回 task metadata。
 - `partial_timeout` 进入 human gate 时，Dialogue recovery 详情只展示 `manual_handoff_candidate`，不会把可选移交候选误显示成已执行的 `auto_handoff_count / auto_handoff_target`。
+- `worker_round` 投影与历史 backfill 已统一保留 `provider_prompt_path / provider_event_log_path / provider_last_message_path / provider_stdout_path / provider_run_metadata_path`，主 transcript 与 details provider-run 预览入口使用同一组 run file metadata。
 - 真实回归样本 `session_45e4fe12b765435d / task_e59573c1306e4e74` 已验证：session 主消息流返回 `worker_round=4`，其中 Codex 回合 `codex_worker_round=2`，且 `full_trace_messages=0`。
 
 ### 3.5 Inspector 继续当 secondary surface
