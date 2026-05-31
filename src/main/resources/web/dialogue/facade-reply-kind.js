@@ -32,6 +32,16 @@ export function classifyFacadeReply(input) {
             toastVerb: "任务已推进"
         };
     }
+    if (normalized.replyType === "worker_round" || normalized.replySource === "worker_round") {
+        return {
+            category: "worker_round",
+            toneClass: "signal--active",
+            badgeTone: "active",
+            badgeText: "latest round",
+            inlineVerb: "执行回合已更新",
+            toastVerb: "执行回合已更新"
+        };
+    }
     if (normalized.replyType === "task_receipt" || normalized.replySource === "task_receipt") {
         return {
             category: "receipt",

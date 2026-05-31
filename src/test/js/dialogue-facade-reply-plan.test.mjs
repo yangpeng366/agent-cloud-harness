@@ -54,6 +54,25 @@ test("task result reply surfaces terminal wording", () => {
     assert.equal(feedback.inlineText, "最近回执：任务已完成，当前 done。");
 });
 
+test("worker round reply surfaces execution round wording", () => {
+    const feedback = buildFacadeReplyFeedback({
+        resolvedMode: "task",
+        replyType: "worker_round",
+        replySource: "worker_round",
+        sessionId: "session_1",
+        taskId: "task_round",
+        taskStatus: "active"
+    });
+
+    assert.equal(feedback.category, "worker_round");
+    assert.equal(feedback.replyType, "worker_round");
+    assert.equal(feedback.replySource, "worker_round");
+    assert.equal(feedback.sessionId, "session_1");
+    assert.equal(feedback.taskId, "task_round");
+    assert.equal(feedback.toastText, "执行回合已更新：task_round · active");
+    assert.equal(feedback.inlineText, "最近回执：执行回合已更新，当前 active。");
+});
+
 test("scoped façade reply only survives matching session and task", () => {
     const reply = buildFacadeReplyFeedback({
         resolvedMode: "task",

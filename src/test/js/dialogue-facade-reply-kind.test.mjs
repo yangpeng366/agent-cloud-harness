@@ -61,3 +61,18 @@ test("facade reply kind keeps terminal task result affordance aligned", () => {
     assert.equal(result.inlineVerb, "任务已完成");
     assert.equal(result.toastVerb, "任务已完成");
 });
+
+test("facade reply kind preserves worker round affordance", () => {
+    const round = classifyFacadeReply({
+        resolvedMode: "task",
+        replyType: "worker_round",
+        replySource: "worker_round"
+    });
+
+    assert.equal(round.category, "worker_round");
+    assert.equal(round.toneClass, "signal--active");
+    assert.equal(round.badgeTone, "active");
+    assert.equal(round.badgeText, "latest round");
+    assert.equal(round.inlineVerb, "执行回合已更新");
+    assert.equal(round.toastVerb, "执行回合已更新");
+});
