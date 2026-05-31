@@ -2295,14 +2295,14 @@ function messageCardRecoveryDetail(metadata, compact = false) {
     );
     const recoveryParts = [];
     if (failureClass) {
-        recoveryParts.push(`failure · ${failureClass}`);
+        recoveryParts.push(`失败 · ${failureClass}`);
     }
     if (recoveryStage) {
-        recoveryParts.push(`recovery · ${recoveryStage}`);
+        recoveryParts.push(`恢复 · ${recoveryStage}`);
     }
     const actionHint = recoveryActionHint(failureClass, recoveryStage);
     if (actionHint) {
-        recoveryParts.push(`hint · ${actionHint}`);
+        recoveryParts.push(`建议 · ${actionHint}`);
     }
     if (sameWorkerRetryCount && sameWorkerRetryCount > 0) {
         recoveryParts.push(`retry ${sameWorkerRetryCount}`);
@@ -2317,7 +2317,7 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
-        recoveryParts.push("recovery · fresh session");
+        recoveryParts.push("恢复 · fresh session");
     }
     return recoveryParts.length > 0 ? recoveryParts.join("  ") : "";
 }

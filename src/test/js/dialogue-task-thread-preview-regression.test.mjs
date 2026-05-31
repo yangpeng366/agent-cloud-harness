@@ -199,14 +199,14 @@ function messageCardRecoveryDetail(metadata, compact = false) {
     );
     const recoveryParts = [];
     if (failureClass) {
-        recoveryParts.push(`failure · ${failureClass}`);
+        recoveryParts.push(`失败 · ${failureClass}`);
     }
     if (recoveryStage) {
-        recoveryParts.push(`recovery · ${recoveryStage}`);
+        recoveryParts.push(`恢复 · ${recoveryStage}`);
     }
     const actionHint = recoveryActionHint(failureClass, recoveryStage);
     if (actionHint) {
-        recoveryParts.push(`hint · ${actionHint}`);
+        recoveryParts.push(`建议 · ${actionHint}`);
     }
     if (sameWorkerRetryCount && sameWorkerRetryCount > 0) {
         recoveryParts.push(`retry ${sameWorkerRetryCount}`);
@@ -221,7 +221,7 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`manual handoff candidate -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
-        recoveryParts.push("recovery · fresh session");
+        recoveryParts.push("恢复 · fresh session");
     }
     return recoveryParts.length > 0 ? recoveryParts.join("  ") : "";
 }
@@ -1003,6 +1003,8 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(compactPreview.includes("恢复状态"), false);
     assert.equal(pinned.detail.includes("等待人工确认"), true);
     assert.equal(pinned.detail.includes("临时运行失败"), true);
+    assert.equal(pinned.detail.includes("failure ·"), false);
+    assert.equal(pinned.detail.includes("recovery ·"), false);
 });
 
 test("active worker label prefers current assigned worker over provider name after auto handoff", () => {
@@ -1051,8 +1053,11 @@ test("human gate recovery detail explains next action for partial-result risk", 
     assert.equal(detail.includes("部分结果待确认"), true);
     assert.equal(detail.includes("等待人工确认"), true);
     assert.equal(detail.includes("先复核已有结果"), true);
+    assert.equal(detail.includes("建议 · 先复核已有结果"), true);
     assert.equal(detail.includes("manual handoff candidate -> deepseek"), true);
     assert.equal(detail.includes("handoff 1"), false);
+    assert.equal(detail.includes("partial_result_or_quality_risk"), false);
+    assert.equal(detail.includes("human_gate_required"), false);
 });
 
 
@@ -1065,6 +1070,7 @@ test("human gate recovery detail explains environment fix path for environment-b
     assert.equal(detail.includes("环境阻塞"), true);
     assert.equal(detail.includes("等待人工确认"), true);
     assert.equal(detail.includes("先修环境后继续"), true);
+    assert.equal(detail.includes("建议 · 先修环境后继续"), true);
 });
 
 test("cold-start recovery detail shows fresh session hint", () => {
@@ -1075,5 +1081,5 @@ test("cold-start recovery detail shows fresh session hint", () => {
     }, true);
 
     assert.equal(detail.includes("自动切换 worker"), true);
-    assert.equal(detail.includes("fresh session"), true);
+    assert.equal(detail.includes("恢复 · fresh session"), true);
 });
