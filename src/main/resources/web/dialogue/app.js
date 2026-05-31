@@ -27,6 +27,7 @@ import { renderFacadeReplyBadgeHtml } from "./facade-reply-badge-render-plan.js"
 import { buildExecutionBoundaryFacts } from "./execution-boundary-plan.js";
 import { buildExecutionSurfaceSummaryPlan } from "./execution-surface-summary-plan.js";
 import { buildProviderRunFilePlan } from "./provider-run-file-plan.js";
+import { formatProviderRunFilePreview, formatProviderRunFilePreviewError } from "./provider-run-file-preview-plan.js";
 import { buildAgentActionPlan } from "./agent-action-plan.js";
 import { buildPendingFacadeReply } from "./facade-pending-plan.js";
 import { buildPendingAutoTaskTracker, resolvePendingAutoTaskCandidate } from "./pending-auto-task-plan.js";
@@ -5354,13 +5355,10 @@ async function onProviderRunFileClick(event) {
     previewBox.textContent = "读取中...";
     try {
         const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?kind=${encodeURIComponent(kind)}`);
-        const meta = [
-            file.kind || kind,
-            file.path,
-            file.size_bytes || file.sizeBytes ? `${file.size_bytes || file.sizeBytes} bytes` : null,
-            file.truncated ? `truncated at ${file.limit_bytes || file.limitBytes || "limit"} bytes` : null
-        ].filter(Boolean).join(" · ");
-        previewBox.textContent = [meta, file.content || ""].filter(Boolean).join("\n\n");
+        previewBox.textContent = formatProviderRunFilePreview(file, kind);
+    } catch (error) {
+        previewBox.textContent = formatProviderRunFilePreviewError(error, kind);
+        throw error;
     } finally {
         button.disabled = false;
     }
