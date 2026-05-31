@@ -228,6 +228,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 如果后端已经把失败细分成 `worker_runtime_transient / task_environment_blocked / worker_backend_deterministic / partial_result_or_quality_risk`，第一页至少要直接露出这条 `failure_class`；否则用户只能看到“auto handoff / human_gate”，但看不出为什么系统会做这个决定
 - 但第一页也不该直接把这些恢复信号按原始枚举串裸露出来；像 `worker_runtime_transient / human_gate_required` 这种 token 只适合留在 API / live_flow / details，主视图更合理的行为是显示成短的人话标签，例如“临时运行失败 / 等待人工确认”
 - 当前 `selectedStatus` focus line 已在 `human_gate_required` 时追加人话 failure class，例如 `human gate · 部分结果待确认 / 能力不匹配`；`dialogue-task-focus-line-plan.test.mjs` 覆盖不裸露 `worker_backend_deterministic` 原始枚举。
+- 当前主卡 / pinned / thread 的 recovery detail 也已把首屏标签从 `failure · / recovery · / hint ·` 收成 `失败 · / 恢复 · / 建议 ·`，保留短信号但减少 control-plane 英文标签外露；`dialogue-task-thread-preview-regression.test.mjs` 覆盖不回退到旧标签。
 - 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
 - richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；`/favicon.ico` 已通过 HTML data icon 与服务端 `204 No Content` 收口，后续新增稳定 `404` 应按回归处理
 - 真实页首屏还应避免“先闪旧态再收敛”：如果 hash 已经带了 `task=...`，第一页不应先短暂显示 `selectedStatus=idle`、主卡正文=`failed`，几秒后才回到正确 worker/result；首轮加载应尽量先拿到 selected task 的 `live_flow` 再渲染主聊天流
