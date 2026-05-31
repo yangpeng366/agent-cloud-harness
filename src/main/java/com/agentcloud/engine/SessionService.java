@@ -413,6 +413,7 @@ public class SessionService {
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_prompt_path");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_event_log_path");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_last_message_path");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_stdout_path");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_metadata_path");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output_chars");

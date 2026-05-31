@@ -166,6 +166,7 @@ class SessionServiceMessageTest {
                     "provider_protocol_trace", List.of("thread/started", "turn/started", "item/agentMessage/delta"),
                     "latest_worker_metadata", Map.of(
                         "execution_backend", "provider_app_server",
+                        "provider_stdout_path", "D:\\tmp\\provider-runs\\codex\\task-backfill\\stdout.log",
                         "provider_timeout_kind", "activity_timeout",
                         "provider_abort_reason", "user_interrupted",
                         "provider_activity_timeout_ms", 180_000,
@@ -187,6 +188,7 @@ class SessionServiceMessageTest {
             assertEquals("worker_round_backfill_projection", workerRound.metadata().get("created_via"));
             assertEquals("codex", workerRound.metadata().get("provider_id"));
             assertEquals("provider_app_server", workerRound.metadata().get("execution_backend"));
+            assertEquals("D:\\tmp\\provider-runs\\codex\\task-backfill\\stdout.log", workerRound.metadata().get("provider_stdout_path"));
             assertEquals("activity_timeout", workerRound.metadata().get("provider_timeout_kind"));
             assertEquals("user_interrupted", workerRound.metadata().get("provider_abort_reason"));
             assertEquals(180_000, ((Number) workerRound.metadata().get("provider_activity_timeout_ms")).intValue());
