@@ -226,6 +226,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
 - richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；`/favicon.ico` 已通过 HTML data icon 与服务端 `204 No Content` 收口，后续新增稳定 `404` 应按回归处理
 - 真实页首屏还应避免“先闪旧态再收敛”：如果 hash 已经带了 `task=...`，第一页不应先短暂显示 `selectedStatus=idle`、主卡正文=`failed`，几秒后才回到正确 worker/result；首轮加载应尽量先拿到 selected task 的 `live_flow` 再渲染主聊天流
+- 当前已对带 `task=` 的 refresh 顺序做静态回归：先加载 session messages 但抑制 eager render，再由 `loadSelectedTask()` 拿到 `live_flow` 后统一渲染 message summary / pinned latest round output，避免首屏先闪旧 `failed/idle`。
 
 ### Step C：再跑 light business smoke
 
