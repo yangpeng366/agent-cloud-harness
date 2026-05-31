@@ -317,6 +317,7 @@ header 只保留：
 - `SessionService.listMessages(session, task_id)` 已补历史回填：当旧任务已有 `worker_output/worker_round` artifact 但缺少 `worker_round` session message 时，读取消息流会按 `artifact_id` 去重补投影，保证旧 Codex/DeepSeek 回合也进入主 transcript。
 - `SessionService.listMessages(session)` 的无 task 过滤主消息流也已补同一套历史回填，避免 `/dialogue/` 首屏只调用 `GET /api/v1/sessions/{id}/messages?limit=...` 时漏掉 Codex worker round。
 - `worker_round` session message 已做 protocol trace payload 收敛：主消息流只保留 `provider_protocol_trace_count` 与最多 20 条 `provider_protocol_trace_preview`，完整 `provider_protocol_trace` 仍留在 worker artifact / live flow / provider run 文件里，避免 transcript 首屏 payload 膨胀。
+- `task_progress / task_result` 的 provider diagnostics 也已采用同一套 trace 摘要策略，避免 assistant lifecycle 回执绕过 `worker_round` 的 payload 收敛约束。
 - 真实回归样本 `session_45e4fe12b765435d / task_e59573c1306e4e74` 已验证：session 主消息流返回 `worker_round=4`，其中 Codex 回合 `codex_worker_round=2`，且 `full_trace_messages=0`。
 
 ### 3.5 Inspector 继续当 secondary surface
