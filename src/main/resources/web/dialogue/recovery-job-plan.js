@@ -49,21 +49,21 @@ export function buildRecoveryJobPlan(jobs, options = {}) {
         status,
         tone: toneForJobStatus(status),
         requestId,
-        summary: `${status} / ${action}`,
+        summary: `${humanizeJobStatus(status)} / ${humanizeRecoveryAction(action)}`,
         cards: [
-            { label: "Recovery Job", value: status },
-            { label: "Request", value: requestId },
-            { label: "Action", value: action },
-            { label: "Mode", value: executionMode || "auto" },
-            failureEvidence ? { label: "Failure Evidence", value: failureEvidence } : null
+            { label: "恢复任务", value: humanizeJobStatus(status) },
+            { label: "请求", value: requestId },
+            { label: "动作", value: humanizeRecoveryAction(action) },
+            { label: "模式", value: humanizeExecutionMode(executionMode || "auto") },
+            failureEvidence ? { label: "失败证据", value: failureEvidence } : null
         ].filter(Boolean),
         chips: [
             targetWorker ? `worker ${targetWorker}` : "",
-            failureClass ? `failure ${failureClass}` : "",
-            failureEvidence ? `evidence ${preview(failureEvidence, 48)}` : "",
-            acceptedAt ? `accepted ${formatTime(acceptedAt)}` : "",
-            startedAt ? `started ${formatTime(startedAt)}` : "",
-            completedAt ? `completed ${formatTime(completedAt)}` : ""
+            failureClass ? `失败 ${humanizeFailureClass(failureClass)}` : "",
+            failureEvidence ? `证据 ${preview(failureEvidence, 48)}` : "",
+            acceptedAt ? `受理 ${formatTime(acceptedAt)}` : "",
+            startedAt ? `开始 ${formatTime(startedAt)}` : "",
+            completedAt ? `完成 ${formatTime(completedAt)}` : ""
         ].filter(Boolean),
         failureEvidence,
         failureEvidenceSource,
@@ -112,4 +112,78 @@ function toneForJobStatus(status) {
         default:
             return "default";
     }
+}
+
+function humanizeJobStatus(status) {
+    switch (String(status || "").toLowerCase()) {
+        case "running":
+            return "运行中";
+        case "accepted":
+            return "已受理";
+        case "succeeded":
+        case "success":
+        case "completed":
+            return "已完成";
+        case "failed":
+        case "error":
+            return "失败";
+        case "interrupted":
+            return "需人工确认";
+        default:
+            return humanizeToken(status);
+    }
+}
+
+function humanizeRecoveryAction(action) {
+    switch (String(action || "").toLowerCase()) {
+        case "fresh_session_resume":
+            return "新会话恢复";
+        case "handoff":
+            return "移交";
+        case "auto_handoff":
+            return "自动移交";
+        case "provider_thread_resume":
+            return "继续 provider thread";
+        case "resume":
+            return "继续执行";
+        case "recover":
+            return "自动恢复";
+        default:
+            return humanizeToken(action);
+    }
+}
+
+function humanizeExecutionMode(mode) {
+    switch (String(mode || "").toLowerCase()) {
+        case "fresh_session":
+            return "新会话";
+        case "provider_thread":
+            return "原 provider thread";
+        case "auto":
+            return "自动";
+        default:
+            return humanizeToken(mode);
+    }
+}
+
+function humanizeFailureClass(failureClass) {
+    switch (String(failureClass || "").toLowerCase()) {
+        case "provider_runtime_transient":
+        case "worker_runtime_transient":
+            return "临时运行失败";
+        case "task_environment_blocked":
+            return "环境阻塞";
+        case "worker_backend_deterministic":
+            return "能力不匹配";
+        case "partial_result_or_quality_risk":
+            return "部分结果待确认";
+        default:
+            return humanizeToken(failureClass);
+    }
+}
+
+function humanizeToken(value) {
+    return String(value || "")
+        .replace(/[_-]+/g, " ")
+        .trim() || "未知";
 }

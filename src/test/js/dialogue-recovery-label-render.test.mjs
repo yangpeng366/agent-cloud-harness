@@ -32,3 +32,9 @@ test("dialogue provider run file labels stay operator readable", () => {
     assert.doesNotMatch(appJs, /\{ label: "run files", value: paths\.join/);
     assert.doesNotMatch(appJs, /\["last message", metadata\.provider_last_message_path/);
 });
+
+test("dialogue recovery job panel renders operator labels", () => {
+    assert.match(appJs, />恢复任务</);
+    assert.match(appJs, /请求 \$\{escapeHtml\(plan\.requestId\)\}/);
+    assert.doesNotMatch(appJs, />Recovery Job</);
+});

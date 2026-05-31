@@ -2385,9 +2385,9 @@ function renderRecoveryJobPanel(plan) {
     }
     return `
         <div class="overview-card overview-card--wide">
-            <span>Recovery Job</span>
+            <span>恢复任务</span>
             <strong>${escapeHtml(plan.summary)}</strong>
-            <small class="message__hint mono">${escapeHtml(plan.requestId)}</small>
+            <small class="message__hint mono">请求 ${escapeHtml(plan.requestId)}</small>
             ${plan.chips.length > 0 ? `
                 <div class="dialogue-task__signals">
                     ${plan.chips.map((chip) => `<span class="signal">${escapeHtml(chip)}</span>`).join("")}

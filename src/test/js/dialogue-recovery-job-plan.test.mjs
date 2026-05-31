@@ -26,12 +26,13 @@ test("recovery job plan summarizes latest async recovery job", () => {
     assert.equal(plan.status, "running");
     assert.equal(plan.tone, "active");
     assert.equal(plan.requestId, "recovery_123");
-    assert.deepEqual(plan.cards.map((item) => item.label), ["Recovery Job", "Request", "Action", "Mode"]);
-    assert.equal(plan.cards[3].value, "fresh_session");
+    assert.equal(plan.summary, "运行中 / 新会话恢复");
+    assert.deepEqual(plan.cards.map((item) => item.label), ["恢复任务", "请求", "动作", "模式"]);
+    assert.equal(plan.cards[3].value, "新会话");
     assert.deepEqual(plan.chips, [
         "worker codex",
-        "failure provider_runtime_transient",
-        "accepted 05/17 18:00"
+        "失败 临时运行失败",
+        "受理 05/17 18:00"
     ]);
 });
 
@@ -59,13 +60,13 @@ test("recovery job plan surfaces async handoff target", () => {
 
     assert.equal(plan.visible, true);
     assert.equal(plan.tone, "done");
-    assert.equal(plan.summary, "succeeded / handoff");
-    assert.deepEqual(plan.cards.find((item) => item.label === "Action"), {
-        label: "Action",
-        value: "handoff"
+    assert.equal(plan.summary, "已完成 / 移交");
+    assert.deepEqual(plan.cards.find((item) => item.label === "动作"), {
+        label: "动作",
+        value: "移交"
     });
     assert.equal(plan.chips.includes("worker claude"), true);
-    assert.equal(plan.chips.includes("failure provider_runtime_transient"), true);
+    assert.equal(plan.chips.includes("失败 临时运行失败"), true);
 });
 
 test("recovery job plan surfaces provider failure evidence", () => {
@@ -83,11 +84,11 @@ test("recovery job plan surfaces provider failure evidence", () => {
     assert.equal(plan.visible, true);
     assert.equal(plan.failureEvidence, "codex turn completion timed out");
     assert.equal(plan.failureEvidenceSource, "agent_run.metadata.provider_error");
-    assert.deepEqual(plan.cards.find((item) => item.label === "Failure Evidence"), {
-        label: "Failure Evidence",
+    assert.deepEqual(plan.cards.find((item) => item.label === "失败证据"), {
+        label: "失败证据",
         value: "codex turn completion timed out"
     });
-    assert.equal(plan.chips.includes("evidence codex turn completion timed out"), true);
+    assert.equal(plan.chips.includes("证据 codex turn completion timed out"), true);
 });
 
 test("recovery job plan marks interrupted jobs as manual attention", () => {
@@ -105,5 +106,6 @@ test("recovery job plan marks interrupted jobs as manual attention", () => {
     assert.equal(plan.status, "interrupted");
     assert.equal(plan.tone, "manual");
     assert.equal(plan.error, "harness restarted before async recovery completed");
-    assert.equal(plan.chips.includes("completed 05/17 18:30"), true);
+    assert.equal(plan.summary, "需人工确认 / 继续执行");
+    assert.equal(plan.chips.includes("完成 05/17 18:30"), true);
 });

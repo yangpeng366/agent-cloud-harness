@@ -195,7 +195,7 @@ async function clickRecover(page) {
     await page.waitForFunction(() => {
       const overview = document.querySelector('#taskOverview');
       return overview
-        && overview.textContent.includes('Recovery Job')
+        && overview.textContent.includes('恢复任务')
         && overview.textContent.includes('recovery_probe_request');
     }, { timeout: 30000 });
     waits.recoveryJobVisible = true;
@@ -256,9 +256,9 @@ async function main() {
     const checks = {
       async_recover_request: observed.recoveries.some((entry) => entry.url.includes('recover?async=true')),
       request_body_mode_auto: observed.recoveries.some((entry) => String(entry.body || '').includes('"mode":"auto"')),
-      recovery_job_visible: observed.overviewText.includes('Recovery Job'),
+      recovery_job_visible: observed.overviewText.includes('恢复任务'),
       request_id_visible: observed.overviewText.includes(requestId),
-      running_status_visible: observed.overviewText.includes('running')
+      running_status_visible: observed.overviewText.includes('运行中')
     };
     const report = {
       base_url: args.baseUrl,
