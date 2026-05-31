@@ -314,6 +314,8 @@ header 只保留：
 - Codex app-server executor 已改为活动超时 + 最大硬上限，并在有输出的超时场景标记 `partial_timeout`。
 - Dialogue 主 transcript 已支持 `worker_round` 卡片、provider run 路径摘要、`partial_timeout` 的“部分结果”文案。
 - `partial_timeout` worker round 卡片已提供“继续 Codex thread”和“手动移交”入口：继续入口触发当前 task 的 `POST /continue`，移交入口打开 details 的 handoff 控件。
+- `SessionService.listMessages(session, task_id)` 已补历史回填：当旧任务已有 `worker_output/worker_round` artifact 但缺少 `worker_round` session message 时，读取消息流会按 `artifact_id` 去重补投影，保证旧 Codex/DeepSeek 回合也进入主 transcript。
+- 真实回归样本 `session_45e4fe12b765435d / task_e59573c1306e4e74` 已验证：消息流返回 `worker_round=4`，其中 Codex 回合 `codex_worker_round=2`。
 
 ### 3.5 Inspector 继续当 secondary surface
 

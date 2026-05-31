@@ -48,6 +48,23 @@ test("provider diagnostics surface before route in message signals", () => {
     assert.equal(plan.texts[0], "provider · codex turn completion timed…");
 });
 
+test("backfilled worker round diagnostics remain visible in transcript signals", () => {
+    const plan = buildMessageSignalPlan({
+        created_via: "worker_round_backfill_projection",
+        provider_id: "codex",
+        provider_failure_reason: "codex turn completion timed out",
+        provider_timeout_kind: "activity_timeout",
+        selected_worker: "codex",
+        execution_status: "timeout"
+    });
+
+    assert.deepEqual(
+        plan.entries.map((entry) => entry.label),
+        ["provider", "route"]
+    );
+    assert.equal(plan.texts[0], "provider · codex turn completion timed…");
+});
+
 test("related-message plan keeps richer context including route and tools", () => {
     const plan = buildMessageSignalPlan({
         trigger: "continue",
