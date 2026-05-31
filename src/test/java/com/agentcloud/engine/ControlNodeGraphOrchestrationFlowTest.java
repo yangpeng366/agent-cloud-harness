@@ -1528,6 +1528,130 @@ class ControlNodeGraphOrchestrationFlowTest {
     }
 
     @Test
+    void partialTimeoutProviderRoundStopsAtHumanGateInsteadOfAutoContinuing() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("partial-timeout-human-gate.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+            SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
+
+            sessionDao.insert(Session.create("session_partial_timeout_gate", "partial timeout gate", "active"));
+
+            WorkerRegistry workerRegistry = new WorkerRegistry();
+            workerRegistry.register(new Worker(
+                "codex-app",
+                "codex",
+                List.of("coding"),
+                List.of(),
+                List.of(tempDir.toString()),
+                Map.of(),
+                Map.of("model_tier", "strong", "execution_backend", "provider_app_server"),
+                false,
+                true
+            ));
+            WorkerRouter router = new WorkerRouter(workerRegistry);
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+            SequencedWorkerExecutor workerExecutor = new SequencedWorkerExecutor(
+                null,
+                List.of(
+                    new WorkerExecutionResult(
+                        "Codex produced partial implementation notes before max duration.",
+                        "Partial result is useful, but final verification is still pending.",
+                        false,
+                        "",
+                        "",
+                        "continue the same codex thread and finish verification",
+                        "medium",
+                        "partial_timeout",
+                        List.of(),
+                        List.of("finish verification"),
+                        0,
+                        900_000L,
+                        Map.ofEntries(
+                            Map.entry("provider_id", "codex"),
+                            Map.entry("execution_backend", "provider_app_server"),
+                            Map.entry("provider_session_id", "thread-partial-timeout-001"),
+                            Map.entry("provider_thread_id", "thread-partial-timeout-001"),
+                            Map.entry("provider_output_parser", "codex_json_rpc"),
+                            Map.entry("provider_turn_status", "partial_timeout"),
+                            Map.entry("provider_timeout_kind", "max_duration"),
+                            Map.entry("provider_turn_activity_timeout_ms", 180_000L),
+                            Map.entry("provider_turn_max_duration_ms", 900_000L),
+                            Map.entry("selected_worker", "codex-app"),
+                            Map.entry("selected_model_tier", "strong"),
+                            Map.entry("execution_role", "executor")
+                        )
+                    )
+                )
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, null, null,
+                workerExecutor, runtimeContextBuilder, new AutoContinueJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_partial_timeout_gate",
+                "session_partial_timeout_gate",
+                null,
+                "partial timeout should wait for user",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "Finish the provider-backed task, but do not silently retry partial timeout output.",
+                null,
+                "codex-app",
+                "scheduler",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "Keep useful Codex partial output visible and wait for continue or handoff."
+                ))
+            );
+            taskDao.insert(task);
+
+            Task finalTask = graph.enter(task);
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+            List<SessionMessage> messages = sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), 20);
+
+            assertEquals(1, workerExecutor.callCount());
+            assertEquals("waiting_human", finalTask.status());
+            assertEquals("waiting_human", persisted.status());
+            assertEquals("human_gate", persisted.controlNode());
+            assertEquals("partial_result_or_quality_risk", persisted.metadata().get("failure_class"));
+            assertEquals("human_gate_required", persisted.metadata().get("recovery_stage"));
+            assertFalse(persisted.metadata().containsKey("auto_same_worker_retry_count"));
+            assertFalse(persisted.metadata().containsKey("auto_handoff_count"));
+            assertEquals("codex-app", persisted.assignedWorker());
+
+            SessionMessage workerRoundMessage = messages.stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("partial_timeout", workerRoundMessage.metadata().get("execution_status"));
+            assertEquals("thread-partial-timeout-001", workerRoundMessage.metadata().get("provider_thread_id"));
+            assertEquals("max_duration", workerRoundMessage.metadata().get("provider_timeout_kind"));
+        }
+    }
+
+    @Test
     void continueBuildsFactAwareJudgmentContextForOrchestratedFlow() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("orchestration-judgment-facts.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);

@@ -2952,19 +2952,33 @@ public class ControlNodeGraph {
         String nextAssignedWorker = directive.autoHandoff() && directive.handoffTarget() != null
             ? directive.handoffTarget()
             : currentAssignedWorker;
-        updated = withMetadataEntries(updated,
-            "failure_class", directive.failureClass(),
-            "failure_summary_readable", directive.failureSummaryReadable(),
-            "recovery_policy", directive.recoveryPolicy(),
-            "recovery_stage", directive.recoveryStage(),
-            "recovery_execution_mode", directive.recoveryExecutionMode(),
-            "auto_same_worker_retry_count", directive.sameWorkerRetryCount(),
-            "auto_handoff_count", directive.autoHandoffCount(),
-            "auto_handoff_target", directive.handoffTarget(),
-            "previous_worker", directive.previousWorker(),
-            "assigned_worker", nextAssignedWorker,
-            "target_worker", directive.autoHandoff() ? directive.handoffTarget() : metadataString(task.metadata(), "target_worker")
-        );
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("failure_class", directive.failureClass());
+        metadata.put("failure_summary_readable", directive.failureSummaryReadable());
+        metadata.put("recovery_policy", directive.recoveryPolicy());
+        metadata.put("recovery_stage", directive.recoveryStage());
+        metadata.put("recovery_execution_mode", directive.recoveryExecutionMode());
+        if (directive.sameWorkerRetry() || directive.sameWorkerRetryCount() > 0) {
+            metadata.put("auto_same_worker_retry_count", directive.sameWorkerRetryCount());
+        }
+        if (directive.autoHandoff()) {
+            metadata.put("auto_handoff_count", directive.autoHandoffCount());
+            metadata.put("auto_handoff_target", directive.handoffTarget());
+        } else if (directive.handoffTarget() != null && !directive.handoffTarget().isBlank()) {
+            metadata.put("manual_handoff_candidate", directive.handoffTarget());
+        }
+        metadata.put("previous_worker", directive.previousWorker());
+        metadata.put("assigned_worker", nextAssignedWorker);
+        metadata.put("target_worker", directive.autoHandoff() ? directive.handoffTarget() : metadataString(task.metadata(), "target_worker"));
+        LinkedHashMap<String, Object> updatedMetadata = updated.metadata() == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(updated.metadata());
+        updatedMetadata.putAll(metadata);
+        if (!directive.autoHandoff()) {
+            updatedMetadata.remove("auto_handoff_count");
+            updatedMetadata.remove("auto_handoff_target");
+        }
+        updated = updated.withMetadata(updatedMetadata);
         if (directive.autoHandoff() && directive.handoffTarget() != null) {
             updated = updated.withAssignedWorker(directive.handoffTarget());
         }
