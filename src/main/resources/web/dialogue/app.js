@@ -2988,26 +2988,26 @@ function summarizeFailureText(text, workerHint = "") {
         return "";
     }
     const threadId = extractQuotedThreadId(normalized);
-    const workerPrefix = firstNonBlank(workerHint) ? `worker ${workerHint} failed:` : "worker failed:";
+    const workerPrefix = firstNonBlank(workerHint) ? `worker ${workerHint} 失败：` : "worker 失败：";
     if (threadId && (/(thread\s+not\s+found|not\s+found)/i.test(normalized)
         || /没.*找到|未.*找到/.test(normalized)
         || looksLikeGarbledThreadNotFound(normalized))) {
-        return `${workerPrefix} thread not found (${threadId})`;
+        return `${workerPrefix}线程未找到 (${threadId})`;
     }
     if (/authentication required/i.test(normalized)) {
-        return `${workerPrefix} authentication required`;
+        return `${workerPrefix}需要认证`;
     }
     if (/connection reset/i.test(normalized)) {
-        return `${workerPrefix} connection reset`;
+        return `${workerPrefix}连接被重置`;
     }
     if (/timed?\s*out|timeout/i.test(normalized)) {
-        return `${workerPrefix} timeout`;
+        return `${workerPrefix}执行超时`;
     }
     if (/failed to start/i.test(normalized)) {
-        return `${workerPrefix} failed to start`;
+        return `${workerPrefix}启动失败`;
     }
     if (/startup remote plugin sync failed/i.test(normalized)) {
-        return `${workerPrefix} startup remote plugin sync failed`;
+        return `${workerPrefix}远程插件同步失败`;
     }
     return "";
 }

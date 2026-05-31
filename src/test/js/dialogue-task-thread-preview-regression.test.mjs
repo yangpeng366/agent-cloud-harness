@@ -298,26 +298,26 @@ function summarizeFailureText(text, workerHint = "") {
         return "";
     }
     const threadId = extractQuotedThreadId(normalized);
-    const workerPrefix = firstNonBlank(workerHint) ? `worker ${workerHint} failed:` : "worker failed:";
+    const workerPrefix = firstNonBlank(workerHint) ? `worker ${workerHint} 失败：` : "worker 失败：";
     if (threadId && (/(thread\s+not\s+found|not\s+found)/i.test(normalized)
         || /没.*找到|未.*找到/.test(normalized)
         || looksLikeGarbledThreadNotFound(normalized))) {
-        return `${workerPrefix} thread not found (${threadId})`;
+        return `${workerPrefix}线程未找到 (${threadId})`;
     }
     if (/authentication required/i.test(normalized)) {
-        return `${workerPrefix} authentication required`;
+        return `${workerPrefix}需要认证`;
     }
     if (/connection reset/i.test(normalized)) {
-        return `${workerPrefix} connection reset`;
+        return `${workerPrefix}连接被重置`;
     }
     if (/timed?\s*out|timeout/i.test(normalized)) {
-        return `${workerPrefix} timeout`;
+        return `${workerPrefix}执行超时`;
     }
     if (/failed to start/i.test(normalized)) {
-        return `${workerPrefix} failed to start`;
+        return `${workerPrefix}启动失败`;
     }
     if (/startup remote plugin sync failed/i.test(normalized)) {
-        return `${workerPrefix} startup remote plugin sync failed`;
+        return `${workerPrefix}远程插件同步失败`;
     }
     return "";
 }
@@ -720,7 +720,7 @@ test("selected task thread bubble prefers focused task failure fallback over sta
     };
 
     const message = buildAssistantMessage(task, flow);
-    assert.equal(message.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(message.includes("worker claude 失败：线程未找到 (19120)"), true);
     assert.equal(message.includes("ARCHITECTURE"), false);
     assert.equal(message.includes("我会先把"), false);
 });
@@ -756,7 +756,7 @@ test("selected task thread bubble prefers live failure summary over terse stale 
     };
 
     const message = buildAssistantMessage(task, flow);
-    assert.equal(message.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(message.includes("worker claude 失败：线程未找到 (19120)"), true);
     assert.equal(message.includes("已完成一轮推进"), false);
     assert.equal(message.includes("ARCHITECTURE"), false);
 });
@@ -821,13 +821,35 @@ test("historical noisy failure summary is compressed into a readable short failu
     };
 
     const fallback = failureNarrativeFallback(flow.task.metadata);
-    assert.equal(fallback.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(fallback.includes("worker claude 失败：线程未找到 (19120)"), true);
     assert.equal(fallback.includes("ARCHITECTURE"), false);
     assert.equal(fallback.includes("我会先把"), false);
     assert.equal(fallback.includes("authentication required"), false);
 
     const previewText = assistantOutputPreview(task, flow, 260);
-    assert.equal(previewText.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(previewText.includes("worker claude 失败：线程未找到 (19120)"), true);
+});
+
+test("timeout failure summary is compressed into an operator readable Chinese summary", () => {
+    const task = {
+        id: "task_timeout"
+    };
+    const flow = {
+        task: {
+            metadata: {
+                previous_worker: "codex",
+                failure_summary_readable: "codex turn completion timed out after 150000 ms\nstdout path C:\\tmp\\provider-run\\stdout.txt"
+            }
+        }
+    };
+
+    const fallback = failureNarrativeFallback(flow.task.metadata);
+    assert.equal(fallback.includes("worker codex 失败：执行超时"), true);
+    assert.equal(fallback.includes("timed out"), false);
+    assert.equal(fallback.includes("stdout path"), false);
+
+    const previewText = assistantOutputPreview(task, flow, 260);
+    assert.equal(previewText.includes("worker codex 失败：执行超时"), true);
 });
 
 test("task progress transcript card exposes worker and short outcome preview before expansion", () => {
@@ -846,12 +868,12 @@ test("task progress transcript card exposes worker and short outcome preview bef
     assert.equal(executionStrip.label, "最近执行");
     assert.equal(executionStrip.title.includes("worker claude"), true);
     assert.equal(executionStrip.detail.includes("waiting_human / human_gate"), true);
-    assert.equal(executionStrip.detail.includes("thread not found (19120)"), true);
+    assert.equal(executionStrip.detail.includes("线程未找到 (19120)"), true);
     assert.equal(executionStrip.detail.includes("ARCHITECTURE"), false);
 
     const outcomeStrip = messageCardOutcomeStrip(message, false);
     assert.equal(outcomeStrip.label, "最近输出");
-    assert.equal(outcomeStrip.title.includes("thread not found (19120)"), true);
+    assert.equal(outcomeStrip.title.includes("线程未找到 (19120)"), true);
     assert.equal(outcomeStrip.detail.includes("waiting_human / human_gate"), true);
 });
 
@@ -911,11 +933,11 @@ test("focused task transcript card prefers projected outcome preview over stale 
     };
 
     const preview = assistantOutputPreview(flow.task, flow, 260);
-    assert.equal(preview.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(preview.includes("worker claude 失败：线程未找到 (19120)"), true);
     assert.equal(preview.includes("ARCHITECTURE"), false);
 
     const projectedFullContent = effectiveTaskOutcomeFullContent(flow.task, flow);
-    assert.equal(projectedFullContent.includes("thread not found (19120)"), true);
+    assert.equal(projectedFullContent.includes("线程未找到 (19120)"), true);
     assert.equal(projectedFullContent.includes("下一步"), true);
     assert.equal(projectedFullContent.includes("Worker Output"), false);
 });
@@ -944,11 +966,11 @@ test("focused task transcript projection only needs live flow task identity, not
     const projected = buildMessageDisplayViewForFocusedFlow(message, flow);
     const outcomeStrip = messageCardOutcomeStrip(projected, false);
 
-    assert.equal(projected.metadata.summary_preview.includes("worker claude failed: thread not found (19120)"), true);
+    assert.equal(projected.metadata.summary_preview.includes("worker claude 失败：线程未找到 (19120)"), true);
     assert.equal(projected.metadata.summary_preview.includes("ARCHITECTURE"), false);
-    assert.equal(projected.metadata.full_content.includes("thread not found (19120)"), true);
+    assert.equal(projected.metadata.full_content.includes("线程未找到 (19120)"), true);
     assert.equal(projected.metadata.full_content.includes("Worker Output"), false);
-    assert.equal(outcomeStrip.title.includes("thread not found (19120)"), true);
+    assert.equal(outcomeStrip.title.includes("线程未找到 (19120)"), true);
 });
 
 test("selected task gets a pinned latest-round output summary before message list history", () => {
@@ -993,11 +1015,11 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(pinned.executionStrip.title.includes("worker claude"), true);
     assert.equal(pinned.executionStrip.detail.includes("waiting_human / human_gate"), true);
     assert.equal(pinned.outcomeStrip.label, "最近输出");
-    assert.equal(pinned.outcomeStrip.title.includes("thread not found (19120)"), true);
+    assert.equal(pinned.outcomeStrip.title.includes("线程未找到 (19120)"), true);
     assert.equal(pinned.showBody, false);
     assert.equal(flow.task.metadata.failure_class, "worker_runtime_transient");
     const compactPreview = pinnedTaskOutcomePreview(task, flow, 240);
-    assert.equal(compactPreview.includes("thread not found (19120)"), true);
+    assert.equal(compactPreview.includes("线程未找到 (19120)"), true);
     assert.equal(compactPreview.includes("human_gate_required"), false);
     assert.equal(compactPreview.includes("下一步"), false);
     assert.equal(compactPreview.includes("恢复状态"), false);
