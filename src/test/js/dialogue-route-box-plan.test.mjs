@@ -61,6 +61,7 @@ test("route box plan keeps recovery fresh-session chip as drawer detail", () => 
         routeChips: ["recovery: fresh session"]
     });
 
+    assert.deepEqual(plan.routeChips, ["恢复：新会话"]);
     assert.equal(plan.hasDrawer, true);
     assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
 });

@@ -5,7 +5,7 @@ export function buildRouteBoxPlan(input) {
     const routeReason = firstNonBlank(source.routeReason, "");
     const taskType = firstNonBlank(source.taskType, "");
     const candidateWorkers = normalizeTextList(source.candidateWorkers);
-    const routeChips = normalizeTextList(source.routeChips);
+    const routeChips = normalizeTextList(source.routeChips).map(humanizeRouteChip);
     const providerDeprioritization = source.providerDeprioritization || null;
     const hasProviderDeprioritization = providerDeprioritization?.providerDeprioritized === true;
     const timelineCount = Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline.length : 0;
@@ -45,6 +45,14 @@ function buildDrawerSummary(detailGroupCount, timelineCount) {
         return `展开 route 细节 · ${detailGroupCount} 组补充`;
     }
     return "";
+}
+
+function humanizeRouteChip(value) {
+    const text = firstNonBlank(value);
+    if (text === "recovery: fresh session") {
+        return "恢复：新会话";
+    }
+    return text;
 }
 
 function firstNonBlank(...values) {

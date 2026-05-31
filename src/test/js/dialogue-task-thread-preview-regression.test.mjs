@@ -221,7 +221,7 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`建议移交 -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
-        recoveryParts.push("恢复 · fresh session");
+        recoveryParts.push("恢复 · 新会话");
     }
     return recoveryParts.length > 0 ? recoveryParts.join("  ") : "";
 }
@@ -1086,5 +1086,6 @@ test("cold-start recovery detail shows fresh session hint", () => {
     }, true);
 
     assert.equal(detail.includes("自动切换 worker"), true);
-    assert.equal(detail.includes("恢复 · fresh session"), true);
+    assert.equal(detail.includes("恢复 · 新会话"), true);
+    assert.equal(detail.includes("fresh session"), false);
 });

@@ -2317,7 +2317,7 @@ function messageCardRecoveryDetail(metadata, compact = false) {
         recoveryParts.push(`建议移交 -> ${preview(manualHandoffCandidate, compact ? 12 : 18)}`);
     }
     if (recoveryExecutionMode === "fresh_session") {
-        recoveryParts.push("恢复 · fresh session");
+        recoveryParts.push("恢复 · 新会话");
     }
     return recoveryParts.length > 0 ? recoveryParts.join("  ") : "";
 }
@@ -3643,7 +3643,7 @@ function renderRouteBox(flow, task) {
         learningHintApplied === false ? "learning: observed, not applied" : null,
         routeAlignment === true ? "route/execution aligned" : null,
         routeAlignment === false ? "route/execution diverged" : null,
-        recoveryExecutionMode === "fresh_session" ? "recovery: fresh session" : null,
+        recoveryExecutionMode === "fresh_session" ? "恢复：新会话" : null,
         providerDeprioritization.chip || null
     ].filter(Boolean);
     if (!selectedWorker && !routeReason && candidateWorkers.length === 0 && routeChips.length === 0) {
