@@ -4,6 +4,8 @@ import com.agentcloud.model.Session;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.SessionMessageCreateRequest;
 import com.agentcloud.model.Task;
+import com.agentcloud.model.Artifact;
+import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.SessionDao;
@@ -136,6 +138,61 @@ class SessionServiceMessageTest {
     }
 
     @Test
+    void listMessagesBackfillsMissingWorkerRoundMessagesFromArtifacts() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-worker-round-backfill.db"))) {
+            SessionService service = service(db);
+            Session session = service.createSession("worker round backfill");
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            taskDao.insert(Task.create("task_backfill", session.id(), "worker task", "active", "medium"));
+
+            artifactDao.insert(new Artifact(
+                "art_backfill",
+                session.id(),
+                "task_backfill",
+                Instant.now(),
+                "worker_output",
+                "Worker Output",
+                null,
+                null,
+                "Codex produced a partial diagnostic result.",
+                Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "partial_timeout",
+                    "provider_id", "codex",
+                    "provider_thread_id", "thread-codex-001",
+                    "provider_failure_reason", "codex turn completion timed out",
+                    "provider_retryable", true,
+                    "latest_worker_metadata", Map.of(
+                        "execution_backend", "provider_app_server",
+                        "provider_timeout_kind", "activity_timeout",
+                        "provider_output_parser", "codex_json_rpc"
+                    )
+                )
+            ));
+
+            List<SessionMessage> messages = service.listMessages(session.id(), 20, "task_backfill");
+            SessionMessage workerRound = messages.stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .findFirst()
+                .orElseThrow();
+
+            assertEquals("art_backfill", workerRound.metadata().get("artifact_id"));
+            assertEquals("worker_round_backfill_projection", workerRound.metadata().get("created_via"));
+            assertEquals("codex", workerRound.metadata().get("provider_id"));
+            assertEquals("provider_app_server", workerRound.metadata().get("execution_backend"));
+            assertEquals("activity_timeout", workerRound.metadata().get("provider_timeout_kind"));
+            assertEquals("codex_json_rpc", workerRound.metadata().get("provider_output_parser"));
+
+            List<SessionMessage> secondRead = service.listMessages(session.id(), 20, "task_backfill");
+            long workerRoundCount = secondRead.stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .count();
+            assertEquals(1, workerRoundCount);
+        }
+    }
+
+    @Test
     void addMessageRejectsClosedSession() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-message-closed.db"))) {
             SessionService service = service(db);
@@ -182,6 +239,7 @@ class SessionServiceMessageTest {
         TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
         SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
         EventDao eventDao = db.jdbi().onDemand(EventDao.class);
-        return new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao);
+        ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+        return new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao, artifactDao);
     }
 }

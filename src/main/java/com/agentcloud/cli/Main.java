@@ -207,7 +207,7 @@ public class Main {
         SkillRegistry skillRegistry = new SkillRegistry(skillDao);
         SkillRouter skillRouter = new SkillRouter(skillRegistry);
 
-        SessionService sessionService = new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao);
+        SessionService sessionService = new SessionService(sessionDao, taskDao, sessionMessageDao, eventDao, artifactDao);
         TaskService taskService = new TaskService(
             taskDao, sessionDao, eventDao, packetDao, workerRouter, packetBuilder, controlGraph,
             runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao,

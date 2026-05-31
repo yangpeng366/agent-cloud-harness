@@ -1,10 +1,12 @@
 package com.agentcloud.engine;
 
 import com.agentcloud.model.Event;
+import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.SessionMessage;
 import com.agentcloud.model.SessionMessageCreateRequest;
 import com.agentcloud.model.Task;
+import com.agentcloud.store.ArtifactDao;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.JsonMapper;
 import com.agentcloud.store.SessionMessageDao;
@@ -25,20 +27,27 @@ public class SessionService {
     private final TaskDao taskDao;
     private final SessionMessageDao sessionMessageDao;
     private final EventDao eventDao;
+    private final ArtifactDao artifactDao;
 
     public SessionService(SessionDao sessionDao, TaskDao taskDao) {
-        this(sessionDao, taskDao, null, null);
+        this(sessionDao, taskDao, null, null, null);
     }
 
     public SessionService(SessionDao sessionDao, TaskDao taskDao, SessionMessageDao sessionMessageDao) {
-        this(sessionDao, taskDao, sessionMessageDao, null);
+        this(sessionDao, taskDao, sessionMessageDao, null, null);
     }
 
     public SessionService(SessionDao sessionDao, TaskDao taskDao, SessionMessageDao sessionMessageDao, EventDao eventDao) {
+        this(sessionDao, taskDao, sessionMessageDao, eventDao, null);
+    }
+
+    public SessionService(SessionDao sessionDao, TaskDao taskDao, SessionMessageDao sessionMessageDao,
+                          EventDao eventDao, ArtifactDao artifactDao) {
         this.sessionDao = sessionDao;
         this.taskDao = taskDao;
         this.sessionMessageDao = sessionMessageDao;
         this.eventDao = eventDao;
+        this.artifactDao = artifactDao;
     }
 
     public Session createSession(String title) {
@@ -176,6 +185,7 @@ public class SessionService {
         if (normalizedTaskId == null) {
             return sessionMessageDao.listBySession(sessionId, safeLimit);
         }
+        backfillWorkerRoundMessages(sessionId, normalizedTaskId);
         return sessionMessageDao.listBySessionAndTask(sessionId, normalizedTaskId, safeLimit);
     }
 
@@ -258,6 +268,186 @@ public class SessionService {
         if (sessionMessageDao == null) {
             throw new IllegalStateException("session message store is not configured");
         }
+    }
+
+    private void backfillWorkerRoundMessages(String sessionId, String taskId) {
+        if (artifactDao == null || sessionMessageDao == null) {
+            return;
+        }
+        try {
+            List<Artifact> artifacts = artifactDao.listBySessionAndTask(sessionId, taskId, 100);
+            for (int i = artifacts.size() - 1; i >= 0; i--) {
+                Artifact artifact = artifacts.get(i);
+                if (!isWorkerRoundArtifact(artifact)) {
+                    continue;
+                }
+                if (sessionMessageDao.findWorkerRoundByArtifactId(sessionId, taskId, artifact.id()) != null) {
+                    continue;
+                }
+                sessionMessageDao.insert(projectWorkerRoundMessage(artifact));
+            }
+        } catch (Exception e) {
+            log.warn("Failed to backfill worker_round messages for session={} task={}", sessionId, taskId, e);
+        }
+    }
+
+    private boolean isWorkerRoundArtifact(Artifact artifact) {
+        if (artifact == null) {
+            return false;
+        }
+        Map<String, Object> metadata = metadataOrEmpty(artifact.metadata());
+        String type = firstNonBlank(trimToNull(artifact.artifactType()), "");
+        if ("worker_output".equalsIgnoreCase(type) || "worker_round".equalsIgnoreCase(type)) {
+            return true;
+        }
+        return metadata.containsKey("latest_worker_metadata")
+            || metadata.containsKey("selected_worker")
+            || metadata.containsKey("execution_status")
+            || metadata.containsKey("provider_id")
+            || metadata.containsKey("provider_thread_id");
+    }
+
+    private SessionMessage projectWorkerRoundMessage(Artifact artifact) {
+        Map<String, Object> artifactMetadata = metadataOrEmpty(artifact.metadata());
+        Map<String, Object> latestWorkerMetadata = nestedMetadata(artifactMetadata, "latest_worker_metadata");
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("source_surface", "session_service");
+        metadata.put("created_via", "worker_round_backfill_projection");
+        metadata.put("artifact_id", artifact.id());
+        metadata.put("artifact_type", artifact.artifactType());
+        metadata.put("artifact_title", artifact.title());
+        metadata.put("worker_id", firstNonBlank(
+            metadataString(artifactMetadata, "worker_id"),
+            metadataString(artifactMetadata, "selected_worker"),
+            metadataString(latestWorkerMetadata, "selected_worker")
+        ));
+        metadata.put("execution_status", firstNonBlank(
+            metadataString(artifactMetadata, "execution_status"),
+            metadataString(latestWorkerMetadata, "execution_status"),
+            "completed"
+        ));
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_id");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_thread_id");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_session_id");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_error");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_status");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_timeout_kind");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_activity_timeout_ms");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_max_duration_ms");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_class");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_failure_reason");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_retryable");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_parser");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_protocol_trace");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "execution_backend");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_dir");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_prompt_path");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_event_log_path");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_last_message_path");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_run_metadata_path");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "partial_output_chars");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "truncated");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_output_truncated");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "unfinished_items");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "suggested_next_step");
+        String preview = previewText(firstNonBlank(
+            metadataString(artifactMetadata, "summary"),
+            metadataString(artifactMetadata, "output_text"),
+            artifact.summary()
+        ), 1_000);
+        metadata.put("output_preview", preview);
+        String content = buildWorkerRoundMessageContent(artifact, metadata);
+        return new SessionMessage(
+            IdGenerator.newId("msg"),
+            artifact.sessionId(),
+            artifact.taskId(),
+            "assistant",
+            "worker_round",
+            content,
+            artifact.createdAt() == null ? Instant.now() : artifact.createdAt(),
+            metadata
+        );
+    }
+
+    private String buildWorkerRoundMessageContent(Artifact artifact, Map<String, Object> metadata) {
+        String worker = firstNonBlank(stringValue(metadata.get("worker_id")), "worker");
+        String executionStatus = firstNonBlank(stringValue(metadata.get("execution_status")), "completed");
+        String preview = firstNonBlank(stringValue(metadata.get("output_preview")), artifact != null ? artifact.summary() : null);
+        String failure = firstNonBlank(
+            metadataString(metadata, "provider_failure_reason"),
+            metadataString(metadata, "provider_error")
+        );
+        if ("partial_timeout".equalsIgnoreCase(executionStatus)) {
+            return previewText("Codex 执行回合已截断，保留部分输出。摘要：" + firstNonBlank(preview, failure, ""), 320);
+        }
+        if ("timeout".equalsIgnoreCase(executionStatus)
+            || "failed".equalsIgnoreCase(executionStatus)
+            || "error".equalsIgnoreCase(executionStatus)
+            || "cancelled".equalsIgnoreCase(executionStatus)) {
+            return previewText("worker " + worker + " 执行异常。原因：" + firstNonBlank(failure, preview, "unknown"), 320);
+        }
+        return previewText("worker " + worker + " 完成一轮执行。摘要：" + firstNonBlank(preview, artifact != null ? artifact.summary() : ""), 320);
+    }
+
+    private Map<String, Object> metadataOrEmpty(Map<String, Object> metadata) {
+        return metadata == null ? Map.of() : metadata;
+    }
+
+    private void copyFromArtifactOrLatest(Map<String, Object> target,
+                                          Map<String, Object> artifactMetadata,
+                                          Map<String, Object> latestWorkerMetadata,
+                                          String key) {
+        copyIfPresent(target, artifactMetadata, key);
+        if (!target.containsKey(key)) {
+            copyIfPresent(target, latestWorkerMetadata, key);
+        }
+    }
+
+    private void copyIfPresent(Map<String, Object> target, Map<String, Object> source, String key) {
+        if (target == null || source == null || key == null || key.isBlank()) {
+            return;
+        }
+        Object value = source.get(key);
+        if (value != null) {
+            target.put(key, value);
+        }
+    }
+
+    private Map<String, Object> nestedMetadata(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return Map.of();
+        }
+        Object value = metadata.get(key);
+        if (!(value instanceof Map<?, ?> map) || map.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        map.forEach((nestedKey, nestedValue) -> {
+            if (nestedKey != null && nestedValue != null) {
+                normalized.put(String.valueOf(nestedKey), nestedValue);
+            }
+        });
+        return normalized.isEmpty() ? Map.of() : normalized;
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null) {
+            return null;
+        }
+        return stringValue(metadata.get(key));
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : trimToNull(String.valueOf(value));
+    }
+
+    private String previewText(String value, int limit) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        return normalized.length() > limit ? normalized.substring(0, limit).trim() + "..." : normalized;
     }
 
     private void recordSessionReceiptMessage(Session session, Map<String, Object> extraMetadata) {
