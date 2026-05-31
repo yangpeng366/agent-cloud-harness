@@ -47,3 +47,20 @@ test("browser acceptance probe guards message body to composer seam", () => {
         /too much space between message body and composer/s
     );
 });
+
+test("browser acceptance probe requires pinned latest round output to carry execution signal", () => {
+    const runner = readFileSync(new URL("../../../scripts/dialogue-browser-acceptance-probe-runner.cjs", import.meta.url), "utf8");
+
+    assert.match(
+        runner,
+        /document\.querySelector\('\[data-testid="pinned-latest-round-output"\]'\)\?\.textContent\?\.trim\(\)\s*\|\|\s*''/
+    );
+    assert.match(
+        runner,
+        /pinned latest round output lacks worker\/status\/output signal/
+    );
+    assert.match(
+        runner,
+        /\(worker\|执行中\|最近执行\|部分结果\|最近输出\|执行回合\)/
+    );
+});

@@ -369,6 +369,9 @@ async function main() {
       if (!/latest round output/i.test(afterAutoTask.pinnedLatestRoundOutput + afterAutoTask.messageSummaryText)) {
         throw new Error(`auto-start task did not expose pinned latest round output summary: ${JSON.stringify(afterAutoTask)}`);
       }
+      if (!/(worker|执行中|最近执行|部分结果|最近输出|执行回合)/i.test(afterAutoTask.pinnedLatestRoundOutput)) {
+        throw new Error(`auto-start task pinned latest round output lacks worker/status/output signal: ${JSON.stringify(afterAutoTask)}`);
+      }
       const autoStartTaskScreenshot = await captureScreenshot(page, screenshotDir, mode, 'auto-start-task');
 
       await click(page, '#composerModeSwitch [data-composer-mode="task"]');
