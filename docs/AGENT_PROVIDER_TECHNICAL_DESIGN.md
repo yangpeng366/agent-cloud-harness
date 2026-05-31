@@ -817,6 +817,8 @@ node --test src/test/js/dialogue-provider-run-file-plan.test.mjs
 执行器语义：
 
 - `CodexAppServerWorkerExecutor.JsonRpcSession` 需要记录 `lastActivityAtMs`。
+- app-server 路径的单轮完成以 Codex turn terminal event 为准，不再要求 app-server 进程本身在固定窗口内退出；turn 完成后仅给短暂清理宽限，常驻进程未退出也不会把本轮 `completed` 覆盖成 `timeout/failed`。
+- `codex exec --json` 兼容路径也必须复用 `turn_max_duration_ms / coding_turn_max_duration_ms`，不能继续使用固定 180s 进程等待上限。
 - 收到以下事件时刷新 activity：
   - `agent_message`
   - `item/commandExecution/*`
@@ -863,6 +865,8 @@ metadata 合同：
 验收入口：
 
 - 构造 Codex app-server mock：持续输出 `agent_message` / command events 超过 150s，但未到 `turn_max_duration_ms`，不应被判定为 `timeout`。
+- 构造 Codex app-server mock：`turn/completed` 后进程继续常驻，harness 应保留本轮 `completed` 与输出，不应因清理进程得到的非 0 exit code 改判失败。
+- 构造 `codex exec --json` mock：设置 `agentcloud.providers.codex.turn_max_duration_ms` 后，metadata 应透出本轮使用的 `provider_turn_max_duration_ms`，证明不再走固定 180s 上限。
 - 构造 max duration 命中且有输出：artifact 和 agent run 应写 `execution_status=partial_timeout`。
 - 构造 max duration 命中且无输出：仍写 `execution_status=timeout`。
 - Dialogue 对 `partial_timeout` 显示“Codex 产出部分结果，等待继续/移交决策”，而不是只显示普通失败。
