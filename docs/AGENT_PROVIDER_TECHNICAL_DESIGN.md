@@ -812,6 +812,8 @@ node --test src/test/js/dialogue-provider-run-file-plan.test.mjs
 | `agentcloud.providers.codex.coding_turn_max_duration_ms` | `900000` | task_type 为 `coding` / `research` / `investigation` 时覆盖 |
 | `agentcloud.providers.codex.partial_timeout_min_output_chars` | `200` | 有足够输出才允许归类为 partial timeout |
 
+兼容说明：实现优先读取 `agentcloud.providers.codex.*` 文档属性，同时保留旧 `agentcloud.codex.turnActivityTimeoutMs` / `agentcloud.codex.turnMaxDurationMs` / `agentcloud.codex.partialTimeoutMinOutputChars` 作为兼容 fallback。
+
 执行器语义：
 
 - `CodexAppServerWorkerExecutor.JsonRpcSession` 需要记录 `lastActivityAtMs`。
@@ -840,6 +842,7 @@ metadata 合同：
 | `provider_turn_max_duration_ms` | 本轮使用的最大硬上限 |
 | `partial_output=true` | 明确告诉 UI / recovery 该结果不是空失败 |
 | `partial_output_chars` | 有效输出长度 |
+| `partial_timeout_min_output_chars` | 本轮使用的 partial timeout 判定阈值 |
 | `provider_thread_id` | 可用于继续 Codex thread |
 | `provider_last_message_path` | 可人工回收中间结果 |
 
