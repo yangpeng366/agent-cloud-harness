@@ -149,6 +149,7 @@
 - 如果消息流很长，优先看摘要卡片，再决定是否切到 `assistant` 或 `system` 过滤器看明细
 - 如果要看 `/dialogue/` 当前壳层排版效果，现有入口是 `scripts/screenshot.js`；但它当前仍主要覆盖截图与布局观察，不等于前端业务功能 smoke
 - 如果要跑轻量前端业务 smoke，当前入口是 `scripts/dialogue-business-smoke.js`；它和 `scripts/screenshot.js` 分层，前者测主交互路径，后者只测壳层与布局
+- 如果要验证 failed / human_gate task 的自动恢复入口和异步恢复 job 可见性，入口是 `scripts/recovery-job-ui-probe.js`；它会断言页面发起 `recover?async=true`，并在 details/overview 中看到 `Recovery Job` 与 request id
 - 如果要本地复现这两层验证，优先按 `STARTUP_GUIDE.md` 里隔离 DB 的 `/dialogue/` 启动方式起实例，避免本机历史 session/task 污染验证结果
 - 如果目标已经从“改 UI”切到“上 GitHub 前页面功能要测完整”，不要只跑这两层；完整发布前矩阵见 `docs/DIALOGUE_GITHUB_RELEASE_TEST_MATRIX.md`
 - 当前最新一轮 unified fresh 隔离实例验证通过的是 `http://localhost:18386`：`scripts/screenshot.js` 已通过 `desktop / narrow / responses` 三个 profile，`scripts/dialogue-business-smoke.js` 也已通过 create session / default `task_auto` / pinned `latest round output` / manual-start task / continue-current note 五条 light business smoke 路径

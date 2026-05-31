@@ -104,6 +104,25 @@
   - 浏览器验收里不应出现 `legacy_control_route=true`，这只能来自历史 `GET` 兼容入口
 - acceptance record 素材
 
+### 1.4 Recovery Job UI Probe
+
+脚本：
+
+- `scripts/recovery-job-ui-probe.js`
+
+职责：
+
+- 构造一个 failed task fixture
+- 在真实 `/dialogue/` 或 `/console/` 页面点击恢复入口
+- 断言浏览器请求走 `POST /api/v1/tasks/{id}/recover?async=true`
+- 断言详情区能看到 `Recovery Job`、`request_id` 和恢复 action/mode
+
+不负责：
+
+- 执行真实长任务恢复
+- 验证 provider 后续 worker round 的完整成功率
+- 替代 `Run-TaskRecoveryAcceptanceProbe.ps1` 的后端恢复策略验收
+
 ---
 
 ## 2. 推荐启动方式
@@ -222,7 +241,28 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18386 --re
 - 如果 default `task_auto` 后页面已经出现 `已提交任务，正在推进`，hash 已经带同一条 `task=...`，且 task thread / details 已经切到新 task，但 `#messageList` 尚未立刻渲染出原始 user intent，这不应判成 task_auto 失败；richer acceptance 的第一段 gate 应允许“消息原文可见”或“选中 task 收敛”二选一，后续 pinned latest-round output gate 再继续验证结果可见性
 - 如果失败点是“点开完整结果后，过几秒又自动收回”，应优先归类为 **message-card expanded state lost on polling seam**，而不是“后端没返回完整结果”
 
-### Step D：最后再跑 richer acceptance
+### Step D：再跑 recovery job UI probe
+
+当本轮改动涉及 `recover` 按钮、`recovery_jobs` 展示、task detail overview 或 failed/human_gate action plan 时，先跑这个探针，再进入 richer acceptance：
+
+```powershell
+node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:18386 --surface dialogue --report .tmp\recovery-job-ui-probe-18386.json --screenshot .tmp\recovery-job-ui-probe-18386.png
+```
+
+预期：
+
+- report 中 `async_recover_request=true`
+- report 中 `recovery_job_visible=true`
+- 页面详情区能看到 `Recovery Job` 与 request id
+
+如果这一步失败，应优先判断：
+
+- 当前实例是否仍在跑旧 JAR
+- `recover` 按钮是否被 action plan 隐藏
+- `/api/v1/tasks/{id}/recovery_jobs?limit=5` 是否被页面读取
+- details panel 是否未展开导致 recovery job panel 不可见
+
+### Step E：最后再跑 richer acceptance
 
 只有在 Step B 稳定、Step C 至少没有明显退化后，再继续跑：
 
