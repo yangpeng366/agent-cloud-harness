@@ -467,6 +467,17 @@ class TaskRuntimeContextBuilderMountedContextTest {
         }
 
         @Override
+        public SessionMessage findWorkerRoundByArtifactIdRaw(String sessionId, String taskId, String artifactId) {
+            return messages.stream()
+                .filter(message -> sessionId.equals(message.sessionId()))
+                .filter(message -> taskId.equals(message.taskId()))
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .filter(message -> artifactId.equals(String.valueOf(message.metadata().get("artifact_id"))))
+                .findFirst()
+                .orElse(null);
+        }
+
+        @Override
         public int updateBinding(String id, String taskId, String metadata) {
             throw new UnsupportedOperationException();
         }

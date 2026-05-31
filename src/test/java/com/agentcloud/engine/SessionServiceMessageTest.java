@@ -105,6 +105,37 @@ class SessionServiceMessageTest {
     }
 
     @Test
+    void canFindProjectedWorkerRoundByArtifactId() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-worker-round-artifact.db"))) {
+            SessionService service = service(db);
+            Session session = service.createSession("worker round artifact");
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            SessionMessageDao messageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            taskDao.insert(Task.create("task_1", session.id(), "worker task", "active", "medium"));
+
+            messageDao.insert(new SessionMessage(
+                "msg_worker_round",
+                session.id(),
+                "task_1",
+                "assistant",
+                "worker_round",
+                "Codex 执行了一轮。",
+                Instant.now(),
+                Map.of(
+                    "created_via", "worker_round_projection",
+                    "artifact_id", "art_1",
+                    "worker_id", "codex"
+                )
+            ));
+
+            SessionMessage found = messageDao.findWorkerRoundByArtifactId(session.id(), "task_1", "art_1");
+            assertEquals("msg_worker_round", found.id());
+            assertEquals("worker_round", found.messageType());
+            assertEquals("art_1", found.metadata().get("artifact_id"));
+        }
+    }
+
+    @Test
     void addMessageRejectsClosedSession() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("session-message-closed.db"))) {
             SessionService service = service(db);

@@ -3188,6 +3188,9 @@ public class ControlNodeGraph {
             return;
         }
         try {
+            if (sessionMessageDao.findWorkerRoundByArtifactId(task.sessionId(), task.id(), artifact.id()) != null) {
+                return;
+            }
             LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
             metadata.put("source_surface", "control_node_graph");
             metadata.put("created_via", "worker_round_projection");

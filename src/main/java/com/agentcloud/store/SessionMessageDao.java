@@ -50,6 +50,20 @@ public interface SessionMessageDao extends SqlObject {
     @SqlQuery("SELECT * FROM session_messages WHERE id = :id")
     SessionMessage findById(@Bind("id") String id);
 
+    @SqlQuery("SELECT * FROM session_messages " +
+              "WHERE session_id = :sessionId " +
+              "AND task_id = :taskId " +
+              "AND message_type = 'worker_round' " +
+              "AND json_extract(metadata_json, '$.artifact_id') = :artifactId " +
+              "LIMIT 1")
+    SessionMessage findWorkerRoundByArtifactIdRaw(@Bind("sessionId") String sessionId,
+                                                  @Bind("taskId") String taskId,
+                                                  @Bind("artifactId") String artifactId);
+
+    default SessionMessage findWorkerRoundByArtifactId(String sessionId, String taskId, String artifactId) {
+        return findWorkerRoundByArtifactIdRaw(sessionId, taskId, artifactId);
+    }
+
     @SqlUpdate("UPDATE session_messages SET task_id = :taskId, metadata_json = :metadata WHERE id = :id")
     int updateBinding(@Bind("id") String id,
                       @Bind("taskId") String taskId,
