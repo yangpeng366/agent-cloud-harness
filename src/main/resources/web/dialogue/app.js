@@ -3061,12 +3061,12 @@ function buildAssistantSignals(task, flow) {
     const taskMetadata = flow?.task?.metadata || task?.metadata || {};
     const recoveryDetail = messageCardRecoveryDetail(taskMetadata, true);
     return [
-        valueLine("action", judgmentTrace.recommended_action || judgmentTrace.recommendedAction || executionJudgment.metadata?.action),
-        valueLine("completion", completionJudgment.metadata?.completion_status || completionJudgment.metadata?.status),
-        valueLine("recovery", recoveryDetail),
-        valueLine("route", routeSignal(flow)),
-        valueLine("tools", toolChainLabel(flow)),
-        valueLine("packet", latestPacket.active_task_summary || latestPacket.activeTaskSummary)
+        valueLine("动作", judgmentTrace.recommended_action || judgmentTrace.recommendedAction || executionJudgment.metadata?.action),
+        valueLine("完成", completionJudgment.metadata?.completion_status || completionJudgment.metadata?.status),
+        valueLine("恢复", recoveryDetail),
+        valueLine("路由", routeSignal(flow)),
+        valueLine("工具", toolChainLabel(flow)),
+        valueLine("上下文包", latestPacket.active_task_summary || latestPacket.activeTaskSummary)
     ].filter(Boolean).slice(0, 4);
 }
 
@@ -4246,7 +4246,7 @@ function routeSignal(flow) {
     if (!worker) {
         return null;
     }
-    return source ? `${worker} via ${humanizeToken(source) || source}` : worker;
+    return source ? `${worker} · 来源：${humanizeToken(source) || source}` : worker;
 }
 
 function toolChainFacts(flow, tools = []) {
@@ -4284,7 +4284,7 @@ function toolChainFacts(flow, tools = []) {
 function toolChainLabel(flow, tools = []) {
     const facts = toolChainFacts(flow, tools);
     const parts = [
-        facts.stepCount ? formatCount(facts.stepCount, "step") : null,
+        facts.stepCount ? formatStepCount(facts.stepCount) : null,
         facts.terminationReason ? humanizeToken(facts.terminationReason) : null,
         !facts.terminationReason && facts.toolExecutionMode ? humanizeToken(facts.toolExecutionMode) : null
     ].filter(Boolean);
@@ -4578,6 +4578,10 @@ function summarizeFrequencyMap(map, emptyLabel = "no sample") {
 
 function formatCount(value, noun) {
     return `${value} ${noun}${value === 1 ? "" : "s"}`;
+}
+
+function formatStepCount(value) {
+    return `${value} 步`;
 }
 
 function valueLine(label, value) {

@@ -76,7 +76,7 @@ function messageRouteSignal(metadata = {}) {
     if (!worker) {
         return null;
     }
-    return source ? `${worker} via ${humanizeToken(source) || source}` : worker;
+    return source ? `${worker} · 来源：${humanizeToken(source) || source}` : worker;
 }
 
 function messageToolSignal(metadata = {}) {
@@ -100,7 +100,7 @@ function messageToolSignal(metadata = {}) {
         metadata.toolExecutionMode
     );
     const parts = [
-        stepCount ? formatCount(stepCount, "step") : null,
+        stepCount ? formatStepCount(stepCount) : null,
         terminationReason ? humanizeToken(terminationReason) || terminationReason : null,
         !terminationReason && executionMode ? humanizeToken(executionMode) || executionMode : null
     ].filter(Boolean);
@@ -276,10 +276,10 @@ function humanizeTimeoutKind(value) {
     }
 }
 
-function formatCount(value, singular) {
+function formatStepCount(value) {
     const count = numberOrNull(value);
     if (count == null) {
         return null;
     }
-    return `${count} ${singular}${count === 1 ? "" : "s"}`;
+    return `${count} 步`;
 }

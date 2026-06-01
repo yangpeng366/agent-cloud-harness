@@ -98,7 +98,7 @@ test("message signal display labels are localized without changing entry keys", 
     assert.deepEqual(plan.texts, [
         "触发 · continue",
         "完成 · done",
-        "路由 · codex via task pinned"
+        "路由 · codex · 来源：task pinned"
     ]);
     assert.equal(humanizeSignalLabel("provider"), "诊断");
     assert.equal(humanizeSignalLabel("unknown_key"), "unknown_key");
@@ -118,6 +118,14 @@ test("related-message plan keeps richer context including route and tools", () =
         plan.entries.map((entry) => entry.label),
         ["trigger", "route", "tools", "mode"]
     );
+    assert.deepEqual(plan.texts, [
+        "触发 · continue",
+        "路由 · codex · 来源：task pinned",
+        "工具 · 2 步 · finished",
+        "模式 · orchestrated"
+    ]);
+    assert.equal(plan.texts.join(" ").includes(" via "), false);
+    assert.equal(plan.texts.join(" ").includes("steps"), false);
 });
 
 test("learning hint signal is localized when richer context is visible", () => {
