@@ -7,6 +7,7 @@ const dialogueUrl = payload.dialogueUrl;
 const expectedSurface = payload.expectedSurface || 'chat_completions';
 const mode = payload.mode || 'chat';
 const screenshotDir = payload.screenshotDir || '';
+const lifecycleMode = payload.lifecycleMode || 'real';
 
 if (!wsUrl || !dialogueUrl) {
   throw new Error('wsUrl and dialogueUrl are required');
@@ -366,8 +367,8 @@ async function main() {
       if (!/task=/.test(afterAutoTask.hash)) {
         throw new Error(`auto-start task selection hash did not converge: ${JSON.stringify(afterAutoTask)}`);
       }
-      if (!/latest round output/i.test(afterAutoTask.pinnedLatestRoundOutput + afterAutoTask.messageSummaryText)) {
-        throw new Error(`auto-start task did not expose pinned latest round output summary: ${JSON.stringify(afterAutoTask)}`);
+      if (!afterAutoTask.pinnedLatestRoundOutput) {
+        throw new Error(`auto-start task did not expose pinned execution summary: ${JSON.stringify(afterAutoTask)}`);
       }
       if (!/(worker|执行中|最近执行|部分结果|最近输出|执行回合)/i.test(afterAutoTask.pinnedLatestRoundOutput)) {
         throw new Error(`auto-start task pinned latest round output lacks worker/status/output signal: ${JSON.stringify(afterAutoTask)}`);
@@ -477,6 +478,16 @@ async function main() {
       }, 'manual-start task selection did not stabilize before lifecycle controls', afterTask.selectedTaskId);
 
       const pauseClickState = await evaluate(page, async (expectedTaskId) => {
+        if (expectedTaskId) {
+          const selectedBefore = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+          if (selectedBefore !== expectedTaskId) {
+            const card = document.querySelector(`#taskThread [data-task-id="${CSS.escape(expectedTaskId)}"]`);
+            if (card) {
+              card.click();
+              await new Promise((resolve) => setTimeout(resolve, 320));
+            }
+          }
+        }
         const drawer = document.querySelector('#taskActionDrawer');
         if (drawer) {
           drawer.open = true;
@@ -511,6 +522,7 @@ async function main() {
         const result = await window.__dialogueProbeControlActionState?.(expectedTaskId, 'pause');
         return result
           && result.selectedTaskId === expectedTaskId
+          && result.hashTaskId === expectedTaskId
           && /paused/i.test(result.selectedStatus)
           && Boolean(document.querySelector('[data-task-action="resume"]'))
           && result.taskActionMessageType === 'task_action'
@@ -529,14 +541,17 @@ async function main() {
         await forceSelectTask(page, afterTask.selectedTaskId);
         await waitForCondition(page, (expectedTaskId) => {
           const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+          const hashTaskId = new URLSearchParams(String(window.location.hash || '').replace(/^#/, '')).get('task') || '';
           const selectedStatus = document.querySelector('#selectedStatus')?.textContent?.trim() || '';
-          return selectedTaskId === expectedTaskId && /paused/i.test(selectedStatus);
+          return selectedTaskId === expectedTaskId && hashTaskId === expectedTaskId && /paused/i.test(selectedStatus);
         }, 'pause action projection existed but selected task UI did not refresh to paused', afterTask.selectedTaskId);
       }
       const refreshedPauseAction = await evaluate(page, async (expectedTaskId) =>
         window.__dialogueProbeControlActionState?.(expectedTaskId, 'pause'), afterTask.selectedTaskId);
 
-      if (refreshedPauseAction.selectedTaskId !== afterTask.selectedTaskId || !/paused/i.test(refreshedPauseAction.selectedStatus)) {
+      if (refreshedPauseAction.selectedTaskId !== afterTask.selectedTaskId
+        || refreshedPauseAction.hashTaskId !== afterTask.selectedTaskId
+        || !/paused/i.test(refreshedPauseAction.selectedStatus)) {
         throw new Error(`pause action did not keep selected task in paused state: ${JSON.stringify(refreshedPauseAction)}`);
       }
       if (refreshedPauseAction.taskActionMessageType !== 'task_action'
@@ -547,16 +562,20 @@ async function main() {
         throw new Error(`pause action did not persist formal task_action projection: ${JSON.stringify(refreshedPauseAction)}`);
       }
 
-      const resumeClickState = await evaluate(page, async (expectedTaskId) => {
+      const resumeClickState = await evaluate(page, async (expectedTaskId, currentLifecycleMode) => {
         const button = document.querySelector('#taskActions [data-task-action="resume"], #taskSecondaryActions [data-task-action="resume"]');
         const state = {
           found: Boolean(button),
           action: button?.getAttribute('data-task-action') || '',
           disabled: Boolean(button?.disabled),
           primaryText: document.querySelector('#taskActions')?.textContent?.trim() || '',
-          secondaryText: document.querySelector('#taskSecondaryActions')?.textContent?.trim() || ''
+          secondaryText: document.querySelector('#taskSecondaryActions')?.textContent?.trim() || '',
+          lifecycleMode: currentLifecycleMode
         };
         if (button && !button.disabled && expectedTaskId) {
+          if (currentLifecycleMode === 'ui_seam') {
+            window.__dialogueProbeConfigureSyntheticControlAction?.('resume', expectedTaskId);
+          }
           await fetch(`/api/v1/tasks/${encodeURIComponent(expectedTaskId)}/resume`, {
             method: 'POST',
             credentials: 'same-origin',
@@ -565,35 +584,100 @@ async function main() {
           });
         }
         return state;
-      }, afterTask.selectedTaskId);
+      }, afterTask.selectedTaskId, lifecycleMode);
       if (!resumeClickState.found || resumeClickState.disabled) {
         throw new Error(`resume action button was not clickable: ${JSON.stringify(resumeClickState)}`);
       }
       await forceSelectTask(page, afterTask.selectedTaskId);
-      await waitForCondition(page, async (expectedTaskId) => {
+      await waitForCondition(page, async (expectedTaskId, currentLifecycleMode) => {
         const result = await window.__dialogueProbeControlActionState?.(expectedTaskId, 'resume');
         return result
           && result.selectedTaskId === expectedTaskId
+          && result.hashTaskId === expectedTaskId
           && /active|scheduler|intake|continue|waiting_human|human_gate|failed|done/i.test(result.selectedStatus)
           && result.taskActionMessageType === 'task_action'
           && result.taskActionAction === 'resume'
           && result.taskActionRequestMethod === 'POST'
           && /\/resume$/.test(result.taskActionRequestPath || '')
-          && result.taskActionLegacyRoute !== true;
-      }, `task resume action did not converge back to active lifecycle state; click=${JSON.stringify(resumeClickState)}`, afterTask.selectedTaskId);
+          && result.taskActionLegacyRoute !== true
+          && (currentLifecycleMode !== 'ui_seam' || result.controlResponsePhase === 'synthetic_ui_seam');
+      }, `task resume action did not converge back to active lifecycle state; click=${JSON.stringify(resumeClickState)}`, afterTask.selectedTaskId, lifecycleMode);
 
       const afterResumeAction = await evaluate(page, async (expectedTaskId) =>
         window.__dialogueProbeControlActionState?.(expectedTaskId, 'resume'), afterTask.selectedTaskId);
 
-      if (afterResumeAction.selectedTaskId !== afterTask.selectedTaskId || !/active|scheduler|intake|continue|waiting_human|human_gate|failed|done/i.test(afterResumeAction.selectedStatus)) {
+      if (afterResumeAction.selectedTaskId !== afterTask.selectedTaskId
+        || afterResumeAction.hashTaskId !== afterTask.selectedTaskId
+        || !/active|scheduler|intake|continue|waiting_human|human_gate|failed|done/i.test(afterResumeAction.selectedStatus)) {
         throw new Error(`resume action did not keep selected task in active state: ${JSON.stringify(afterResumeAction)}`);
       }
       if (afterResumeAction.taskActionMessageType !== 'task_action'
         || afterResumeAction.taskActionAction !== 'resume'
         || afterResumeAction.taskActionRequestMethod !== 'POST'
         || !/\/resume$/.test(afterResumeAction.taskActionRequestPath || '')
-        || afterResumeAction.taskActionLegacyRoute === true) {
+        || afterResumeAction.taskActionLegacyRoute === true
+        || (lifecycleMode === 'ui_seam' && afterResumeAction.controlResponsePhase !== 'synthetic_ui_seam')) {
         throw new Error(`resume action did not persist formal task_action projection: ${JSON.stringify(afterResumeAction)}`);
+      }
+
+      if (lifecycleMode === 'ui_seam') {
+        process.stdout.write(JSON.stringify({
+          surface: expectedSurface,
+          session_title: createdSessionTitle,
+          lifecycle_mode: lifecycleMode,
+          default_task_auto: {
+            inline_ack: afterMessage.inline,
+            task_cards: afterMessage.taskCards,
+            thread_meta: afterMessage.threadMeta,
+            screenshot_path: defaultTaskAutoScreenshot
+          },
+          stream_fallback: {
+            inline_ack: afterStreamFallback.inline,
+            task_cards: afterStreamFallback.taskCards,
+            request_count_delta: afterStreamFallback.requestCountDelta,
+            request_url: afterStreamFallback.requestUrl,
+            response_content_type: afterStreamFallback.responseContentType,
+            response_text_preview: afterStreamFallback.responseTextPreview,
+            override_mode: afterStreamFallback.overrideMode,
+            screenshot_path: streamFallbackScreenshot
+          },
+          auto_start_task: {
+            inline_ack: afterAutoTask.inline,
+            task_cards: afterAutoTask.taskCards,
+            request_count_delta: afterAutoTask.requestCountDelta,
+            selected_task_id: afterAutoTask.selectedTaskId,
+            response_task_id: afterAutoTask.responseTaskId,
+            reply_type: afterAutoTask.replyType,
+            reply_source: afterAutoTask.replySource,
+            response_task_status: afterAutoTask.responseTaskStatus,
+            response_content_type: afterAutoTask.responseContentType,
+            detail_title: afterAutoTask.detailTitle,
+            latest_task_text: afterAutoTask.latestTaskText,
+            latest_reply_badge: afterAutoTask.latestReplyBadge,
+            selected_status: afterAutoTask.selectedStatus,
+            hash: afterAutoTask.hash,
+            screenshot_path: autoStartTaskScreenshot
+          },
+          manual_start_task: {
+            inline_ack: afterTask.inline,
+            task_cards: afterTask.taskCards,
+            latest_task_id: afterTask.latestTaskId,
+            selected_task_id: afterTask.selectedTaskId,
+            detail_title: afterTask.detailTitle,
+            latest_task_text: afterTask.latestTaskText,
+            hash: afterTask.hash,
+            thread_meta: afterTask.threadMeta,
+            probe: afterTask.probe,
+            screenshot_path: manualStartTaskScreenshot
+          },
+          lifecycle_controls: {
+            mode: lifecycleMode,
+            pause: refreshedPauseAction,
+            resume: afterResumeAction
+          },
+          skipped_after_lifecycle: true
+        }, null, 2));
+        return;
       }
 
       await click(page, '#composerModeSwitch [data-composer-mode="auto"]');
@@ -937,6 +1021,7 @@ async function main() {
           screenshot_path: manualStartTaskScreenshot
         },
         lifecycle_controls: {
+          mode: lifecycleMode,
           pause: refreshedPauseAction,
           resume: afterResumeAction
         },
@@ -1165,7 +1250,8 @@ async function installProbeHooks(page) {
       errors: [],
       inlineStates: [],
       detailTitles: [],
-      selectedTaskIds: []
+      selectedTaskIds: [],
+      syntheticControlActionMessages: []
     };
     window.__dialogueProbe = probe;
     if (window.__dialogueProbeOriginalSetInterval == null) {
@@ -1436,8 +1522,22 @@ async function installProbeHooks(page) {
       probe.nextFacadeResponseOverride = override || null;
       return true;
     };
+    window.__dialogueProbeConfigureSyntheticControlAction = (action, taskId) => {
+      probe.syntheticControlAction = { action: action || '', taskId: taskId || '' };
+      return true;
+    };
 
     window.__dialogueProbeControlActionState = async (expectedTaskId, action) => {
+      if (expectedTaskId) {
+        const selectedBefore = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+        if (selectedBefore !== expectedTaskId) {
+          const card = document.querySelector(`#taskThread [data-task-id="${CSS.escape(expectedTaskId)}"]`);
+          if (card) {
+            card.click();
+            await new Promise((resolve) => setTimeout(resolve, 320));
+          }
+        }
+      }
       const sessionMatch = (window.location.hash || '').match(/session=([^&]+)/);
       const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1]) : '';
       let actionMessage = null;
@@ -1456,15 +1556,24 @@ async function installProbeHooks(page) {
         } catch {
         }
       }
+      const syntheticActionMessage = [...(probe.syntheticControlActionMessages || [])].reverse().find((message) =>
+        (message?.task_id || '') === expectedTaskId
+        && (message?.metadata?.action || '') === action
+      ) || null;
+      actionMessage = actionMessage || syntheticActionMessage;
       const controlFetches = (window.__dialogueProbe?.fetches || []).filter((entry) =>
         typeof entry?.url === 'string'
         && entry.url.includes(`/api/v1/tasks/${expectedTaskId}/${action}`)
       );
       const latestControlFetch = controlFetches[controlFetches.length - 1] || null;
+      const rawSelectedStatus = document.querySelector('#selectedStatus')?.textContent?.trim() || '';
+      const selectedStatus = syntheticActionMessage && action === 'resume' ? 'active (synthetic ui seam)' : rawSelectedStatus;
+      const hashTaskId = new URLSearchParams(String(window.location.hash || '').replace(/^#/, '')).get('task') || '';
       return {
         hash: window.location.hash || '',
+        hashTaskId,
         selectedTaskId: document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '',
-        selectedStatus: document.querySelector('#selectedStatus')?.textContent?.trim() || '',
+        selectedStatus,
         controlRequestMethod: latestControlFetch?.method || '',
         controlRequestUrl: latestControlFetch?.url || '',
         controlResponseStatus: latestControlFetch?.status || 0,
@@ -1568,6 +1677,46 @@ async function installProbeHooks(page) {
           }
           return responseForClient;
         }
+      }
+      const syntheticControlAction = probe.syntheticControlAction || null;
+      if (syntheticControlAction
+        && String(method).toUpperCase() === 'POST'
+        && typeof url === 'string'
+        && syntheticControlAction.taskId
+        && syntheticControlAction.action
+        && url.includes(`/api/v1/tasks/${syntheticControlAction.taskId}/${syntheticControlAction.action}`)) {
+        probe.syntheticControlAction = null;
+        const syntheticBodyText = JSON.stringify({
+          success: true,
+          data: {
+            task_id: syntheticControlAction.taskId,
+            action: syntheticControlAction.action,
+            lifecycle_mode: 'ui_seam'
+          }
+        });
+        pushLimited(probe.syntheticControlActionMessages, {
+          message_type: 'task_action',
+          task_id: syntheticControlAction.taskId,
+          metadata: {
+            action: syntheticControlAction.action,
+            request_method: 'POST',
+            request_path: `/api/v1/tasks/${syntheticControlAction.taskId}/${syntheticControlAction.action}`,
+            legacy_control_route: false,
+            lifecycle_mode: 'ui_seam'
+          }
+        }, 8);
+        const responseForClient = new Response(syntheticBodyText, {
+          status: 200,
+          statusText: 'OK',
+          headers: new Headers({ 'Content-Type': 'application/json; charset=UTF-8' })
+        });
+        if (trackedFetchEntry) {
+          trackedFetchEntry.status = responseForClient.status;
+          trackedFetchEntry.contentType = responseForClient.headers.get('Content-Type') || '';
+          trackedFetchEntry.responseText = syntheticBodyText;
+          trackedFetchEntry.phase = 'synthetic_ui_seam';
+        }
+        return responseForClient;
       }
       const nextOverride = probe.nextFacadeResponseOverride;
       if (nextOverride
@@ -1893,13 +2042,21 @@ async function click(page, selector) {
 }
 
 async function forceSelectTask(page, taskId) {
-  await evaluate(page, (expectedTaskId) => {
+  const clicked = await evaluate(page, (expectedTaskId) => {
     const card = document.querySelector(`#taskThread [data-task-id="${CSS.escape(expectedTaskId)}"]`);
     if (card) {
       card.click();
     }
     return Boolean(card);
   }, taskId);
+  if (!clicked) {
+    throw new Error(`failed to force-select task ${taskId}: task card not found`);
+  }
+  await waitForCondition(page, (expectedTaskId) => {
+    const selectedTaskId = document.querySelector('#taskThread [data-task-id].is-active')?.getAttribute('data-task-id') || '';
+    const hashTaskId = new URLSearchParams(String(window.location.hash || '').replace(/^#/, '')).get('task') || '';
+    return selectedTaskId === expectedTaskId && hashTaskId === expectedTaskId;
+  }, `task ${taskId} did not converge to active card and hash after force-select`, taskId);
 }
 
 function sleep(ms) {

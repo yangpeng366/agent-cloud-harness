@@ -21,7 +21,7 @@ foreach ($entry in @($manual.recommended_order)) {
         continue
     }
     $entryId = [string]$entry.id
-    $evidenceMode = 'scripted_browser_evidence_available'
+    $evidenceMode = 'manual_review_required'
     $paths += [pscustomobject]@{
         id = $entryId
         label = [string]$entry.path

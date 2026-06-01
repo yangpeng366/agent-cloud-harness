@@ -7,6 +7,8 @@ param(
     [string]$ScreenshotDir = '',
     [int]$NodeMaxOldSpaceMb = 768,
     [string]$NodePath = '',
+    [ValidateSet('real', 'ui_seam')]
+    [string]$LifecycleMode = 'real',
     [ValidateSet('both', 'chat', 'responses')]
     [string]$Surface = 'both'
 )
@@ -173,6 +175,7 @@ function Invoke-SurfaceProbe {
             expectedSurface = $ExpectedSurface
             mode = $SurfaceName
             screenshotDir = $resolvedScreenshotDir
+            lifecycleMode = $LifecycleMode
         } -NodeExecutable $nodeExecutable -SurfaceName $SurfaceName
     } finally {
         if ($browser) {
@@ -259,6 +262,7 @@ if ($Surface -in @('both', 'responses')) {
         dialogue_url = "$BaseUrl/dialogue/"
         responses_dialogue_url = "$BaseUrl/dialogue/#facade=responses"
         surface = $Surface
+        lifecycle_mode = $LifecycleMode
         debug_port = $DebugPort
         node_path = $nodeExecutable
         screenshot_dir = $resolvedScreenshotDir

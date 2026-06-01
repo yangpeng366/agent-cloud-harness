@@ -217,13 +217,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 > 注意：这些 PNG 只是“最小取证”候选；若正式记录直接采用 scripted browser evidence，也应在备注里写明来源。
 >
 > 当前更实的 gate 拆分是：
-> - A-H 都可接受 scripted browser evidence，只要它们对应当前真实可达 seam
+> - A-H 自动化覆盖可接受 scripted browser evidence，只要它们对应当前真实可达 seam
+> - A-H 严格人工签核仍需要人工复看和回填；不要用脚本输出自动勾 `通过`
 > - 其中旧路径标签仍保留，但当前真实 seam 更接近 `task_note_attach`：
 >   - B / G
-> - 若使用 starter / browser probe 自动回填 A-H，仍应在备注中保留“来源于 scripted browser evidence”
+> - 若使用 starter / browser probe 自动回填 A-H 自动化覆盖，仍应在备注中保留“来源于 scripted browser evidence”
 > - 当前可先生成一份 scripted backfill JSON：
 >   `powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceScriptedBackfillTemplate.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json > .\.tmp\dialogue-scripted-backfill-18276.json`
->   - A-H 会预填为 `passed=true`
+>   - A-H 会预填为 `scripted_coverage_passed=true`
+>   - `passed` 仍保持 `false`，除非人工复看后再填写
 >   - 这份 JSON 仍不等于 final gate 关闭
 >
 > 若 starter JSON 已落在 `.tmp/dialogue-manual-<port>.json`，也可先用下面的 helper 生成一段可复制的 A-H markdown 骨架，再粘贴回本模板：

@@ -56,11 +56,14 @@ $groups = [ordered]@{
     baseline = @(
         ".gitignore",
         "README.md",
+        "STARTUP_GUIDE.md",
         "LICENSE",
         "CONTRIBUTING.md",
         "SECURITY.md",
         "CODE_OF_CONDUCT.md",
         ".github/",
+        "docs/AGENT_PROVIDER_TECHNICAL_DESIGN.md",
+        "docs/API_CONTRACTS.md",
         "docs/GITHUB_RELEASE_CHECKLIST.md",
         "docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md",
         "docs/GITHUB_FIRST_RELEASE_FILESET.md",
@@ -71,18 +74,39 @@ $groups = [ordered]@{
         "docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md",
         "docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md",
         "docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md",
-        "docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md"
+        "docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md",
+        "docs/HARNESS_REDESIGN_FOR_LOCAL_AGENTS.md",
+        "docs/PROJECT_EVALUATION_AND_NEXT_PLAN.md",
+        "docs/TROUBLESHOOT.md"
     )
     product = @(
+        "src/main/java/com/agentcloud/agent/providers/",
         "src/main/java/com/agentcloud/engine/ChatFacadeService.java",
+        "src/main/java/com/agentcloud/cli/Main.java",
+        "src/main/java/com/agentcloud/engine/TaskService.java",
+        "src/main/java/com/agentcloud/engine/router/WorkerRegistry.java",
+        "src/main/java/com/agentcloud/engine/router/WorkerRouter.java",
+        "src/main/java/com/agentcloud/server/NioHttpServer.java",
+        "src/main/java/com/agentcloud/server/TaskHandler.java",
         "src/main/java/com/agentcloud/server/WebConsoleHandler.java",
+        "src/main/java/com/agentcloud/server/WorkerHandler.java",
+        "src/main/java/com/agentcloud/worker/",
         "src/main/resources/web/console/app.js",
         "src/main/resources/web/dialogue/",
+        "src/test/java/com/agentcloud/agent/",
+        "src/test/java/com/agentcloud/cli/",
+        "src/test/java/com/agentcloud/engine/ControlNodeGraphOrchestrationFlowTest.java",
+        "src/test/java/com/agentcloud/engine/router/",
         "src/test/java/com/agentcloud/server/ChatFacadeHandlerHttpTest.java",
+        "src/test/java/com/agentcloud/server/ApiErrorContractHttpTest.java",
+        "src/test/java/com/agentcloud/server/TaskHandlerLiveFlowHttpTest.java",
+        "src/test/java/com/agentcloud/server/TaskHandlerProviderSelectionHttpTest.java",
         "src/test/java/com/agentcloud/server/WebConsoleHandlerHttpTest.java",
+        "src/test/java/com/agentcloud/worker/",
         "src/test/js/"
     )
     harness = @(
+        "scripts/Run-HarnessWithJava21.ps1",
         "scripts/Start-DialogueChatFacadeManualAcceptance.ps1",
         "scripts/Run-ChatFacadeAcceptanceWithLocalHarness.ps1",
         "scripts/Run-ChatFacadePathMatrixProbe.ps1",
@@ -90,12 +114,21 @@ $groups = [ordered]@{
         "scripts/dialogue-browser-acceptance-probe-runner.cjs",
         "scripts/Render-DialogueAcceptanceRecordSeed.ps1",
         "scripts/Run-DialogueRecordSeedProbe.ps1",
+        "scripts/Render-DialogueAcceptanceManualBackfillTemplate.ps1",
+        "scripts/Apply-DialogueAcceptanceManualBackfill.ps1",
+        "scripts/Run-DialogueAcceptanceManualBackfillProbe.ps1",
+        "scripts/Render-DialogueAcceptanceScriptedBackfillTemplate.ps1",
+        "scripts/Run-DialogueAcceptanceScriptedBackfillProbe.ps1",
         "scripts/Run-GitHubFirstReleaseDryRun.ps1",
         "scripts/Run-GitHubFirstReleaseCommitDryRun.ps1",
         "scripts/Run-GitHubFirstReleaseStagePreview.ps1",
         "scripts/Run-GitHubFirstReleaseIndexAudit.ps1",
         "scripts/Run-GitHubFirstReleasePrecheck.ps1",
+        "scripts/Run-CodexPartialTimeoutSmoke.ps1",
+        "scripts/dialogue-business-smoke.js",
+        "scripts/provider-discovery-smoke.js",
         "docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md",
+        "docs/DIALOGUE_UI_VALIDATION_RUNBOOK.md",
         "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md",
         "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md"
     )
@@ -104,8 +137,11 @@ $groups = [ordered]@{
 $evidenceOnly = @(
     "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-10.md",
     "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md",
+    "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-06-02.md",
+    "docs/DIALOGUE_GITHUB_RELEASE_PRECHECK_2026-05-12.md",
     "docs/GITHUB_FIRST_RELEASE_DRY_RUN_2026-05-11.md",
     "docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-05-11.md",
+    "docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md",
     "docs/GITHUB_FIRST_RELEASE_INDEX_AUDIT_2026-05-11.md",
     "docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md",
     "docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_baseline_2026-05-11.md",
@@ -114,15 +150,22 @@ $evidenceOnly = @(
     "docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_all_2026-05-11.md",
     "docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_baseline_2026-05-11.md",
     "docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_product_2026-05-11.md",
-    "docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md"
+    "docs/GITHUB_FIRST_RELEASE_STAGE_PREVIEW_harness_2026-05-11.md",
+    "docs/REASONIX_AGENT_SUPPORT_AND_IMPROVEMENT_PLAN.md"
 )
 
 $deferPrefixes = @(
+    ".reasonix/",
     ".tmp/",
+    "tmp/",
     "test-results/",
+    "bash.exe.stackdump",
     "hs_err_pid",
     "replay_pid",
-    "docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md"
+    "docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md",
+    "docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md",
+    "task-ops.js",
+    "version"
 )
 
 $selectedGroups = if ($Commit -eq "all") {

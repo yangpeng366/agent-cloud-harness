@@ -51,6 +51,15 @@ function Replace-Line {
 }
 
 foreach ($path in $paths) {
+    $evidenceMode = [string]$path.evidence_mode
+    $scriptedCoveragePassed = $false
+    if ($path.PSObject.Properties.Name -contains 'scripted_coverage_passed') {
+        $scriptedCoveragePassed = [bool]$path.scripted_coverage_passed
+    }
+    if ($path.passed -and ($scriptedCoveragePassed -or $evidenceMode -eq 'scripted_browser_evidence_available')) {
+        throw ("scripted browser evidence cannot mark manual Passed=true for path {0}; run or record manual review first" -f [string]$path.id)
+    }
+
     $heading = "### {0}. {1}" -f [string]$path.id, [string]$path.label
     $headingIndex = Find-LineIndex -Lines $recordLines -Pattern $heading
     if ($headingIndex -lt 0) {

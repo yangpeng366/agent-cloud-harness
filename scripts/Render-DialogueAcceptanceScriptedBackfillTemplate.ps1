@@ -34,6 +34,7 @@ function New-ProbeBackfillPath {
         [string]$EntryUrl,
         [string]$EvidenceMode,
         [bool]$Passed,
+        [bool]$ScriptedCoveragePassed,
         [string]$Input,
         [string]$ObservedResult,
         [string[]]$Notes
@@ -45,6 +46,7 @@ function New-ProbeBackfillPath {
         surface = $Surface
         entry_url = $EntryUrl
         passed = $Passed
+        scripted_coverage_passed = $ScriptedCoveragePassed
         evidence_mode = $EvidenceMode
         input = $Input
         observed_result = $ObservedResult
@@ -69,6 +71,7 @@ function New-ScriptedProbePath {
             -EntryUrl ([string]$Entry.entry_url) `
             -EvidenceMode 'scripted_browser_evidence_missing' `
             -Passed $false `
+            -ScriptedCoveragePassed $false `
             -Input '' `
             -ObservedResult '' `
             -Notes @("Expected scripted browser evidence source missing: $SourceKey")
@@ -91,7 +94,8 @@ function New-ScriptedProbePath {
         -Surface ([string]$Entry.surface) `
         -EntryUrl ([string]$Entry.entry_url) `
         -EvidenceMode 'scripted_browser_evidence_available' `
-        -Passed $true `
+        -Passed $false `
+        -ScriptedCoveragePassed $true `
         -Input 'scripted browser probe bundle' `
         -ObservedResult $ObservedResult `
         -Notes $notes
@@ -192,6 +196,7 @@ foreach ($entry in @($manual.recommended_order)) {
                 -EntryUrl ([string]$entry.entry_url) `
                 -EvidenceMode 'unclassified' `
                 -Passed $false `
+                -ScriptedCoveragePassed $false `
                 -Input '' `
                 -ObservedResult '' `
                 -Notes @('No scripted or human gate classification was assigned.')
@@ -204,6 +209,6 @@ foreach ($entry in @($manual.recommended_order)) {
     result_json_path = [string]$manual.result_json_path
     record_path = [string]$payload.record_suggestion
     recommended_screenshot_dir = [string]$manual.recommended_screenshot_dir
-    note = "A-H are prefilled from the starter browser-probe bundle against the current reachable dialogue seam. Applying this template does not close the final release gate by itself."
+    note = "A-H scripted coverage is prefilled from the starter browser-probe bundle against the current reachable dialogue seam. The manual passed field remains false so applying this template does not close the strict manual release gate."
     paths = $paths
 } | ConvertTo-Json -Depth 6

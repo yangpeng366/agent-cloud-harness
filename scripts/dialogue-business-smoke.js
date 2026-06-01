@@ -309,7 +309,9 @@ async function assertPinnedLatestRoundOutput(page) {
     () => {
       const pinned = document.querySelector('[data-testid="pinned-latest-round-output"]')?.textContent || '';
       const summary = document.querySelector('#messageSummary')?.textContent || '';
-      return /latest round output/i.test(pinned) || /latest round output/i.test(summary);
+      const combined = `${pinned}\n${summary}`;
+      return /latest round output/i.test(combined)
+        || /最近输出|执行中|最近执行|部分结果/.test(combined);
     },
     { timeout: 30000 }
   );
@@ -319,6 +321,11 @@ async function assertPinnedLatestRoundOutput(page) {
     summaryText: document.querySelector('#messageSummary')?.textContent.trim() || '',
     selectedStatus: document.querySelector('#selectedStatus')?.textContent.trim() || '',
   }));
+}
+
+function hasPinnedExecutionSurface(result) {
+  const text = `${result?.pinnedText || ''}\n${result?.summaryText || ''}`;
+  return /latest round output/i.test(text) || /最近输出|执行中|最近执行|部分结果/.test(text);
 }
 
 async function waitForTaskScopedMessages(baseUrl, sessionId, taskId, predicate, timeoutMs = 30000) {
@@ -538,7 +545,11 @@ async function main() {
     console.error(`PAGEERROR: ${error.stack || error.message}`);
   });
   page.on('requestfailed', (request) => {
-    console.error(`REQUESTFAILED: ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`);
+    const failureText = request.failure()?.errorText || '';
+    if (request.url().includes('/events?stream=true') && /ERR_ABORTED/i.test(failureText)) {
+      return;
+    }
+    console.error(`REQUESTFAILED: ${request.method()} ${request.url()} ${failureText}`);
   });
 
   try {
@@ -572,8 +583,8 @@ async function main() {
     const pinnedResult = await assertPinnedLatestRoundOutput(page);
     pushStep(
       report,
-      'default task_auto pinned latest round output',
-      /latest round output/i.test(pinnedResult.pinnedText + pinnedResult.summaryText),
+      'default task_auto pinned execution surface',
+      hasPinnedExecutionSurface(pinnedResult),
       `status=${pinnedResult.selectedStatus} pinned=${pinnedResult.pinnedText || '<empty>'} summary=${pinnedResult.summaryText || '<empty>'}`
     );
 

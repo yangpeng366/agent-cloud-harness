@@ -1,6 +1,8 @@
 param(
     [switch]$SkipJavaTests,
     [switch]$SkipNodeTests,
+    [switch]$SkipProviderDiscoverySmoke,
+    [switch]$SkipCodexPartialTimeoutSmoke,
     [switch]$SkipDryRunMarkdown,
     [string]$MarkdownPath = ""
 )
@@ -72,6 +74,16 @@ function Add-Lines {
     }
 }
 
+function Resolve-PrecheckDate {
+    param([string]$Path)
+
+    if ($Path -and $Path -match '(\d{4}-\d{2}-\d{2})') {
+        return $Matches[1]
+    }
+
+    return (Get-Date).ToString("yyyy-MM-dd")
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
 
@@ -79,8 +91,9 @@ $markdownTarget = if ($MarkdownPath) {
     $MarkdownPath
 }
 else {
-    "docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-05-11.md"
+    "docs/GITHUB_FIRST_RELEASE_PRECHECK_$((Get-Date).ToString("yyyy-MM-dd")).md"
 }
+$precheckDate = Resolve-PrecheckDate -Path $markdownTarget
 
 $results = [ordered]@{
     node_check = [ordered]@{
@@ -97,6 +110,35 @@ $results = [ordered]@{
         command = "powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -MavenArgs '-Dtest=ChatFacadeHandlerHttpTest,WebConsoleHandlerHttpTest'"
         skipped = [bool]$SkipJavaTests
         exit_code = $null
+    }
+    provider_discovery_smoke = [ordered]@{
+        build_command = "powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven"
+        command = "node .\scripts\provider-discovery-smoke.js --port 18432 --report .\.tmp\provider-discovery-smoke\report.json"
+        skipped = [bool]$SkipProviderDiscoverySmoke
+        build_exit_code = $null
+        exit_code = $null
+        report_path = $null
+        passed = $null
+    }
+    codex_partial_timeout_smoke = [ordered]@{
+        command = "powershell -ExecutionPolicy Bypass -File .\scripts\Run-CodexPartialTimeoutSmoke.ps1"
+        skipped = [bool]$SkipCodexPartialTimeoutSmoke
+        exit_code = $null
+        report_path = $null
+        passed = $null
+    }
+    dialogue_backfill_gate_probe = [ordered]@{
+        command = "powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueAcceptanceScriptedBackfillProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json"
+        manual_command = "powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueAcceptanceManualBackfillProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json"
+        input_json_path = ".\.tmp\dialogue-manual-18276.json"
+        skipped = $false
+        skip_reason = $null
+        exit_code = $null
+        manual_exit_code = $null
+        scripted_coverage_prefilled = @()
+        residual_human = @()
+        scripted_misuse_rejected = $null
+        manual_apply_passed = $null
     }
     first_release_dry_run = [ordered]@{
         command = "powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseDryRun.ps1 -WriteMarkdown"
@@ -142,6 +184,77 @@ if (-not $SkipJavaTests) {
     }
 }
 
+if (-not $SkipProviderDiscoverySmoke) {
+    Invoke-Step -Title "provider discovery smoke" -Action {
+        powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven
+        $results.provider_discovery_smoke.build_exit_code = $LASTEXITCODE
+        Ensure-LastExitCodeZero "Provider discovery smoke build failed."
+
+        $providerDiscoveryReport = ".\.tmp\provider-discovery-smoke\report.json"
+        node .\scripts\provider-discovery-smoke.js --port 18432 --report $providerDiscoveryReport
+        $results.provider_discovery_smoke.exit_code = $LASTEXITCODE
+        Ensure-LastExitCodeZero "Provider discovery smoke failed."
+
+        $resolvedReport = Resolve-Path -LiteralPath $providerDiscoveryReport
+        $results.provider_discovery_smoke.report_path = $resolvedReport.Path
+        $smokeReport = Get-Content -LiteralPath $resolvedReport.Path -Raw | ConvertFrom-Json
+        $results.provider_discovery_smoke.passed = [bool]$smokeReport.passed
+        if (-not $smokeReport.passed) {
+            throw "Provider discovery smoke report did not pass."
+        }
+    }
+}
+
+if (-not $SkipCodexPartialTimeoutSmoke) {
+    Invoke-Step -Title "codex partial timeout smoke" -Action {
+        powershell -ExecutionPolicy Bypass -File .\scripts\Run-CodexPartialTimeoutSmoke.ps1
+        $results.codex_partial_timeout_smoke.exit_code = $LASTEXITCODE
+        Ensure-LastExitCodeZero "Codex partial timeout smoke failed."
+
+        $codexReport = ".\.tmp\codex-partial-timeout-smoke\report.json"
+        $resolvedReport = Resolve-Path -LiteralPath $codexReport
+        $results.codex_partial_timeout_smoke.report_path = $resolvedReport.Path
+        $smokeReport = Get-Content -LiteralPath $resolvedReport.Path -Raw | ConvertFrom-Json
+        $results.codex_partial_timeout_smoke.passed = [bool]$smokeReport.passed
+        if (-not $smokeReport.passed) {
+            throw "Codex partial timeout smoke report did not pass."
+        }
+    }
+}
+
+Invoke-Step -Title "dialogue A-H scripted/manual backfill gate probe" -Action {
+    $backfillInputPath = $results.dialogue_backfill_gate_probe.input_json_path
+    if (-not (Test-Path -LiteralPath $backfillInputPath)) {
+        $results.dialogue_backfill_gate_probe.skipped = $true
+        $results.dialogue_backfill_gate_probe.skip_reason = "missing input json: $backfillInputPath"
+        return
+    }
+
+    $scriptedProbe = Invoke-PowerShellJsonScript -Arguments @(
+        "-ExecutionPolicy", "Bypass",
+        "-File", ".\scripts\Run-DialogueAcceptanceScriptedBackfillProbe.ps1",
+        "-InputJsonPath", $backfillInputPath
+    )
+    $results.dialogue_backfill_gate_probe.exit_code = 0
+    $results.dialogue_backfill_gate_probe.scripted_coverage_prefilled = @($scriptedProbe.scripted_coverage_prefilled)
+    $results.dialogue_backfill_gate_probe.residual_human = @($scriptedProbe.residual_human)
+    $results.dialogue_backfill_gate_probe.scripted_misuse_rejected = [bool]$scriptedProbe.scripted_misuse_rejected
+    if (-not $scriptedProbe.ok -or -not $scriptedProbe.scripted_misuse_rejected) {
+        throw "Dialogue scripted backfill gate probe did not pass."
+    }
+
+    $manualProbe = Invoke-PowerShellJsonScript -Arguments @(
+        "-ExecutionPolicy", "Bypass",
+        "-File", ".\scripts\Run-DialogueAcceptanceManualBackfillProbe.ps1",
+        "-InputJsonPath", $backfillInputPath
+    )
+    $results.dialogue_backfill_gate_probe.manual_exit_code = 0
+    $results.dialogue_backfill_gate_probe.manual_apply_passed = [bool]$manualProbe.applied
+    if (-not $manualProbe.applied) {
+        throw "Dialogue manual backfill probe did not pass."
+    }
+}
+
 Invoke-Step -Title "first release dry-run" -Action {
     $dryRun = Invoke-PowerShellJsonScript -Arguments @(
         "-ExecutionPolicy", "Bypass",
@@ -177,7 +290,7 @@ Invoke-Step -Title "first release stage preview" -Action {
 
 if (-not $SkipDryRunMarkdown) {
     $out = New-StringList
-    $out.Add('# GitHub First Release Precheck 2026-05-11')
+    $out.Add(("# GitHub First Release Precheck {0}" -f $precheckDate))
     $out.Add('')
     $out.Add('> Purpose: capture one real local precheck run for the current first-release slice.')
     $out.Add('')
@@ -228,7 +341,70 @@ if (-not $SkipDryRunMarkdown) {
     }
     $out.Add('')
 
-    $out.Add('### 4. first release dry-run')
+    $out.Add('### 4. Provider discovery smoke')
+    $out.Add('')
+    $out.Add('```powershell')
+    $out.Add($results.provider_discovery_smoke.build_command)
+    $out.Add($results.provider_discovery_smoke.command)
+    $out.Add('```')
+    $out.Add('')
+    $out.Add('Result:')
+    $out.Add('')
+    if ($results.provider_discovery_smoke.skipped) {
+        $out.Add('- Skipped')
+    }
+    else {
+        $out.Add(('- Build exit code: {0}' -f $results.provider_discovery_smoke.build_exit_code))
+        $out.Add(('- Smoke exit code: {0}' -f $results.provider_discovery_smoke.exit_code))
+        $out.Add(('- Report: {0}' -f $results.provider_discovery_smoke.report_path))
+        $out.Add(('- Passed: {0}' -f $results.provider_discovery_smoke.passed))
+        $out.Add('- Validates `providers.yaml` dynamic provider appears in `/api/v1/agents` and `/api/v1/workers`, and worker list readiness matches runtime readiness')
+    }
+    $out.Add('')
+
+    $out.Add('### 5. Codex partial timeout smoke')
+    $out.Add('')
+    $out.Add('```powershell')
+    $out.Add($results.codex_partial_timeout_smoke.command)
+    $out.Add('```')
+    $out.Add('')
+    $out.Add('Result:')
+    $out.Add('')
+    if ($results.codex_partial_timeout_smoke.skipped) {
+        $out.Add('- Skipped')
+    }
+    else {
+        $out.Add(('- Exit code: {0}' -f $results.codex_partial_timeout_smoke.exit_code))
+        $out.Add(('- Report: {0}' -f $results.codex_partial_timeout_smoke.report_path))
+        $out.Add(('- Passed: {0}' -f $results.codex_partial_timeout_smoke.passed))
+        $out.Add('- Validates Codex partial output communication failure, max-duration hard limit, ControlNodeGraph human gate projection, provider thread continuation metadata, and Dialogue worker_round actions')
+    }
+    $out.Add('')
+
+    $out.Add('### 6. Dialogue A-H scripted/manual backfill gate')
+    $out.Add('')
+    $out.Add('```powershell')
+    $out.Add($results.dialogue_backfill_gate_probe.command)
+    $out.Add($results.dialogue_backfill_gate_probe.manual_command)
+    $out.Add('```')
+    $out.Add('')
+    $out.Add('Result:')
+    $out.Add('')
+    if ($results.dialogue_backfill_gate_probe.skipped) {
+        $out.Add(('- Skipped: {0}' -f $results.dialogue_backfill_gate_probe.skip_reason))
+    }
+    else {
+        $out.Add(('- Scripted exit code: {0}' -f $results.dialogue_backfill_gate_probe.exit_code))
+        $out.Add(('- Manual exit code: {0}' -f $results.dialogue_backfill_gate_probe.manual_exit_code))
+        $out.Add(('- Scripted coverage prefilled: {0}' -f (($results.dialogue_backfill_gate_probe.scripted_coverage_prefilled | ForEach-Object { [string]$_ }) -join ', ')))
+        $out.Add(('- Residual human gate: {0}' -f (($results.dialogue_backfill_gate_probe.residual_human | ForEach-Object { [string]$_ }) -join ', ')))
+        $out.Add(('- Scripted misuse rejected: {0}' -f $results.dialogue_backfill_gate_probe.scripted_misuse_rejected))
+        $out.Add(('- Manual apply still works: {0}' -f $results.dialogue_backfill_gate_probe.manual_apply_passed))
+        $out.Add('- Validates scripted browser evidence cannot mark strict manual A-H Passed=true, while intentional manual backfill still works')
+    }
+    $out.Add('')
+
+    $out.Add('### 7. first release dry-run')
     $out.Add('')
     $out.Add('```powershell')
     $out.Add($results.first_release_dry_run.command)
@@ -244,7 +420,7 @@ if (-not $SkipDryRunMarkdown) {
     $out.Add('  - review')
     $out.Add('')
 
-    $out.Add('### 5. first release commit dry-run')
+    $out.Add('### 8. first release commit dry-run')
     $out.Add('')
     $out.Add('```powershell')
     $out.Add($results.first_release_commit_dry_run.command)
@@ -260,7 +436,7 @@ if (-not $SkipDryRunMarkdown) {
     $out.Add(('- Current unmatched_count = {0}' -f $results.first_release_commit_dry_run.unmatched_count))
     $out.Add('')
 
-    $out.Add('### 6. first release stage preview')
+    $out.Add('### 9. first release stage preview')
     $out.Add('')
     $out.Add('```powershell')
     $out.Add($results.first_release_stage_preview.command)
@@ -278,7 +454,7 @@ if (-not $SkipDryRunMarkdown) {
     $out.Add('## Still Outstanding')
     $out.Add('')
     $out.Add('- README.md still uses a published repo placeholder and has not yet been filled with a real public repository URL')
-    $out.Add('- /dialogue/ A-H real manual acceptance is still not complete')
+    $out.Add('- /dialogue/ strict A-H manual click-through acceptance is still not complete; scripted current-reachable seam evidence exists but does not close this manual gate')
     $out.Add('- GitHub Actions has not yet been verified on a real remote GitHub repository')
     $out.Add('')
 

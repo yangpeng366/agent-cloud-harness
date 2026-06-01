@@ -315,10 +315,10 @@
 
 注意：
 
-- 这些 PNG 只是辅助取证索引；若正式记录直接采用 scripted browser evidence，也应在备注里保留来源说明
-- 当前 richer browser probe 已经对其中大部分路径提供了真实页面级直接证据
-- 不应再把 A-H 全部都视为“必须人工逐条手点”这一种 gate
-- 若人工观察与 scripted browser PNG 不一致，应以真实页面手点结果为准，再回头记录偏差
+- 这些 PNG 只是辅助取证索引；若正式记录采用 scripted browser evidence，也应在备注里保留来源说明。
+- 当前 richer browser probe 已经对 A-H 的当前可达 seam 提供了真实页面级自动化证据。
+- 如果 release checklist 仍把“严格人工逐条手点”列为 gate，则 scripted browser evidence 只能关闭“自动化覆盖”子项，不能自动关闭人工签核 gate。
+- 若人工观察与 scripted browser PNG 不一致，应以真实页面手点结果为准，再回头记录偏差。
 
 当前更准确的 gate 应拆成两类：
 
@@ -339,11 +339,12 @@
 
 因此，后续 acceptance record 和 release gate 更合理的解释是：
 
-- A-H：都可由 scripted browser evidence + screenshot bundle 直接回填
-- 其中 B/G 仍保留旧路径标签，但当前证据应解释为 `task_note_attach` seam
-- 若需要额外做人眼复看，优先复看第一页信息是否足够直观，而不是机械重复点完整 A-H 全套
+- A-H 自动化覆盖：可由 scripted browser evidence + screenshot bundle 回填为已覆盖。
+- A-H 严格人工签核：只有人工按本节最小取证要求复看并回填后，才能把 `passed` / release checklist 的人工 gate 勾成通过。
+- 其中 B/G 仍保留旧路径标签，但当前证据应解释为 `task_note_attach` seam。
+- 若只是做人眼复看，优先复看第一页信息是否足够直观，以及自动化 evidence 是否与现场一致；不要把脚本生成的 JSON 直接等同于人工验收记录。
 
-当前还新增了一条 helper，可直接把 starter browser-probe bundle 转成“半自动已回填、半人工待补”的 JSON：
+当前还新增了一条 helper，可直接把 starter browser-probe bundle 转成“自动化覆盖已回填、人工签核待补”的 JSON：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceScriptedBackfillTemplate.ps1 `
@@ -352,8 +353,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Render-DialogueAcceptanceScri
 
 它的当前 contract 是：
 
-- A-H：预填 `passed=true`
-- 每条自动预填路径都会带：
+- A-H：预填 `scripted_coverage_passed=true`
+- A-H：保持 `passed=false`，避免误关闭严格人工 gate
+- 每条自动覆盖路径都会带：
   - `evidence_mode=scripted_browser_evidence_available`
   - `observed_result`
   - `Evidence source`

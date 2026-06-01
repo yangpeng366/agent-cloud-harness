@@ -153,6 +153,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 - 如果真实 `8080` 页面仍显示 `01/21 22:04` 这类明显错误时间，或 `task_progress` 还只有旧摘要/乱码，优先判断当前实例是否仍在跑旧/坏的运行 JAR；不要在未 fresh restart 的前提下直接判定“代码没生效”
 - 如果本机构建链直接报 `mvn` 找不到，要先修构建环境；否则你后面看到的所有 `/dialogue/` 页面行为，都可能只是旧构建的假象
 - `Run-DialogueBrowserAcceptanceProbe.ps1` 会优先从 PATH 解析 `node`，PATH 漂移时会回退到常见本机 Node runtime；仍找不到时再用 `-NodePath <path-to-node.exe>` 显式指定，避免验收脚本因为当前 shell 环境漏配 PATH 而误判页面失败
+- 做 richer browser acceptance 时，如果当前机器内存紧张或 provider 二进制会触发真实长 worker，建议用独立端口、独立 DB，并关闭启动时 dispatch preflight warmup：
+  - JVM 参数：`-Dagentcloud.dispatch.preflight.warmup=false`
+  - 该参数只跳过启动预热，不改变正常 task 调度语义；因此 `resume` 这类动作仍可能触发真实 worker 执行
+  - dispatch preflight 失败缓存/冷却现在也可配置：`-Dagentcloud.dispatch.preflight.cache_ms=<ms>`、`-Dagentcloud.dispatch.preflight.unavailable_ms=<ms>`
+  - 默认值已调到更适合浏览器验收的保守口径：cache `120000ms`，失败 unavailable `600000ms`，避免不可用 CLI 在长流程中反复 help/probe timeout
+  - 如果目标只是 UI seam 检查，不要把“跳过预热 + 短 timeout”误记成完整后端 resume gate
+- richer browser acceptance 现在有显式 lifecycle 模式：
+  - 默认 `-LifecycleMode real`：`pause` / `resume` 都走真实后端，属于完整 gate，但可能触发真实 worker 执行
+  - `-LifecycleMode ui_seam`：`pause` 仍走真实后端并验证 `task_action` 投影；`resume` 只在浏览器探针内 synthetic 成功，验证按钮、POST path/method、非 legacy route 和 UI seam；验证到 lifecycle 后直接结束，不再继续跑 selected-task note / follow-up 这些会触发真实 continuation worker 的阶段
+  - 低资源本机排 UI 时可先用 `ui_seam`，发布/回归结论仍应用 `real` 或人工完整路径补证据
 
 ---
 
@@ -669,3 +679,198 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - **先跑 `scripts/screenshot.js` 看 shell**
 - **再跑 `scripts/dialogue-business-smoke.js` 看轻量业务**
 - **continuity / richer acceptance 仍走独立 acceptance 工具链**
+
+---
+
+## 8. 2026-06-01 default `task_auto` catch-up 收口记录
+
+背景：
+
+- fresh 隔离实例 `18410`、隔离库 `.tmp/dialogue-smoke-18410-20260601-2214.db` 下运行 `scripts/dialogue-business-smoke.js`。
+- session 创建成功后，default `task_auto` 后端已创建 `task_bbbf1df366d94ab0`，但浏览器 smoke 在等待 `hash task + message-list 增量 + detail title` 时 30s 超时。
+
+真实结论：
+
+- 这不是旧的 `thread not found (22568)` 复现；本轮主要问题是 façade 请求同步等待 provider routing / execution 时，前端 pending auto-task catch-up 已能发现新 task，但没有先刷新 session messages、也没有先用 task list 渲染详情标题。
+- 因此 UI 可以在 provider 长请求完成前短时间保持“任务已创建但 transcript/detail 未收敛”的状态，导致 light business smoke 抖动。
+
+验证入口：
+
+- 报告：`.tmp/dialogue-business-smoke-18410-20260601-2215.json`
+- 服务日志：`.tmp/server-18410-20260601-2214.out.log`
+- API 证据：`GET /api/v1/tasks` 可见 `task_bbbf1df366d94ab0`；`GET /api/v1/sessions/session_957514011f744235/messages?limit=20` 可见 `task_brief`
+
+收口状态：
+
+- 已落地。`tryCatchUpPendingAutoTaskSelection()` 命中新 task 后，会先 `loadMessages(sessionId)`，再用本地 task list 渲染 thread/details/composer/hash，最后才进入较慢的 `loadSelectedTask()` / `live_flow` 加载。
+- 已用脚本锁住两个关键边界：
+  - `dialogue-pending-auto-task-plan.test.mjs`：pending tracker 会优先选择匹配提交 intent 的新 task，避免被晚到 auto-start task 抢占。
+  - `dialogue-refresh-order-plan.test.mjs`：selected task refresh 会先无渲染加载 messages，再渲染 live_flow，避免旧消息壳覆盖当前任务详情。
+- 当前 light business smoke 已覆盖 default `task_auto` 后进入 task 视图、pinned `最近输出`、manual-start settle、continue-current task-scoped note。
+
+---
+
+## 9. 2026-06-02 richer browser acceptance 复核记录
+
+背景：
+
+- 复核目标是确认 `HARNESS_REDESIGN_FOR_LOCAL_AGENTS.md` 里的 Codex/worker round/partial timeout/UI 执行面闭环是否能被真实 `/dialogue/` 浏览器探针覆盖。
+- 使用隔离端口 `18444`、隔离数据库 `.tmp/dialogue-accept-18444e.db`、短 Codex timeout，并新增 `-Dagentcloud.dispatch.preflight.warmup=false` 跳过启动 preflight，降低本机资源压力。
+
+真实结论：
+
+- 浏览器探针里两个脚本级误判已收口：
+  - pinned 最近输出断言不再依赖旧英文 `latest round output`，改为要求稳定 selector 下有非空执行摘要，并继续检查 worker/status/output 信号。
+  - task lifecycle 检查前会重新选择目标 task，避免 auto-start 晚到刷新把 active card 抢回去后误判 pause/resume 状态。
+- 这轮 richer browser acceptance 仍未通过，原因不是页面空白或 pinned output 缺失，而是 `resume` 会进入真实 worker 调度；当前低内存工作站上 JVM 在 `ToolAwareWorkerExecutor` 路径附近发生 native OOM，浏览器侧表现为 `Failed to fetch`。
+- 后续复核显示，OOM 前还有一类资源放大点：路由 dispatch readiness 会对 capable provider worker 做 active probe；不可用或启动慢的 CLI（例如 claude/codebuddy）在长浏览器流程里会重复 timeout，然后再回退 codex。失败 preflight 的默认 cache/unavailable 窗口已加长，并支持用系统属性覆盖。
+- 因此这轮只能作为“脚本断言和选择漂移 seam 已收口”的证据，不能作为完整 `chat` surface browser acceptance 绿灯。
+
+验证入口：
+
+```powershell
+node --test src/test/js/dialogue-transcript-layout-plan.test.mjs
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -MavenArgs '-Dtest=MainConfigTest'
+```
+
+后续动作：
+
+- 如果要把 richer browser acceptance 做成低资源环境可稳定跑的 gate，应新增显式的轻量 lifecycle 模式，例如只验证 UI 请求形态/投影 seam，或在 probe 内 synthetic resume；不要静默降低现有 real resume 覆盖。
+- 如果要验证完整后端 resume，应换更干净/更高内存环境，并保留真实 worker 执行日志、JVM 日志和 browser probe JSON/screenshot。
+
+收口状态：
+
+- 已新增显式轻量模式 `Run-DialogueBrowserAcceptanceProbe.ps1 -LifecycleMode ui_seam`。
+- 默认仍是 `real`，不会静默降低既有 richer acceptance 覆盖。
+- `ui_seam` 模式下，resume 结果会在 JSON 里标记 `lifecycle_controls.mode=ui_seam`，且 `resume.controlResponsePhase=synthetic_ui_seam`，并带 `skipped_after_lifecycle=true`，方便和真实后端 gate 区分。
+- Worker dispatch preflight 的失败冷却也已收口：默认 cache `120s`、失败 unavailable `600s`，并可通过 `agentcloud.dispatch.preflight.cache_ms` / `agentcloud.dispatch.preflight.unavailable_ms` 覆盖。
+- 路由阶段也已减少外部 probe 放大：dispatch readiness 改为按排序候选逐个探测，命中首个 dispatch-ready worker 后停止；只有前置候选失败才会记录到 `dispatchSkippedWorkers`。
+- 后续又收口了一条 lifecycle focus race：pause 发起前也会重新选中目标 task，避免 active task 被晚到刷新抢走后，请求误打旧 task。
+
+复验证据：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 `
+  -BaseUrl http://localhost:18449 `
+  -Surface chat `
+  -LifecycleMode ui_seam `
+  -DebugPort 19274 `
+  -UserDataDir .tmp\edge-dialogue-browser-probe-ui-seam-18449 `
+  -ScreenshotDir .tmp\dialogue-browser-screens-18449-ui-seam-chat
+```
+
+- 结果文件：`.tmp/dialogue-browser-ui-seam-18449-chat.json`
+- 关键结果：`lifecycle_mode=ui_seam`、`pause.controlResponsePhase=completed`、`resume.controlResponsePhase=synthetic_ui_seam`、`skipped_after_lifecycle=true`
+- 额外确认：`pause.controlRequestUrl`、`pause.taskActionRequestPath` 与当前 `pause.selectedTaskId` 已对齐，避免误打旧 task。
+- 这条证据只证明 UI lifecycle seam；不证明真实后端 resume 后的 worker 调度成功。
+
+### 9.2 2026-06-02 real chat lifecycle 复核
+
+在收紧 lifecycle 断言后，又跑了一轮 `real` chat surface。启动条件：
+
+- 隔离端口：`18455`
+- 隔离 DB：`.tmp\dialogue-browser-real-18455\agent_cloud.db`
+- JVM：JDK21，`-Xmx384m -Xss512k -XX:TieredStopAtLevel=1 -XX:CICompilerCount=2 -XX:ReservedCodeCacheSize=48m`
+- 启动参数：`-Dagentcloud.dispatch.preflight.warmup=false`、dispatch preflight cache `120000ms`、unavailable `600000ms`
+- Codex 验收用短 turn 参数：`turn_activity_timeout_ms=3000`、`turn_max_duration_ms=5000`、`coding_turn_max_duration_ms=5000`、`partial_timeout_min_output_chars=1`
+
+命令形态：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 `
+  -BaseUrl http://localhost:18455 `
+  -Surface chat `
+  -LifecycleMode real `
+  -DebugPort 19277 `
+  -UserDataDir .tmp\edge-dialogue-browser-probe-real-18455 `
+  -ScreenshotDir .tmp\dialogue-browser-screens-18455-real-chat
+```
+
+结果文件：`.tmp/dialogue-browser-real-18455/probe-output.json`
+
+关键结果：
+
+- `surface=chat`、`lifecycle_mode=real` 通过。
+- `pause` 走真实 `POST /api/v1/tasks/task_723b61cb6381495a/pause`，`controlResponseStatus=200`，`task_action.request_method=POST`。
+- `resume` 走真实 `POST /api/v1/tasks/task_723b61cb6381495a/resume`，`controlResponseStatus=200`，`task_action.request_method=POST`。
+- 新增断言要求 `hashTaskId == selectedTaskId == action target task id`；本轮 `pause` / `resume` 均满足，避免 URL hash 和 active task 漂移。
+- 本轮没有复现 JVM native OOM，`server.err.log` 为空。
+
+边界：
+
+- 这条证据证明 `chat` surface 的真实 pause/resume lifecycle gate；不等于 `Surface both`，也不替代严格人工 A-H 手点。
+- 本轮使用短 Codex turn 参数，适合作为 UI lifecycle/partial result gate，不代表长 coding task 10-15min 默认策略的性能验收。
+
+### 9.3 2026-06-02 real both-surface lifecycle 复核
+
+随后继续跑了 `Surface both` 的真实 lifecycle gate，覆盖 `chat` 与 `responses` 两个入口：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 `
+  -BaseUrl http://localhost:18457 `
+  -Surface both `
+  -LifecycleMode real `
+  -DebugPort 19279 `
+  -UserDataDir .tmp\edge-dialogue-browser-probe-real-both-18457 `
+  -ScreenshotDir .tmp\dialogue-browser-screens-18457-real-both `
+  -NodeMaxOldSpaceMb 1024
+```
+
+启动条件：
+
+- 隔离端口：`18457`
+- 隔离 DB：`.tmp\dialogue-browser-real-both-18457\agent_cloud.db`
+- JVM：JDK21，`-Xmx512m -Xss512k -XX:TieredStopAtLevel=1 -XX:CICompilerCount=2 -XX:ReservedCodeCacheSize=64m`
+- 启动参数：关闭 dispatch preflight warmup，dispatch cache `120000ms`，unavailable `600000ms`
+- Codex 验收用短 turn 参数同 9.2
+
+结果文件：`.tmp/dialogue-browser-real-both-18457/probe-output.json`
+
+关键结果：
+
+- 顶层 `surface=both`、`lifecycle_mode=real`。
+- `chat_surface.surface=chat_completions`，`responses_surface.surface=responses`，两者均非空。
+- chat lifecycle：
+  - pause: `POST /api/v1/tasks/task_6ca41fc0065044b8/pause`，`controlResponseStatus=200`，`task_action.request_method=POST`
+  - resume: `POST /api/v1/tasks/task_6ca41fc0065044b8/resume`，`controlResponseStatus=200`，`task_action.request_method=POST`
+  - `hashTaskId == selectedTaskId == task_6ca41fc0065044b8`
+- responses lifecycle：
+  - pause: `POST /api/v1/tasks/task_7c30c2e057694238/pause`，`controlResponseStatus=200`，`task_action.request_method=POST`
+  - resume: `POST /api/v1/tasks/task_7c30c2e057694238/resume`，`controlResponseStatus=200`，`task_action.request_method=POST`
+  - `hashTaskId == selectedTaskId == task_7c30c2e057694238`
+- 截图目录 `.tmp\dialogue-browser-screens-18457-real-both` 同时包含 chat 与 responses 的 default task、stream fallback、manual-start、task-note、continuity、followup 截图。
+
+当前判断：
+
+- 自动化 richer browser acceptance 的 `real` lifecycle gate 已覆盖 `chat` 和 `responses` 两个 surface。
+- 仍未替代严格人工 A-H 手点；发布前 checklist 里人工逐条确认仍应单独保留。
+- 本轮仍使用短 Codex turn 参数，因此证明的是 browser lifecycle / projection / continuity seam，不是长 coding task 默认 10-15min 策略的吞吐或稳定性验收。
+
+### 9.1 2026-06-02 light business smoke 复核
+
+本轮额外跑了独立端口的 light business smoke，用来确认 `/dialogue/` 当前业务主链路没有只停在单测或静态截图：
+
+```powershell
+# 启动条件：
+# JDK21, port 18453, isolated db .tmp\dialogue-business-smoke-18453\agent_cloud.db,
+# -Dagentcloud.dispatch.preflight.warmup=false
+node .\scripts\dialogue-business-smoke.js `
+  --base-url http://localhost:18453 `
+  --report .tmp\dialogue-business-smoke-18453\report.json
+```
+
+结果：
+
+- `open dialogue shell` 通过。
+- `create session` 通过，hash 收敛到新 session。
+- `submit default task_auto` 通过，hash 收敛到新 task。
+- `default task_auto pinned execution surface` 通过，首屏可见 `最近输出` / `执行中` / `active / scheduler`。
+- `submit manual-start task` 通过，manual task 与 details/active card 对齐。
+- `submit continue-current note` 通过，任务内写入 `task_note`，assistant 回执为 `已记录到当前任务上下文，等待手动继续。`
+
+报告文件：`.tmp/dialogue-business-smoke-18453/report.json`
+
+边界：
+
+- 这条证据覆盖 light business smoke，不替代 richer browser acceptance 的 `real` lifecycle gate。
+- 本轮启动关闭了 dispatch preflight warmup，只降低启动资源压力，不改变普通 task 调度语义。

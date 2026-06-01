@@ -33,8 +33,11 @@ foreach ($requiredId in @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')) {
 
 foreach ($scriptedId in @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')) {
     $entry = $byId[$scriptedId]
-    if (-not $entry.passed) {
-        throw "scripted path $scriptedId should be prefilled as passed"
+    if ($entry.passed) {
+        throw "scripted path $scriptedId must not mark the strict manual passed gate"
+    }
+    if (-not $entry.scripted_coverage_passed) {
+        throw "scripted path $scriptedId should be prefilled as scripted_coverage_passed"
     }
     if ([string]$entry.evidence_mode -ne 'scripted_browser_evidence_available') {
         throw "scripted path $scriptedId has wrong evidence_mode: $($entry.evidence_mode)"
@@ -44,9 +47,39 @@ foreach ($scriptedId in @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')) {
     }
 }
 
+$port = ($backfill.base_url -replace '^https?://localhost:', '')
+$scriptedMisusePath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) (".tmp\dialogue-scripted-backfill-misuse-{0}.json" -f $port)))
+$recordProbePath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) (".tmp\dialogue-scripted-backfill-misuse-record-{0}.md" -f $port)))
+
+& powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Render-DialogueAcceptanceRecordDraft.ps1") -InputJsonPath $InputJsonPath |
+    Out-File -FilePath $recordProbePath -Encoding utf8
+
+$misuse = $backfill | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+$misuse.paths[0].passed = $true
+$misuse | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $scriptedMisusePath -Encoding utf8
+
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $applyOutput = & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "Apply-DialogueAcceptanceManualBackfill.ps1") `
+        -BackfillJsonPath $scriptedMisusePath `
+        -RecordPath $recordProbePath 2>&1
+    $applyExitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($applyExitCode -eq 0) {
+    throw "apply helper accepted scripted evidence as manual Passed=true"
+}
+$applyText = ($applyOutput | Out-String)
+if (-not $applyText.Contains("scripted browser evidence cannot mark manual Passed=true")) {
+    throw "apply helper rejected scripted misuse with unexpected error: $applyText"
+}
+
 [pscustomobject]@{
     input_json_path = [System.IO.Path]::GetFullPath($InputJsonPath)
-    scripted_prefilled = @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')
-    residual_human = @()
+    scripted_coverage_prefilled = @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')
+    residual_human = @('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H')
+    scripted_misuse_rejected = $true
     ok = $true
 } | ConvertTo-Json -Depth 4

@@ -6,7 +6,7 @@ param(
     [string]$StdOutPath = ".tmp\server.out.log",
     [string]$StdErrPath = ".tmp\server.err.log",
     [string[]]$JavaArgs = @(),
-    [switch]$AutoStop
+    [switch]$AutoStop = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -159,6 +159,31 @@ function Assert-PortAvailable {
     if ($listeners) {
         if ($AutoStop) {
             Stop-ProcessByPort -PortNumber $PortNumber
+
+            $maxRetries = 10
+            $retryCount = 0
+            $portReleased = $false
+
+            while ($retryCount -lt $maxRetries) {
+                Start-Sleep -Milliseconds 500
+                $listeners = Get-NetTCPConnection -State Listen -LocalPort $PortNumber -ErrorAction SilentlyContinue
+                if (-not $listeners) {
+                    $portReleased = $true
+                    break
+                }
+                $retryCount++
+                Write-Host "Waiting for port $PortNumber to be released... ($retryCount/$maxRetries)" -ForegroundColor Yellow
+            }
+
+            if (-not $portReleased) {
+                Write-ErrorWithHelp `
+                    -Message "Port $PortNumber is still in use after stopping the process" `
+                    -HelpMessage @"
+The port may be held by the system or another process. Try:
+1. Use a different port: .\scripts\Run-HarnessWithJava21.ps1 -Port 8081
+2. Restart your computer
+"@
+            }
         }
         else {
             $owningProcess = ($listeners | Select-Object -First 1).OwningProcess
@@ -255,6 +280,7 @@ Management commands:
 }
 else {
     Write-Info "Step 3/3: Start in foreground mode"
+    Assert-PortAvailable -PortNumber $Port -AutoStop:$AutoStop
 
     $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
     $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)
@@ -276,7 +302,7 @@ Press Ctrl+C to stop the service
             -Message "Service failed to start with exit code: $LASTEXITCODE" `
             -HelpMessage @"
 Common startup failure reasons:
-1. Port is in use - use -Port parameter to specify another port
+1. Port is in use - use -AutoStop parameter to automatically stop existing process
 2. JAR file is corrupted - rebuild the project
 3. Java version incompatible - ensure using Java 21
 4. Check error logs for detailed information
