@@ -277,6 +277,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18457 -Surface both -LifecycleMode real -DebugPort 19279 -UserDataDir .tmp\edge-dialogue-browser-probe-real-both-18457 -ScreenshotDir .tmp\dialogue-browser-screens-18457-real-both -NodeMaxOldSpaceMb 1024
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Port 18466 -Background -StdOutPath .tmp\harness-warmup-disabled-18466.out.log -StdErrPath .tmp\harness-warmup-disabled-18466.err.log -DisableDispatchPreflightWarmup
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=TaskHandlerLiveFlowHttpTest#providerRunFileHttpSupportsSseTailSnapshots' test }
+& { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=TaskHandlerLiveFlowHttpTest#providerRunFileHttpSseEmitsUpdateWhenTailFileChanges+providerRunFileHttpSupportsSseTailSnapshots' test }
 ```
 
 关键验收点：
@@ -296,6 +297,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - OpenCode 已迁移为 `OpenCodeProtocol` 并注册到默认 protocol registry；正常执行路径会设置 `provider_protocol_parser_used=true`，不再依赖 executor 内部 opencode parser 主路径。
 - Task 级 SSE 事件面已接入：`/api/v1/tasks/{id}/events` 普通 GET 返回最近 harness events，`stream=true` 返回 `text/event-stream`；Dialogue 使用该流缩短“执行中/最近输出”刷新延迟。
 - Provider run 文件受控读取已支持尾部窗口和 SSE 窗口流：`/api/v1/tasks/{id}/provider_run_file?kind=events&tail=true&max_lines=50` 可读取最新 `events.jsonl` 尾部行；`stream=true` 或 `Accept: text/event-stream` 会返回 `provider_run_file.snapshot/update/done`，用于观察长 `stdout.log` / `events.jsonl` 的尾部变化；Dialogue / Console 的 `事件日志`、`标准输出` 预览默认使用 `tail=true&max_lines=80`，其他文件仍保持文件头 64 KiB 的兼容行为。
+- Provider run file SSE 已补回归测试覆盖真实文件变化：订阅 `stdout` 尾部窗口期间追加新行，会收到 `provider_run_file.update` 并展示最新尾部内容；这验证的是受控文件读面 update 语义，不改变其非 token-level stdout streaming 边界。
 - Dialogue / Console 的 provider run 文件按钮已接入该 SSE 读面：`事件日志`、`标准输出` 优先通过 EventSource 订阅 `provider_run_file.snapshot/update/done`；关闭详情弹窗、切换任务或会话时会关闭旧订阅，避免跨任务残留连接。
 - Dialogue 主视图已具备运行态徽标：选中 active/running task 后，pinned summary 与 task thread 会显示“执行中 · worker · 已运行 XmYs · 节点 scheduler/continue”，并由 task SSE 事件触发局部刷新；5s 轮询仍作为兜底，避免用户必须展开 details 才知道 Codex/worker 是否仍在跑。
 - Dialogue 对 `partial_timeout` worker_round 已提供操作入口：有 `provider_thread_id / provider_session_id` 时显示“继续 Codex thread”和“手动移交”；没有 provider thread 时只显示“手动移交”，避免把部分结果压成普通失败。

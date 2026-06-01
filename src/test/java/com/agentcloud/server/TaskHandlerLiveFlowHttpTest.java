@@ -50,6 +50,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -612,6 +613,59 @@ class TaskHandlerLiveFlowHttpTest {
             assertTrue(response.body().contains("event: provider_run_file.snapshot"));
             assertTrue(response.body().contains("\"kind\":\"stdout\""));
             assertTrue(response.body().contains("\"read_mode\":\"tail\""));
+            assertTrue(response.body().contains("stdout-2\\nstdout-3"));
+            assertTrue(response.body().contains("event: provider_run_file.stream.done"));
+        }
+    }
+
+    @Test
+    void providerRunFileHttpSseEmitsUpdateWhenTailFileChanges() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file-sse-update.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider run file sse update", "coding", "user", "high",
+                "订阅 provider stdout 尾部更新", "HTTP should emit provider run file SSE updates when stdout changes",
+                null, null, Map.of(), false
+            ));
+            Path runDir = tempDir.resolve("provider-run-sse-update").toAbsolutePath().normalize();
+            Path stdoutPath = runDir.resolve("stdout.log");
+            Files.createDirectories(runDir);
+            Files.writeString(stdoutPath, "stdout-1\nstdout-2\n", StandardCharsets.UTF_8);
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "worker output",
+                Map.of("latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "partial_timeout",
+                    "provider_run_dir", runDir.toString(),
+                    "provider_stdout_path", stdoutPath.toString()
+                ))
+            ));
+
+            Future<HttpResponse<String>> responseFuture = harness.executor.submit(() -> harness.client.send(
+                HttpRequest.newBuilder(harness.uri(
+                    "/api/v1/tasks/" + task.id()
+                        + "/provider_run_file?kind=stdout&stream=true&max_ticks=4&interval_ms=250&max_lines=2"))
+                    .header("Accept", "text/event-stream")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            ));
+            Thread.sleep(350);
+            Files.writeString(stdoutPath, "stdout-1\nstdout-2\nstdout-3\n", StandardCharsets.UTF_8);
+
+            HttpResponse<String> response = responseFuture.get();
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().contains("event: provider_run_file.snapshot"));
+            assertTrue(response.body().contains("stdout-1\\nstdout-2"));
+            assertTrue(response.body().contains("event: provider_run_file.update"));
             assertTrue(response.body().contains("stdout-2\\nstdout-3"));
             assertTrue(response.body().contains("event: provider_run_file.stream.done"));
         }
