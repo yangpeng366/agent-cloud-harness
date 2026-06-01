@@ -145,6 +145,40 @@ $env:OPENAI_WIRE_API="chat_completions"
 
 未配置时，LLM 层会以 `available=false` 降级运行，部分功能（如 prompt-based judgment）将回退到规则判断或默认执行器。
 
+可用性检查：
+
+```bash
+curl http://localhost:8080/api/v1/health
+```
+
+`llm.available=true` 表示启动进程已读取到非空 `OPENAI_API_KEY`；响应只返回 `api_key_configured` 布尔值，不回显密钥内容。
+
+## ⚙️ 可选：配置本地 Agent Provider
+
+启动时会轻量读取 `providers.yaml` / `providers.yml` / `providers.json`，用于给本地 provider 覆盖或补充 CLI protocol 执行计划：
+
+- 当前目录、`config/`
+- `${user.home}/.agentcloud/`
+- `/etc/agentcloud/`
+
+当前动态发现只覆盖 generic native CLI provider，支持 `protocol: native_cli_text|native_cli_json|native_cli_lines|native_cli_stream_json`、`command`、`binary`、`args`、`env`、`capabilities`。`command` 会按完整命令执行；`binary + args` 会使用 `binary` 作为启动目标，并自动把 task prompt 追加到参数末尾。新 `id` 会在启动期注册到 `/api/v1/agents` 和 `/api/v1/workers`，并进入 provider-native 路由候选；是否 ready 仍取决于本机 binary、认证和 dispatch preflight。`native_cli_stream_json` 在 generic 配置里按行保留输出；Codex app-server 仍走内置 Codex 执行链，不通过 generic discovery 动态注册。
+
+边界：动态 provider inventory 仍是内存态，未独立持久化；配置文件只在启动时读取，修改后需要重启 harness。`app_server_json_rpc`、`mcp` 和未声明 protocol 的自动探测还不属于当前 generic discovery 能力。
+
+示例 `providers.yaml`：
+
+```yaml
+providers:
+  - id: trae
+    protocol: native_cli_text
+    binary: trae
+    args: ["chat", "--mode", "agent"]
+    env:
+      TRAE_MODE: local
+```
+
+Provider 输出和 Codex app-server 运行文件默认写入 `.tmp/provider-runs/`，可通过 `-Dagentcloud.provider_runs.dir=...` 或 `AGENTCLOUD_PROVIDER_RUNS_DIR` 覆盖。
+
 ---
 
 ## 📁 项目结构速览

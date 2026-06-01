@@ -830,6 +830,7 @@ node --test src/test/js/dialogue-provider-run-file-plan.test.mjs
 - `awaitTurnCompletion` 的循环条件应同时考虑：
   - 未超过 `turn_max_duration_ms`
   - 距离最近活动未超过 `turn_activity_timeout_ms`
+- `turn_max_duration_ms` 是真正硬上限；即使误配置或调试参数让 `turn_activity_timeout_ms` 大于它，也不能把单轮等待时间延长到 activity timeout。
 - 当 activity timeout 命中且没有有效输出时，状态为 `timeout`。
 - 当 max duration 命中但存在有效输出时，状态为 `partial_timeout`。
 - 当收到 `turn_aborted` 且已有有效输出时，状态也应优先归一为 `partial_timeout`，metadata 保留 `provider_turn_status=cancelled/interrupted` 和 `provider_abort_reason`。
@@ -867,6 +868,7 @@ metadata 合同：
 
 - 构造 Codex app-server mock：持续输出 `agent_message` / command events 超过 150s，但未到 `turn_max_duration_ms`，不应被判定为 `timeout`。
 - 构造 Codex app-server mock：`turn/completed` 后进程继续常驻，harness 应保留本轮 `completed` 与输出，不应因清理进程得到的非 0 exit code 改判失败。
+- 构造 Codex app-server mock：`turn_activity_timeout_ms` 大于 `turn_max_duration_ms` 时，仍必须先命中 `max_duration`，有输出则为 `partial_timeout`。
 - 构造 `codex exec --json` mock：设置 `agentcloud.providers.codex.turn_max_duration_ms` 后，metadata 应透出本轮使用的 `provider_turn_max_duration_ms`，证明不再走固定 180s 上限。
 - 构造 `codex exec --json` 非 0 退出 mock：失败 metadata 仍应显示 `provider_output_parser=codex_exec_json`，并保留 `exit_code / provider_error / provider_turn_max_duration_ms`。
 - 构造 max duration 命中且有输出：artifact 和 agent run 应写 `execution_status=partial_timeout`。
@@ -964,7 +966,7 @@ node --test src/test/js/dialogue-phase6-path-matrix.test.mjs
 | 配置 | 默认 | 说明 |
 |------|------|------|
 | `agentcloud.providers.codex.execution_mode` | `app_server` | 可选 `app_server` / `exec_json` |
-| `agentcloud.providers.codex.output_dir` | `.tmp/provider-runs/codex` | 存放 prompt、JSONL event、last message |
+| `agentcloud.provider_runs.dir` / `AGENTCLOUD_PROVIDER_RUNS_DIR` | `.tmp/provider-runs` | provider run 根目录；Codex app-server 会落到 `{root}/codex/{task_id}/{execution_id}/`，包含 prompt、JSONL event、last message、metadata |
 | `agentcloud.providers.codex.resume_mode` | `fresh_on_recovery` | recovery 阶段默认不复用旧 session |
 
 当前状态（2026-05-22）：
@@ -1270,6 +1272,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 阶段 B 剩余动作：
 
+- `providers.yaml` / `providers.json` 当前的动态发现是轻量 native CLI generic provider 能力，已支持 `protocol/native_cli_text/json/lines/stream_json`、`binary`、`args`、`env` 别名；其中 `native_cli_stream_json` 当前按行保留输出，不等同于 Claude/Cursor provider-specific stream-json parser。`app_server_json_rpc` 仍由 Codex app-server 执行器主链处理，`mcp` 与“未写 protocol 自动探测”还不能宣称已完成。
 - 在安装 `cursor-agent / opencode / copilot / gemini / kimi` 后，继续补真实 CLI smoke 证据，确认 `cursor chat --help`、`opencode run --help` 等 probe args 与本机版本一致。
 - 当前 CLI profile 已有进程内 runtime cache，但没有落 SQLite；如果要跨进程复用，需要新增 profile 持久化或把 warm-up 结果写入 worker runtime cache 文件。
 - profile 解析仍是 help 文本启发式，后续应按 provider 增加更精确的 probe，例如 `cursor chat --help`、`gemini --help`、`kimi --help` 的真实输出 fixture。

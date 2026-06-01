@@ -177,6 +177,47 @@ node scripts/dialogue-business-smoke.js --base-url http://localhost:18386 --repo
 |------|------|--------|
 | `-Dserver.port` | HTTP 服务端口 | 8080 |
 | `-Ddb.path` | SQLite 数据库文件路径 | `${user.home}/.agentcloud/agent_cloud.db` |
+| `-Dagentcloud.provider_runs.dir` | provider/Codex run 文件目录，用于保存 prompt、stdout/events、last_message、metadata | `.tmp/provider-runs` |
+| `-Dagentcloud.provider_runs.max_per_task` | 每个 provider/task 保留的 run 目录数量 | 20 |
+| `-Dagentcloud.provider_runs.max_age_hours` | provider run 目录最大保留小时数 | 168 |
+
+Provider run 目录也可用环境变量覆盖：
+
+| 环境变量 | 说明 |
+|----------|------|
+| `AGENTCLOUD_PROVIDER_RUNS_DIR` | 同 `-Dagentcloud.provider_runs.dir` |
+| `AGENTCLOUD_PROVIDER_RUNS_MAX_PER_TASK` | 同 `-Dagentcloud.provider_runs.max_per_task` |
+| `AGENTCLOUD_PROVIDER_RUNS_MAX_AGE_HOURS` | 同 `-Dagentcloud.provider_runs.max_age_hours` |
+
+### 本地 Agent Provider 配置
+
+启动时会读取以下位置的 `providers.yaml` / `providers.yml` / `providers.json`，后面的配置会覆盖默认 protocol registry 中同 id 的 provider protocol：
+
+- 当前工作目录
+- `config/`
+- `${user.home}/.agentcloud/`
+- `/etc/agentcloud/`
+
+当前动态发现只覆盖 generic native CLI provider。支持 `command` 完整命令，也支持 `binary + args` 形态；后者会使用 `binary` 作为启动目标，并把 task prompt 自动追加到参数末尾。新 `id` 会在启动期注册到 `/api/v1/agents` 和 `/api/v1/workers`，并进入 provider-native 路由候选；是否 ready 仍取决于本机 binary、认证和 dispatch preflight。支持的 protocol：
+
+- `native_cli_text`
+- `native_cli_json`
+- `native_cli_lines`
+- `native_cli_stream_json`，当前按行保留输出，不做 provider-specific event 解析
+
+示例：
+
+```yaml
+providers:
+  - id: trae
+    protocol: native_cli_text
+    binary: trae
+    args: ["chat", "--mode", "agent"]
+    env:
+      TRAE_MODE: local
+```
+
+边界：动态 provider inventory 仍是内存态，未独立持久化；配置文件只在启动时读取，修改后需要重启 harness。Codex app-server 仍走内置 `CodexAppServerWorkerExecutor`；`app_server_json_rpc`、`mcp` 和未声明 protocol 的自动探测不属于当前 generic discovery 能力。
 
 ---
 

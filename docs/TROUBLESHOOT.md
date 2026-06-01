@@ -231,6 +231,53 @@ curl "http://localhost:8080/api/v1/workers"
   4. `WorkerRouterRouteTraceTest.pinnedWorkerWithoutWorkspaceAccessCannotOverrideLocalWorkspaceRequirement()`
   5. `WorkerRouterRouteTraceTest.localWorkspaceOpsTaskRejectsCandidateWithoutWorkspaceAccess()`
 
+### 2.0.6 配了 `providers.yaml` / `providers.json`，但新 provider 没有按预期执行
+
+- **典型表现**:
+  1. 已在当前目录、`config/` 或 `${user.home}/.agentcloud/` 放了 `providers.yaml`
+  2. 重启 harness 后，看不到对应 provider 行为变化
+  3. 或 `/api/v1/workers` 能看到新 worker，但 readiness 显示 not ready
+- **当前支持范围**:
+  1. `ProviderProtocolDiscovery` 只动态注册 generic native CLI provider
+  2. 支持 `protocol: native_cli_text|native_cli_json|native_cli_lines|native_cli_stream_json`
+  3. 支持 `command` 完整命令；也支持 `binary + args`，其中 `binary` 是启动目标，task prompt 会自动追加到参数末尾
+  4. 支持 `env`，也兼容旧的 `type: generic` + `command`
+  5. 新 `id` 会在启动期注册到 `/api/v1/agents` 和 `/api/v1/workers`，并进入 provider-native 路由候选
+  6. `native_cli_stream_json` 只是按行保留输出，不等于 Claude/Cursor 专用 stream-json parser
+  7. `app_server_json_rpc`、`mcp`、未写 protocol 的自动探测当前不是 dynamic generic discovery 能力
+- **快速检查**:
+
+```yaml
+providers:
+  - id: trae
+    protocol: native_cli_text
+    binary: trae
+    args: ["chat", "--mode", "agent"]
+    env:
+      TRAE_MODE: local
+```
+
+- **排查顺序**:
+  1. 先确认配置文件位置在当前启动工作目录、`config/` 或 `${user.home}/.agentcloud/`
+  2. 重启 harness；discovery 只在启动时读取配置
+  3. 如果配置的是 `codex app-server`，不要期望它通过 generic discovery 生效；Codex 仍走内置 app-server executor
+  4. 如果配置了全新 `id`，先确认 `/api/v1/workers` 和 `/api/v1/agents` 是否有对应条目；没有则说明 harness 没读到配置或需要重启
+  5. 再查 `/api/v1/workers/{id}/readiness`；如果 `provider:<id>=false`，优先处理 binary 路径、认证或 dispatch preflight
+  6. 如果任务仍没有路由到该 worker，检查 task type 是否落在配置的 `capabilities` 内，以及该 worker 是否 ready
+  7. 如果需要查看 provider 输出，优先查 artifact metadata 里的 `provider_run_dir / provider_last_message_path / provider_stdout_path / provider_event_log_path`
+  8. 也可通过 `GET /api/v1/tasks/{id}/provider_run_file?kind=last_message|stdout|events|metadata|prompt` 读取受控 run 文件
+- **已验证的真实 smoke**:
+  1. 在临时工作目录放 `providers.yaml`，使用独立端口和临时 DB 启动 harness
+  2. `/api/v1/agents` 返回 `smoke_agent`，metadata 含 `provider_discovery=true`、`configured_from=providers.yaml`
+  3. `/api/v1/workers` 返回 `smoke_agent`，`ready=false`、`capabilities=["coding","research"]`
+  4. `/api/v1/workers/smoke_agent/readiness` 返回 `executor_backend:provider_native_cli=true`、`provider:smoke_agent=false`、`reason=binary not found: smoke-agent-missing-binary`
+  5. 该 smoke 同时覆盖 Windows PowerShell 写出的 UTF-8 BOM YAML；discovery 会剥离文件头 BOM 后解析 `providers:`
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven
+node .\scripts\provider-discovery-smoke.js --port 18432 --report .\.tmp\provider-discovery-smoke\report.json
+```
+
 ### 2.0.1 `/dialogue/` 里为什么“聊天”现在会直接进入 task，而不是只记一条 session note
 
 - **当前位置**: `/dialogue/` 主 composer, `ChatFacadeService`

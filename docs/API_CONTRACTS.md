@@ -51,7 +51,9 @@
 | GET | `/api/v1/tasks/{id}/runtime_context` | 查看当前运行时上下文、active context 与 mounted context 视图 | 路径参数 `id` | `TaskRuntimeContext` | 否 |
 | GET | `/api/v1/tasks/{id}/judgment_trace` | 查看最近一次 execution/completion judgment 诊断视图 | 路径参数 `id` | `JudgmentTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/live_flow` | 聚合查看 live flow 诊断面 | Query: `limit` | `TaskLiveFlowView` | 否 |
+| GET | `/api/v1/tasks/{id}/events` | 查看或订阅 task 级 harness event 流 | Query: `limit?`, `stream=true?`, `interval_ms?`, `max_ticks?`; `Accept: text/event-stream` 也会启用流式响应 | `Event[]` 或 `text/event-stream` | 否 |
 | GET | `/api/v1/tasks/{id}/provider_run_file` | 受控读取最新 provider run 文件内容，用于排查 Codex/Kimi/DeepSeek 等 worker round | Query: `kind=last_message\|events\|stdout\|metadata\|prompt` | `ProviderRunFileView` | 否 |
+| GET | `/api/v1/tasks/{id}/artifacts` | 查询任务产物列表；用于 Dialogue 的 artifact-first worker round 渲染，合并任务 `artifacts` 表与最新 `agent_run` artifacts | Query: `limit?` | `AgentRunArtifactView[]` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_run` | 查看该任务最新 experiment run 指标快照 | 路径参数 `id` | `ExperimentRunRecord` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_summary` | 以当前任务所属 `experiment_name` 为键，查看整组 matrix 汇总与 case 对比 | 路径参数 `id` | `ExperimentMatrixSummary` | 否 |
 | GET | `/api/v1/tasks/{id}/harness_trace` | 查看面向 AHE 复盘的压缩 Harness 执行轨迹 | Query: `limit` | `HarnessTraceView` | 否 |
@@ -573,6 +575,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `created_at`
 - `metadata`
 
+`GET /api/v1/tasks/{id}/artifacts` 是 worker output 的 artifact-first 读取面。当前语义：
+
+- 优先返回该 task 直接写入 `artifacts` 表的产物，即使没有对应 `agent_run` 也必须可见。
+- 同时合并最新 provider `agent_run` 的 artifacts，便于 provider-aware 读面和历史 `artifacts` 表读面统一展示。
+- 返回项使用 `AgentRunArtifactView` 形态，稳定字段至少包括 `artifact_id / run_id / provider_id / task_id / artifact_type / title / path / summary / created_at / metadata`。
+- 当 `metadata.execution_status=partial_timeout` 时，前端必须把它当作可展示的部分结果，而不是普通失败摘要。
+
 从 hardness phase-1 方案视角看，这意味着：
 
 - `ToolInvocationRecord` 已经不是 blueprint，而是现有 API 和持久化对象
@@ -842,7 +851,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 
 | 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |
 |------|------|------|---------|---------|------|
-| GET | `/api/v1/health` | 健康检查与版本探针 | 无 | `status/virtual_threads/version` | 否 |
+| GET | `/api/v1/health` | 健康检查与版本探针 | 无 | `status/virtual_threads/version/llm` | 否 |
+
+`llm` 字段用于快速判断 judgment / tool-aware execution 是否有可用 LLM 配置。它返回 `available`、`api_key_configured`、`base_url`、`model`、`review_model`、`wire_api`、`request_timeout_seconds`、`max_retries`、`max_tokens`；不会回显 `OPENAI_API_KEY` 原文。
 
 ### 认证与鉴权
 

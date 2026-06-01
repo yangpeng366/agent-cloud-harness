@@ -83,7 +83,7 @@
 
 以下事实在公开说明里应保持诚实：
 
-- `/dialogue/` A-H 八条真实人工验收尚未全部完成
+- `/dialogue/` A-H 八条严格人工手点尚未全部完成；当前 scripted browser bundle 已覆盖可达 seam，但不能替代人工 gate
 - `README.md` 中仍保留 `<your-published-repo-url>` 发布占位，尚未替换成真实公开地址
 - 当前 harness 仍然定位于本地 / 单机
 - 安全边界尚未收口，不应宣称可直接公网部署

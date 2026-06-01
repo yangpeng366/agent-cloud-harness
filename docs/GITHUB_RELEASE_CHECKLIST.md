@@ -45,6 +45,12 @@
     - `.tmp/dialogue-business-smoke-18386.json`
 - [x] Windows 宿主下的外部进程输出编码兼容已收口为“UTF-8 优先 + 本地编码兜底”
 - [x] `/dialogue/` richer browser acceptance 现已具备 fresh 真实证据
+  - 2026-06-02 isolated real both-surface lifecycle:
+    - `18457` `Surface both` / `LifecycleMode real`
+    - report: `.tmp/dialogue-browser-real-both-18457/probe-output.json`
+    - screenshots: `.tmp/dialogue-browser-screens-18457-real-both`
+    - chat and responses `pause` / `resume` all used real `POST /api/v1/tasks/{id}/...`
+    - `hashTaskId == selectedTaskId == action target task id` for both surfaces
   - isolated fresh samples:
     - `18338` `chat`
     - `18340` `responses`
@@ -67,12 +73,19 @@
   - current rationale:
     - B / G no longer rely on nonexistent `*message-only.png` artifacts
     - both now use real browser-probe evidence from `task_note_attach` on chat / responses surfaces
+  - boundary:
+    - 这里的 A-H 指 scripted browser 对“当前可达 seam”的覆盖；2026-06-02 已有 `Surface both` + `LifecycleMode real` 复核，但仍不等于严格人工逐条手点 gate 已关闭
+- [ ] `/dialogue/` A-H 严格人工逐条手点已完成
+  - current note:
+    - 当前已有 screenshot / JSON bundle 可辅助回填，但 release precheck 仍应把严格人工 gate 保持为未完成，除非有人按 runbook 完成并签入对应记录
+    - 2026-06-02 后续复核中，`Surface both` + `LifecycleMode real` 已在隔离端口 `18457` 通过，旧的低内存 OOM 只保留为运行风险；该自动化证据仍不能替代“人工逐条手点”签核
 - [x] 验收记录已回填
   - current evidence:
     - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-11.md`
     - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-05-14.md`
+    - `docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_2026-06-02.md`
   - current status:
-    - current formal record now rewrites B/G to the current `task_note_attach` evidence and latest `18276` prep bundle
+    - current formal records cover the current `task_note_attach` seam and the 2026-06-02 automated real both-surface lifecycle evidence
 - [x] 公开说明中没有把当前状态夸大成 production-ready distributed platform
   - current public-facing wording audit:
     - `README.md` 将项目定位为“本地原型与单机 harness”
@@ -88,12 +101,15 @@
 如果看“作为首发项目对外站得住”：
 
 - 仍需完成发布范围收口与更大范围产品线收尾
+- 仍需保持未完成 gate 的诚实边界：真实公开 URL、干净环境完整预检、真实远端 GitHub Actions、严格人工 A-H 手点
 
 ## 证据说明
 
 - 忽略项隔离：见 `.gitignore`
 - 本地首发预检记录：见
   - `docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-05-11.md`
+  - `docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md`
+    - 当前更新后的本地 precheck 记录，包含 provider discovery smoke、Codex partial timeout smoke、`unmatched_count=0` 的 commit dry-run，以及 precheck 标题日期修正
 - 首发范围与非首发证据分层：见
   - `docs/GITHUB_FIRST_RELEASE_FILESET.md`
   - `docs/GITHUB_FIRST_RELEASE_DRY_RUN_2026-05-11.md`
@@ -132,12 +148,15 @@
   - `docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`
 - 本地首发预检脚本：见
   - `scripts/Run-GitHubFirstReleasePrecheck.ps1`
+  - 该脚本现包含 provider discovery smoke：先构建 shaded jar，再运行 `scripts/provider-discovery-smoke.js`，验证临时 `providers.yaml` 注册的 provider 会同时出现在 `/api/v1/agents` 与 `/api/v1/workers`，且列表 readiness 与 runtime readiness 一致
+  - 该脚本现包含 Codex partial timeout smoke：运行 `scripts/Run-CodexPartialTimeoutSmoke.ps1`，验证有输出的 Codex 通信/时间截断会投影为 `partial_timeout`、进入 human gate，并在 Dialogue `worker_round` 上暴露继续/移交入口
 - Commit 1 baseline dry-run：见
   - `scripts/Run-GitHubFirstReleaseCommitDryRun.ps1`
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_baseline_2026-05-11.md`
 - 最新 `all` commit dry-run：见
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
   - 当前 `unmatched = none`
+  - 当前 defer/exclude 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`、`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md`，这些不应被误当作首发遗漏项
 - 当前真实本地首发主提交：见
   - `8350a8c chore: prepare repository baseline for public first release`
   - `d7fefea feat: ship chat-first dialogue facade and related UI flows`

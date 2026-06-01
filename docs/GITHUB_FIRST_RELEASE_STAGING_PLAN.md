@@ -62,11 +62,15 @@ git add scripts/Run-GitHubFirstReleaseDryRun.ps1
 git add scripts/Run-GitHubFirstReleaseCommitDryRun.ps1
 git add scripts/Run-GitHubFirstReleaseStagePreview.ps1
 git add scripts/Run-GitHubFirstReleasePrecheck.ps1
+git add scripts/Run-CodexPartialTimeoutSmoke.ps1
+git add scripts/provider-discovery-smoke.js
 ```
 
 目的：
 
 - 明确这些脚本属于公开的 acceptance harness，而不是本机私货
+- provider discovery smoke 已接入 precheck，用于验证 `providers.yaml/json` 动态 provider 注册与 readiness 投影
+- Codex partial timeout smoke 用于验证长任务有输出但被通信/时间策略截断时，后端、控制图和 Dialogue 操作入口保持一致
 
 ### Step D. 最后纳入 acceptance / operator 主文档
 
@@ -133,7 +137,7 @@ node --test src/test/js/*.test.mjs
 即使全部 stage 完成，也不要在首发说明里越界宣称以下事项已经完成：
 
 - `README.md` 已填入真实公开仓库地址
-- `/dialogue/` A-H 八条真实人工验收全部通过
+- `/dialogue/` A-H 八条严格人工手点全部通过（当前已有 scripted current-reachable seam 证据，但不等价于人工 gate）
 - GitHub Actions 已在真实远端仓库跑绿
 - 可以直接公网部署
 - 已达到 distributed production platform 水平
@@ -205,6 +209,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseDryRun.
 
 - baseline / product / harness 三组都已有真实命中项
 - 当前 `unmatched = none`
+- 当前 `defer` 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`、`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md`，这些属于本机/后续演进项，不进入首发主 slice
 - 这说明首发提交批次已经不仅是纸面方案，而是有真实 worktree 快照支撑
 
 同时现在还已有一轮 stage-level proof：
@@ -228,5 +233,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseDryRun.
 即使以上 staging 方案都已经收稳，当前仍不能宣称以下事项已完成：
 
 - `README.md` 已填入真实公开仓库地址
-- `/dialogue/` A-H 八条真实人工验收已完成
+- `/dialogue/` A-H 八条严格人工手点已完成（区别于当前 scripted browser seam coverage）
 - GitHub Actions 已在真实远端仓库跑绿
