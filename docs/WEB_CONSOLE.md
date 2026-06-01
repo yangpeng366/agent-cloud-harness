@@ -150,6 +150,7 @@
 - `Related Messages` 和 `连续性摘要` 仍然常驻，但默认只显示小预览；额外消息和 overflow continuity chips 会进内嵌折叠区，避免 details drawer 中段高度过高
 - inspector 的“迭代链上下文”卡片现在默认只常驻当前轮和上一轮/下一轮导航；完整链表会下沉到折叠区，避免右侧默认出现整条历史列表
 - task details 的控制动作现在也按 chat-first 方向收口：默认常驻只保留一个状态感知的主动作（例如 `继续推进` 或 `恢复`），`暂停 / 升级 / Worker 移交` 等次级控制下沉到 `更多操作`
+- 控制动作和恢复任务 chip 里的 worker 相关文案也应统一为 `执行方`：handoff 动作显示 `移交执行方`，恢复 job 目标显示 `执行方 <worker>`，不要再出现 `移交 Worker` 或 `worker <id>`
 - inspector 现在也会显示当前 task 的 `Related Messages`
 - `Related Messages` 不再只看 `task_id=当前任务` 的回执，也会有限度并入同 session 的普通连续聊天消息；这些消息会带 `session continuity` badge，而 task 自己的回执/brief 会带 `task-bound` badge
 - 当前选中的 `session/task` 会同步到 URL hash，刷新页面或分享链接时能直接落到同一轮任务
