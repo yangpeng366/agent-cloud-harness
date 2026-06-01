@@ -1462,6 +1462,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 2. 再做统一 provider output 文件落盘，减少 SQLite 与 UI 噪声。
 3. 最后逐个接通 suggest-only worker，没接通前保持 not ready。
 
+当前进展（2026-06-02，dynamic discovery unsupported visibility）：
+
+- `ProviderProtocolDiscovery` 现在把 `app_server_json_rpc`、`mcp` 以及其他未知协议记录到 `DiscoveryResult.unsupportedProviders`，metadata 包含 `provider_discovery_supported=false` 与 `provider_discovery_unsupported_reason`。
+- 这些 unsupported provider 不会注册到 `ProviderProtocolRegistry`、`AgentProviderRegistry` 或 `WorkerRegistry`，因此不会被 router 当作 runnable worker 分发。
+- 这一步只解决“配置被静默忽略”的可观测性问题；`app_server_json_rpc` 的通用动态执行器、`mcp` handshake / tool bridge 仍未实现。
+
+当前验证入口：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven "-Dtest=ProviderProtocolDiscoveryTest#recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols"
+```
+
 ---
 
 ## 15. 风险与边界提醒

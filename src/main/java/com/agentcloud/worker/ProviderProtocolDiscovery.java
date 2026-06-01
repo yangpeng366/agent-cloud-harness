@@ -50,23 +50,25 @@ public class ProviderProtocolDiscovery {
     public DiscoveryResult discoverDetailed() {
         ProviderProtocolRegistry registry = new ProviderProtocolRegistry();
         ArrayList<DiscoveredProvider> providers = new ArrayList<>();
+        ArrayList<UnsupportedProvider> unsupportedProviders = new ArrayList<>();
         
         for (Path path : searchPaths) {
             if (Files.exists(path)) {
                 try {
-                    loadFromFile(path, registry, providers);
+                    loadFromFile(path, registry, providers, unsupportedProviders);
                 } catch (IOException e) {
                     log.warn("Provider protocol config ignored. path={} reason={}", path, e.getMessage());
                 }
             }
         }
         
-        return new DiscoveryResult(registry, List.copyOf(providers));
+        return new DiscoveryResult(registry, List.copyOf(providers), List.copyOf(unsupportedProviders));
     }
 
     private void loadFromFile(Path path,
                               ProviderProtocolRegistry registry,
-                              List<DiscoveredProvider> discoveredProviders) throws IOException {
+                              List<DiscoveredProvider> discoveredProviders,
+                              List<UnsupportedProvider> unsupportedProviders) throws IOException {
         String content = Files.readString(path);
         ProvidersConfig config = isYamlPath(path)
             ? parseYamlLikeConfig(content)
@@ -80,6 +82,13 @@ public class ProviderProtocolDiscovery {
                     DiscoveredProvider discovered = discoveredProvider(provider, path);
                     if (discovered != null) {
                         discoveredProviders.add(discovered);
+                    }
+                } else {
+                    UnsupportedProvider unsupported = unsupportedProvider(provider, path);
+                    if (unsupported != null) {
+                        unsupportedProviders.add(unsupported);
+                        log.warn("Provider protocol config skipped. provider={} protocol={} reason={}",
+                            unsupported.id(), unsupported.protocol(), unsupported.reason());
                     }
                 }
             }
@@ -351,6 +360,35 @@ public class ProviderProtocolDiscovery {
         );
     }
 
+    private UnsupportedProvider unsupportedProvider(ProviderConfig config, Path sourcePath) {
+        String id = firstNonBlank(config.id);
+        if (id == null) {
+            return null;
+        }
+        String protocolType = effectiveProtocolType(config);
+        if (protocolType == null) {
+            return null;
+        }
+        String reason = switch (protocolType.toLowerCase()) {
+            case "app_server_json_rpc" -> "app_server_json_rpc is only wired for built-in codex app-server, not dynamic provider discovery";
+            case "mcp" -> "mcp dynamic provider protocol is not implemented";
+            default -> "provider protocol is not supported by current dynamic discovery";
+        };
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("configured_from", sourcePath == null ? "provider_discovery" : sourcePath.toString());
+        metadata.put("provider_discovery", true);
+        metadata.put("provider_discovery_supported", false);
+        metadata.put("provider_protocol", protocolType);
+        metadata.put("provider_discovery_unsupported_reason", reason);
+        return new UnsupportedProvider(
+            id,
+            firstNonBlank(config.displayName, id),
+            protocolType,
+            reason,
+            Map.copyOf(metadata)
+        );
+    }
+
     private String effectiveProtocolType(ProviderConfig config) {
         if (config == null) {
             return null;
@@ -454,10 +492,17 @@ public class ProviderProtocolDiscovery {
         public Integer selectionPriority;
     }
 
-    public record DiscoveryResult(ProviderProtocolRegistry registry, List<DiscoveredProvider> providers) {
+    public record DiscoveryResult(ProviderProtocolRegistry registry,
+                                  List<DiscoveredProvider> providers,
+                                  List<UnsupportedProvider> unsupportedProviders) {
+        public DiscoveryResult(ProviderProtocolRegistry registry, List<DiscoveredProvider> providers) {
+            this(registry, providers, List.of());
+        }
+
         public DiscoveryResult {
             if (registry == null) registry = new ProviderProtocolRegistry();
             if (providers == null) providers = List.of();
+            if (unsupportedProviders == null) unsupportedProviders = List.of();
         }
     }
 
@@ -472,6 +517,20 @@ public class ProviderProtocolDiscovery {
             if (displayName == null || displayName.isBlank()) displayName = id;
             if (capabilities == null) capabilities = List.of();
             if (binary == null || binary.isBlank()) binary = id;
+            if (metadata == null) metadata = Map.of();
+        }
+    }
+
+    public record UnsupportedProvider(String id,
+                                      String displayName,
+                                      String protocol,
+                                      String reason,
+                                      Map<String, Object> metadata) {
+        public UnsupportedProvider {
+            if (id == null) id = "";
+            if (displayName == null || displayName.isBlank()) displayName = id;
+            if (protocol == null) protocol = "";
+            if (reason == null) reason = "provider protocol is not supported by current dynamic discovery";
             if (metadata == null) metadata = Map.of();
         }
     }

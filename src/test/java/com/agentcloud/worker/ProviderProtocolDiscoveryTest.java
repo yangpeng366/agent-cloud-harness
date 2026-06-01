@@ -263,6 +263,42 @@ class ProviderProtocolDiscoveryTest {
         assertTrue(String.join(" ", plan.command()).contains("command protocol prompt"));
     }
 
+    @Test
+    void recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols() throws Exception {
+        Path config = tempDir.resolve("providers.yaml");
+        Files.writeString(config, """
+            providers:
+              - id: codex_dynamic
+                display_name: Dynamic Codex
+                protocol: app_server_json_rpc
+                binary: codex
+              - id: mcp_agent
+                protocol: mcp
+                binary: mcp-agent
+            """);
+
+        ProviderProtocolDiscovery.DiscoveryResult result =
+            new ProviderProtocolDiscovery(List.of(config)).discoverDetailed();
+
+        assertTrue(result.providers().isEmpty());
+        assertEquals(2, result.unsupportedProviders().size());
+        assertEquals(null, result.registry().get("codex_dynamic"));
+        assertEquals(null, result.registry().get("mcp_agent"));
+
+        ProviderProtocolDiscovery.UnsupportedProvider codex = result.unsupportedProviders().get(0);
+        assertEquals("codex_dynamic", codex.id());
+        assertEquals("Dynamic Codex", codex.displayName());
+        assertEquals("app_server_json_rpc", codex.protocol());
+        assertTrue(codex.reason().contains("built-in codex app-server"));
+        assertEquals(false, codex.metadata().get("provider_discovery_supported"));
+
+        ProviderProtocolDiscovery.UnsupportedProvider mcp = result.unsupportedProviders().get(1);
+        assertEquals("mcp_agent", mcp.id());
+        assertEquals("mcp", mcp.protocol());
+        assertTrue(mcp.reason().contains("not implemented"));
+        assertEquals(false, mcp.metadata().get("provider_discovery_supported"));
+    }
+
     private TaskRuntimeContext runtimeContext(String intent) {
         Task task = Task.create(
             "task_discovery_test",
