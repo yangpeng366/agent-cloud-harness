@@ -45,3 +45,9 @@ test("console provider detail fetches and renders worker dispatch probe metadata
     assert.match(appJs, /function workerIdForProvider\(providerId\)/);
     assert.match(appJs, /return "openclaw-native";/);
 });
+
+test("console recovery job panel renders operator labels", () => {
+    assert.match(appJs, />恢复任务</);
+    assert.match(appJs, /请求 \$\{escapeHtml\(plan\.requestId\)\}/);
+    assert.doesNotMatch(appJs, />Recovery Job</);
+});

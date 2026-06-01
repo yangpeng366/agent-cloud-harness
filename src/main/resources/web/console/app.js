@@ -1705,9 +1705,9 @@ function renderRecoveryJobPanel(plan) {
     }
     return `
         <div class="overview-card">
-            <span>Recovery Job</span>
+            <span>恢复任务</span>
             <strong>${escapeHtml(plan.summary)}</strong>
-            <small class="message__hint mono">${escapeHtml(plan.requestId)}</small>
+            <small class="message__hint mono">请求 ${escapeHtml(plan.requestId)}</small>
             ${plan.chips.length > 0 ? `
                 <div class="agent-run-card__meta">
                     ${plan.chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}
