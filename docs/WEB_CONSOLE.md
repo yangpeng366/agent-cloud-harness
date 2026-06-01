@@ -138,6 +138,7 @@
 - 展开的任务面板内部也进一步做成 progressive disclosure：`迭代链 / Related Messages / 连续性摘要` 常驻，`Mounted Context / 路由与判断 / 实验对比 / 最近产物 / 工具轨迹` 默认折叠，避免 inspector 一打开就把整页诊断信息全部铺开
 - 右侧 `实验对比` 面板的指标也不应继续露出 `runs / done / learned hint applied / avg tool steps / steps / cost`；对 operator 可见的统计项应显示为 `次运行 / 完成 / 学习偏好已应用 / 平均工具步数 / 步骤 / 成本`
 - `路由与判断` 里的 judgment 卡片现在默认也只保留 summary、execution boundary 和少量关键 diagnostics，不再把 alignment/candidate/evidence/unfinished 等所有细项一次性拼成大段文本
+- execution boundary 的基础 chip 也应使用 operator 可读中文：`execution / worker` 显示为 `执行回合 / 执行方`，避免 details 里继续出现 `exec / worker` 这类 raw trace 标签
 - `路由与判断` 和 cognition timeline 的可见 chip 也应人话化：`next/current/follow-up/action/route/status/aligned/diverged` 不应直接裸露，显示为 `下一步/当前/跟进/动作/路由/状态/一致/不一致`
 - `Mounted Context` 对象卡的控制面 chip 也应人话化：`retention / rehydrated / archive retrieval / external refresh / context reopen / refs / targets / next` 不应直接裸露，显示为 `保留状态 / 已从归档恢复 / 需要检索归档 / 需要刷新外部事实 / 需要重开上下文 / 引用 / 候选目标 / 下一步`
 - `/dialogue/` 右侧现在也会直接显示当前 task 的 experiment 对比卡片，但默认只常驻当前 mode headline；其余 mode 对比、prompt rollout 和 case 对照已下沉到折叠区

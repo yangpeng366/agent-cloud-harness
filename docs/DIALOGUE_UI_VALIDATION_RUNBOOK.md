@@ -235,6 +235,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - message card 的 learning hint 状态也应人话化：当 richer context 可见时显示 `提示 · <worker> 已应用 / 已观测未应用`，而不是 `applied / observed`；验收入口是 `node --test src/test/js/dialogue-message-card-plan.test.mjs`。
 - message card 与 active task signal 的 route/tool 文案也不应保留 `via / steps`：route 显示 `来源：...`，tool chain 显示 `N 步`；同一个 `dialogue-message-card-plan.test.mjs` 覆盖 message card 计划层不回退。
 - 右侧详情的 `实验对比` 指标也应遵守同一中文化口径：`runs / done / learned hint applied / avg tool steps / steps / cost` 不应作为用户可见文案；`dialogue-experiment-summary-plan.test.mjs` 静态锁住这些指标不回退。
+- execution boundary 的基础 chip 也不应继续裸露 `exec / worker` 风格标签；`dialogue-execution-boundary-plan.test.mjs` 覆盖 `执行回合 / 执行方` 不回退。
 - judgment/cognition timeline 的细节 chip 也应遵守同一中文化口径：`next/current/follow-up/action/route/status/aligned/diverged` 收成 `下一步/当前/跟进/动作/路由/状态/一致/不一致`；`dialogue-recovery-label-render.test.mjs` 静态锁住不回退。
 - Mounted Context 对象卡也不应裸露 `retention / rehydrated / archive retrieval / external refresh / context reopen / refs / targets / next`；`dialogue-recovery-label-render.test.mjs` 静态锁住这些 chip 不回退。
 - recovery detail 的操作短信号也已收口成 `重试 N / 移交 N -> worker / 建议移交 -> worker`，不再把 `retry / handoff / manual handoff candidate` 这类英文控制面标签直接放在第一页。
