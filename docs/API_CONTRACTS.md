@@ -226,6 +226,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 | POST | `/api/v1/workers` | 动态注册 worker | `worker_id`, `worker_type`, `capabilities`, `tool_capabilities`, `tool_scope`, `dependencies`, `metadata`, `suggest_only`, `ready` | `Worker` | 否 |
 | GET | `/api/v1/workers/{id}` | 查询 worker | 路径参数 `id` | `Worker` | 否 |
 | GET | `/api/v1/workers/{id}/readiness` | 查询 worker readiness | 路径参数 `id`；Query `mode=passive|dispatch`，默认 `passive` | `ReadinessCheck` | 否 |
+| POST | `/api/v1/agents/{id}/preflight` | 主动执行 provider dispatch preflight | 路径参数 `id`；请求体可空 | `AgentProviderView`，metadata 含 `dispatch_preflight_*` | 否 |
 
 `GET /api/v1/tasks/{id}/select_worker` 当前返回的 `RouteResult` 除 `selected_worker` / `fallback_workers` / `route_reason` 外，还包含以下解释字段：
 

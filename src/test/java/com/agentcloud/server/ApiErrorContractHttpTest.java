@@ -365,6 +365,29 @@ class ApiErrorContractHttpTest {
     }
 
     @Test
+    void agentPreflightEndpointRunsProviderDispatchPreflight() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("agent-provider-preflight.db"),
+            new AgentProviderRegistry().register(new PreflightProvider("codex", true, false, "fresh turn rejected")),
+            true
+        )) {
+            ApiCall response = fixture.send("POST", "/api/v1/agents/codex/preflight", "", "application/json");
+
+            assertEquals(200, response.statusCode());
+            assertFalse(response.body().path("data").path("ready").asBoolean(true));
+            assertEquals("fresh turn rejected", response.body().path("data").path("readiness_reason").asText());
+            JsonNode metadata = response.body().path("data").path("metadata");
+            assertEquals("dispatch_preflight_test", metadata.path("source").asText());
+            assertEquals("active_probe", metadata.path("dispatch_preflight_mode").asText());
+            assertEquals("cli_help", metadata.path("dispatch_preflight_probe_kind").asText());
+            assertEquals("--version", metadata.path("dispatch_preflight_probe_args").get(0).asText());
+            assertEquals("provider_protocol_error", metadata.path("provider_failure_class").asText());
+            assertTrue(metadata.path("provider_failure_reason").asText().contains("fresh turn rejected"));
+            assertTrue(metadata.path("provider_retryable").asBoolean(false));
+        }
+    }
+
+    @Test
     void workerReadinessDispatchModeProjectsPassiveFallbackProbeMode() throws Exception {
         try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
             tempDir.resolve("worker-provider-dispatch-passive-preflight.db"),
@@ -717,6 +740,16 @@ class ApiErrorContractHttpTest {
 
         private ApiCall get(String path) throws IOException, InterruptedException {
             HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path)).GET().build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return new ApiCall(response.statusCode(), NioHttpServer.SHARED_MAPPER.readTree(response.body()));
+        }
+
+        private ApiCall send(String method, String path, String body, String contentType)
+            throws IOException, InterruptedException {
+            HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + path))
+                .method(method, HttpRequest.BodyPublishers.ofString(body == null ? "" : body))
+                .header("Content-Type", contentType)
+                .build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             return new ApiCall(response.statusCode(), NioHttpServer.SHARED_MAPPER.readTree(response.body()));
         }

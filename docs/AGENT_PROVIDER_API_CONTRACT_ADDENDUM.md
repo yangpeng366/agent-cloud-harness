@@ -315,7 +315,33 @@
 
 ---
 
-## 5.4 GET `/api/v1/agents/{id}/runs`
+## 5.4 POST `/api/v1/agents/{id}/preflight`
+
+### 用途
+主动执行指定 provider 的 dispatch preflight，用于调试本地 CLI / dynamic provider 的低副作用验活命令、参数兼容性和 failure classification。
+
+### 请求体
+可空。
+
+### 响应
+`200 OK` -> `AgentProviderView`
+
+`metadata` 会包含 provider 返回的 dispatch preflight 诊断字段，例如：
+
+- `dispatch_preflight_mode`
+- `dispatch_preflight_probe_kind`
+- `dispatch_preflight_probe_args`
+- `dispatch_preflight_command_shape`
+- `dispatch_preflight_exit_code`
+- `provider_failure_class / provider_failure_reason / provider_retryable`
+
+### 失败响应
+- `404 not found`
+- `500 internal error`
+
+---
+
+## 5.5 GET `/api/v1/agents/{id}/runs`
 
 ### 用途
 查看某 provider 最近 runs。

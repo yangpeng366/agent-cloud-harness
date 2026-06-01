@@ -57,14 +57,6 @@ class AgentHandler implements HttpHandler {
                         : agentRunService.listByProvider(id, status, parseLimit(params.get("limit")));
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(runs));
                 }
-            } else if ("GET".equals(method) && path.matches("/api/v1/agents/[^/]+")) {
-                String id = NioHttpServer.pathVar(ex, 4);
-                AgentProvider provider = registry.get(id);
-                if (provider == null) {
-                    NioHttpServer.sendNotFound(ex);
-                } else {
-                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(toView(provider)));
-                }
             } else if ("POST".equals(method) && path.matches("/api/v1/agents/[^/]+/refresh")) {
                 String id = NioHttpServer.pathVar(ex, 4);
                 AgentProvider provider = registry.get(id);
@@ -73,6 +65,23 @@ class AgentHandler implements HttpHandler {
                 } else {
                     AgentProviderStatus refreshed = registry.refresh(id);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(toView(provider, refreshed)));
+                }
+            } else if ("POST".equals(method) && path.matches("/api/v1/agents/[^/]+/preflight")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                AgentProvider provider = registry.get(id);
+                if (provider == null) {
+                    NioHttpServer.sendNotFound(ex);
+                } else {
+                    AgentProviderStatus preflight = registry.dispatchPreflight(id);
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(toView(provider, preflight)));
+                }
+            } else if ("GET".equals(method) && path.matches("/api/v1/agents/[^/]+")) {
+                String id = NioHttpServer.pathVar(ex, 4);
+                AgentProvider provider = registry.get(id);
+                if (provider == null) {
+                    NioHttpServer.sendNotFound(ex);
+                } else {
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(toView(provider)));
                 }
             } else {
                 NioHttpServer.sendMethodNotAllowed(ex);
