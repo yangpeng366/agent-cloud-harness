@@ -307,9 +307,11 @@ As of this record:
   - `.tmp\dialogue-record-backfill-probe-18276.md` is updated by markdown merge helper
   - helper scope is limited to A-H `Passed / Input / Observed result / Notes`; it does not close the final gate
 - but `/dialogue/` page functionality is **still not fully release-closed**
-- the remaining open release work is no longer “redo A-H manual clicks”
+- the remaining open release work is no longer “rerun the same scripted A-H seam coverage”; that automated coverage exists
+- strict A-H manual sign-off is still separate and remains open until a human reviews the paths, records the required minimal evidence, and applies the manual backfill intentionally
 - the GitHub release gate remains open until:
   - the formal acceptance record and release docs stay in sync with the latest starter bundle
+  - strict manual sign-off is either completed or explicitly removed from the release checklist as a gate
   - the remaining non-acceptance release items are also closed
 
 ## Recommended Next Step
@@ -319,5 +321,6 @@ Do not keep expanding docs first.
 The next useful work item is:
 
 1. keep the formal acceptance record and release docs synchronized with the latest starter bundle
-2. continue real `/dialogue/` product-line work instead of re-expanding acceptance-prep docs
-3. only then treat the `/dialogue/` page-function release gate as fully closed
+2. preserve the split between scripted coverage and strict manual sign-off
+3. continue real `/dialogue/` product-line work instead of re-expanding acceptance-prep docs
+4. only then treat the `/dialogue/` page-function release gate as fully closed

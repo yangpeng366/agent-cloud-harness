@@ -1,4 +1,4 @@
-﻿# GitHub First Release Precheck 2026-05-11
+﻿# GitHub First Release Precheck 2026-06-02
 
 > Purpose: capture one real local precheck run for the current first-release slice.
 
@@ -22,7 +22,7 @@ node --test src/test/js/*.test.mjs
 
 Result:
 
-- Passed; see console output for exact Node test details
+- Skipped
 
 ### 3. Java HTTP regression
 
@@ -32,9 +32,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 Result:
 
-- Maven test run passed
-- ChatFacadeHandlerHttpTest passed
-- WebConsoleHandlerHttpTest passed
+- Skipped
 
 ### 4. Provider discovery smoke
 
@@ -62,9 +60,26 @@ Result:
 - Exit code: 0
 - Report: D:\gitAll\agent-cloud-harness\.tmp\codex-partial-timeout-smoke\report.json
 - Passed: True
-- Validates Codex partial output communication failure, ControlNodeGraph human gate projection, provider thread continuation metadata, and Dialogue worker_round actions
+- Validates Codex partial output communication failure, max-duration hard limit, ControlNodeGraph human gate projection, provider thread continuation metadata, and Dialogue worker_round actions
 
-### 6. first release dry-run
+### 6. Dialogue A-H scripted/manual backfill gate
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueAcceptanceScriptedBackfillProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueAcceptanceManualBackfillProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18276.json
+```
+
+Result:
+
+- Scripted exit code: 0
+- Manual exit code: 0
+- Scripted coverage prefilled: A, B, C, D, E, F, G, H
+- Residual human gate: A, B, C, D, E, F, G, H
+- Scripted misuse rejected: True
+- Manual apply still works: True
+- Validates scripted browser evidence cannot mark strict manual A-H Passed=true, while intentional manual backfill still works
+
+### 7. first release dry-run
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseDryRun.ps1 -WriteMarkdown
@@ -79,7 +94,7 @@ Result:
   - defer
   - review
 
-### 7. first release commit dry-run
+### 8. first release commit dry-run
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseCommitDryRun.ps1 -Commit all -WriteMarkdown
@@ -94,7 +109,7 @@ Result:
   - acceptance harness and operator docs
 - Current unmatched_count = 0
 
-### 8. first release stage preview
+### 9. first release stage preview
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseStagePreview.ps1 -Commit all -WriteMarkdown
