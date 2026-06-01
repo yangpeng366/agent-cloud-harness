@@ -191,6 +191,8 @@ public class ProviderProtocolDiscovery {
             case "selectionPriority", "selection_priority" -> config.selectionPriority = parseInteger(value);
             case "command" -> config.command = parseYamlInlineList(value);
             case "args" -> config.args = parseYamlInlineList(value);
+            case "dispatchProbeArgs", "dispatch_probe_args", "dispatchPreflightProbeArgs", "dispatch_preflight_probe_args" ->
+                config.dispatchProbeArgs = parseYamlInlineList(value);
             case "capabilities" -> config.capabilities = parseYamlInlineList(value);
             default -> {
             }
@@ -208,6 +210,13 @@ public class ProviderProtocolDiscovery {
                 java.util.ArrayList<String> args = new java.util.ArrayList<>(config.args != null ? config.args : List.of());
                 args.add(value);
                 config.args = args;
+            }
+            case "dispatchProbeArgs", "dispatch_probe_args", "dispatchPreflightProbeArgs", "dispatch_preflight_probe_args" -> {
+                java.util.ArrayList<String> args = new java.util.ArrayList<>(
+                    config.dispatchProbeArgs != null ? config.dispatchProbeArgs : List.of()
+                );
+                args.add(value);
+                config.dispatchProbeArgs = args;
             }
             case "capabilities" -> {
                 java.util.ArrayList<String> capabilities = new java.util.ArrayList<>(
@@ -350,6 +359,10 @@ public class ProviderProtocolDiscovery {
         if (config.model != null && !config.model.isBlank()) {
             metadata.put("configured_model", config.model);
         }
+        if (config.dispatchProbeArgs != null && !config.dispatchProbeArgs.isEmpty()) {
+            metadata.put("dispatch_probe_args", List.copyOf(config.dispatchProbeArgs));
+            metadata.put("dispatch_probe_args_source", "provider_discovery_config");
+        }
         return new DiscoveredProvider(
             id,
             firstNonBlank(config.displayName, id),
@@ -487,6 +500,7 @@ public class ProviderProtocolDiscovery {
         public List<String> command;
         public String binary;
         public List<String> args;
+        public List<String> dispatchProbeArgs;
         public List<String> capabilities;
         public String outputParser;
         public Map<String, String> environment;

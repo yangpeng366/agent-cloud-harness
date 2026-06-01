@@ -232,6 +232,26 @@ class AgentProviderSupportTest {
     }
 
     @Test
+    void localCliDispatchPreflightUsesConfiguredProbeArgsFromDiscoveryMetadata() throws Exception {
+        Path cli = fakeCli("custom-probe-cli", "echo custom probe help");
+        LocalCliAgentProvider provider = new LocalCliAgentProvider(
+            "custom_agent",
+            "Custom Agent",
+            List.of("coding"),
+            Map.of("dispatch_probe_args", List.of("doctor", "--help")),
+            cli.toString(),
+            null,
+            null
+        );
+
+        AgentProviderStatus status = provider.dispatchPreflight();
+
+        assertTrue(status.ready());
+        assertEquals(List.of("doctor", "--help"), status.metadata().get("dispatch_preflight_probe_args"));
+        assertTrue(((List<?>) status.metadata().get("dispatch_preflight_command_shape")).contains("doctor"));
+    }
+
+    @Test
     void localCliDispatchPreflightClassifiesBadArgumentsWithProviderFailureMetadata() throws Exception {
         Path cli = fakeCli("bad-args-cli", "echo error: unknown option %1\r\nexit /b 2", "echo error: unknown option \"$1\"\nexit 2");
         LocalCliAgentProvider provider = new LocalCliAgentProvider(

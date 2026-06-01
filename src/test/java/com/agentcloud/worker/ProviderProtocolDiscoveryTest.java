@@ -152,6 +152,7 @@ class ProviderProtocolDiscoveryTest {
                 capabilities: ["coding", "research"]
                 model_tier: small
                 selection_priority: 61
+                dispatch_probe_args: ["chat", "--help"]
             """);
 
         ProviderProtocolDiscovery.DiscoveryResult result =
@@ -166,6 +167,8 @@ class ProviderProtocolDiscoveryTest {
         assertEquals(List.of("coding", "research"), provider.capabilities());
         assertEquals("small", provider.metadata().get("model_tier"));
         assertEquals(61, provider.metadata().get("selection_priority"));
+        assertEquals(List.of("chat", "--help"), provider.metadata().get("dispatch_probe_args"));
+        assertEquals("provider_discovery_config", provider.metadata().get("dispatch_probe_args_source"));
     }
 
     @Test

@@ -29,6 +29,7 @@ public class LocalCliAgentProvider implements AgentProvider {
     private final String pathEnvVar;
     private final String modelEnvVar;
     private final LocalCliProviderConfig cliConfig;
+    private final List<String> configuredDispatchProbeArgs;
 
     public LocalCliAgentProvider(String providerId,
                                  String displayName,
@@ -55,6 +56,7 @@ public class LocalCliAgentProvider implements AgentProvider {
         this.pathEnvVar = blankToNull(pathEnvVar);
         this.modelEnvVar = blankToNull(modelEnvVar);
         this.cliConfig = new LocalCliProviderConfig(this.providerId, this.defaultBinary, this.pathEnvVar, this.modelEnvVar);
+        this.configuredDispatchProbeArgs = configuredDispatchProbeArgs(metadata);
         this.descriptor = new AgentProviderDescriptor(
             this.providerId,
             displayName,
@@ -243,6 +245,9 @@ public class LocalCliAgentProvider implements AgentProvider {
     }
 
     private List<String> dispatchProbeArgs(String providerId, String configuredBinary) {
+        if (!configuredDispatchProbeArgs.isEmpty()) {
+            return configuredDispatchProbeArgs;
+        }
         return switch ((providerId == null ? "" : providerId).toLowerCase()) {
             case "cursor" -> List.of("chat", "--help");
             case "opencode" -> List.of("run", "--help");
@@ -256,6 +261,26 @@ public class LocalCliAgentProvider implements AgentProvider {
             case "codex" -> List.of("--version");
             default -> List.of("--help");
         };
+    }
+
+    private List<String> configuredDispatchProbeArgs(Map<String, Object> metadata) {
+        if (metadata == null) {
+            return List.of();
+        }
+        Object value = metadata.get("dispatch_probe_args");
+        if (value == null) {
+            value = metadata.get("dispatch_preflight_probe_args");
+        }
+        if (value instanceof List<?> list) {
+            return list.stream()
+                .map(item -> item == null ? "" : String.valueOf(item).trim())
+                .filter(item -> !item.isBlank())
+                .toList();
+        }
+        if (value instanceof String text && !text.isBlank()) {
+            return List.of(text.trim());
+        }
+        return List.of();
     }
 
     private String commandProbeFailureReason(CommandProbeResult probe) {
