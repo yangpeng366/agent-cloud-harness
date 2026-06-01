@@ -1616,7 +1616,7 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
     return `
         <section class="message-summary-card message-summary-card--pinned" data-role="active-task" data-testid="pinned-latest-round-output">
             <div class="message-summary-card__meta">
-                <span class="task-badge" data-tone="active">latest round output</span>
+                <span class="task-badge" data-tone="active">最近输出</span>
                 <span>${escapeHtml(preview(task.title || task.id, 32))}</span>
                 ${workerLabel ? `<span>${escapeHtml(`执行方 · ${workerLabel}`)}</span>` : ""}
                 ${failureClass ? `<span>${escapeHtml(`失败 · ${preview(failureClass, 28)}`)}</span>` : ""}
