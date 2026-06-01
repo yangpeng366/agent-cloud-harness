@@ -346,7 +346,7 @@ public class ProviderProtocolDiscovery {
         String configuredProtocolType = firstNonBlank(config.type, config.protocol);
         String protocolType = effectiveProtocolType(config);
         DiscoveryProbeResult probeResult = configuredProtocolType == null
-            ? runStartupProtocolProbe(config)
+            ? runStartupProtocolProbe(config, "startup_help_probe")
             : null;
         String binary = firstNonBlank(config.binary, config.binaryPath, firstCommandPart(config.command), id);
         List<String> capabilities = config.capabilities != null && !config.capabilities.isEmpty()
@@ -379,7 +379,7 @@ public class ProviderProtocolDiscovery {
         );
     }
 
-    private DiscoveryProbeResult runStartupProtocolProbe(ProviderConfig config) {
+    private DiscoveryProbeResult runStartupProtocolProbe(ProviderConfig config, String mode) {
         List<String> command = startupProtocolProbeCommand(config);
         if (command.isEmpty()) {
             return null;
@@ -393,7 +393,7 @@ public class ProviderProtocolDiscovery {
             if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
                 return new DiscoveryProbeResult(
-                    "startup_help_probe",
+                    mode,
                     command,
                     -1,
                     "probe timed out",
@@ -403,7 +403,7 @@ public class ProviderProtocolDiscovery {
             }
             String output = TextDecoding.decodeExternalProcessOutput(process.getInputStream().readAllBytes()).trim();
             return new DiscoveryProbeResult(
-                "startup_help_probe",
+                mode,
                 command,
                 process.exitValue(),
                 truncate(firstNonBlankLine(output), 300),
@@ -412,7 +412,7 @@ public class ProviderProtocolDiscovery {
             );
         } catch (IOException e) {
             return new DiscoveryProbeResult(
-                "startup_help_probe",
+                mode,
                 command,
                 -1,
                 truncate(e.getMessage(), 300),
@@ -422,7 +422,7 @@ public class ProviderProtocolDiscovery {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return new DiscoveryProbeResult(
-                "startup_help_probe",
+                mode,
                 command,
                 -1,
                 "probe interrupted",
@@ -559,6 +559,7 @@ public class ProviderProtocolDiscovery {
         metadata.put("provider_discovery_supported", false);
         metadata.put("provider_protocol", protocolType);
         metadata.put("provider_discovery_unsupported_reason", reason);
+        appendStartupProtocolProbeMetadata(metadata, runStartupProtocolProbe(config, "unsupported_startup_probe"));
         List<String> capabilities = config.capabilities != null && !config.capabilities.isEmpty()
             ? List.copyOf(config.capabilities)
             : List.of("coding", "reading", "session");

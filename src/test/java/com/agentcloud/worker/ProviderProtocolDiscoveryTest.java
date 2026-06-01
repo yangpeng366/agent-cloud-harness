@@ -329,17 +329,24 @@ class ProviderProtocolDiscoveryTest {
     @Test
     void recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols() throws Exception {
         Path config = tempDir.resolve("providers.yaml");
+        Path javaExecutable = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java");
         Files.writeString(config, """
             providers:
               - id: codex_dynamic
                 display_name: Dynamic Codex
                 protocol: app_server_json_rpc
-                binary: codex
+                binary: "%s"
+                dispatch_probe_args: ["--version"]
               - id: mcp_agent
                 protocol: mcp
-                binary: mcp-agent
+                binary: "%s"
+                dispatch_probe_args: ["--version"]
                 capabilities: ["tool_use"]
-            """);
+            """.formatted(
+                javaExecutable.toString().replace("\\", "\\\\"),
+                javaExecutable.toString().replace("\\", "\\\\")
+            ));
 
         ProviderProtocolDiscovery.DiscoveryResult result =
             new ProviderProtocolDiscovery(List.of(config)).discoverDetailed();
@@ -356,6 +363,10 @@ class ProviderProtocolDiscoveryTest {
         assertEquals("app_server_json_rpc", codex.protocol());
         assertTrue(codex.reason().contains("built-in codex app-server"));
         assertEquals(false, codex.metadata().get("provider_discovery_supported"));
+        assertEquals("unsupported_startup_probe", codex.metadata().get("provider_protocol_probe_mode"));
+        assertEquals(0, codex.metadata().get("provider_protocol_probe_exit_code"));
+        assertEquals(true, codex.metadata().get("provider_protocol_probe_success"));
+        assertEquals(List.of("--version"), codex.metadata().get("provider_protocol_probe_command_shape"));
 
         ProviderProtocolDiscovery.UnsupportedProvider mcp = result.unsupportedProviders().get(1);
         assertEquals("mcp_agent", mcp.id());
@@ -363,6 +374,9 @@ class ProviderProtocolDiscoveryTest {
         assertEquals("mcp", mcp.protocol());
         assertTrue(mcp.reason().contains("not implemented"));
         assertEquals(false, mcp.metadata().get("provider_discovery_supported"));
+        assertEquals("unsupported_startup_probe", mcp.metadata().get("provider_protocol_probe_mode"));
+        assertEquals(0, mcp.metadata().get("provider_protocol_probe_exit_code"));
+        assertEquals(true, mcp.metadata().get("provider_protocol_probe_success"));
     }
 
     private TaskRuntimeContext runtimeContext(String intent) {

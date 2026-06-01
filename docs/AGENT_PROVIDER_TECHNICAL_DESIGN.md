@@ -1469,6 +1469,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 - `ProviderProtocolDiscovery` 现在把 `app_server_json_rpc`、`mcp` 以及其他未知协议记录到 `DiscoveryResult.unsupportedProviders`，metadata 包含 `provider_discovery_supported=false` 与 `provider_discovery_unsupported_reason`。
 - `Main` 会把这些 unsupported provider 注册为只读 `UnsupportedAgentProvider`，因此 `/api/v1/agents` 和 `/api/v1/agents/{id}` 能看到 `provider_type=unsupported`、`ready=false`、`ready_for_dispatch=false` 与跳过原因。
 - 这些 unsupported provider 不会注册到 `ProviderProtocolRegistry` 或 `WorkerRegistry`，也不会调用 `ProviderExecutionSupport.registerProviderNativeCli`，因此不会被 router 当作 runnable worker 分发。
+- 对配置了可探测 `binary` / `command` 的 unsupported provider，discovery 会执行同一套低副作用 startup probe，并把 `provider_protocol_probe_mode=unsupported_startup_probe`、command shape、exit code、success、parser hint、output preview 写入 metadata；该证据只用于 operator 诊断，不改变 unsupported provider 的不可分发语义。
 - 这一步只解决“配置被静默忽略”和“operator 读面不可见”的问题；`app_server_json_rpc` 的通用动态执行器、`mcp` handshake / tool bridge 仍未实现。
 
 当前验证入口：
