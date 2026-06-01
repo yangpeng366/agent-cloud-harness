@@ -637,7 +637,7 @@ node .\scripts\dialogue-business-smoke.js
 - `shell/layout validation` 已有 fresh 隔离实例下的真实绿灯
 - `light business smoke` 已有 fresh 隔离实例下的真实绿灯
 - 第三轮 codex 风格壳层收口已经落到真实 `/dialogue/` HTML/CSS/JS，而不是仍停留在纯文档阶段
-- details / status surface 已开始继续收口：details/open 能展示 partial timeout provider diagnostics，并同步展示 activity timeout / max duration bounds；header focus line 会直接露出 `partial timeout / human gate / handoff queued` 这类恢复状态
+- details / status surface 已开始继续收口：details/open 能展示 partial timeout provider diagnostics，并同步展示 activity timeout / max duration bounds；header focus line 已把恢复状态收成 `部分结果待确认 / 等待人工确认 / 移交已排队`
 - 但仍不应把它写成“前端业务功能已完全验证通过”，因为 richer continuity / acceptance 仍需独立 acceptance 工具链
 
 最新这一轮继续补几个和长任务恢复直接相关的 UI 缺口：
@@ -648,7 +648,9 @@ node .\scripts\dialogue-business-smoke.js
 - 新增浏览器验收脚本 `scripts/recovery-job-ui-probe.js`：用真实 session/task 打开 `/dialogue/` 或 `/console/`，拦截 recover/recovery_jobs 响应，断言按钮请求包含 `recover?async=true` 且详情区能看到 `恢复任务` 与请求 id
 - `message-panel__body--stream-only` 下的短 transcript 改成底部栈布局：`message-stream` 使用 `margin-top:auto`，剩余空白优先留在消息组上方，消息组、折叠任务轨迹和 composer 之间保持紧凑
 - 这轮只收敛已知空白 seam 与恢复动作入口，不改变 transcript-first 主结构和 details panel 的展开语义
-- 补充收敛：`selectedStatus` 的 focus line 已抽为 `task-focus-line-plan.js`，避免 header 只显示 `waiting_human / human_gate` 而看不出是 partial timeout、human gate 还是 handoff queued；验收入口是 `node --test src/test/js/dialogue-task-focus-line-plan.test.mjs`
+- 补充收敛：`selectedStatus` 的 focus line 已抽为 `task-focus-line-plan.js`，避免 header 只显示 `waiting_human / human_gate`，并避免把 partial timeout、human gate、handoff queued 这些内部恢复状态直接裸露到首屏；验收入口是 `node --test src/test/js/dialogue-task-focus-line-plan.test.mjs`
+
+后端消息正文也同步收口：新写入的 `task_progress / task_result.full_content` 使用 `失败摘要 / worker 输出 / 产物内容 / 恢复模式 / 执行轨迹` 中文分段；旧 `Failure Summary / Worker Output / Artifact Content` 只保留为前端识别历史空壳与回退失败摘要的兼容入口。
 
 紧接着这一轮补的是 `/console/` 与 `/dialogue/` 的时间口径对齐：
 

@@ -64,6 +64,7 @@
 - 当前实现已经按这条规则拆成独立展开键：主聊天流继续按 `message id` 维持，task thread 的 `round output` 则单独按 `task id` 维持
 - 上半区 transcript 主卡的展开态也不应继续盲信历史 `full_content`。如果当前 `full_content` 只是旧的 `Worker Output / Artifact Content` 空壳，而同一条 message metadata 已经有更可读的 `failure_summary_readable`，展开后应优先显示 `失败摘要 (+ 下一步)`，而不是把空壳正文重新暴露出来
 - 对当前选中的失败态 task，如果历史 `task_progress.full_content` 还是旧空壳，而 `live_flow.task.metadata.failure_summary_readable` 已经更完整，thread output 也应优先回退到这条更新后的失败摘要，而不是继续只显示 `failed / Worker Output / Artifact Content`
+- 后端新写入的 `task_progress / task_result.full_content` 也应直接使用 `失败摘要 / worker 输出 / 产物内容 / 恢复模式 / 执行轨迹` 中文分段；`Worker Output / Artifact Content / Failure Summary` 只作为兼容旧数据的空壳识别口径，不应继续作为新内容呈现给 operator
 - 如果历史 `failure_summary_readable` 本身还是长噪声，主 thread output 也不应整段照抄；第一页应先压成短可读失败摘要，把原始 trace / listing / prompt echo 继续留在 details 与 live flow
 - 已知 provider/runtime 失败摘要应在 Dialogue 第一屏人话化：`thread not found` 显示为 `线程未找到 (...)`，`timeout / timed out` 显示为 `执行超时`，避免用户只能看到 `worker failed: timeout` 这类内部英文诊断
 - 顶部状态 focus line 里的新增恢复状态也应人话化：partial timeout 显示为 `部分结果待确认`，human gate 显示为 `等待人工确认`，auto handoff pending 显示为 `移交已排队`
