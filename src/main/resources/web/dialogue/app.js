@@ -1201,7 +1201,7 @@ function renderDetails() {
         experimentRun.modelMode,
         task.metadata?.model_mode,
         task.metadata?.modelMode,
-        "ad hoc"
+        "临时任务"
     );
     const toolFacts = toolChainFacts(flow, tools);
     const toolLabel = toolChainLabel(flow, tools);

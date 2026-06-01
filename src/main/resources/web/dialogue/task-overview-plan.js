@@ -1,5 +1,5 @@
 export function buildTaskOverviewPlan(task, context = {}) {
-    const experimentMode = context.experimentMode || "ad hoc";
+    const experimentMode = context.experimentMode || "临时任务";
     const toolLabel = humanizeToolLabel(context.toolLabel || "none");
     const workerLabel = context.workerLabel || task?.assigned_worker || task?.assignedWorker || "未分配";
     const focusWorker = context.focusWorker || "";

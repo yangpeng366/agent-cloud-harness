@@ -37,6 +37,21 @@ test("task overview plan accepts caller-provided focus line base for queued reco
     assert.equal(plan.cards[3].value, "无");
 });
 
+test("task overview defaults experiment mode to localized ad hoc label", async () => {
+    const plan = buildTaskOverviewPlan({ id: "task_default" }, { toolLabel: "none" });
+
+    assert.equal(plan.cards.find((item) => item.label === "实验模式").value, "临时任务");
+
+    const { readFile } = await import("node:fs/promises");
+    const overviewSource = await readFile(new URL("../../main/resources/web/dialogue/task-overview-plan.js", import.meta.url), "utf8");
+    const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+
+    assert.doesNotMatch(overviewSource, /"ad hoc"/);
+    assert.doesNotMatch(appJs, /"ad hoc"/);
+    assert.match(overviewSource, /"临时任务"/);
+    assert.match(appJs, /"临时任务"/);
+});
+
 test("task overview source avoids raw worker label in visible chrome", async () => {
     const { readFile } = await import("node:fs/promises");
     const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
