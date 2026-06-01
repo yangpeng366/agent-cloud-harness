@@ -146,7 +146,7 @@
 - `/dialogue/` 右侧现在也会直接显示当前 task 的 experiment 对比卡片，但默认只常驻当前 mode headline；其余 mode 对比、prompt rollout 和 case 对照已下沉到折叠区
 - `/dialogue/` 的 route 卡片也会补 `route_source / preferred_worker_hint / learning_hint_applied / fallback_reason` 等字段，不再只显示一个 selected worker
 - 如果当前恢复链已经把某个 provider 判成热失败窗口，`/console/` 与 `/dialogue/` 的 route box 还会直接显示 `恢复阶段会优先避开 <provider>`；这条说明对应的是 recovery 视角，不是普通 route 永久禁用
-- route 卡片当前默认常驻只保留 `selected worker / route source / route reason`；candidate workers、route chips 和 cognition timeline 已下沉到折叠区，避免 inspector 默认展开时信息过满
+- route 卡片当前默认常驻只保留 `selected worker / route source / route reason`；candidate workers、route chips 和 cognition timeline 已下沉到折叠区，避免 inspector 默认展开时信息过满；折叠 summary 应显示 `展开路由细节 / 展开路由轨迹`，不要回退成 `展开 route 细节 / route timeline`
 - `Related Messages` 和 `连续性摘要` 仍然常驻，但默认只显示小预览；额外消息和 overflow continuity chips 会进内嵌折叠区，避免 details drawer 中段高度过高
 - inspector 的“迭代链上下文”卡片现在默认只常驻当前轮和上一轮/下一轮导航；完整链表会下沉到折叠区，避免右侧默认出现整条历史列表
 - task details 的控制动作现在也按 chat-first 方向收口：默认常驻只保留一个状态感知的主动作（例如 `继续推进` 或 `恢复`），`暂停 / 升级 / Worker 移交` 等次级控制下沉到 `更多操作`
