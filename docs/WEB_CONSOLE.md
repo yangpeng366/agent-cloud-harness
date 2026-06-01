@@ -136,6 +136,7 @@
 - `GET /api/v1/sessions/{id}/messages` 现在已经能直接返回上述结构化 message metadata，前端不需要再从 `live_flow` 或右侧 inspector 反推 route / next-step / control action
 - 右侧任务面板现在默认收起，通过 header 上的 `查看任务面板` 再展开；窄屏下继续以单列方式展示
 - 展开的任务面板内部也进一步做成 progressive disclosure：`迭代链 / Related Messages / 连续性摘要` 常驻，`Mounted Context / 路由与判断 / 实验对比 / 最近产物 / 工具轨迹` 默认折叠，避免 inspector 一打开就把整页诊断信息全部铺开
+- 右侧 `实验对比` 面板的指标也不应继续露出 `runs / done / learned hint applied / avg tool steps / steps / cost`；对 operator 可见的统计项应显示为 `次运行 / 完成 / 学习偏好已应用 / 平均工具步数 / 步骤 / 成本`
 - `路由与判断` 里的 judgment 卡片现在默认也只保留 summary、execution boundary 和少量关键 diagnostics，不再把 alignment/candidate/evidence/unfinished 等所有细项一次性拼成大段文本
 - `/dialogue/` 右侧现在也会直接显示当前 task 的 experiment 对比卡片，但默认只常驻当前 mode headline；其余 mode 对比、prompt rollout 和 case 对照已下沉到折叠区
 - `/dialogue/` 的 route 卡片也会补 `route_source / preferred_worker_hint / learning_hint_applied / fallback_reason` 等字段，不再只显示一个 selected worker
