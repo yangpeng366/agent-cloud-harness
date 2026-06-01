@@ -3897,34 +3897,34 @@ function renderExperimentModeCard(modeSummary, currentMode) {
         <div class="experiment-mode-card${isCurrent}">
             <div class="stack-item__meta">
                 <span class="task-badge" data-tone="${modelMode === currentMode ? "active" : "default"}">${escapeHtml(modelMode)}</span>
-                <span>${escapeHtml(String(numberOrNull(modeSummary?.run_count, modeSummary?.runCount) ?? 0))} runs</span>
-                <span>${escapeHtml(formatRate(acceptanceRate))} accept</span>
+                <span>${escapeHtml(String(numberOrNull(modeSummary?.run_count, modeSummary?.runCount) ?? 0))} 次运行</span>
+                <span>${escapeHtml(formatRate(acceptanceRate))} 验收通过</span>
             </div>
-            <strong>${escapeHtml(`${formatRate(completionRate)} done · ${formatRate(learningHintAppliedRate)} learned hint applied`)}</strong>
-            <p>${escapeHtml(`${formatDecimal(averageToolChainStepCount)} avg tool steps · ${summarizeCountMap(routeSourceCounts)}`)}</p>
+            <strong>${escapeHtml(`${formatRate(completionRate)} 完成 · ${formatRate(learningHintAppliedRate)} 学习偏好已应用`)}</strong>
+            <p>${escapeHtml(`平均工具步数 ${formatDecimal(averageToolChainStepCount)} · ${summarizeCountMap(routeSourceCounts)}`)}</p>
             <div class="experiment-rollout-grid">
-                ${renderExperimentRolloutBlock("worker", workerPromptModeCounts, workerPromptModeSampleCount, workerMountedRenderedRate, workerMountedInjectedRate, averageMountedContextPanelCount)}
-                ${renderExperimentRolloutBlock("exec judge", executionJudgmentPromptModeCounts, executionJudgmentPromptModeSampleCount, executionJudgmentMountedRenderedRate, executionJudgmentMountedInjectedRate)}
-                ${renderExperimentRolloutBlock("done judge", completionJudgmentPromptModeCounts, completionJudgmentPromptModeSampleCount, completionJudgmentMountedRenderedRate, completionJudgmentMountedInjectedRate)}
+                ${renderExperimentRolloutBlock("worker", "工作者", workerPromptModeCounts, workerPromptModeSampleCount, workerMountedRenderedRate, workerMountedInjectedRate, averageMountedContextPanelCount)}
+                ${renderExperimentRolloutBlock("exec judge", "执行判断", executionJudgmentPromptModeCounts, executionJudgmentPromptModeSampleCount, executionJudgmentMountedRenderedRate, executionJudgmentMountedInjectedRate)}
+                ${renderExperimentRolloutBlock("done judge", "完成判断", completionJudgmentPromptModeCounts, completionJudgmentPromptModeSampleCount, completionJudgmentMountedRenderedRate, completionJudgmentMountedInjectedRate)}
             </div>
         </div>
     `;
 }
 
-function renderExperimentRolloutBlock(label, promptModeCounts, sampleCount, renderedRate, injectedRate, averagePanelCount = null) {
+function renderExperimentRolloutBlock(label, displayLabel, promptModeCounts, sampleCount, renderedRate, injectedRate, averagePanelCount = null) {
     const metrics = [
-        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
-        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`,
-        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`
+        renderedRate === null ? null : `已渲染 ${formatRate(renderedRate)}`,
+        injectedRate === null ? null : `已注入 ${formatRate(injectedRate)}`,
+        averagePanelCount === null ? null : `平均面板 ${formatDecimal(averagePanelCount)}`
     ].filter(Boolean);
     return `
         <div class="experiment-rollout-block">
             <div class="experiment-rollout-block__meta">
-                <span class="task-badge">${escapeHtml(label)}</span>
-                <span>${escapeHtml(String(sampleCount))} sampled</span>
+                <span class="task-badge" title="${escapeHtml(label)}">${escapeHtml(displayLabel)}</span>
+                <span>${escapeHtml(String(sampleCount))} 次采样</span>
             </div>
-            <strong>${escapeHtml(summarizeFrequencyMap(promptModeCounts, "no prompt sample"))}</strong>
-            <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "no mounted-context telemetry")}</p>
+            <strong>${escapeHtml(summarizeFrequencyMap(promptModeCounts, "暂无提示词样本"))}</strong>
+            <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "暂无挂载上下文遥测")}</p>
         </div>
     `;
 }
@@ -3946,18 +3946,20 @@ function renderExperimentPromptModeComparisonSection(
     return `
         <div class="experiment-prompt-section">
             <div class="stack-item__meta">
-                <span class="task-badge">prompt rollout</span>
-                <span>mounted-context prompt-mode comparison</span>
+                <span class="task-badge">提示词 rollout</span>
+                <span>挂载上下文提示词模式对比</span>
             </div>
             <div class="experiment-summary__grid">
-                ${renderExperimentPromptModeComparisonCard("worker", promptModeSummaries, currentWorkerPromptMode)}
+                ${renderExperimentPromptModeComparisonCard("worker", "工作者", promptModeSummaries, currentWorkerPromptMode)}
                 ${renderExperimentPromptModeComparisonCard(
                     "exec judge",
+                    "执行判断",
                     executionJudgmentPromptModeSummaries,
                     currentExecutionJudgmentPromptMode
                 )}
                 ${renderExperimentPromptModeComparisonCard(
                     "done judge",
+                    "完成判断",
                     completionJudgmentPromptModeSummaries,
                     currentCompletionJudgmentPromptMode
                 )}
@@ -3966,7 +3968,7 @@ function renderExperimentPromptModeComparisonSection(
     `;
 }
 
-function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, currentPromptMode) {
+function renderExperimentPromptModeComparisonCard(label, displayLabel, promptModeSummaries, currentPromptMode) {
     const promptModes = orderedPromptModeKeys(promptModeSummaries);
     const sampledCount = promptModes.reduce(
         (total, promptMode) => total + (numberOrNull(
@@ -3978,10 +3980,10 @@ function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, cu
     return `
         <div class="experiment-mode-card experiment-prompt-card">
             <div class="stack-item__meta">
-                <span class="task-badge">${escapeHtml(label)}</span>
-                <span>${escapeHtml(String(sampledCount))} sampled</span>
+                <span class="task-badge" title="${escapeHtml(label)}">${escapeHtml(displayLabel)}</span>
+                <span>${escapeHtml(String(sampledCount))} 次采样</span>
                 ${currentPromptMode
-                    ? `<span>${escapeHtml(`current ${humanizeToken(currentPromptMode) || currentPromptMode}`)}</span>`
+                    ? `<span>${escapeHtml(`当前 ${humanizeToken(currentPromptMode) || currentPromptMode}`)}</span>`
                     : ""}
             </div>
             <div class="experiment-prompt-list">
@@ -3993,7 +3995,7 @@ function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, cu
                             currentPromptMode
                         ))
                         .join("")
-                    : `<div class="experiment-rollout-block"><p>no prompt sample</p></div>`}
+                    : `<div class="experiment-rollout-block"><p>暂无提示词样本</p></div>`}
             </div>
         </div>
     `;
@@ -4026,24 +4028,24 @@ function renderExperimentPromptModeRow(promptMode, promptModeSummary, currentPro
         promptModeSummary?.averageMountedContextRenderedObjectCount
     );
     const headline = [
-        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
-        renderUsedRate === null ? null : `used ${formatRate(renderUsedRate)}`,
-        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`
+        renderedRate === null ? null : `已渲染 ${formatRate(renderedRate)}`,
+        renderUsedRate === null ? null : `已使用 ${formatRate(renderUsedRate)}`,
+        injectedRate === null ? null : `已注入 ${formatRate(injectedRate)}`
     ].filter(Boolean);
     const detail = [
-        budgetTruncatedRate === null ? null : `budget ${formatRate(budgetTruncatedRate)}`,
-        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`,
-        averageRenderedObjectCount === null ? null : `avg objs ${formatDecimal(averageRenderedObjectCount)}`
+        budgetTruncatedRate === null ? null : `预算截断 ${formatRate(budgetTruncatedRate)}`,
+        averagePanelCount === null ? null : `平均面板 ${formatDecimal(averagePanelCount)}`,
+        averageRenderedObjectCount === null ? null : `平均对象 ${formatDecimal(averageRenderedObjectCount)}`
     ].filter(Boolean);
     const isCurrent = promptMode === currentPromptMode ? " is-current" : "";
     return `
         <div class="experiment-rollout-block experiment-prompt-row${isCurrent}">
             <div class="experiment-rollout-block__meta">
                 <span class="task-badge" data-tone="${promptMode === currentPromptMode ? "active" : "default"}">${escapeHtml(humanizeToken(promptMode) || promptMode)}</span>
-                <span>${escapeHtml(String(runCount))} runs</span>
+                <span>${escapeHtml(String(runCount))} 次运行</span>
             </div>
-            <strong>${escapeHtml(headline.length > 0 ? headline.join(" · ") : "no mounted-context telemetry")}</strong>
-            <p>${escapeHtml(detail.length > 0 ? detail.join(" · ") : "no budget or object telemetry")}</p>
+            <strong>${escapeHtml(headline.length > 0 ? headline.join(" · ") : "暂无挂载上下文遥测")}</strong>
+            <p>${escapeHtml(detail.length > 0 ? detail.join(" · ") : "暂无预算或对象遥测")}</p>
         </div>
     `;
 }
@@ -4074,7 +4076,7 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
                 <div class="stack-item__meta">
                     <span class="task-badge" data-tone="${mode === currentMode ? "active" : "default"}">${escapeHtml(mode)}</span>
                 </div>
-                <strong>missing</strong>
+                <strong>缺失</strong>
                 <p>当前 case 还没有这个 mode 的 run。</p>
             </div>
         `;
@@ -4088,7 +4090,7 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
                 <span>${escapeHtml(humanizeToken(completionStatus) || completionStatus)}</span>
             </div>
             <strong>${escapeHtml(humanizeToken(acceptanceResult) || acceptanceResult)}</strong>
-            <p>${escapeHtml(`steps ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} · cost ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
+            <p>${escapeHtml(`步骤 ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} · 成本 ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
         </div>
     `;
 }
