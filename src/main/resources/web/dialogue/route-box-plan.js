@@ -36,13 +36,13 @@ export function buildRouteBoxPlan(input) {
 
 function buildDrawerSummary(detailGroupCount, timelineCount) {
     if (detailGroupCount > 0 && timelineCount > 0) {
-        return `展开 route 细节 · ${detailGroupCount} 组补充 / ${timelineCount} 条 timeline`;
+        return `展开路由细节 · ${detailGroupCount} 组补充 / ${timelineCount} 条轨迹`;
     }
     if (timelineCount > 0) {
-        return `展开 route timeline · ${timelineCount} 条`;
+        return `展开路由轨迹 · ${timelineCount} 条`;
     }
     if (detailGroupCount > 0) {
-        return `展开 route 细节 · ${detailGroupCount} 组补充`;
+        return `展开路由细节 · ${detailGroupCount} 组补充`;
     }
     return "";
 }

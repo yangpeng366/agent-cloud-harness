@@ -18,7 +18,7 @@ test("route box plan keeps worker/source/reason primary and pushes extra context
     assert.equal(plan.routeReason, "task pinned worker still satisfies current route constraints");
     assert.deepEqual(plan.routeChips, ["模式：strong only", "学习记忆：已应用"]);
     assert.equal(plan.hasDrawer, true);
-    assert.equal(plan.drawerSummary, "展开 route 细节 · 3 组补充 / 2 条 timeline");
+    assert.equal(plan.drawerSummary, "展开路由细节 · 3 组补充 / 2 条轨迹");
 });
 
 test("route box plan humanizes route diagnostic chips", () => {
@@ -71,7 +71,7 @@ test("route box plan counts recovery provider deprioritization as drawer detail"
         headline: "恢复阶段会优先避开 claude",
         detail: "最近窗口内出现了临时 provider 失败，恢复建议会先尝试其他 provider。"
     });
-    assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
+    assert.equal(plan.drawerSummary, "展开路由细节 · 1 组补充");
 });
 
 test("route box plan keeps recovery fresh-session chip as drawer detail", () => {
@@ -84,7 +84,18 @@ test("route box plan keeps recovery fresh-session chip as drawer detail", () => 
 
     assert.deepEqual(plan.routeChips, ["恢复：新会话"]);
     assert.equal(plan.hasDrawer, true);
-    assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
+    assert.equal(plan.drawerSummary, "展开路由细节 · 1 组补充");
+});
+
+test("route drawer summary uses localized labels", () => {
+    const withTimelineOnly = buildRouteBoxPlan({
+        selectedWorker: "codex",
+        cognitionTimeline: [{ stage: "route" }]
+    });
+
+    assert.equal(withTimelineOnly.drawerSummary, "展开路由轨迹 · 1 条");
+    assert.equal(withTimelineOnly.drawerSummary.includes("route"), false);
+    assert.equal(withTimelineOnly.drawerSummary.includes("timeline"), false);
 });
 
 test("dialogue route chip source does not emit raw English control labels", async () => {
