@@ -3637,12 +3637,12 @@ function renderRouteBox(flow, task) {
         routePreview.recoveryUnpinnedRecommendation?.recovery_execution_mode
     );
     const routeChips = [
-        modelMode ? `mode: ${humanizeToken(modelMode) || modelMode}` : null,
-        preferredWorkerHint ? `hint: ${preferredWorkerHint}` : null,
-        learningHintApplied === true ? "learning: applied" : null,
-        learningHintApplied === false ? "learning: observed, not applied" : null,
-        routeAlignment === true ? "route/execution aligned" : null,
-        routeAlignment === false ? "route/execution diverged" : null,
+        modelMode ? `模式：${humanizeToken(modelMode) || modelMode}` : null,
+        preferredWorkerHint ? `偏好：${preferredWorkerHint}` : null,
+        learningHintApplied === true ? "学习记忆：已应用" : null,
+        learningHintApplied === false ? "学习记忆：已观察未应用" : null,
+        routeAlignment === true ? "路由/执行：一致" : null,
+        routeAlignment === false ? "路由/执行：不一致" : null,
         recoveryExecutionMode === "fresh_session" ? "恢复：新会话" : null,
         providerDeprioritization.chip || null
     ].filter(Boolean);

@@ -86,3 +86,19 @@ test("route box plan keeps recovery fresh-session chip as drawer detail", () => 
     assert.equal(plan.hasDrawer, true);
     assert.equal(plan.drawerSummary, "展开 route 细节 · 1 组补充");
 });
+
+test("dialogue route chip source does not emit raw English control labels", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+
+    assert.doesNotMatch(appJs, /`mode: \$\{humanizeToken\(modelMode\)/);
+    assert.doesNotMatch(appJs, /`hint: \$\{preferredWorkerHint\}`/);
+    assert.doesNotMatch(appJs, /"learning: applied"/);
+    assert.doesNotMatch(appJs, /"learning: observed, not applied"/);
+    assert.doesNotMatch(appJs, /"route\/execution aligned"/);
+    assert.doesNotMatch(appJs, /"route\/execution diverged"/);
+    assert.match(appJs, /`模式：\$\{humanizeToken\(modelMode\)/);
+    assert.match(appJs, /`偏好：\$\{preferredWorkerHint\}`/);
+    assert.match(appJs, /"学习记忆：已应用"/);
+    assert.match(appJs, /"路由\/执行：一致"/);
+});
