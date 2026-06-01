@@ -77,7 +77,7 @@
 - manual-start task
 - continue-current note
 - default `task_auto` 后的第一页结果可见性
-  - 当前选中 task 时，顶部应能看到 pinned `latest round output` 或等价的 `messageSummary` 短结果
+  - 当前选中 task 时，顶部应能看到 pinned `最近输出` 或等价的 `messageSummary` 短结果
   - 推荐优先抓稳定 selector：`[data-testid="pinned-latest-round-output"]`
 
 不负责：
@@ -220,20 +220,20 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - transcript 主卡的默认折叠态还应保持“短摘要优先”：`worker + short failure/result` 留在正文和 outcome strip；`failure_class / retry / handoff / human_gate / next step` 这类恢复细节继续留在 hint 或展开正文，不要重新把第一屏压成长句
 - 多轮任务第一页的 worker 可见性还应再前置一层：不论是上半区 transcript 主卡，还是下半区 active task thread，都应形成稳定的 `worker / status / short output` 执行条带；用户不该先读一段自然语言后，才推断出“是谁在跑、跑到了哪一轮”
 - 对当前选中的 active task，`task_progress / task_result` 默认折叠态最好接近 `codex/openclaw` 的 round output block：第一眼先看到 `执行中/最近执行 worker`、当前 `status / control node`、以及最近一轮短输出；展开 `>` 只负责补完整正文，不负责补第一屏关键信息
-- 如果当前页面已经选中 task，transcript 顶部还应额外有一块 pinned `latest round output` 摘要，直接钉住该 task 最近一轮 worker 结果；不应要求用户先在 message list 里向下找那张 `task_progress / task_result` 卡
-- 为了让 richer browser acceptance / 真实页探针更稳定，这块 pinned `latest round output` 最好提供稳定 selector，例如 `data-testid="pinned-latest-round-output"`；避免探针只能依赖样式类或文案猜节点
-- 这块 pinned `latest round output` 不应严格依赖 `live_flow.task` 已完全挂好；只要当前 selected task 已确定、且 `session messages / related messages` 里已有对应 `task_progress / task_result`，顶部摘要也应能先渲染出来
-- pinned `latest round output` 自身也应遵守“短摘要优先”：正文只保留 `worker + short failure/result`，`failure_class / retry / handoff / next step` 继续留在 foot 或展开区，不要把顶部摘要重新拉成长段状态播报
+- 如果当前页面已经选中 task，transcript 顶部还应额外有一块 pinned `最近输出` 摘要，直接钉住该 task 最近一轮 worker 结果；不应要求用户先在 message list 里向下找那张 `task_progress / task_result` 卡
+- 为了让 richer browser acceptance / 真实页探针更稳定，这块 pinned `最近输出` 最好提供稳定 selector，例如 `data-testid="pinned-latest-round-output"`；避免探针只能依赖样式类或文案猜节点
+- 这块 pinned `最近输出` 不应严格依赖 `live_flow.task` 已完全挂好；只要当前 selected task 已确定、且 `session messages / related messages` 里已有对应 `task_progress / task_result`，顶部摘要也应能先渲染出来
+- pinned `最近输出` 自身也应遵守“短摘要优先”：正文只保留 `worker + short failure/result`，`failure_class / retry / handoff / next step` 继续留在 foot 或展开区，不要把顶部摘要重新拉成长段状态播报
 - 当 transcript 消息较少时，`message summary + message list` 这一组默认也应整体贴近底部 composer，而不是让消息卡停在上半区、把大块空白留在消息下方；若仍有剩余空白，也应优先上移到消息组之上
 - 如果 transcript 下方还保留折叠态 `任务轨迹` summary，这个 summary 也应按同一条原则收成薄 footer strip；不能因为它本身像第二块 header，就重新制造“消息组和 composer 之间断一层”的错觉
-- 如果 pinned `latest round output` 已经有独立的 `最近输出` 条带，正文应进一步退成可选 fallback，而不是和 output strip 重复同一句短结果
+- 如果 pinned `最近输出` 已经有独立的 `最近输出` 条带，正文应进一步退成可选 fallback，而不是和 output strip 重复同一句短结果
 - 当前 `dialogue-task-thread-preview-regression.test.mjs` 已锁住 pinned 卡去重合同：当 `outcomeStrip.label=最近输出` 且 headline 已显示短失败摘要时，`showBody=false`，正文不再重复同一句 output preview。
 - 下半区 active task thread 也应显式有一块 `最近输出` panel；如果第一页只能看到 `Harness` 正文，却没有独立的 output label / short result block，应直接判定为 **thread round-output visibility regression**
 - 如果后端已经把失败细分成 `worker_runtime_transient / task_environment_blocked / worker_backend_deterministic / partial_result_or_quality_risk`，第一页至少要直接露出这条 `failure_class`；否则用户只能看到“auto handoff / human_gate”，但看不出为什么系统会做这个决定
 - 但第一页也不该直接把这些恢复信号按原始枚举串裸露出来；像 `worker_runtime_transient / human_gate_required` 这种 token 只适合留在 API / live_flow / details，主视图更合理的行为是显示成短的人话标签，例如“临时运行失败 / 等待人工确认”
 - 当前 `selectedStatus` focus line 已在 `human_gate_required` 时追加人话 failure class，例如 `等待人工确认 · 部分结果待确认 / 能力不匹配`；`dialogue-task-focus-line-plan.test.mjs` 覆盖不裸露 `worker_backend_deterministic` 原始枚举，也不再把新增恢复状态写成 `human gate / handoff queued`。
 - 当前主卡 / pinned / thread 的 recovery detail 也已把首屏标签从 `failure · / recovery · / hint ·` 收成 `失败 · / 恢复 · / 建议 ·`，保留短信号但减少 control-plane 英文标签外露；`dialogue-task-thread-preview-regression.test.mjs` 覆盖不回退到旧标签。
-- message card 与 pinned latest round output 的 failure badge 也已收成 `失败 · <failure class>`；`dialogue-recovery-label-render.test.mjs` 覆盖不回退到 `failure ·`。
+- message card 与 pinned 最近输出的 failure badge 也已收成 `失败 · <failure class>`；`dialogue-recovery-label-render.test.mjs` 覆盖不回退到 `failure ·`。
 - message card 的 learning hint 状态也应人话化：当 richer context 可见时显示 `提示 · <worker> 已应用 / 已观测未应用`，而不是 `applied / observed`；验收入口是 `node --test src/test/js/dialogue-message-card-plan.test.mjs`。
 - message card 与 active task signal 的 route/tool 文案也不应保留 `via / steps`：route 显示 `来源：...`，tool chain 显示 `N 步`；同一个 `dialogue-message-card-plan.test.mjs` 覆盖 message card 计划层不回退。
 - route drawer 的 chip 源头也不应主动生成 `mode: / hint: / learning: / route/execution`；`dialogue-route-box-plan.test.mjs` 同时覆盖旧输入兼容映射和 app.js 源头中文化。
@@ -246,8 +246,8 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
 - richer browser acceptance / 真实页复看时，浏览器 console 默认不应再出现稳定可复现的静态资源 `404`；`/favicon.ico` 已通过 HTML data icon 与服务端 `204 No Content` 收口，后续新增稳定 `404` 应按回归处理
 - 真实页首屏还应避免“先闪旧态再收敛”：如果 hash 已经带了 `task=...`，第一页不应先短暂显示 `selectedStatus=idle`、主卡正文=`failed`，几秒后才回到正确 worker/result；首轮加载应尽量先拿到 selected task 的 `live_flow` 再渲染主聊天流
-- 当前已对带 `task=` 的 refresh 顺序做静态回归：先加载 session messages 但抑制 eager render，再由 `loadSelectedTask()` 拿到 `live_flow` 后统一渲染 message summary / pinned latest round output，避免首屏先闪旧 `failed/idle`。
-- richer browser acceptance 里的 pinned `latest round output` gate 已从“只检查 selector 存在/标题存在”升级为要求该区域直接带 `worker / 执行中 / 最近输出 / 执行回合` 等执行信号，避免空 pinned 卡误判通过。
+- 当前已对带 `task=` 的 refresh 顺序做静态回归：先加载 session messages 但抑制 eager render，再由 `loadSelectedTask()` 拿到 `live_flow` 后统一渲染 message summary / pinned 最近输出，避免首屏先闪旧 `failed/idle`。
+- richer browser acceptance 里的 pinned 最近输出 gate 已从“只检查 selector 存在/标题存在”升级为要求该区域直接带 `worker / 执行中 / 最近输出 / 执行回合` 等执行信号，避免空 pinned 卡误判通过。
 
 ### Step C：再跑 light business smoke
 
@@ -318,7 +318,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - default `task_auto`
   - manual-start task
   - continue-current note
-- 真实 `8080` 上新增的 pinned `latest round output` gate 已经能通过
+- 真实 `8080` 上新增的 pinned 最近输出 gate 已经能通过
 - fresh `18386` 隔离样本里，`continue-current note` 也已经重新回到绿色：
   - `task_note`
   - `已记录到当前任务上下文，等待手动继续。`
@@ -342,11 +342,11 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 
 - 在真实 `8080` 上，`scripts/dialogue-business-smoke.js` 现在已经能额外验证：
   - default `task_auto` 成功后
-  - 第一屏顶部可稳定看到 pinned `latest round output`
+  - 第一屏顶部可稳定看到 pinned `最近输出`
   - 当前 smoke 输出里已抓到：
     - `selectedStatus = active / scheduler / worker codex`
-    - pinned `latest round output`
-    - `执行中 / worker codex · active / scheduler`
+    - pinned `最近输出`
+    - `执行中 / 执行方 codex · active / scheduler`
 - 这说明“default task_auto 后第一页要直接看见 worker + 最近一轮 output summary”这条 contract 已经有真实浏览器 smoke 证据
 
 最近一轮更贴近真实页面断层排查的新证据来自 fresh `18390`：
@@ -449,7 +449,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 
 - create session
 - default `task_auto`
-- default `task_auto pinned latest round output`
+- default `task_auto pinned 最近输出`
 - manual-start task
 - continue-current note
 
@@ -538,7 +538,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - 后续已收口当时的 headless `404` 静态资源噪声：页面声明空 favicon，服务端 `/favicon.ico` 返回 `204 No Content`
   - 对应回归证据是 `WebConsoleHandlerHttpTest.rootFaviconReturnsNoContentForAcceptanceNoise()`
 - fresh `18362` 这轮又把边界收得更细了一层：
-  - `/dialogue/` 第一屏的 pinned `latest round output` 与 active task thread 现在已经能直接显示：
+  - `/dialogue/` 第一屏的 pinned `最近输出` 与 active task thread 现在已经能直接显示：
     - 当前/最近执行 worker
     - 当前 status / control node
     - 最近输出短摘要
@@ -572,7 +572,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
   - fresh `18366` 的 `scripts/dialogue-business-smoke.js` 已重新通过：
     - create session
     - default `task_auto`
-    - default `task_auto pinned latest round output`
+    - default `task_auto pinned 最近输出`
     - manual-start task
     - continue-current note
   - 后续真实 `8080` 长寿实例里又进一步收口了另一条晚到刷新 seam：

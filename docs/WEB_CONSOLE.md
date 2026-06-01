@@ -80,7 +80,7 @@
 - 当前验证入口：`WebConsoleHandlerHttpTest.consoleRouteDeclaresEmptyFavicon()` 与 `WebConsoleHandlerHttpTest.rootFaviconReturnsNoContentForAcceptanceNoise()`
 - 对带 `task=` hash 的真实页，首屏也不应先闪旧态再收敛；更接近 `codex/openclaw` 的体验是：一打开就尽量直接落在当前 selected task 的 worker/status/outcome 上，而不是先渲染一版 `idle / failed` 再等下一轮刷新纠正
 - 如果要把 `/dialogue/` 收得更像 `codex/openclaw`，优先增强第一页的 `worker / status / short output` 执行条带，而不是继续往 details 里堆信息；执行中的 worker 必须是第一眼就能扫到的主信息
-- 对已选中的 active task，第一页 transcript 顶部最好再钉一块 `latest round output` 摘要，把最近一轮 worker 结果直接放到主视线里，而不是只靠 message list 里的历史顺序自然出现
+- 对已选中的 active task，第一页 transcript 顶部最好再钉一块 `最近输出` 摘要，把最近一轮 worker 结果直接放到主视线里，而不是只靠 message list 里的历史顺序自然出现；`pinned-latest-round-output` 只作为稳定 selector 名称，不应作为用户可见标题
 - 这块 pinned output 的数据源也不应被 `live_flow.task` 单点卡死；只要当前 selected task 和对应 outcome message 已经存在，顶部摘要就应先显示
 - pinned output 也要保持密度克制：正文只露出短结果，恢复状态和下一步继续下沉，不要把顶部摘要自己做成第二块长诊断面板
 - 如果 pinned output 已经有独立的 `最近输出` 条带，正文更适合作为 fallback 或补充上下文，不应再和 output strip 重复同一句短失败摘要
@@ -162,7 +162,7 @@
 - 如果要验证 failed / human_gate task 的自动恢复入口和异步恢复 job 可见性，入口是 `scripts/recovery-job-ui-probe.js`；它会断言页面发起 `recover?async=true`，并在 details/overview 中看到 `恢复任务` 与请求 id
 - 如果要本地复现这两层验证，优先按 `STARTUP_GUIDE.md` 里隔离 DB 的 `/dialogue/` 启动方式起实例，避免本机历史 session/task 污染验证结果
 - 如果目标已经从“改 UI”切到“上 GitHub 前页面功能要测完整”，不要只跑这两层；完整发布前矩阵见 `docs/DIALOGUE_GITHUB_RELEASE_TEST_MATRIX.md`
-- 当前最新一轮 unified fresh 隔离实例验证通过的是 `http://localhost:18386`：`scripts/screenshot.js` 已通过 `desktop / narrow / responses` 三个 profile，`scripts/dialogue-business-smoke.js` 也已通过 create session / default `task_auto` / pinned `latest round output` / manual-start task / continue-current note 五条 light business smoke 路径
+- 当前最新一轮 unified fresh 隔离实例验证通过的是 `http://localhost:18386`：`scripts/screenshot.js` 已通过 `desktop / narrow / responses` 三个 profile，`scripts/dialogue-business-smoke.js` 也已通过 create session / default `task_auto` / pinned 最近输出 / manual-start task / continue-current note 五条 light business smoke 路径
 - `/dialogue/` 最近这一轮已经继续往 `codex` 壳层收：左侧更像 recent thread rail，header 更薄，details 入口更轻，transcript-first 主区和底部 composer 更明显；顶部状态和右侧 details header 也进一步弱化成次级面
 - 这一轮 green run 之后，当前仍以 transcript 为第一视觉中心，且顺序跑 shell screenshot / light business smoke 仍保持绿灯
 - 最新一轮默认密度收口又继续压了一层：顶部 `message summary` 更像 transcript 导读，composer mode/meta 条更轻，底部 composer footer 只保留最少 session/task context，不再像小型控制说明区
