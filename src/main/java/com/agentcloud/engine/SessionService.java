@@ -396,6 +396,7 @@ public class SessionService {
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_id");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_thread_id");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_session_id");
+        copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "resume_provider_session_id");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_error");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_turn_status");
         copyFromArtifactOrLatest(metadata, artifactMetadata, latestWorkerMetadata, "provider_timeout_kind");

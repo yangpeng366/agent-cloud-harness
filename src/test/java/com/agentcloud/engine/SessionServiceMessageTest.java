@@ -168,6 +168,7 @@ class SessionServiceMessageTest {
                         "execution_backend", "provider_app_server",
                         "provider_stdout_path", "D:\\tmp\\provider-runs\\codex\\task-backfill\\stdout.log",
                         "provider_timeout_kind", "activity_timeout",
+                        "resume_provider_session_id", "resume-thread-codex-001",
                         "provider_abort_reason", "user_interrupted",
                         "provider_activity_timeout_ms", 180_000,
                         "provider_turn_activity_timeout_ms", 180_000,
@@ -190,6 +191,7 @@ class SessionServiceMessageTest {
             assertEquals("provider_app_server", workerRound.metadata().get("execution_backend"));
             assertEquals("D:\\tmp\\provider-runs\\codex\\task-backfill\\stdout.log", workerRound.metadata().get("provider_stdout_path"));
             assertEquals("activity_timeout", workerRound.metadata().get("provider_timeout_kind"));
+            assertEquals("resume-thread-codex-001", workerRound.metadata().get("resume_provider_session_id"));
             assertEquals("user_interrupted", workerRound.metadata().get("provider_abort_reason"));
             assertEquals(180_000, ((Number) workerRound.metadata().get("provider_activity_timeout_ms")).intValue());
             assertEquals(180_000, ((Number) workerRound.metadata().get("provider_turn_activity_timeout_ms")).intValue());

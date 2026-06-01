@@ -1599,6 +1599,7 @@ class ControlNodeGraphOrchestrationFlowTest {
                             Map.entry("execution_backend", "provider_app_server"),
                             Map.entry("provider_session_id", "thread-partial-timeout-001"),
                             Map.entry("provider_thread_id", "thread-partial-timeout-001"),
+                            Map.entry("resume_provider_session_id", "resume-thread-partial-timeout-001"),
                             Map.entry("provider_output_parser", "codex_json_rpc"),
                             Map.entry("provider_turn_status", "partial_timeout"),
                             Map.entry("provider_timeout_kind", "max_duration"),
@@ -1664,6 +1665,8 @@ class ControlNodeGraphOrchestrationFlowTest {
                 .orElseThrow();
             assertEquals("partial_timeout", workerRoundMessage.metadata().get("execution_status"));
             assertEquals("thread-partial-timeout-001", workerRoundMessage.metadata().get("provider_thread_id"));
+            assertEquals("resume-thread-partial-timeout-001",
+                workerRoundMessage.metadata().get("resume_provider_session_id"));
             assertEquals("max_duration", workerRoundMessage.metadata().get("provider_timeout_kind"));
             assertEquals("D:\\tmp\\provider-runs\\codex\\task-partial\\stdout.log",
                 workerRoundMessage.metadata().get("provider_stdout_path"));

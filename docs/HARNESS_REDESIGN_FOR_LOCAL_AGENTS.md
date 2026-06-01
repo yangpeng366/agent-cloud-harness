@@ -285,7 +285,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 
 - Codex app-server 在已有输出后收到 `502 Bad Gateway` 类 JSON-RPC error，不再标记纯失败；返回 `partial_timeout` / `COMPLETED_PARTIAL`，并写入 last message file。
 - Codex 单轮超时已按“活动超时 + 最大硬上限”执行：`turn_activity_timeout_ms` 只判断无活动卡死，`turn_max_duration_ms` / `coding_turn_max_duration_ms` 是真正硬上限，不会被更大的 activity timeout 拉长；coding / research / investigation 默认硬上限为 `900000ms`。
-- ControlNodeGraph 写入 worker artifact 后，会同步追加 `worker_round` session_message；消息 metadata 指向 `artifact_id`、worker/provider、provider run files，历史 artifact 仍可由 SessionService 回填。
+- ControlNodeGraph 写入 worker artifact 后，会同步追加 `worker_round` session_message；消息 metadata 指向 `artifact_id`、worker/provider、provider run files，并保留 `resume_provider_session_id` 供继续同一 provider thread。历史 artifact 仍可由 SessionService 回填同等元数据。
 - 直接写入 `artifacts` 表、没有 `agent_run` 的任务，也能通过 `/api/v1/tasks/{id}/artifacts` 返回产物。
 - Dialogue 不再只依赖 `session_messages.content`，`worker_round` 下方会主动展示该 task 的 artifact 预览。
 - Dialogue worker_round artifact-first 渲染策略已抽成可测 plan：未加载时显示“正在加载 worker 产物”，空列表隐藏，最多内联 3 个 artifact 预览并显示剩余数量，选中 task 会打 `data-selected-task` 标记。
