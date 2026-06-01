@@ -514,9 +514,22 @@
 - `http`
 - `inproc`
 
+## 7.2 Discovery Probe Metadata
+
+当 dynamic provider 未显式配置 `protocol`，但配置了 `binary` 或 `command` 时，服务会保守推断为 `native_cli_text`，并执行一次短超时 startup help/probe。该结果只用于诊断，不自动切换协议、不替代 dispatch readiness。
+
+常见 metadata：
+- `provider_protocol_inferred`: `true`
+- `provider_protocol_probe_mode`: 当前为 `startup_help_probe`
+- `provider_protocol_probe_command_shape`: 探测参数形态，不包含完整 binary 路径
+- `provider_protocol_probe_exit_code`: 进程退出码，超时或启动失败为 `-1`
+- `provider_protocol_probe_success`: 是否 exit code 为 `0`
+- `provider_protocol_probe_suggested_parser`: `text` / `json` / `stream_json` / `unknown`
+- `provider_protocol_probe_output_preview`: 第一条非空输出预览
+
 ---
 
-## 7.2 错误返回
+## 7.3 错误返回
 延续现有错误 envelope：
 
 ```json

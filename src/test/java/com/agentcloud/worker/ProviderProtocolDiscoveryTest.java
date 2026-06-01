@@ -299,6 +299,34 @@ class ProviderProtocolDiscoveryTest {
     }
 
     @Test
+    void inferredProtocolRecordsStartupProbeEvidenceWithoutChangingRunnableProtocol() throws Exception {
+        Path config = tempDir.resolve("providers.yaml");
+        Path javaExecutable = Path.of(System.getProperty("java.home"), "bin",
+            System.getProperty("os.name", "").toLowerCase().contains("win") ? "java.exe" : "java");
+        Files.writeString(config, """
+            providers:
+              - id: probed_command_agent
+                binary: "%s"
+                dispatch_probe_args: ["--version"]
+            """.formatted(javaExecutable.toString().replace("\\", "\\\\")));
+
+        ProviderProtocolDiscovery.DiscoveryResult result =
+            new ProviderProtocolDiscovery(List.of(config)).discoverDetailed();
+
+        ProviderProtocol protocol = result.registry().get("probed_command_agent");
+        assertNotNull(protocol);
+        ProviderProtocolDiscovery.DiscoveredProvider provider = result.providers().get(0);
+        assertEquals("native_cli_text", provider.protocol());
+        assertEquals(true, provider.metadata().get("provider_protocol_inferred"));
+        assertEquals("startup_help_probe", provider.metadata().get("provider_protocol_probe_mode"));
+        assertEquals(0, provider.metadata().get("provider_protocol_probe_exit_code"));
+        assertEquals(true, provider.metadata().get("provider_protocol_probe_success"));
+        assertEquals("text", provider.metadata().get("provider_protocol_probe_suggested_parser"));
+        assertTrue(String.valueOf(provider.metadata().get("provider_protocol_probe_output_preview")).length() > 0);
+        assertEquals(List.of("--version"), provider.metadata().get("provider_protocol_probe_command_shape"));
+    }
+
+    @Test
     void recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols() throws Exception {
         Path config = tempDir.resolve("providers.yaml");
         Files.writeString(config, """

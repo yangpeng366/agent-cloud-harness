@@ -229,6 +229,14 @@ async function run() {
       inferredAgent?.metadata?.provider_protocol === 'native_cli_text'
         && inferredAgent?.metadata?.provider_protocol_inferred === true,
       JSON.stringify(inferredAgent?.metadata || {}));
+    assertCondition(report, 'inferred provider includes startup protocol probe diagnostics',
+      inferredAgent?.metadata?.provider_protocol_probe_mode === 'startup_help_probe'
+        && Array.isArray(inferredAgent?.metadata?.provider_protocol_probe_command_shape)
+        && inferredAgent.metadata.provider_protocol_probe_command_shape.includes('--help')
+        && inferredAgent?.metadata?.provider_protocol_probe_exit_code === -1
+        && inferredAgent?.metadata?.provider_protocol_probe_success === false
+        && inferredAgent?.metadata?.provider_protocol_probe_suggested_parser === 'unknown',
+      JSON.stringify(inferredAgent?.metadata || {}));
     assertCondition(report, 'inferred provider projected to worker inventory',
       Boolean(inferredWorker)
         && Array.isArray(inferredWorker?.capabilities)

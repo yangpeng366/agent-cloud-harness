@@ -1,5 +1,6 @@
 package com.agentcloud.worker;
 
+import com.agentcloud.runtime.TextDecoding;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -13,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 public class ProviderProtocolDiscovery {
     private static final Logger log = LoggerFactory.getLogger(ProviderProtocolDiscovery.class);
@@ -343,6 +345,9 @@ public class ProviderProtocolDiscovery {
         }
         String configuredProtocolType = firstNonBlank(config.type, config.protocol);
         String protocolType = effectiveProtocolType(config);
+        DiscoveryProbeResult probeResult = configuredProtocolType == null
+            ? runStartupProtocolProbe(config)
+            : null;
         String binary = firstNonBlank(config.binary, config.binaryPath, firstCommandPart(config.command), id);
         List<String> capabilities = config.capabilities != null && !config.capabilities.isEmpty()
             ? List.copyOf(config.capabilities)
@@ -363,6 +368,7 @@ public class ProviderProtocolDiscovery {
             metadata.put("dispatch_probe_args", List.copyOf(config.dispatchProbeArgs));
             metadata.put("dispatch_probe_args_source", "provider_discovery_config");
         }
+        appendStartupProtocolProbeMetadata(metadata, probeResult);
         return new DiscoveredProvider(
             id,
             firstNonBlank(config.displayName, id),
@@ -371,6 +377,166 @@ public class ProviderProtocolDiscovery {
             protocolType,
             Map.copyOf(metadata)
         );
+    }
+
+    private DiscoveryProbeResult runStartupProtocolProbe(ProviderConfig config) {
+        List<String> command = startupProtocolProbeCommand(config);
+        if (command.isEmpty()) {
+            return null;
+        }
+        long timeoutMs = durationPropertyMs("agentcloud.provider_discovery.probe_timeout_ms", 1_500L);
+        Process process = null;
+        try {
+            process = new ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start();
+            if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                return new DiscoveryProbeResult(
+                    "startup_help_probe",
+                    command,
+                    -1,
+                    "probe timed out",
+                    false,
+                    "unknown"
+                );
+            }
+            String output = TextDecoding.decodeExternalProcessOutput(process.getInputStream().readAllBytes()).trim();
+            return new DiscoveryProbeResult(
+                "startup_help_probe",
+                command,
+                process.exitValue(),
+                truncate(firstNonBlankLine(output), 300),
+                process.exitValue() == 0,
+                suggestedParser(output)
+            );
+        } catch (IOException e) {
+            return new DiscoveryProbeResult(
+                "startup_help_probe",
+                command,
+                -1,
+                truncate(e.getMessage(), 300),
+                false,
+                "unknown"
+            );
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new DiscoveryProbeResult(
+                "startup_help_probe",
+                command,
+                -1,
+                "probe interrupted",
+                false,
+                "unknown"
+            );
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
+        }
+    }
+
+    private List<String> startupProtocolProbeCommand(ProviderConfig config) {
+        String binary = firstNonBlank(config.binary, config.binaryPath);
+        List<String> probeArgs = config.dispatchProbeArgs != null && !config.dispatchProbeArgs.isEmpty()
+            ? config.dispatchProbeArgs
+            : List.of("--help");
+        if (binary != null) {
+            ArrayList<String> command = new ArrayList<>();
+            command.add(binary);
+            command.addAll(probeArgs);
+            return List.copyOf(command);
+        }
+        if (config.command == null || config.command.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<String> command = new ArrayList<>();
+        boolean replacedPrompt = false;
+        for (String part : config.command) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            if (part.contains("{{prompt}}")) {
+                command.add(part.replace("{{prompt}}", String.join(" ", probeArgs)));
+                replacedPrompt = true;
+            } else {
+                command.add(part);
+            }
+        }
+        if (!replacedPrompt) {
+            command.addAll(probeArgs);
+        }
+        return List.copyOf(command);
+    }
+
+    private void appendStartupProtocolProbeMetadata(Map<String, Object> metadata, DiscoveryProbeResult probeResult) {
+        if (metadata == null || probeResult == null) {
+            return;
+        }
+        metadata.put("provider_protocol_probe_mode", probeResult.mode());
+        metadata.put("provider_protocol_probe_command_shape", probeCommandShape(probeResult.command()));
+        metadata.put("provider_protocol_probe_exit_code", probeResult.exitCode());
+        metadata.put("provider_protocol_probe_success", probeResult.success());
+        metadata.put("provider_protocol_probe_suggested_parser", probeResult.suggestedParser());
+        if (probeResult.outputPreview() != null && !probeResult.outputPreview().isBlank()) {
+            metadata.put("provider_protocol_probe_output_preview", probeResult.outputPreview());
+        }
+    }
+
+    private List<String> probeCommandShape(List<String> command) {
+        if (command == null || command.isEmpty()) {
+            return List.of();
+        }
+        return command.stream()
+            .skip(1)
+            .filter(item -> item != null && !item.isBlank())
+            .toList();
+    }
+
+    private String suggestedParser(String output) {
+        if (output == null || output.isBlank()) {
+            return "text";
+        }
+        String trimmed = output.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            return "json";
+        }
+        long jsonLineCount = trimmed.lines()
+            .map(String::trim)
+            .filter(line -> line.startsWith("{") && line.endsWith("}"))
+            .limit(2)
+            .count();
+        return jsonLineCount >= 2 ? "stream_json" : "text";
+    }
+
+    private String firstNonBlankLine(String output) {
+        if (output == null || output.isBlank()) {
+            return null;
+        }
+        return output.lines()
+            .map(String::trim)
+            .filter(line -> !line.isBlank())
+            .findFirst()
+            .orElse(null);
+    }
+
+    private String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) {
+            return value;
+        }
+        return value.substring(0, Math.max(0, maxLength - 3)) + "...";
+    }
+
+    private long durationPropertyMs(String key, long defaultValue) {
+        String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Math.max(100L, Long.parseLong(raw.trim()));
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
     }
 
     private UnsupportedProvider unsupportedProvider(ProviderConfig config, Path sourcePath) {
@@ -554,6 +720,19 @@ public class ProviderProtocolDiscovery {
             if (protocol == null) protocol = "";
             if (reason == null) reason = "provider protocol is not supported by current dynamic discovery";
             if (metadata == null) metadata = Map.of();
+        }
+    }
+
+    private record DiscoveryProbeResult(String mode,
+                                        List<String> command,
+                                        int exitCode,
+                                        String outputPreview,
+                                        boolean success,
+                                        String suggestedParser) {
+        private DiscoveryProbeResult {
+            if (mode == null) mode = "startup_help_probe";
+            if (command == null) command = List.of();
+            if (suggestedParser == null || suggestedParser.isBlank()) suggestedParser = "unknown";
         }
     }
 
