@@ -451,9 +451,9 @@ but it still does not by itself close the wider project or GitHub release.
 
 ### 4.1 Remaining Gaps
 
-- [x] token-level streaming not yet accepted
-- [x] full `/v1/responses` item/tool-call surface not yet accepted
-- [x] current A-H seam coverage now comes from richer browser probe bundles, and the formal record has been rewritten against that bundle
+- [ ] token-level streaming not yet accepted
+- [ ] full `/v1/responses` item/tool-call surface not yet accepted
+- [ ] strict manual A-H click-through is not accepted by this historical record; use the 2026-06-02 record and runbook for the current boundary
 
 ### 4.2 Final Gate
 

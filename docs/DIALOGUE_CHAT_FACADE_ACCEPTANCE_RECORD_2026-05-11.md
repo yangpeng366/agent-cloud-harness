@@ -681,9 +681,9 @@ Run-DialogueRecordDraftProbe.ps1 -InputJsonPath .\.tmp\dialogue-manual-18246.jso
 
 ### 4.1 未覆盖项
 
-- [x] token-level streaming 仍未验收
-- [x] 完整 `/v1/responses` item/tool-call surface 仍未验收
-- [x] A-H 八条真实页面路径尚未逐条手工点验
+- [ ] token-level streaming 仍未验收
+- [ ] 完整 `/v1/responses` item/tool-call surface 仍未验收
+- [ ] A-H 八条真实页面路径尚未逐条手工点验；本历史记录不构成当前严格人工验收通过证据
 
 ### 4.2 最终判断
 

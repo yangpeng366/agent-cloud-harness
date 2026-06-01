@@ -152,11 +152,6 @@ providers:
     env:
       MULTICA_REASONIX_MODEL: deepseek-v4-flash
 
-  - id: codex
-    binary: codex
-    protocol: app_server_json_rpc
-    app_server_port: 47201
-
   - id: trae
     binary: trae
     args: ["chat", "--mode", "agent"]
@@ -165,8 +160,9 @@ providers:
 
 **优势**：
 - 新增 agent = 编辑 yaml + 重启，无需改 Java 代码
-- protocol 字段选已有 protocol 实现类（native_cli_text / native_cli_stream_json / app_server_json_rpc / mcp）
-- 未指定 protocol → 自动探测（先尝试 --help 看是否可用，再用 `GenericCliProtocol` 做文本解析）
+- protocol 字段当前只应选择已支持的 dynamic generic protocol（`native_cli_text` / `native_cli_json` / `native_cli_lines` / `native_cli_stream_json`）
+- 未指定 protocol → 保守推断为 `native_cli_text`，并执行低副作用 startup help/probe 产出诊断证据；不会根据 probe 自动切换协议
+- `app_server_json_rpc` / `mcp` 可写入配置用于 inventory 观测，但当前只会注册为 unsupported provider，不会成为 runnable worker
 
 当前落地边界：`native_cli_text/json/lines/stream_json` generic provider 已支持动态发现；其中 `native_cli_stream_json` 会解析通用 JSONL 事件里的 `content/text/message/result/error` 字段并归一 failed/error 事件，但仍不等同于 Claude/Cursor 这类 provider-specific JSON event parser。未写 `protocol` 但配置了 `binary` 或 `command` 的 provider 会被保守推断为 `native_cli_text`，并在 metadata 标记 `provider_protocol_inferred=true`；discovery 会执行一个短超时低副作用 startup help/probe，把 `provider_protocol_probe_*` 证据写入 metadata，但不会用该探测结果自动改协议或阻断注册。动态 provider 可通过 `dispatch_probe_args` 配置分发前真实验活命令，`/workers/{id}/readiness?mode=dispatch` 和 `POST /api/v1/agents/{id}/preflight` 会优先使用这组 probe args，而不是只能盲用默认 `--help`。`app_server_json_rpc`、`mcp` 与通用 handshake / tool bridge 仍属于后续收硬项；配置了这些未支持协议的 provider 现在会以 `unsupported` provider 出现在 `/api/v1/agents`，metadata 带 `provider_discovery_unsupported_reason`，并在可构造低副作用命令时记录 `provider_protocol_probe_mode=unsupported_startup_probe` 证据，但不会注册为 runnable worker 或路由候选，避免误分发。
 

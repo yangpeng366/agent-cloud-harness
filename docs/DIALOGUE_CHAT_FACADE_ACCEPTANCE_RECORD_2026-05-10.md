@@ -446,9 +446,9 @@ probe 过早截断 + 前端过渡态收敛不足，而不是仍在持续复现�
 
 ### 4.1 未覆盖项
 
-- [x] token-level streaming 仍未验收
-- [x] 完整 `/v1/responses` item/tool-call surface 仍未验收
-- [x] 8 条真实页面路径尚未逐条手工点验
+- [ ] token-level streaming 仍未验收
+- [ ] 完整 `/v1/responses` item/tool-call surface 仍未验收
+- [ ] 8 条真实页面路径尚未逐条手工点验；本历史记录不构成当前严格人工验收通过证据
 
 ### 4.2 最终判断
 
