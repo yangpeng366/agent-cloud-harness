@@ -61,6 +61,17 @@ test("console provider detail can run provider preflight from the page", () => {
     assert.match(appJs, /dispatch_preflight_output_preview/);
 });
 
+test("console provider detail renders startup protocol probe diagnostics", () => {
+    assert.match(appJs, /renderProviderStartupProtocolProbe\(agent\)/);
+    assert.match(appJs, /function renderProviderStartupProtocolProbe\(agent\)/);
+    assert.match(appJs, /startup protocol probe/);
+    assert.match(appJs, /provider_protocol_probe_mode/);
+    assert.match(appJs, /provider_protocol_probe_command_shape/);
+    assert.match(appJs, /provider_protocol_probe_suggested_parser/);
+    assert.match(appJs, /provider_protocol_inferred/);
+    assert.match(appJs, /该探测只作为 discovery 诊断证据/);
+});
+
 test("console recovery job panel renders operator labels", () => {
     assert.match(appJs, />恢复任务</);
     assert.match(appJs, /请求 \$\{escapeHtml\(plan\.requestId\)\}/);

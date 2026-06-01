@@ -581,6 +581,7 @@
 - `运行 Preflight` 按钮调用 `POST /api/v1/agents/{id}/preflight`
 - 页面会展示 `dispatch_preflight_mode`、probe args、command shape、exit code、output preview、failure class / retryable 等诊断
 - 执行后同步刷新 Agent Inventory 与 worker dispatch readiness，便于判断本地 CLI 是否能接收新任务
+- 对未显式配置 `protocol` 的 dynamic provider，Provider Detail 会把 startup discovery probe 单独渲染为 `startup protocol probe` 诊断块，避免只在 raw metadata 里查找 `provider_protocol_probe_*`
 
 ## 9.2 Task Detail
 建议显示：

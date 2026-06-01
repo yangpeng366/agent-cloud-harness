@@ -1419,6 +1419,7 @@ function renderAgentDetail() {
             <p>${escapeHtml(preview(readinessReason, 220))}</p>
             ${renderProviderRuntimeDiagnostics(agent, runs)}
             ${renderProviderPreflightDiagnostics(agent)}
+            ${renderProviderStartupProtocolProbe(agent)}
             ${renderWorkerDispatchReadiness(state.selectedWorkerReadiness, workerId)}
             ${renderMetadataGrid(agent.metadata, 6)}
             <div class="agent-action-row">
@@ -1431,6 +1432,43 @@ function renderAgentDetail() {
         <div class="agent-trace-list">
             <div class="decision-item__type">recent provider runs</div>
             ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 provider 暂无 run 记录。")}
+        </div>
+    `;
+}
+
+function renderProviderStartupProtocolProbe(agent) {
+    const metadata = agent?.metadata || {};
+    if (!metadata || typeof metadata !== "object") {
+        return "";
+    }
+    const mode = firstNonBlank(metadata.provider_protocol_probe_mode, metadata.providerProtocolProbeMode);
+    const commandShape = normalizeTextList(metadata.provider_protocol_probe_command_shape, metadata.providerProtocolProbeCommandShape);
+    const exitCode = numberOrNull(metadata.provider_protocol_probe_exit_code, metadata.providerProtocolProbeExitCode);
+    const success = booleanValue(metadata.provider_protocol_probe_success, metadata.providerProtocolProbeSuccess);
+    const suggestedParser = firstNonBlank(metadata.provider_protocol_probe_suggested_parser, metadata.providerProtocolProbeSuggestedParser);
+    const outputPreview = firstNonBlank(metadata.provider_protocol_probe_output_preview, metadata.providerProtocolProbeOutputPreview);
+    const inferred = booleanValue(metadata.provider_protocol_inferred, metadata.providerProtocolInferred);
+    if (!mode && commandShape.length === 0 && exitCode === null && success === null && !suggestedParser && !outputPreview) {
+        return "";
+    }
+    const ok = success === null ? exitCode === 0 : success === true;
+    return `
+        <div class="agent-trace-list provider-diagnostics">
+            <div class="decision-item__type">startup protocol probe</div>
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "probe ok" : "probe failed"}</span>
+                ${mode ? `<span class="task-badge" data-tone="paused">${escapeHtml(mode)}</span>` : ""}
+                ${inferred === true ? `<span class="task-badge" data-tone="paused">protocol inferred</span>` : ""}
+                ${suggestedParser ? `<span class="task-badge" data-tone="auto">parser: ${escapeHtml(suggestedParser)}</span>` : ""}
+            </div>
+            <div class="agent-detail__grid">
+                ${overviewCard("Exit Code", exitCode === null ? "n/a" : String(exitCode))}
+                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
+                ${overviewCard("Protocol", firstNonBlank(metadata.provider_protocol, metadata.providerProtocol, "unknown"))}
+                ${overviewCard("Parser Hint", suggestedParser || "n/a")}
+            </div>
+            ${outputPreview ? `<p class="mono">${escapeHtml(preview(outputPreview, 260))}</p>` : ""}
+            <p>${escapeHtml("该探测只作为 discovery 诊断证据，不自动切换协议，也不替代 dispatch readiness。")}</p>
         </div>
     `;
 }

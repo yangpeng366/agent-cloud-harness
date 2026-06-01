@@ -171,7 +171,14 @@ function buildAgentFixture() {
     checked_at: checkedAt,
     metadata: {
       provider_protocol: 'app_server_json_rpc',
-      execution_backend: 'provider_app_server'
+      execution_backend: 'provider_app_server',
+      provider_protocol_inferred: true,
+      provider_protocol_probe_mode: 'startup_help_probe',
+      provider_protocol_probe_command_shape: ['--version'],
+      provider_protocol_probe_exit_code: 0,
+      provider_protocol_probe_success: true,
+      provider_protocol_probe_suggested_parser: 'text',
+      provider_protocol_probe_output_preview: 'codex help probe'
     }
   };
 }
@@ -183,6 +190,13 @@ function buildPreflightAgentFixture() {
     metadata: {
       provider_protocol: 'app_server_json_rpc',
       execution_backend: 'provider_app_server',
+      provider_protocol_inferred: true,
+      provider_protocol_probe_mode: 'startup_help_probe',
+      provider_protocol_probe_command_shape: ['--version'],
+      provider_protocol_probe_exit_code: 0,
+      provider_protocol_probe_success: true,
+      provider_protocol_probe_suggested_parser: 'text',
+      provider_protocol_probe_output_preview: 'codex help probe',
       dispatch_preflight_mode: 'active_probe',
       dispatch_preflight_probe_kind: 'cli_help',
       dispatch_preflight_probe_args: ['--version'],
@@ -446,6 +460,10 @@ async function main() {
         provider_preflight_rendered: result.agentDetailText.includes('provider preflight result')
           && result.agentDetailText.includes('active_probe')
           && result.agentDetailText.includes('codex 0.0.0-probe'),
+        startup_protocol_probe_rendered: result.agentDetailText.includes('startup protocol probe')
+          && result.agentDetailText.includes('protocol inferred')
+          && result.agentDetailText.includes('parser: text')
+          && result.agentDetailText.includes('codex help probe'),
         worker_dispatch_probe_rendered: result.agentDetailText.includes('worker dispatch probe')
           && result.agentDetailText.includes('dispatch ready')
       },
