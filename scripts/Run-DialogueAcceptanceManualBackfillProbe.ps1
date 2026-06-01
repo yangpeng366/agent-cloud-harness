@@ -26,6 +26,20 @@ $recordPath = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) (".tmp\dia
     Out-File -FilePath $templatePath -Encoding utf8
 
 $backfill = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json
+if (-not ([string]$backfill.note).Contains("must be backfilled only after a human reviews each path")) {
+    throw "manual backfill template note does not require human review"
+}
+if (-not ([string]$backfill.note).Contains("cannot mark Passed=true")) {
+    throw "manual backfill template note does not reject scripted evidence as final gate"
+}
+foreach ($path in @($backfill.paths)) {
+    if ([string]$path.evidence_mode -ne 'manual_review_required') {
+        throw "manual backfill template path $($path.id) must start as manual_review_required"
+    }
+    if ($path.passed) {
+        throw "manual backfill template path $($path.id) must not start as Passed=true"
+    }
+}
 $first = $backfill.paths[0]
 $first.passed = $true
 $first.input = "manual probe input"

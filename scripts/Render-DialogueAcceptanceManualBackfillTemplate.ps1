@@ -40,6 +40,6 @@ foreach ($entry in @($manual.recommended_order)) {
     result_json_path = [string]$manual.result_json_path
     record_path = [string]$payload.record_suggestion
     recommended_screenshot_dir = [string]$manual.recommended_screenshot_dir
-    note = "A-H may be backfilled from scripted browser evidence if the screenshot bundle and browser-probe JSON are being used as the source of truth. This template does not complete the final gate by itself."
+    note = "A-H strict manual acceptance must be backfilled only after a human reviews each path and records the observed result. Scripted browser evidence may be used as supporting context, but it cannot mark Passed=true or close the strict manual release gate by itself."
     paths = $paths
 } | ConvertTo-Json -Depth 6
