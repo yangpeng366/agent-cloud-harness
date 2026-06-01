@@ -119,3 +119,19 @@ test("related-message plan keeps richer context including route and tools", () =
         ["trigger", "route", "tools", "mode"]
     );
 });
+
+test("learning hint signal is localized when richer context is visible", () => {
+    const applied = buildMessageSignalPlan({
+        preferred_worker_hint: "codex",
+        learning_hint_applied: true
+    }, { relatedOnly: true });
+    const observed = buildMessageSignalPlan({
+        preferred_worker_hint: "kimi",
+        learning_hint_applied: false
+    }, { relatedOnly: true });
+
+    assert.deepEqual(applied.texts, ["提示 · codex 已应用"]);
+    assert.deepEqual(observed.texts, ["提示 · kimi 已观测未应用"]);
+    assert.equal(applied.texts.join(" ").includes("applied"), false);
+    assert.equal(observed.texts.join(" ").includes("observed"), false);
+});

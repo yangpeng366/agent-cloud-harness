@@ -154,16 +154,16 @@ function messageLearningSignal(preferredWorkerHint, learningHintApplied) {
         return null;
     }
     if (preferredWorkerHint && learningHintApplied === true) {
-        return `${preferredWorkerHint} applied`;
+        return `${preferredWorkerHint} 已应用`;
     }
     if (preferredWorkerHint && learningHintApplied === false) {
-        return `${preferredWorkerHint} observed`;
+        return `${preferredWorkerHint} 已观测未应用`;
     }
     if (learningHintApplied === true) {
-        return "applied";
+        return "已应用";
     }
     if (learningHintApplied === false) {
-        return "observed";
+        return "已观测未应用";
     }
     return preferredWorkerHint;
 }
