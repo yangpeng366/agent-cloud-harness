@@ -211,6 +211,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 运行态条带和 task overview 里的 worker 标签应显示为 `执行方`，不要回退成 `Worker`、`worker <id>` 或 `worker · <id>`。
 - task overview 的实验模式默认值也应中文化：无 experiment metadata 时显示 `临时任务`，不要回退到 `ad hoc`。
 - 控制动作和 recovery job 的 worker 相关标签也应同口径：`移交执行方 / 执行方 <worker>`，不要回退到 `移交 Worker / worker <id>`。
+- task 详情 modal 的 route / 判断诊断也必须同口径：显示 `执行方 / 选中执行方 / 候选执行方`，空值显示 `未分配 / 未知 / 暂无`，不要回退到 `Worker / unassigned / unknown / none / not specified / no result`。
 - 这条运行态条带最好显式分成两层：第一层是 `执行中/最近执行 worker + status/control node`，第二层是 `最近输出 + short failure/result`；不能退化成只有一段普通正文或一串 badge
 - 这两层条带还应继续接近真正的执行面：`worker` 与 `status/control node` 最好拆成独立 headline/detail，而不是全挤在同一行长句里；`最近输出` 也应优先展示短结果 headline，避免用户先扫到一大段自然语言正文
 - 移动端也要守住同一条 transcript-first contract：即使新增了更明显的 worker/output 条带，`430px` 左右窄屏下也不应让 header 或 composer 重新长到压过 transcript；否则应直接判定为 **narrow transcript dominance regression**
