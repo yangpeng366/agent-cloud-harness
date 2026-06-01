@@ -72,7 +72,7 @@ curl "http://localhost:8080/api/v1/tasks/<task_id>/recovery_jobs?limit=10"
 
 如果响应里的 `request_id` 在这个列表里不存在，说明请求没有成功进入异步恢复入口。若 job 停在 `accepted/running`，继续看 `status_url` 与服务端日志；若为 `failed`，先看 `error_message` 和 `metadata.recovery_action`。
 
-Console / Dialogue 手工点“自动恢复”时也应走同一条异步入口。页面任务详情会展示最近 `Recovery Job`；如果看不到 `request_id`，先查浏览器 Network 是否请求了 `recover?async=true`，再查 `/api/v1/tasks/<task_id>/recovery_jobs?limit=5`。
+Console / Dialogue 手工点“自动恢复”时也应走同一条异步入口。页面任务详情会展示最近 `恢复任务`；如果看不到请求 id，先查浏览器 Network 是否请求了 `recover?async=true`，再查 `/api/v1/tasks/<task_id>/recovery_jobs?limit=5`。
 
 前端合同可用浏览器 probe 验证，默认检查 `/dialogue/`：
 
@@ -86,7 +86,7 @@ node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:8080 --surfa
 node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:8080 --surface console
 ```
 
-这个 probe 会创建一个失败 task，但会在浏览器内拦截 recover/recovery_jobs 响应；验收目标是 UI 请求路径包含 `recover?async=true`，并且详情区展示 `Recovery Job` 与对应 `request_id`，不启动真实长 worker。
+这个 probe 会创建一个失败 task，但会在浏览器内拦截 recover/recovery_jobs 响应；验收目标是 UI 请求路径包含 `recover?async=true`，并且详情区展示 `恢复任务` 与对应请求 id，不启动真实长 worker。
 
 ### 2.0 worker 执行失败后，什么时候该自动切 worker，什么时候该停到人工确认
 

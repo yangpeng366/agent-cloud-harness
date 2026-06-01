@@ -645,7 +645,7 @@ node .\scripts\dialogue-business-smoke.js
 - `/dialogue/` 的 task action plan 接入 `recover`，`waiting_human / waiting / human_gate / failed` 优先显示“自动恢复”，避免用户只能在 `resume / continue / handoff` 之间猜
 - `recover` 动作走 `POST /api/v1/tasks/{id}/recover?async=true`，默认 `mode=auto`，和后端最近失败任务恢复入口保持一致，同时避免浏览器请求被真实 worker 长执行拖住
 - task detail 额外读取 `/api/v1/tasks/{id}/recovery_jobs?limit=5`，在 overview 中显示最近异步恢复 job 的 `status / request_id / action / execution_mode / target_worker / error`
-- 新增浏览器验收脚本 `scripts/recovery-job-ui-probe.js`：用真实 session/task 打开 `/dialogue/` 或 `/console/`，拦截 recover/recovery_jobs 响应，断言按钮请求包含 `recover?async=true` 且详情区能看到 `Recovery Job` 与 `request_id`
+- 新增浏览器验收脚本 `scripts/recovery-job-ui-probe.js`：用真实 session/task 打开 `/dialogue/` 或 `/console/`，拦截 recover/recovery_jobs 响应，断言按钮请求包含 `recover?async=true` 且详情区能看到 `恢复任务` 与请求 id
 - `message-panel__body--stream-only` 下的短 transcript 改成底部栈布局：`message-stream` 使用 `margin-top:auto`，剩余空白优先留在消息组上方，消息组、折叠任务轨迹和 composer 之间保持紧凑
 - 这轮只收敛已知空白 seam 与恢复动作入口，不改变 transcript-first 主结构和 details panel 的展开语义
 - 补充收敛：`selectedStatus` 的 focus line 已抽为 `task-focus-line-plan.js`，避免 header 只显示 `waiting_human / human_gate` 而看不出是 partial timeout、human gate 还是 handoff queued；验收入口是 `node --test src/test/js/dialogue-task-focus-line-plan.test.mjs`
