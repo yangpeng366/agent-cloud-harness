@@ -10,6 +10,7 @@ import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
+import com.agentcloud.llm.LlmConfig;
 import com.agentcloud.store.DatabaseManager;
 import com.agentcloud.store.EventDao;
 import com.agentcloud.store.SessionDao;
@@ -258,6 +259,23 @@ class ApiErrorContractHttpTest {
     }
 
     @Test
+    void listWorkersProjectsRuntimeReadinessInsteadOfStaticReadyFlag() throws Exception {
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("worker-list-runtime-readiness.db"),
+            new AgentProviderRegistry().register(new CodexProvider("definitely-missing-codex-binary-for-list-test"))
+        )) {
+            ApiCall list = fixture.get("/api/v1/workers");
+            ApiCall readiness = fixture.get("/api/v1/workers/codex/readiness");
+
+            assertEquals(200, list.statusCode());
+            assertEquals(200, readiness.statusCode());
+            JsonNode codex = workerById(list.body().path("data"), "codex");
+            assertFalse(codex.path("ready").asBoolean(true));
+            assertFalse(readiness.body().path("data").path("ready").asBoolean(true));
+        }
+    }
+
+    @Test
     void workerReadinessIncludesExecutorBackendFailureForUnsupportedBuiltinProviderWorker() throws Exception {
         try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
             tempDir.resolve("worker-provider-backend-gap.db"),
@@ -456,6 +474,56 @@ class ApiErrorContractHttpTest {
             assertEquals("404", response.body().path("code").asText());
             assertEquals("not found", response.body().path("message").asText());
         }
+    }
+
+    @Test
+    void healthPayloadProjectsLlmAvailabilityWithoutLeakingApiKey() {
+        Map<String, Object> payload = NioHttpServer.healthPayload(new LlmConfig(
+            "sk-test-secret",
+            "https://llm.example/v1",
+            "gpt-test",
+            "gpt-review",
+            "responses",
+            12,
+            3,
+            256
+        ));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> llm = (Map<String, Object>) payload.get("llm");
+
+        assertEquals("up", payload.get("status"));
+        assertEquals(true, llm.get("available"));
+        assertEquals(true, llm.get("api_key_configured"));
+        assertEquals("https://llm.example/v1", llm.get("base_url"));
+        assertEquals("gpt-test", llm.get("model"));
+        assertEquals("gpt-review", llm.get("review_model"));
+        assertEquals("responses", llm.get("wire_api"));
+        assertEquals(12, llm.get("request_timeout_seconds"));
+        assertEquals(3, llm.get("max_retries"));
+        assertEquals(256, llm.get("max_tokens"));
+        assertFalse(payload.toString().contains("sk-test-secret"));
+    }
+
+    @Test
+    void healthPayloadReportsUnavailableLlmWhenApiKeyMissing() {
+        Map<String, Object> payload = NioHttpServer.healthPayload(new LlmConfig(
+            "",
+            "https://llm.example/v1",
+            "gpt-test",
+            null,
+            "chat_completions",
+            60,
+            2,
+            null
+        ));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> llm = (Map<String, Object>) payload.get("llm");
+
+        assertEquals(false, llm.get("available"));
+        assertEquals(false, llm.get("api_key_configured"));
+        assertEquals("default", llm.get("max_tokens"));
     }
 
     private static final class HttpFixture implements AutoCloseable {

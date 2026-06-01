@@ -57,14 +57,21 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
     private final AgentProviderRegistry providerRegistry;
     private final WorkerRegistry workerRegistry;
     private final Map<String, LocalCliProviderConfig> providerConfigs;
+    private final ProviderProtocolRegistry protocolRegistry;
 
     public ProviderCliWorkerExecutor(AgentProviderRegistry providerRegistry) {
-        this(providerRegistry, null);
+        this(providerRegistry, null, null);
     }
 
     public ProviderCliWorkerExecutor(AgentProviderRegistry providerRegistry, WorkerRegistry workerRegistry) {
+        this(providerRegistry, workerRegistry, null);
+    }
+
+    public ProviderCliWorkerExecutor(AgentProviderRegistry providerRegistry, WorkerRegistry workerRegistry,
+                                      ProviderProtocolRegistry protocolRegistry) {
         this.providerRegistry = providerRegistry;
         this.workerRegistry = workerRegistry;
+        this.protocolRegistry = protocolRegistry != null ? protocolRegistry : ProviderProtocolRegistry.defaultRegistry();
         this.providerConfigs = new LinkedHashMap<>();
         if (providerRegistry != null) {
             for (AgentProvider provider : providerRegistry.list()) {
@@ -99,6 +106,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         LocalCliProviderConfig.ResolvedConfig config = resolvedConfig(providerId);
         AgentProviderStatus providerStatus = providerStatus(providerId);
         String cwd = resolveWorkingDirectory(context, worker);
+        ProviderProtocol protocol = protocolRegistry.get(providerId);
         ProviderCliPlan plan = buildPlan(providerId, config, context, cwd, cliProfile(providerStatus));
         ProviderRunFiles runFiles = ProviderRunFiles.create(providerId, taskId(context), workerId, plan);
 
@@ -129,6 +137,16 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                     providerId, workerId, cwd, plan, providerStatus, durationMs, null, runFiles);
             }
             drainer.join(2_000);
+            if (protocol != null) {
+                long durationMs = System.currentTimeMillis() - startedAtMs;
+                WorkerExecutionResult parsed = protocol.parseOutput(
+                    capture.bytes(),
+                    toProtocolPlan(plan),
+                    durationMs,
+                    baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs)
+                );
+                return finalizeProtocolResult(parsed, capture, process.exitValue(), providerId, workerId, runFiles);
+            }
             output = consume(capture.bytes(), providerId);
             if (capture.truncated()) {
                 output = output.withOutputLimitExceeded(capture.totalBytes(), MAX_CAPTURE_BYTES);
@@ -198,7 +216,93 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             normalizedStatus.equals("failed") && !outputText.isBlank() ? List.of("cli output requires inspection") : List.of(),
             0,
             durationMs,
-            Map.copyOf(metadata)
+            Map.copyOf(metadata),
+            outcomeFromStatus(normalizedStatus)
+        );
+    }
+
+    private ProviderProtocol.ProviderCliPlan toProtocolPlan(ProviderCliPlan plan) {
+        if (plan == null) {
+            return null;
+        }
+        return new ProviderProtocol.ProviderCliPlan(
+            plan.command(),
+            plan.promptPreview(),
+            plan.model(),
+            plan.stdinPrompt(),
+            plan.environment(),
+            plan.configuredBinary(),
+            plan.executableTarget(),
+            plan.launchMode(),
+            plan.cliProfile(),
+            plan.cliProfileAdjustments()
+        );
+    }
+
+    private WorkerExecutionResult finalizeProtocolResult(WorkerExecutionResult parsed,
+                                                         OutputCapture capture,
+                                                         int exitCode,
+                                                         String providerId,
+                                                         String workerId,
+                                                         ProviderRunFiles runFiles) {
+        WorkerExecutionResult safe = parsed != null
+            ? parsed
+            : new WorkerExecutionResult("", "", false, "", "", "", "low",
+                "failed", List.of(), List.of("provider protocol returned empty result"), 0, 0L, Map.of());
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (safe.metadata() != null) {
+            metadata.putAll(safe.metadata());
+        }
+        metadata.put("exit_code", exitCode);
+        metadata.put("provider_protocol_parser_used", true);
+        metadata.put("provider_protocol_id", providerId);
+        if (capture != null && capture.truncated()) {
+            metadata.put("provider_output_truncated", true);
+            metadata.put("provider_output_total_bytes", capture.totalBytes());
+            metadata.put("provider_output_capture_limit_bytes", MAX_CAPTURE_BYTES);
+        }
+        appendRunFileMetadata(metadata, runFiles);
+        String normalizedStatus = normalizeStatus(safe.executionStatus(), exitCode);
+        String outputText = safe.outputText() == null ? "" : safe.outputText().trim();
+        if (metadata.containsKey("provider_output_truncated")) {
+            normalizedStatus = "failed";
+        }
+        String providerDiagnostic = providerDiagnostic(
+            metadata.get("provider_error") == null ? null : String.valueOf(metadata.get("provider_error")),
+            outputText,
+            normalizedStatus
+        );
+        if ("failed".equals(normalizedStatus) && providerDiagnostic != null && !providerDiagnostic.isBlank()) {
+            metadata.putIfAbsent("provider_error", providerDiagnostic);
+        }
+        attachProviderFailureClassification(metadata, normalizedStatus, providerDiagnostic);
+        String sqliteOutputText = sqliteOutputText(outputText, metadata);
+        if (runFiles != null) {
+            runFiles.writeLastMessage(outputText);
+            runFiles.writeMetadata(metadata);
+        }
+        log.info("Provider protocol CLI round completed. provider={} worker={} status={} exitCode={} durationMs={}",
+            providerId, workerId, normalizedStatus, exitCode, safe.durationMs());
+        return new WorkerExecutionResult(
+            safe.summary(),
+            sqliteOutputText,
+            safe.producedArtifact(),
+            safe.artifactTitle(),
+            safe.artifactContent(),
+            safe.suggestedNextStep(),
+            safe.confidence(),
+            normalizedStatus,
+            safe.evidenceRefs(),
+            safe.unfinishedItems(),
+            safe.proposedActions(),
+            safe.contextRequests(),
+            safe.completionClaim(),
+            safe.handoffTarget(),
+            safe.riskFlags(),
+            safe.tokenUsage(),
+            safe.durationMs(),
+            Map.copyOf(metadata),
+            outcomeFromStatus(normalizedStatus)
         );
     }
 
@@ -226,18 +330,39 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                                       TaskRuntimeContext context,
                                       String cwd,
                                       CliCapabilityProfile profile) {
+        ProviderProtocol protocol = protocolRegistry.get(providerId);
+        if (protocol != null) {
+            return fromProtocolPlan(protocol.buildPlan(config, context, cwd, profile));
+        }
         String prompt = ProviderTaskPromptBuilder.build(context);
         return switch (providerId.toLowerCase(Locale.ROOT)) {
             case "cursor" -> buildCursorPlan(config, prompt, context, cwd, profile);
             case "openclaw" -> buildOpenClawPlan(config, prompt, context);
             case "claude" -> buildClaudePlan(config, prompt, context, profile);
             case "gemini" -> buildGeminiPlan(config, prompt, context, profile);
-            case "deepseek" -> buildDeepSeekPlan(config, prompt, context);
             case "kimi" -> buildKimiPlan(config, prompt, context, cwd, profile);
             case "copilot" -> buildCopilotPlan(config, prompt, context, profile);
             case "opencode" -> buildOpenCodePlan(config, prompt, context);
             default -> throw new IllegalArgumentException("unsupported provider-native cli provider: " + providerId);
         };
+    }
+
+    private ProviderCliPlan fromProtocolPlan(ProviderProtocol.ProviderCliPlan plan) {
+        if (plan == null) {
+            throw new IllegalArgumentException("provider protocol returned empty execution plan");
+        }
+        return new ProviderCliPlan(
+            plan.command(),
+            plan.promptPreview(),
+            plan.model(),
+            plan.stdinPrompt(),
+            plan.environment(),
+            plan.configuredBinary(),
+            plan.executableTarget(),
+            plan.launchMode(),
+            plan.cliProfile(),
+            plan.cliProfileAdjustments()
+        );
     }
 
     private ProviderCliPlan buildCursorPlan(LocalCliProviderConfig.ResolvedConfig config,
@@ -374,6 +499,18 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         args.add("exec");
         args.add(prompt);
         return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), null);
+    }
+
+    private ProviderCliPlan buildReasonixPlan(LocalCliProviderConfig.ResolvedConfig config,
+                                              String prompt,
+                                              TaskRuntimeContext context) {
+        ArrayList<String> args = new ArrayList<>();
+        args.add("run");
+        args.add("--no-config");
+        args.add("--no-proxy");
+        args.add(prompt);
+        String configuredModel = configuredModel(config, context);
+        return providerCliPlan(config.launchSpec(), args, truncate(prompt, 240), configuredModel);
     }
 
     private ProviderCliPlan buildKimiPlan(LocalCliProviderConfig.ResolvedConfig config,
@@ -539,6 +676,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
                 case "claude" -> consumeClaude(reader);
                 case "gemini" -> consumeGemini(reader);
                 case "deepseek" -> consumeDeepSeek(reader);
+                case "reasonix" -> consumeReasonix(reader);
                 case "kimi" -> consumeKimi(reader);
                 case "copilot" -> consumeCopilot(reader);
                 case "opencode" -> consumeOpenCode(reader);
@@ -821,6 +959,33 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             null,
             null,
             "deepseek_exec_text"
+        );
+    }
+
+    private ProviderCliOutput consumeReasonix(BufferedReader reader) throws IOException {
+        StringBuilder output = new StringBuilder();
+        String status = "completed";
+        String errorText = null;
+        String line;
+        while ((line = reader.readLine()) != null) {
+            String trimmed = line.trim();
+            if (trimmed.isBlank()) continue;
+            // Skip Reasonix metadata lines (e.g. ⌘ MCP connection status, — cost summary)
+            if (trimmed.startsWith("⌘") || trimmed.startsWith("—")) continue;
+            // Skip [skills] boot messages
+            if (trimmed.startsWith("[skills]")) continue;
+            // Skip cost/turns summary line
+            if (trimmed.startsWith("- turns:")) continue;
+            appendLine(output, trimmed);
+        }
+        return new ProviderCliOutput(
+            status,
+            output.toString().trim(),
+            errorText,
+            null,
+            null,
+            null,
+            "reasonix_text"
         );
     }
 
@@ -1278,6 +1443,11 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
         if (plan.model() != null && !plan.model().isBlank()) {
             metadata.put("configured_model", plan.model());
         }
+        if (plan.environment() != null && !plan.environment().isEmpty()) {
+            metadata.put("cli_environment_keys", plan.environment().keySet().stream().sorted().toList());
+            putIfNonBlank(metadata, "execution_runtime", plan.environment().get("execution_runtime"));
+            putIfNonBlank(metadata, "delegated_provider", plan.environment().get("delegated_provider"));
+        }
         if (providerStatus != null) {
             metadata.put("provider_ready", providerStatus.ready());
             if (providerStatus.version() != null && !providerStatus.version().isBlank()) {
@@ -1368,7 +1538,7 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
 
     private String expectedOutputMode(String providerId) {
         return switch (providerId == null ? "" : providerId.toLowerCase(Locale.ROOT)) {
-            case "deepseek" -> "text";
+            case "deepseek", "reasonix" -> "text";
             case "copilot" -> "jsonl";
             case "opencode" -> "json";
             default -> "stream_json";
@@ -1381,7 +1551,8 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             case "openclaw" -> "openclaw_json";
             case "claude" -> "claude_stream_json";
             case "gemini" -> "gemini_stream_json";
-            case "deepseek" -> "deepseek_exec_text";
+            case "deepseek" -> "deepseek_reasonix_text";
+            case "reasonix" -> "reasonix_text";
             case "kimi" -> "kimi_stream_json";
             case "copilot" -> "copilot_jsonl";
             case "opencode" -> "opencode_json";
@@ -1423,7 +1594,8 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             List.of(errorText),
             0,
             durationMs,
-            Map.copyOf(metadata)
+            Map.copyOf(metadata),
+            ExecutionOutcome.FAILED
         );
     }
 
@@ -1492,6 +1664,17 @@ public class ProviderCliWorkerExecutor implements WorkerExecutor {
             case "aborted" -> "cancelled";
             case "error" -> "failed";
             default -> "completed";
+        };
+    }
+
+    private ExecutionOutcome outcomeFromStatus(String status) {
+        if (status == null) {
+            return ExecutionOutcome.COMPLETED;
+        }
+        return switch (status.toLowerCase(Locale.ROOT)) {
+            case "partial_timeout" -> ExecutionOutcome.COMPLETED_PARTIAL;
+            case "completed" -> ExecutionOutcome.COMPLETED;
+            default -> ExecutionOutcome.FAILED;
         };
     }
 

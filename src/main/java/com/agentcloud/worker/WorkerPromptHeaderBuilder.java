@@ -28,15 +28,21 @@ final class WorkerPromptHeaderBuilder {
             title,
             goal
         );
-        appendLine(sb, "Task Title: " + firstNonBlank(title, "(untitled task)"));
+        StringBuilder header = new StringBuilder();
+        header.append("Task: ").append(firstNonBlank(title, "(untitled task)")).append("\n");
         if (includeTaskType) {
             String taskType = PromptFieldDeduper.normalizePromptField(metadataString(metadata, "task_type"));
             if (!taskType.isBlank()) {
-                appendLine(sb, "Task Type: " + taskType);
+                header.append("Task Type: ").append(taskType).append("\n");
             }
         }
-        appendIfPresent(sb, "Goal", goal);
-        appendIfPresent(sb, "Intent", intent);
+        if (!goal.isBlank()) {
+            header.append("---\n").append(goal).append("\n---\n");
+        }
+        if (!intent.isBlank()) {
+            header.append("Intent: ").append(intent).append("\n");
+        }
+        sb.append(header);
     }
 
     private static String metadataString(Map<String, Object> metadata, String key) {

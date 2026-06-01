@@ -104,6 +104,13 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
         } catch (IllegalStateException e) {
             long durationMs = System.currentTimeMillis() - startedAtMs;
+            // Try to recover output from run files even on protocol error
+            String partialOutput = recoverPartialOutput(runFiles);
+            if (partialOutput != null && !partialOutput.isBlank()) {
+                log.warn("Codex app-server protocol error but partial output available. worker={} error={}", workerId, e.getMessage());
+                return failureResultWithOutput("partial_timeout", "codex protocol error: " + e.getMessage(),
+                    partialOutput, providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
+            }
             return failureResult("failed", e.getMessage(),
                 providerId, workerId, cwd, plan, providerStatus, durationMs, null, null, runFiles);
         } finally {
@@ -114,7 +121,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
 
         long durationMs = System.currentTimeMillis() - startedAtMs;
-        String normalizedStatus = normalizeStatus(output.status(), output.exitCode());
+        String normalizedStatus = normalizeAppServerStatus(output.status());
         LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
         appendRunFileMetadata(metadata, runFiles);
         if (output.exitCode() != null) {
@@ -173,7 +180,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             normalizedStatus.equals("failed") && !outputText.isBlank() ? List.of("codex app-server output requires inspection") : List.of(),
             0,
             durationMs,
-            Map.copyOf(metadata)
+            Map.copyOf(metadata),
+            outcomeFromStatus(normalizedStatus)
         );
     }
 
@@ -262,7 +270,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             normalizedStatus.equals("failed") && !outputText.isBlank() ? List.of("codex exec_json output requires inspection") : List.of(),
             0,
             durationMs,
-            Map.copyOf(metadata)
+            Map.copyOf(metadata),
+            outcomeFromStatus(normalizedStatus)
         );
     }
 
@@ -353,26 +362,34 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         try (Writer writer = new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8);
              BufferedReader reader = process.inputReader(StandardCharsets.UTF_8)) {
             JsonRpcSession session = new JsonRpcSession(writer, reader, runFiles.events(), partialOutputThreshold);
-            session.request("initialize", Map.of(
-                "clientInfo", Map.of(
-                    "name", "agent-cloud-harness",
-                    "title", "Agent Cloud Harness",
-                    "version", "0.2.0"
-                ),
-                "capabilities", Map.of(
-                    "experimentalApi", true
-                )
-            ));
-            session.notify("initialized");
-            String threadId = startOrResumeThread(session, plan);
-            String turnStatus = startTurn(session, threadId, plan.prompt());
-            String terminalTurnStatus = session.awaitTurnCompletion(
-                turnStatus,
-                turnActivityTimeoutMs(),
-                turnMaxDurationMs(plan),
-                partialOutputThreshold
-            );
-            return session.toOutput(threadId, terminalTurnStatus);
+            try {
+                session.request("initialize", Map.of(
+                    "clientInfo", Map.of(
+                        "name", "agent-cloud-harness",
+                        "title", "Agent Cloud Harness",
+                        "version", "0.2.0"
+                    ),
+                    "capabilities", Map.of(
+                        "experimentalApi", true
+                    )
+                ));
+                session.notify("initialized");
+                String threadId = startOrResumeThread(session, plan);
+                String turnStatus = startTurn(session, threadId, plan.prompt());
+                String terminalTurnStatus = session.awaitTurnCompletion(
+                    turnStatus,
+                    turnActivityTimeoutMs(),
+                    turnMaxDurationMs(plan),
+                    partialOutputThreshold
+                );
+                return session.toOutput(threadId, terminalTurnStatus);
+            } catch (IOException | IllegalStateException e) {
+                CodexSessionOutput partial = session.partialFailureOutput(e.getMessage());
+                if (partial != null) {
+                    return partial;
+                }
+                throw e;
+            }
         }
     }
 
@@ -786,7 +803,71 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             List.of(errorText),
             0,
             durationMs,
-            Map.copyOf(metadata)
+            Map.copyOf(metadata),
+            ExecutionOutcome.FAILED
+        );
+    }
+
+    private String recoverPartialOutput(ProviderRunFiles runFiles) {
+        if (runFiles == null || !runFiles.available()) {
+            return null;
+        }
+        try {
+            String lastMessage = Files.readString(runFiles.lastMessagePath());
+            return lastMessage != null && !lastMessage.isBlank() ? lastMessage : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private WorkerExecutionResult failureResultWithOutput(String status,
+                                                          String errorText,
+                                                          String outputText,
+                                                          String providerId,
+                                                          String workerId,
+                                                          String cwd,
+                                                          CodexExecutionPlan plan,
+                                                          AgentProviderStatus providerStatus,
+                                                          long durationMs,
+                                                          Integer exitCode,
+                                                          String threadId,
+                                                          ProviderRunFiles runFiles) {
+        LinkedHashMap<String, Object> metadata = baseMetadata(providerId, workerId, cwd, plan, providerStatus, durationMs);
+        metadata.put("provider_error", errorText);
+        metadata.put("provider_output_parser", outputParserFor(plan));
+        metadata.put("partial_output", true);
+        metadata.put("partial_output_chars", outputText != null ? outputText.length() : 0);
+        if ("provider_native_cli_json".equalsIgnoreCase(plan.executionBackend())) {
+            metadata.put("provider_turn_max_duration_ms", turnMaxDurationMs(plan));
+        }
+        appendRunFileMetadata(metadata, runFiles);
+        attachProviderFailureClassification(metadata, "partial_timeout", errorText);
+        if (exitCode != null) {
+            metadata.put("exit_code", exitCode);
+        }
+        if (threadId != null && !threadId.isBlank()) {
+            metadata.put("provider_session_id", threadId);
+            metadata.put("provider_thread_id", threadId);
+        }
+        if (runFiles != null) {
+            runFiles.writeLastMessage(outputText != null ? outputText : "");
+            runFiles.writeMetadata(metadata);
+        }
+        return new WorkerExecutionResult(
+            summarize(outputText, errorText, "partial_timeout"),
+            outputText != null ? outputText : "",
+            false,
+            "",
+            "",
+            "",
+            "medium",
+            "partial_timeout",
+            List.of(),
+            List.of(),
+            0,
+            durationMs,
+            Map.copyOf(metadata),
+            ExecutionOutcome.COMPLETED_PARTIAL
         );
     }
 
@@ -825,6 +906,27 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             case "aborted", "canceled", "interrupted" -> "cancelled";
             case "error" -> "failed";
             default -> "completed";
+        };
+    }
+
+    private String normalizeAppServerStatus(String rawStatus) {
+        String value = rawStatus == null || rawStatus.isBlank() ? "completed" : rawStatus.trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "completed", "failed", "cancelled", "timeout", "partial_timeout" -> value;
+            case "aborted", "canceled", "interrupted" -> "cancelled";
+            case "error" -> "failed";
+            default -> "completed";
+        };
+    }
+
+    private ExecutionOutcome outcomeFromStatus(String status) {
+        if (status == null) {
+            return ExecutionOutcome.COMPLETED;
+        }
+        return switch (status.toLowerCase(Locale.ROOT)) {
+            case "partial_timeout" -> ExecutionOutcome.COMPLETED_PARTIAL;
+            case "completed" -> ExecutionOutcome.COMPLETED;
+            default -> ExecutionOutcome.FAILED;
         };
     }
 
@@ -1076,6 +1178,14 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             if (envelope == null || envelope.isMissingNode() || envelope.isNull()) {
                 return;
             }
+            JsonNode errorNode = envelope.get("error");
+            if (errorNode != null && !errorNode.isNull()) {
+                String message = firstNonBlank(text(errorNode, "message"), errorNode.toString());
+                errorText = firstNonBlank(errorText, message);
+                abortReason = firstNonBlank(abortReason, message);
+                turnStatus = hasPartialOutput(partialOutputThreshold) ? "partial_timeout" : "failed";
+                return;
+            }
             JsonNode methodNode = envelope.get("method");
             JsonNode idNode = envelope.get("id");
             if (methodNode != null && !methodNode.isNull() && idNode != null && !idNode.isNull()) {
@@ -1193,7 +1303,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             }
             long startedAtMs = System.currentTimeMillis();
             markActivity();
-            long hardDeadline = startedAtMs + Math.max(activityTimeoutMs, maxDurationMs);
+            // 最大时长是硬上限；活动超时只控制“多久无事件算卡死”，不能延长硬上限。
+            long hardDeadline = startedAtMs + Math.max(1L, maxDurationMs);
             while (System.currentTimeMillis() < hardDeadline) {
                 long now = System.currentTimeMillis();
                 long idleDeadline = lastActivityAtMs + activityTimeoutMs;
@@ -1218,6 +1329,11 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 if (isTerminalStatus(turnStatus)) {
                     return turnStatus;
                 }
+            }
+            if (System.currentTimeMillis() >= hardDeadline) {
+                applyTimeoutState("max_duration", partialOutputThreshold,
+                    "codex turn max duration reached after partial output",
+                    "codex turn max duration reached");
             }
             if ("unknown".equalsIgnoreCase(turnStatus)) {
                 turnStatus = firstNonBlank(requestTurnStatus, errorText == null ? "completed" : "failed");
@@ -1354,6 +1470,20 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
         private boolean hasPartialOutput(int threshold) {
             return output.toString().trim().length() >= Math.max(1, threshold);
+        }
+
+        private CodexSessionOutput partialFailureOutput(String message) {
+            if (!hasPartialOutput(partialOutputThreshold)) {
+                return null;
+            }
+            turnStatus = "partial_timeout";
+            errorText = firstNonBlank(
+                errorText,
+                message,
+                "codex app-server communication failed after partial output"
+            );
+            abortReason = firstNonBlank(abortReason, message, "communication_failed_after_partial_output");
+            return toOutput(threadId, "partial_timeout");
         }
 
         private void applyTimeoutState(String kind,

@@ -63,6 +63,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             EventDao eventDao = db.jdbi().onDemand(EventDao.class);
             ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
             DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
             ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
             CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
 
@@ -79,7 +80,7 @@ class ControlNodeGraphOrchestrationFlowTest {
             );
 
             ControlNodeGraph graph = new ControlNodeGraph(
-                taskDao, eventDao, sessionDao, packetDao, router, null, null,
+                taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, null, null,
                 new FakeWorkerExecutor(), runtimeContextBuilder, new FakeJudgmentService(),
                 artifactDao, decisionDao, null
             );
@@ -115,6 +116,9 @@ class ControlNodeGraphOrchestrationFlowTest {
             Task finalTask = graph.enter(task);
             Task persisted = taskDao.findById(task.id()).orElseThrow();
             List<Artifact> artifacts = artifactDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+            List<SessionMessage> workerRoundMessages = sessionMessageDao.listBySessionAndTask(task.sessionId(), task.id(), 10).stream()
+                .filter(message -> "worker_round".equals(message.messageType()))
+                .toList();
             List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
 
             assertEquals("done", finalTask.status());
@@ -131,6 +135,18 @@ class ControlNodeGraphOrchestrationFlowTest {
             assertTrue(artifacts.stream().anyMatch(a -> "small".equals(metadataString(a.metadata(), "selected_model_tier"))));
             assertTrue(artifacts.stream().anyMatch(a -> "plan_pending".equals(metadataString(a.metadata(), "orchestration_stage"))));
             assertTrue(artifacts.stream().anyMatch(a -> "execution_pending".equals(metadataString(a.metadata(), "orchestration_stage"))));
+            assertEquals(2, workerRoundMessages.size());
+            for (Artifact artifact : artifacts) {
+                SessionMessage workerRound = workerRoundMessages.stream()
+                    .filter(message -> artifact.id().equals(metadataString(message.metadata(), "artifact_id")))
+                    .findFirst()
+                    .orElseThrow();
+                assertEquals("assistant", workerRound.role());
+                assertEquals("worker_round_projection", workerRound.metadata().get("created_via"));
+                assertEquals(metadataString(artifact.metadata(), "worker_id"), metadataString(workerRound.metadata(), "worker_id"));
+                assertEquals(metadataString(artifact.metadata(), "provider_id"), metadataString(workerRound.metadata(), "provider_id"));
+                assertTrue(workerRound.content().contains("完成一轮执行"));
+            }
 
             assertEquals(4, decisions.size());
             assertTrue(decisions.stream().anyMatch(d ->

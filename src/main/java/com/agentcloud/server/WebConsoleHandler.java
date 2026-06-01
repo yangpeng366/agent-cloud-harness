@@ -42,6 +42,9 @@ class WebConsoleHandler implements HttpHandler {
             String method = exchange.getRequestMethod();
             boolean headOnly = "HEAD".equals(method);
             String requestPath = exchange.getRequestURI().getPath();
+            log.debug("WebConsoleHandler: method={}, path={}, routePrefix={}, resourceRoot={}",
+                method, requestPath, routePrefix, resourceRoot);
+
             if (!"GET".equals(method) && !headOnly) {
                 NioHttpServer.sendJson(exchange, 405, Map.of(
                     "success", false,
@@ -52,6 +55,8 @@ class WebConsoleHandler implements HttpHandler {
             }
 
             String resourcePath = resolveResourcePath(requestPath);
+            log.debug("WebConsoleHandler: resolved resourcePath={}", resourcePath);
+
             if (resourcePath == null) {
                 NioHttpServer.sendJson(exchange, 404, Map.of(
                     "success", false,
@@ -69,8 +74,6 @@ class WebConsoleHandler implements HttpHandler {
             }
             exchange.close();
         } catch (Exception e) {
-            // 这里避免把 throwable 直接交给 logback，某些本机/打包异常链下会触发
-            // ThrowableProxy 类加载失败，进而把原始静态资源问题放大成连接中断。
             log.error("WebConsoleHandler error: routePrefix={} detail={}", routePrefix, e.toString());
             NioHttpServer.sendJson(exchange, 500, Map.of(
                 "success", false,
@@ -118,11 +121,23 @@ class WebConsoleHandler implements HttpHandler {
     }
 
     private byte[] readResource(String resourcePath) throws IOException {
-        try (InputStream input = WebConsoleHandler.class.getClassLoader().getResourceAsStream(resourcePath)) {
-            if (input == null) {
-                throw new IOException("resource not found: " + resourcePath);
-            }
-            return input.readAllBytes();
+        InputStream input = null;
+        input = WebConsoleHandler.class.getClassLoader().getResourceAsStream(resourcePath);
+        if (input == null) {
+            input = WebConsoleHandler.class.getClassLoader().getResourceAsStream("/" + resourcePath);
+        }
+        if (input == null) {
+            input = WebConsoleHandler.class.getResourceAsStream("/" + resourcePath);
+        }
+        if (input == null) {
+            input = WebConsoleHandler.class.getResourceAsStream(resourcePath);
+        }
+
+        if (input == null) {
+            throw new IOException("resource not found: " + resourcePath);
+        }
+        try (InputStream finalInput = input) {
+            return finalInput.readAllBytes();
         }
     }
 

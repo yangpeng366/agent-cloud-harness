@@ -177,10 +177,9 @@ public class WorkerRouter {
             capable = taskContractCapable;
         }
         List<String> candidateWorkers = capable.stream().map(Worker::workerId).toList();
-        Map<String, WorkerRegistry.ReadinessCheck> dispatchReadinessByWorker = dispatchReadinessByWorker(capable);
-        List<Worker> dispatchReadyCapable = capable.stream()
-            .filter(worker -> isDispatchReady(worker, dispatchReadinessByWorker))
-            .toList();
+        DispatchReadinessSelection dispatchSelection = selectDispatchReadyWorkers(capable, taskType, true);
+        Map<String, WorkerRegistry.ReadinessCheck> dispatchReadinessByWorker = dispatchSelection.readinessByWorker();
+        List<Worker> dispatchReadyCapable = dispatchSelection.readyWorkers();
         fallbackReason = mergeReasons(
             fallbackReason,
             explainDispatchReadinessFallback(capable, dispatchReadyCapable, dispatchReadinessByWorker)
@@ -188,11 +187,11 @@ public class WorkerRouter {
         List<RouteSkippedWorker> dispatchSkippedWorkers =
             dispatchSkippedWorkers(capable, dispatchReadyCapable, dispatchReadinessByWorker);
         if (dispatchReadyCapable.isEmpty() && preferredModelTier != null && tierFallbackCapable != capable) {
+            DispatchReadinessSelection tierFallbackDispatchSelection =
+                selectDispatchReadyWorkers(tierFallbackCapable, taskType, true);
             Map<String, WorkerRegistry.ReadinessCheck> tierFallbackDispatchReadinessByWorker =
-                dispatchReadinessByWorker(tierFallbackCapable);
-            List<Worker> tierFallbackDispatchReady = tierFallbackCapable.stream()
-                .filter(worker -> isDispatchReady(worker, tierFallbackDispatchReadinessByWorker))
-                .toList();
+                tierFallbackDispatchSelection.readinessByWorker();
+            List<Worker> tierFallbackDispatchReady = tierFallbackDispatchSelection.readyWorkers();
             if (!tierFallbackDispatchReady.isEmpty()) {
                 fallbackReason = mergeReasons(
                     fallbackReason,
@@ -234,9 +233,7 @@ public class WorkerRouter {
         }
 
         // 简单策略：优先找 readiness 全过的，按 capability 匹配数排序
-        Worker selected = dispatchReadyCapable.stream()
-            .max(routeComparator(taskType))
-            .orElse(null);
+        Worker selected = dispatchReadyCapable.isEmpty() ? null : dispatchReadyCapable.get(0);
 
         if (selected == null) {
             return routeResult(task.id(), null, List.of(), "no capable worker found",
@@ -493,18 +490,32 @@ public class WorkerRouter {
         return value != null && Boolean.parseBoolean(value);
     }
 
-    private Map<String, WorkerRegistry.ReadinessCheck> dispatchReadinessByWorker(List<Worker> workers) {
+    private DispatchReadinessSelection selectDispatchReadyWorkers(List<Worker> workers,
+                                                                  String taskType,
+                                                                  boolean stopAfterFirstReady) {
         Map<String, WorkerRegistry.ReadinessCheck> readinessByWorker = new LinkedHashMap<>();
+        List<Worker> readyWorkers = new ArrayList<>();
         if (workers == null) {
-            return readinessByWorker;
+            return new DispatchReadinessSelection(List.of(), readinessByWorker);
         }
-        for (Worker worker : workers) {
+        List<Worker> ordered = workers.stream()
+            .filter(worker -> worker != null && worker.workerId() != null)
+            .sorted(routeComparator(taskType).reversed())
+            .toList();
+        for (Worker worker : ordered) {
             if (worker == null || worker.workerId() == null) {
                 continue;
             }
-            readinessByWorker.put(worker.workerId(), registry.checkReadiness(worker.workerId(), "dispatch"));
+            WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness(worker.workerId(), "dispatch");
+            readinessByWorker.put(worker.workerId(), readiness);
+            if (readiness != null && readiness.ready()) {
+                readyWorkers.add(worker);
+                if (stopAfterFirstReady) {
+                    break;
+                }
+            }
         }
-        return readinessByWorker;
+        return new DispatchReadinessSelection(readyWorkers, readinessByWorker);
     }
 
     private boolean isDispatchReady(Worker worker, Map<String, WorkerRegistry.ReadinessCheck> readinessByWorker) {
@@ -541,6 +552,7 @@ public class WorkerRouter {
             : dispatchReadyCapable.stream().map(Worker::workerId).toList();
         return capable.stream()
             .filter(worker -> worker != null && !readyWorkerIds.contains(worker.workerId()))
+            .filter(worker -> readinessByWorker == null || readinessByWorker.containsKey(worker.workerId()))
             .map(worker -> {
                 WorkerRegistry.ReadinessCheck readiness = readinessByWorker != null
                     ? readinessByWorker.get(worker.workerId())
@@ -708,6 +720,16 @@ public class WorkerRouter {
         String providerFailureReason,
         Boolean providerRetryable
     ) {}
+
+    private record DispatchReadinessSelection(
+        List<Worker> readyWorkers,
+        Map<String, WorkerRegistry.ReadinessCheck> readinessByWorker
+    ) {
+        private DispatchReadinessSelection {
+            if (readyWorkers == null) readyWorkers = List.of();
+            if (readinessByWorker == null) readinessByWorker = Map.of();
+        }
+    }
 
     public record RouteDiagnostic(
         String selectedWorker,

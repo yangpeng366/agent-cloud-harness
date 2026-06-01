@@ -285,18 +285,17 @@ class AgentProviderSupportTest {
     }
 
     @Test
-    void workerRegistryProviderReadinessRejectsUnsupportedBuiltinProviderBackendEvenWhenProviderIsReady() {
+    void workerRegistryProviderReadinessAcceptsExpandedNativeCliSupportButStillRequiresProviderReady() {
         AgentProviderRegistry providers = new AgentProviderRegistry()
-            .register(new StaticProvider("hermes", true, true, "ready"));
+            .register(new StaticProvider("hermes", true, false, "binary not found: hermes"));
         WorkerRegistry registry = new WorkerRegistry(providers);
 
         WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness("hermes");
 
         assertFalse(readiness.ready());
-        assertTrue(readiness.checks().getOrDefault("provider:hermes", false));
-        assertFalse(readiness.checks().getOrDefault("executor_backend:provider_native_cli", true));
-        assertTrue(readiness.reason().contains("executor backend not supported"));
-        assertTrue(readiness.reason().contains("provider=hermes"));
+        assertFalse(readiness.checks().getOrDefault("provider:hermes", true));
+        assertTrue(readiness.checks().getOrDefault("executor_backend:provider_native_cli", false));
+        assertTrue(readiness.reason().contains("binary not found: hermes"));
     }
 
     @Test
@@ -322,6 +321,40 @@ class AgentProviderSupportTest {
         assertFalse(afterFailure.ready());
         assertFalse(afterFailure.checks().getOrDefault("runtime_available", true));
         assertTrue(afterFailure.reason().contains("temporarily unavailable"));
+    }
+
+    @Test
+    void dispatchPreflightTimingDefaultsAreLongEnoughForBrowserAcceptance() {
+        String cacheProperty = "agentcloud.dispatch.preflight.cache_ms";
+        String unavailableProperty = "agentcloud.dispatch.preflight.unavailable_ms";
+        String previousCache = System.getProperty(cacheProperty);
+        String previousUnavailable = System.getProperty(unavailableProperty);
+        System.clearProperty(cacheProperty);
+        System.clearProperty(unavailableProperty);
+        try {
+            assertEquals(120_000L, WorkerRegistry.dispatchPreflightCacheMs());
+            assertEquals(600_000L, WorkerRegistry.dispatchPreflightUnavailableMs());
+        } finally {
+            restoreProperty(cacheProperty, previousCache);
+            restoreProperty(unavailableProperty, previousUnavailable);
+        }
+    }
+
+    @Test
+    void dispatchPreflightTimingCanBeOverriddenForValidationRuns() {
+        String cacheProperty = "agentcloud.dispatch.preflight.cache_ms";
+        String unavailableProperty = "agentcloud.dispatch.preflight.unavailable_ms";
+        String previousCache = System.getProperty(cacheProperty);
+        String previousUnavailable = System.getProperty(unavailableProperty);
+        System.setProperty(cacheProperty, "45000");
+        System.setProperty(unavailableProperty, "300000");
+        try {
+            assertEquals(45_000L, WorkerRegistry.dispatchPreflightCacheMs());
+            assertEquals(300_000L, WorkerRegistry.dispatchPreflightUnavailableMs());
+        } finally {
+            restoreProperty(cacheProperty, previousCache);
+            restoreProperty(unavailableProperty, previousUnavailable);
+        }
     }
 
     @Test

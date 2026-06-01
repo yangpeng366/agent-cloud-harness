@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -31,7 +32,8 @@ public record WorkerExecutionResult(
     List<String> riskFlags,
     Integer tokenUsage,
     Long durationMs,
-    Map<String, Object> metadata
+    Map<String, Object> metadata,
+    ExecutionOutcome outcome
 ) {
     public WorkerExecutionResult(String summary, String outputText, boolean producedArtifact,
                                  String artifactTitle, String artifactContent, String suggestedNextStep,
@@ -39,17 +41,47 @@ public record WorkerExecutionResult(
                                  Map<String, Object> metadata) {
         this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
             confidence, "unknown", List.of(), List.of(), List.of(), List.of(), "", "", List.of(),
-            tokenUsage, durationMs, metadata);
+            tokenUsage, durationMs, metadata, null);
     }
 
     public WorkerExecutionResult(String summary, String outputText, boolean producedArtifact,
                                  String artifactTitle, String artifactContent, String suggestedNextStep,
                                  String confidence, String executionStatus,
                                  List<String> evidenceRefs, List<String> unfinishedItems,
-                                 Integer tokenUsage, Long durationMs, Map<String, Object> metadata) {
+                                 Integer tokenUsage, Long durationMs,
+                                 Map<String, Object> metadata,
+                                 ExecutionOutcome outcome) {
         this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
             confidence, executionStatus, evidenceRefs, unfinishedItems, List.of(), List.of(), "", "", List.of(),
-            tokenUsage, durationMs, metadata);
+            tokenUsage, durationMs, metadata, outcome);
+    }
+
+    public WorkerExecutionResult(String summary, String outputText, boolean producedArtifact,
+                                 String artifactTitle, String artifactContent, String suggestedNextStep,
+                                 String confidence, String executionStatus,
+                                 List<String> evidenceRefs, List<String> unfinishedItems,
+                                 Integer tokenUsage, Long durationMs,
+                                 Map<String, Object> metadata) {
+        this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
+            confidence, executionStatus, evidenceRefs, unfinishedItems, List.of(), List.of(), "", "", List.of(),
+            tokenUsage, durationMs, metadata, null);
+    }
+
+    public WorkerExecutionResult(String summary, String outputText, boolean producedArtifact,
+                                 String artifactTitle, String artifactContent, String suggestedNextStep,
+                                 String confidence, String executionStatus,
+                                 List<String> evidenceRefs, List<String> unfinishedItems,
+                                 List<AgentActionDraft> proposedActions,
+                                 List<String> contextRequests,
+                                 String completionClaim,
+                                 String handoffTarget,
+                                 List<String> riskFlags,
+                                 Integer tokenUsage,
+                                 Long durationMs,
+                                 Map<String, Object> metadata) {
+        this(summary, outputText, producedArtifact, artifactTitle, artifactContent, suggestedNextStep,
+            confidence, executionStatus, evidenceRefs, unfinishedItems, proposedActions, contextRequests,
+            completionClaim, handoffTarget, riskFlags, tokenUsage, durationMs, metadata, null);
     }
 
     public WorkerExecutionResult {
@@ -70,6 +102,18 @@ public record WorkerExecutionResult(
         if (tokenUsage == null) tokenUsage = 0;
         if (durationMs == null) durationMs = 0L;
         if (metadata == null) metadata = Map.of();
+        if (outcome == null) outcome = inferOutcome(executionStatus);
+    }
+
+    private static ExecutionOutcome inferOutcome(String executionStatus) {
+        if (executionStatus == null) {
+            return ExecutionOutcome.COMPLETED;
+        }
+        return switch (executionStatus.toLowerCase()) {
+            case "completed" -> ExecutionOutcome.COMPLETED;
+            case "partial_timeout" -> ExecutionOutcome.COMPLETED_PARTIAL;
+            default -> ExecutionOutcome.FAILED;
+        };
     }
 
     public WorkerExecutionResult withEnvelope(WorkerExecutionEnvelope envelope) {
@@ -85,6 +129,7 @@ public record WorkerExecutionResult(
         merged.put("execution_finished_at", envelope.finishedAt().toString());
         merged.put("execution_duration_ms", envelope.durationMs());
         merged.put("execution_status", envelope.executionStatus());
+        merged.put("execution_outcome", outcome != null ? outcome.name() : null);
         if (envelope.toolInvocationIds() != null && !envelope.toolInvocationIds().isEmpty()) {
             merged.put("tool_invocation_ids", envelope.toolInvocationIds());
         }
@@ -109,7 +154,8 @@ public record WorkerExecutionResult(
             riskFlags,
             tokenUsage,
             envelope.durationMs(),
-            merged
+            merged,
+            outcome
         );
     }
 

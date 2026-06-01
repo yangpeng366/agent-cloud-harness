@@ -2,6 +2,7 @@ package com.agentcloud.engine;
 
 import com.agentcloud.engine.memory.PacketBuilder;
 import com.agentcloud.engine.router.WorkerRouter;
+import com.agentcloud.model.AgentRunArtifactView;
 import com.agentcloud.model.*;
 import com.agentcloud.runtime.RuntimeCognitionSurfaceAssembler;
 import com.agentcloud.runtime.RuntimeFactSetAssembler;
@@ -43,6 +44,7 @@ public class TaskService {
     private final ExperimentRunService experimentRunService;
     private final AgentRunService agentRunService;
     private final TaskRecoveryJobDao recoveryJobDao;
+    private final ArtifactDao artifactDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
 
@@ -109,6 +111,23 @@ public class TaskService {
                        ExperimentRunService experimentRunService,
                        AgentRunService agentRunService,
                        TaskRecoveryJobDao recoveryJobDao) {
+        this(taskDao, sessionDao, eventDao, packetDao, router, packetBuilder, controlGraph, judgmentService,
+            runtimeContextBuilder, consolidationService, learningMemoryService, toolInvocationDao,
+            sessionMessageDao, experimentRunService, agentRunService, recoveryJobDao, null);
+    }
+
+    public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
+                       WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
+                       RuntimeJudgmentService judgmentService,
+                       TaskRuntimeContextBuilder runtimeContextBuilder,
+                       ConsolidationService consolidationService,
+                       LearningMemoryService learningMemoryService,
+                       ToolInvocationDao toolInvocationDao,
+                       SessionMessageDao sessionMessageDao,
+                       ExperimentRunService experimentRunService,
+                       AgentRunService agentRunService,
+                       TaskRecoveryJobDao recoveryJobDao,
+                       ArtifactDao artifactDao) {
         this.taskDao = taskDao;
         this.sessionDao = sessionDao;
         this.eventDao = eventDao;
@@ -125,6 +144,7 @@ public class TaskService {
         this.experimentRunService = experimentRunService;
         this.agentRunService = agentRunService;
         this.recoveryJobDao = recoveryJobDao;
+        this.artifactDao = artifactDao;
         this.runtimeFactSetAssembler = new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, router);
         this.runtimeCognitionSurfaceAssembler = new RuntimeCognitionSurfaceAssembler();
     }
@@ -1748,6 +1768,16 @@ public class TaskService {
         return toolInvocationDao != null ? toolInvocationDao.listByTask(taskId, boundedLimit(limit)) : List.of();
     }
 
+    public List<Event> listEvents(String taskId, int limit) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        if (eventDao == null) {
+            return List.of();
+        }
+        return nullToEmpty(eventDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit(limit))).stream()
+            .sorted(Comparator.comparing(Event::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+            .toList();
+    }
+
     public ExperimentRunRecord getExperimentRun(String taskId) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         return experimentRunService != null ? experimentRunService.refresh(task) : null;
@@ -1756,6 +1786,51 @@ public class TaskService {
     public AgentRunRecord getLatestAgentRun(String taskId) {
         taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         return agentRunService != null ? agentRunService.latestByTask(taskId) : null;
+    }
+
+    public List<AgentRunArtifactView> listArtifacts(String taskId, int limit) {
+        Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
+        int boundedLimit = boundedLimit(limit);
+        LinkedHashMap<String, AgentRunArtifactView> merged = new LinkedHashMap<>();
+        if (artifactDao != null) {
+            for (Artifact artifact : nullToEmpty(artifactDao.listBySessionAndTask(task.sessionId(), task.id(), boundedLimit))) {
+                AgentRunArtifactView view = toAgentRunArtifactView(artifact);
+                merged.putIfAbsent(view.artifactId(), view);
+            }
+        }
+        if (agentRunService != null) {
+            AgentRunRecord run = agentRunService.latestByTask(taskId);
+            if (run != null) {
+                for (AgentRunArtifactView view : nullToEmpty(agentRunService.listArtifacts(run.runId(), boundedLimit))) {
+                    merged.putIfAbsent(view.artifactId(), view);
+                }
+            }
+        }
+        return merged.values().stream()
+            .sorted(Comparator.comparing(AgentRunArtifactView::createdAt, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
+            .limit(boundedLimit)
+            .toList();
+    }
+
+    private AgentRunArtifactView toAgentRunArtifactView(Artifact artifact) {
+        Map<String, Object> metadata = artifact.metadata() != null ? artifact.metadata() : Map.of();
+        String providerId = firstNonBlank(
+            metadataString(metadata, "provider_id"),
+            metadataString(metadata, "provider"),
+            metadataString(metadata, "assigned_worker"),
+            "unknown"
+        );
+        return new AgentRunArtifactView(
+            artifact.id(),
+            metadataString(metadata, "agent_run_id"),
+            providerId,
+            artifact.artifactType(),
+            artifact.title(),
+            artifact.uri(),
+            artifact.summary(),
+            artifact.createdAt(),
+            metadata
+        );
     }
 
     public TaskControlResult pauseTask(String taskId, String reason) {

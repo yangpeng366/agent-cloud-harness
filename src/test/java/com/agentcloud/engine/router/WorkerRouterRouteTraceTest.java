@@ -234,6 +234,28 @@ class WorkerRouterRouteTraceTest {
     }
 
     @Test
+    void dispatchReadinessStopsAfterFirstSortedReadyWorker() {
+        CountingDispatchProvider codex = new CountingDispatchProvider("codex", true, true, "ready");
+        CountingDispatchProvider claude = new CountingDispatchProvider("claude", true, false, "claude unavailable");
+        CountingDispatchProvider cursor = new CountingDispatchProvider("cursor", true, false, "cursor unavailable");
+        AgentProviderRegistry providers = new AgentProviderRegistry()
+            .register(codex)
+            .register(claude)
+            .register(cursor);
+        WorkerRegistry registry = new WorkerRegistry(providers);
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding"));
+
+        assertEquals("codex", route.selectedWorker());
+        assertEquals(1, codex.dispatchCount());
+        assertEquals(0, claude.dispatchCount());
+        assertEquals(0, cursor.dispatchCount());
+        assertTrue(route.dispatchSkippedWorkers().stream()
+            .noneMatch(skipped -> "claude".equals(skipped.workerId()) || "cursor".equals(skipped.workerId())));
+    }
+
+    @Test
     void researchAutoRouteCanSelectGeminiFromResearchContract() {
         AgentProviderRegistry providers = new AgentProviderRegistry()
             .register(preflightProvider("gemini", true, true, "ready"));
@@ -712,5 +734,68 @@ class WorkerRouterRouteTraceTest {
                 );
             }
         };
+    }
+
+    private static final class CountingDispatchProvider implements AgentProvider {
+        private final String providerId;
+        private final boolean passiveReady;
+        private final boolean dispatchReady;
+        private final String dispatchReason;
+        private int dispatchCount;
+
+        private CountingDispatchProvider(String providerId,
+                                         boolean passiveReady,
+                                         boolean dispatchReady,
+                                         String dispatchReason) {
+            this.providerId = providerId;
+            this.passiveReady = passiveReady;
+            this.dispatchReady = dispatchReady;
+            this.dispatchReason = dispatchReason;
+        }
+
+        @Override
+        public AgentProviderDescriptor descriptor() {
+            return new AgentProviderDescriptor(
+                providerId,
+                providerId,
+                "local_cli",
+                "process",
+                List.of("chat"),
+                Map.of()
+            );
+        }
+
+        @Override
+        public AgentProviderStatus detect() {
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "test",
+                "ready",
+                passiveReady,
+                passiveReady ? null : "provider not ready",
+                Instant.now(),
+                Map.of()
+            );
+        }
+
+        @Override
+        public AgentProviderStatus dispatchPreflight() {
+            dispatchCount++;
+            return new AgentProviderStatus(
+                providerId,
+                true,
+                "test",
+                "ready",
+                dispatchReady,
+                dispatchReady ? null : dispatchReason,
+                Instant.now(),
+                Map.of("source", "counting_dispatch_provider")
+            );
+        }
+
+        private int dispatchCount() {
+            return dispatchCount;
+        }
     }
 }

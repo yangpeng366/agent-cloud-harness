@@ -4,6 +4,7 @@ import com.agentcloud.agent.AgentDiscoveryService;
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.SimpleAgentDiscoveryService;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
+import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.engine.*;
 import com.agentcloud.engine.memory.ContextReconstructor;
 import com.agentcloud.engine.memory.PacketBuilder;
@@ -36,6 +37,9 @@ import com.agentcloud.tool.WriteFilesTool;
 import com.agentcloud.worker.DefaultWorkerExecutor;
 import com.agentcloud.worker.CodexAppServerWorkerExecutor;
 import com.agentcloud.worker.ProviderCliWorkerExecutor;
+import com.agentcloud.worker.ProviderExecutionSupport;
+import com.agentcloud.worker.ProviderProtocolDiscovery;
+import com.agentcloud.worker.ProviderProtocolRegistry;
 import com.agentcloud.worker.ToolAwareWorkerExecutor;
 import com.agentcloud.worker.WorkerExecutor;
 import com.agentcloud.worker.WorkerExecutorRouter;
@@ -96,12 +100,19 @@ public class Main {
         AgentProviderRegistry agentProviderRegistry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(agentProviderRegistry::register);
         WorkerRegistry workerRegistry = new WorkerRegistry(agentProviderRegistry);
-        Map<String, WorkerRegistry.ReadinessCheck> workerPreflightWarmup = workerRegistry.warmupDispatchPreflight();
-        long workerPreflightReadyCount = workerPreflightWarmup.values().stream()
-            .filter(WorkerRegistry.ReadinessCheck::ready)
-            .count();
-        log.info("Worker dispatch preflight warmup completed. ready={} total={}",
-            workerPreflightReadyCount, workerPreflightWarmup.size());
+        ProviderProtocolDiscovery.DiscoveryResult providerDiscovery =
+            new ProviderProtocolDiscovery().discoverDetailed();
+        registerDiscoveredProviders(providerDiscovery, agentProviderRegistry, workerRegistry);
+        if (dispatchPreflightWarmupEnabled()) {
+            Map<String, WorkerRegistry.ReadinessCheck> workerPreflightWarmup = workerRegistry.warmupDispatchPreflight();
+            long workerPreflightReadyCount = workerPreflightWarmup.values().stream()
+                .filter(WorkerRegistry.ReadinessCheck::ready)
+                .count();
+            log.info("Worker dispatch preflight warmup completed. ready={} total={}",
+                workerPreflightReadyCount, workerPreflightWarmup.size());
+        } else {
+            log.info("Worker dispatch preflight warmup skipped by agentcloud.dispatch.preflight.warmup=false");
+        }
         WorkerRouter workerRouter = new WorkerRouter(workerRegistry, learningMemoryService);
         ContextReconstructor reconstructor = new ContextReconstructor(taskDao, decisionDao, artifactDao, eventDao, relationDao);
         RuntimeJudgmentService runtimeJudgmentService = new RuntimeJudgmentService();
@@ -179,7 +190,12 @@ public class Main {
         // Agent Provider Layer (Phase 1 skeleton)
         AgentDiscoveryService agentDiscoveryService = new SimpleAgentDiscoveryService(agentProviderRegistry);
         AgentRunService agentRunService = new AgentRunService(agentRunDao, agentProviderRegistry, eventDao, artifactDao);
-        ProviderCliWorkerExecutor providerCliWorkerExecutor = new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry);
+        ProviderProtocolRegistry providerProtocolRegistry = ProviderProtocolRegistry.defaultRegistry();
+        for (var protocol : providerDiscovery.registry().all()) {
+            providerProtocolRegistry.register(protocol);
+        }
+        ProviderCliWorkerExecutor providerCliWorkerExecutor =
+            new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry, providerProtocolRegistry);
         CodexAppServerWorkerExecutor codexAppServerWorkerExecutor =
             new CodexAppServerWorkerExecutor(agentProviderRegistry, workerRegistry);
         WorkerExecutor workerExecutor = new WorkerExecutorRouter(
@@ -211,7 +227,7 @@ public class Main {
         TaskService taskService = new TaskService(
             taskDao, sessionDao, eventDao, packetDao, workerRouter, packetBuilder, controlGraph,
             runtimeJudgmentService, runtimeContextBuilder, consolidation, learningMemoryService, toolInvocationDao,
-            sessionMessageDao, experimentRunService, agentRunService, recoveryJobDao
+            sessionMessageDao, experimentRunService, agentRunService, recoveryJobDao, artifactDao
         );
         ExperimentMatrixService experimentMatrixService = new ExperimentMatrixService(taskService, experimentRunService);
 
@@ -219,7 +235,7 @@ public class Main {
         int port = Integer.parseInt(System.getProperty("server.port", "8080"));
         NioHttpServer server = new NioHttpServer(
             port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation, learningMemoryService,
-            experimentRunService, experimentMatrixService, agentRunService, agentActionDao
+            experimentRunService, experimentMatrixService, agentRunService, agentActionDao, llmConfig
         );
         server.start();
 
@@ -280,5 +296,42 @@ public class Main {
 
         // 保持运行
         Thread.currentThread().join();
+    }
+
+    private static void registerDiscoveredProviders(ProviderProtocolDiscovery.DiscoveryResult discovery,
+                                                    AgentProviderRegistry agentProviderRegistry,
+                                                    WorkerRegistry workerRegistry) {
+        if (discovery == null || discovery.providers().isEmpty()) {
+            return;
+        }
+        for (ProviderProtocolDiscovery.DiscoveredProvider provider : discovery.providers()) {
+            if (provider == null || provider.id() == null || provider.id().isBlank()) {
+                continue;
+            }
+            ProviderExecutionSupport.registerProviderNativeCli(provider.id());
+            if (agentProviderRegistry.get(provider.id()) == null) {
+                agentProviderRegistry.register(new LocalCliAgentProvider(
+                    provider.id(),
+                    provider.displayName(),
+                    provider.capabilities(),
+                    provider.metadata(),
+                    provider.binary(),
+                    null,
+                    null
+                ));
+            }
+            if (workerRegistry.get(provider.id()) == null) {
+                workerRegistry.registerProviderNativeWorker(
+                    provider.id(),
+                    provider.capabilities(),
+                    provider.metadata()
+                );
+            }
+        }
+    }
+
+    static boolean dispatchPreflightWarmupEnabled() {
+        String value = System.getProperty("agentcloud.dispatch.preflight.warmup");
+        return value == null || !"false".equalsIgnoreCase(value.trim());
     }
 }

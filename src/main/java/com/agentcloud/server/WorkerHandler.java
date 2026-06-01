@@ -2,6 +2,7 @@ package com.agentcloud.server;
 
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.ApiResponse;
+import com.agentcloud.model.Worker;
 import com.agentcloud.tool.HostToolAvailability;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,12 +39,12 @@ class WorkerHandler implements HttpHandler {
             String path = ex.getRequestURI().getPath();
 
             if ("GET".equals(method) && path.equals("/api/v1/workers")) {
-                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(registry.listAll()));
+                NioHttpServer.sendJson(ex, 200, ApiResponse.ok(listWorkersWithReadiness()));
             } else if ("GET".equals(method) && path.matches("/api/v1/workers/[^/]+")) {
                 String id = NioHttpServer.pathVar(ex, 4);
                 var w = registry.get(id);
                 if (w == null) NioHttpServer.sendNotFound(ex);
-                else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(w));
+                else NioHttpServer.sendJson(ex, 200, ApiResponse.ok(withReadiness(w)));
             } else if ("GET".equals(method) && path.matches("/api/v1/workers/[^/]+/readiness")) {
                 String id = NioHttpServer.pathVar(ex, 4);
                 String mode = readinessMode(ex);
@@ -87,6 +88,30 @@ class WorkerHandler implements HttpHandler {
             throw new IllegalArgumentException(key + " is required");
         }
         return value;
+    }
+
+    private List<Worker> listWorkersWithReadiness() {
+        return registry.listAll().stream()
+            .map(this::withReadiness)
+            .toList();
+    }
+
+    private Worker withReadiness(Worker worker) {
+        if (worker == null) {
+            return null;
+        }
+        WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness(worker.workerId());
+        return new Worker(
+            worker.workerId(),
+            worker.workerType(),
+            worker.capabilities(),
+            worker.toolCapabilities(),
+            worker.toolScope(),
+            worker.dependencies(),
+            worker.metadata(),
+            worker.suggestOnly(),
+            readiness.ready()
+        );
     }
 
     private String optionalString(Map<String, Object> body, String key, String defaultValue) {

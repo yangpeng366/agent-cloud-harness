@@ -11,6 +11,7 @@ import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
 import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
+import com.agentcloud.llm.LlmConfig;
 import com.agentcloud.store.AgentActionDao;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
@@ -40,6 +41,7 @@ public class NioHttpServer {
     private final ExperimentMatrixService experimentMatrixService;
     private final AgentRunService agentRunService;
     private final AgentActionDao agentActionDao;
+    private final LlmConfig llmConfig;
     private final ObjectMapper mapper;
     private final ClassLoader appClassLoader;
     private HttpServer server;
@@ -70,6 +72,19 @@ public class NioHttpServer {
                          ExperimentMatrixService experimentMatrixService,
                          AgentRunService agentRunService,
                          AgentActionDao agentActionDao) {
+        this(port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation,
+            learningMemoryService, experimentRunService, experimentMatrixService, agentRunService, agentActionDao,
+            new LlmConfig());
+    }
+
+    public NioHttpServer(int port, TaskService taskService, SessionService sessionService,
+                         WorkerRegistry workerRegistry, AgentProviderRegistry agentProviderRegistry, SkillRegistry skillRegistry,
+                         ConsolidationService consolidation, LearningMemoryService learningMemoryService,
+                         ExperimentRunService experimentRunService,
+                         ExperimentMatrixService experimentMatrixService,
+                         AgentRunService agentRunService,
+                         AgentActionDao agentActionDao,
+                         LlmConfig llmConfig) {
         this.port = port;
         this.taskService = taskService;
         this.sessionService = sessionService;
@@ -82,6 +97,7 @@ public class NioHttpServer {
         this.experimentMatrixService = experimentMatrixService;
         this.agentRunService = agentRunService;
         this.agentActionDao = agentActionDao;
+        this.llmConfig = llmConfig == null ? new LlmConfig() : llmConfig;
         this.mapper = SHARED_MAPPER;
         this.appClassLoader = NioHttpServer.class.getClassLoader();
     }
@@ -125,11 +141,31 @@ public class NioHttpServer {
         server.createContext("/api/v1/experiment_runs", new ExperimentRunHandler(taskService, experimentRunService));
         server.createContext("/api/v1/experiment_matrix", new ExperimentMatrixHandler(experimentMatrixService, mapper));
         server.createContext("/api/v1/health", exchange -> {
-            sendJson(exchange, 200, Map.of("status", "up", "virtual_threads", true, "version", "0.2.0"));
+            sendJson(exchange, 200, healthPayload(llmConfig));
         });
 
         server.start();
         log.info("NIO HTTP Server started on port {} (virtual threads enabled)", port);
+    }
+
+    static Map<String, Object> healthPayload(LlmConfig llmConfig) {
+        LlmConfig config = llmConfig == null ? new LlmConfig() : llmConfig;
+        return Map.of(
+            "status", "up",
+            "virtual_threads", true,
+            "version", "0.2.0",
+            "llm", Map.of(
+                "available", config.available(),
+                "base_url", config.baseUrl(),
+                "model", config.model(),
+                "review_model", config.reviewModel(),
+                "wire_api", config.wireApi(),
+                "request_timeout_seconds", config.requestTimeoutSeconds(),
+                "max_retries", config.maxRetries(),
+                "max_tokens", config.maxTokens() == null ? "default" : config.maxTokens(),
+                "api_key_configured", config.available()
+            )
+        );
     }
 
     public void stop() {

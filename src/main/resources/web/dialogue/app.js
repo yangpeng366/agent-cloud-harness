@@ -48,6 +48,8 @@ const state = {
     tasks: [],
     messages: [],
     relatedMessages: [],
+    taskArtifactsById: new Map(),
+    taskArtifactsLoading: new Set(),
     expandedMessageIds: new Set(),
     expandedThreadOutputTaskIds: new Set(),
     messageFilterRole: "all",
@@ -69,6 +71,8 @@ const state = {
     experimentSummary: null,
     toastTimer: null,
     pollingTimer: null,
+    taskEventSource: null,
+    taskEventRefreshTimer: null,
     facadeSurface: "chat_completions",
     selectedTaskLoading: false
 };
@@ -150,6 +154,7 @@ const dom = {
     routeBox: document.getElementById("routeBox"),
     experimentSummary: document.getElementById("experimentSummary"),
     decisionList: document.getElementById("decisionList"),
+    executionTimeline: document.getElementById("executionTimeline"),
     artifactList: document.getElementById("artifactList"),
     agentActionList: document.getElementById("agentActionList"),
     relatedMessages: document.getElementById("relatedMessages"),
@@ -457,6 +462,7 @@ function applyRelatedMessagesFromLiveFlow(flow) {
 }
 
 async function loadSelectedTask(taskId, loud) {
+    ensureTaskEventStream(taskId);
     state.selectedTaskLoading = true;
     renderDetails();
     const encodedTaskId = encodeURIComponent(taskId);
@@ -516,6 +522,7 @@ async function loadSelectedTask(taskId, loud) {
 async function selectTask(taskId, loud = false) {
     state.selectedTaskId = taskId;
     state.selectedTaskStickyUntil = Date.now() + 15000;
+    ensureTaskEventStream(taskId);
     syncLocationSelection();
     await loadSelectedTask(taskId, loud);
 }
@@ -531,6 +538,7 @@ async function onCreateSession(event) {
     state.selectedSessionId = session.id;
     state.selectedTaskId = null;
     state.selectedTaskStickyUntil = 0;
+    closeTaskEventStream();
     state.liveFlow = null;
     state.experimentSummary = null;
     state.relatedMessages = [];
@@ -562,6 +570,7 @@ async function createRecoverySession() {
     state.selectedSessionId = session.id;
     state.selectedTaskId = null;
     state.selectedTaskStickyUntil = 0;
+    closeTaskEventStream();
     state.liveFlow = null;
     state.experimentSummary = null;
     state.relatedMessages = [];
@@ -999,6 +1008,7 @@ function renderMessages() {
     dom.messageList.innerHTML = filteredMessages.length > 0
         ? filteredMessages.map((message) => renderMessageCard(message, { facadeReplyHighlight })).join("")
         : emptyState(emptyMessageFilterText());
+    queueWorkerRoundArtifactLoads(filteredMessages);
 }
 
 function renderThread() {
@@ -1075,6 +1085,7 @@ function renderThreadTask(task, taskIndex, tasksById) {
                 </div>
                 <div class="dialogue-task__bubble dialogue-task__bubble--assistant">
                     ${executionStrip ? `
+                        ${renderLiveExecutionBadge(buildLiveExecutionBadge(task, flow, executionStrip), "thread")}
                         <div class="dialogue-task__runline">
                             <span class="dialogue-task__runlabel">${escapeHtml(executionStrip.label)}</span>
                             <div class="dialogue-task__runcontent">
@@ -1147,6 +1158,7 @@ function renderDetails() {
         dom.routeBox.innerHTML = emptyState("正在加载 route preview。");
         dom.experimentSummary.innerHTML = emptyState("正在加载 experiment summary。");
         dom.decisionList.innerHTML = emptyState("正在加载 decision。");
+        dom.executionTimeline.innerHTML = emptyState("正在加载执行时间线。");
         dom.artifactList.innerHTML = emptyState("正在加载 artifact。");
         dom.agentActionList.innerHTML = emptyState("正在加载 reconciled action。");
         dom.toolList.innerHTML = emptyState("正在加载 tool trace。");
@@ -1174,6 +1186,7 @@ function renderDetails() {
         dom.routeBox.innerHTML = emptyState("暂无 route preview");
         dom.experimentSummary.innerHTML = emptyState("当前任务不属于 experiment batch。");
         dom.decisionList.innerHTML = emptyState("暂无 decision");
+        dom.executionTimeline.innerHTML = emptyState("暂无执行时间线");
         dom.artifactList.innerHTML = emptyState("暂无 artifact");
         dom.agentActionList.innerHTML = emptyState("暂无 reconciled action");
         dom.toolList.innerHTML = emptyState("暂无 tool trace");
@@ -1195,6 +1208,7 @@ function renderDetails() {
     const decisions = flow?.decisions || [];
     const recentArtifacts = (flow?.runtime_context?.recent_artifacts || flow?.runtimeContext?.recentArtifacts || []).slice(0, 5);
     const tools = (flow?.tool_invocations || flow?.toolInvocations || []).slice(0, 6);
+    const cognitionTimeline = flow?.runtime_cognition_timeline || flow?.runtimeCognitionTimeline || [];
     const experimentRun = experimentRunView(flow);
     const experimentMode = firstNonBlank(
         experimentRun.model_mode,
@@ -1310,6 +1324,13 @@ function renderDetails() {
         decisionCards.push(decisionCard(decision.decision_type || decision.decisionType || "decision", decision));
     });
     dom.decisionList.innerHTML = decisionCards.length > 0 ? decisionCards.join("") : emptyState("暂无 decision");
+    dom.executionTimeline.innerHTML = renderExecutionTimeline({
+        cognitionTimeline,
+        decisions,
+        recentArtifacts,
+        tools,
+        task
+    });
 
     dom.artifactList.innerHTML = recentArtifacts.length > 0
         ? recentArtifacts.map(renderArtifactCard).join("")
@@ -1439,6 +1460,7 @@ function renderMessageCard(message, options = {}) {
                 <div class="message-card__body">${escapeHtml(body)}</div>
             `}
             ${detail ? `<div class="message-card__hint">${escapeHtml(detail)}</div>` : ""}
+            ${renderWorkerRoundArtifacts(messageView)}
             ${options.relatedOnly && taskId ? `<div class="message-card__hint mono">${escapeHtml(taskId)}</div>` : ""}
             ${needsExpand ? `
                 <div class="message-card__expand-indicator" data-message-action="toggle-expand">
@@ -1449,6 +1471,55 @@ function renderMessageCard(message, options = {}) {
             ${actions.length > 0 ? `<div class="message-card__actions">${actions.join("")}</div>` : ""}
         </article>
     `;
+}
+
+function renderWorkerRoundArtifacts(message) {
+    const type = normalizeMessageType(message?.message_type || message?.messageType);
+    const taskId = messageTaskId(message);
+    if (type !== "worker_round" || !taskId) {
+        return "";
+    }
+    const cached = state.taskArtifactsById.get(taskId);
+    if (!cached) {
+        return `<div class="worker-round-artifacts" data-task-artifacts="${escapeHtml(taskId)}">
+            <div class="message-card__hint">正在加载 worker 产物...</div>
+        </div>`;
+    }
+    if (!cached.length) {
+        return "";
+    }
+    const isSelected = taskId === state.selectedTaskId;
+    const cards = cached.slice(0, 3).map((a) => renderArtifactCard(a, { highlightSelected: isSelected })).join("");
+    const more = cached.length > 3 ? `<div class="message-card__hint">还有 ${cached.length - 3} 个产物，可在 details 面板查看。</div>` : "";
+    return `<div class="worker-round-artifacts" data-task-id="${escapeHtml(taskId)}"${isSelected ? " data-selected-task" : ""}>${cards}${more}</div>`;
+}
+
+function queueWorkerRoundArtifactLoads(messages) {
+    const taskIds = new Set();
+    (messages || []).forEach((message) => {
+        const type = normalizeMessageType(message?.message_type || message?.messageType);
+        const taskId = messageTaskId(message);
+        if (type === "worker_round" && taskId && !state.taskArtifactsById.has(taskId)) {
+            taskIds.add(taskId);
+        }
+    });
+    taskIds.forEach((taskId) => {
+        void loadTaskArtifactsForMessages(taskId);
+    });
+}
+
+async function loadTaskArtifactsForMessages(taskId) {
+    if (!taskId || state.taskArtifactsLoading.has(taskId)) {
+        return;
+    }
+    state.taskArtifactsLoading.add(taskId);
+    try {
+        const artifacts = await apiOrNull(`/api/v1/tasks/${encodeURIComponent(taskId)}/artifacts?limit=4`);
+        state.taskArtifactsById.set(taskId, Array.isArray(artifacts) ? artifacts : []);
+        renderMessages();
+    } finally {
+        state.taskArtifactsLoading.delete(taskId);
+    }
 }
 
 function isProcessType(type) {
@@ -1612,6 +1683,7 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
     const taskMetadata = (flowTaskId === taskId ? flow?.task?.metadata : null) || task?.metadata || {};
     const detail = messageCardRecoveryDetail(taskMetadata, true);
     const failureClass = humanizeFailureClass(firstNonBlank(taskMetadata.failure_class, taskMetadata.failureClass));
+    const liveBadge = buildLiveExecutionBadge(task, flow, executionStrip);
     const showBody = Boolean(outputPreview) && !outcomeStrip;
     return `
         <section class="message-summary-card message-summary-card--pinned" data-role="active-task" data-testid="pinned-latest-round-output">
@@ -1622,6 +1694,7 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
                 ${failureClass ? `<span>${escapeHtml(`失败 · ${preview(failureClass, 28)}`)}</span>` : ""}
                 <span>${escapeHtml(formatTime(task.updated_at || task.updatedAt || task.created_at || task.createdAt))}</span>
             </div>
+            ${liveBadge ? renderLiveExecutionBadge(liveBadge, "summary") : ""}
             ${executionStrip ? `
                 <div class="message-summary-card__execution-strip">
                     <span class="message-summary-card__execution-label">${escapeHtml(executionStrip.label)}</span>
@@ -2550,7 +2623,8 @@ function stackItem(label, title, body, meta) {
     `;
 }
 
-function renderArtifactCard(artifact) {
+function renderArtifactCard(artifact, opts = {}) {
+    const highlightSelected = opts.highlightSelected === true;
     const metadata = artifactMetadata(artifact);
     const type = artifact.artifact_type || artifact.artifactType || "artifact";
     const title = artifact.title || "untitled artifact";
@@ -2571,15 +2645,18 @@ function renderArtifactCard(artifact) {
     ].filter(Boolean);
     const files = artifactProviderRunFiles(metadata);
     const drawer = renderArtifactOutputDrawer(outputText, files);
+    const previewText = summary ? preview(stripAnsi(summary), 600) : "";
+    const hasMore = summary && summary.length > 600;
     return `
-        <div class="stack-item artifact-card">
+        <div class="stack-item artifact-card${highlightSelected ? " artifact-card--selected" : ""}">
             <div class="stack-item__meta">
                 <span class="task-badge">${escapeHtml(type)}</span>
+                ${highlightSelected ? `<span class="task-badge" data-tone="active">当前任务</span>` : ""}
                 <span>${escapeHtml(createdAt)}</span>
             </div>
             <strong>${escapeHtml(title)}</strong>
             ${chips.length > 0 ? `<div class="artifact-card__chips">${chips.map((chip) => `<span>${escapeHtml(chip)}</span>`).join("")}</div>` : ""}
-            ${summary ? `<p>${escapeHtml(preview(summary, 360))}</p>` : ""}
+            ${previewText ? `<p class="artifact-card__summary">${escapeHtml(previewText)}${hasMore ? `<span class="artifact-card__more-hint"> ... 共 ${summary.length} 字符</span>` : ""}</p>` : ""}
             ${files.length > 0 ? renderArtifactProviderFiles(files) : ""}
             ${drawer}
         </div>
@@ -2697,6 +2774,152 @@ function renderAgentActionItem(action) {
     );
 }
 
+function renderExecutionTimeline({ cognitionTimeline, decisions, recentArtifacts, tools, task }) {
+    const items = [
+        ...executionTimelineFromCognition(cognitionTimeline),
+        ...executionTimelineFromTools(tools),
+        ...executionTimelineFromArtifacts(recentArtifacts),
+        ...executionTimelineFromDecisions(decisions),
+        executionTimelineTaskItem(task)
+    ].filter(Boolean);
+    if (items.length === 0) {
+        return emptyState("暂无执行时间线");
+    }
+    const sorted = items
+        .map((item, index) => ({ ...item, index, timeMs: timestampMillis(item.time) }))
+        .sort((left, right) => {
+            if (right.timeMs !== left.timeMs) {
+                return right.timeMs - left.timeMs;
+            }
+            return left.index - right.index;
+        })
+        .slice(0, 14);
+    return sorted.map(renderExecutionTimelineItem).join("");
+}
+
+function executionTimelineFromCognition(entries) {
+    return (Array.isArray(entries) ? entries : []).map((entry) => ({
+        kind: firstNonBlank(entry?.stage, "event"),
+        title: firstNonBlank(entry?.label, humanizeToken(entry?.stage) || entry?.stage, "event"),
+        body: firstNonBlank(entry?.summary, summarizeCognitionTimelineEntry(entry), entry?.reason),
+        time: firstNonBlank(entry?.occurred_at, entry?.occurredAt, entry?.created_at, entry?.createdAt),
+        chips: cognitionTimelineChips(entry).slice(0, 4)
+    }));
+}
+
+function executionTimelineFromTools(tools) {
+    return (Array.isArray(tools) ? tools : []).map((tool) => ({
+        kind: "tool",
+        title: `${tool.tool_name || tool.toolName || "tool"} · ${toolTraceStatusLabel(tool)}`,
+        body: toolTraceSummary(tool),
+        time: firstNonBlank(tool?.created_at, tool?.createdAt, tool?.updated_at, tool?.updatedAt),
+        chips: [
+            tool?.elapsed_ms || tool?.elapsedMs ? `${tool.elapsed_ms || tool.elapsedMs} ms` : null,
+            firstNonBlank(tool?.status, tool?.result_status, tool?.resultStatus)
+        ].filter(Boolean)
+    }));
+}
+
+function executionTimelineFromArtifacts(artifacts) {
+    return (Array.isArray(artifacts) ? artifacts : []).map((artifact) => {
+        const metadata = artifactMetadata(artifact);
+        const status = firstNonBlank(
+            metadata.execution_status,
+            metadata.executionStatus,
+            metadata.agent_run_status,
+            metadata.agentRunStatus
+        );
+        return {
+            kind: firstNonBlank(artifact.artifact_type, artifact.artifactType, "artifact"),
+            title: firstNonBlank(artifact.title, "worker artifact"),
+            body: preview(stripAnsi(firstNonBlank(artifact.summary, artifactOutputText(artifact, metadata), artifact.uri)), 240),
+            time: firstNonBlank(artifact.created_at, artifact.createdAt),
+            chips: [
+                status ? `status ${status}` : null,
+                firstNonBlank(metadata.worker_id, metadata.workerId, metadata.selected_worker, metadata.selectedWorker),
+                metadata.duration_ms || metadata.durationMs ? formatDurationMs(metadata.duration_ms || metadata.durationMs) : null
+            ].filter(Boolean)
+        };
+    });
+}
+
+function executionTimelineFromDecisions(decisions) {
+    return (Array.isArray(decisions) ? decisions : []).slice(0, 6).map((decision) => ({
+        kind: "decision",
+        title: firstNonBlank(decision.decision_type, decision.decisionType, "decision"),
+        body: firstNonBlank(decision.summary, decision.reason, decision.metadata?.summary),
+        time: firstNonBlank(decision.created_at, decision.createdAt, decision.updated_at, decision.updatedAt),
+        chips: [
+            firstNonBlank(decision.action, decision.metadata?.action),
+            firstNonBlank(decision.metadata?.status, decision.metadata?.completion_status, decision.metadata?.completionStatus)
+        ].filter(Boolean)
+    }));
+}
+
+function executionTimelineTaskItem(task) {
+    if (!task) {
+        return null;
+    }
+    return {
+        kind: "task",
+        title: firstNonBlank(task.status, "task"),
+        body: firstNonBlank(task.summary, task.next_step, task.nextStep, task.intent, task.title),
+        time: firstNonBlank(task.updated_at, task.updatedAt, task.created_at, task.createdAt),
+        chips: [
+            firstNonBlank(task.control_node, task.controlNode),
+            firstNonBlank(task.assigned_worker, task.assignedWorker)
+        ].filter(Boolean)
+    };
+}
+
+function renderExecutionTimelineItem(item) {
+    const tone = executionTimelineTone(item.kind);
+    const chips = (item.chips || []).filter(Boolean).slice(0, 4);
+    return `
+        <div class="execution-timeline__item">
+            <div class="execution-timeline__rail" data-tone="${escapeHtml(tone)}"></div>
+            <div class="execution-timeline__body">
+                <div class="stack-item__meta">
+                    <span class="task-badge" data-tone="${escapeHtml(tone)}">${escapeHtml(humanizeToken(item.kind) || item.kind)}</span>
+                    <span>${escapeHtml(formatTime(item.time))}</span>
+                </div>
+                <strong>${escapeHtml(preview(item.title, 120) || "event")}</strong>
+                ${item.body ? `<p>${escapeHtml(preview(item.body, 260))}</p>` : ""}
+                ${chips.length > 0 ? `
+                    <div class="chip-list execution-timeline__chips">
+                        ${chips.map((chip) => `<span class="chip">${escapeHtml(preview(chip, 72))}</span>`).join("")}
+                    </div>
+                ` : ""}
+            </div>
+        </div>
+    `;
+}
+
+function executionTimelineTone(kind) {
+    const normalized = String(kind || "").toLowerCase();
+    if (normalized.includes("tool")) {
+        return "active";
+    }
+    if (normalized.includes("artifact") || normalized.includes("worker")) {
+        return "done";
+    }
+    if (normalized.includes("decision") || normalized.includes("judgment")) {
+        return "paused";
+    }
+    if (normalized.includes("fail") || normalized.includes("timeout")) {
+        return "failed";
+    }
+    return "default";
+}
+
+function timestampMillis(value) {
+    if (!value) {
+        return 0;
+    }
+    const date = new Date(normalizeTimestampValue(value));
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
 function toolTraceStatusLabel(tool) {
     return buildToolTraceStatusLabel(tool);
 }
@@ -2757,8 +2980,104 @@ function buildThreadExecutionStrip(task, flow, workerLabel) {
     const title = workerLabel ? `执行方 ${workerLabel}` : `${taskStatus} / ${controlNode}`;
     const detail = workerLabel ? `${taskStatus} / ${controlNode}` : "";
     return title || detail
-        ? { label, title, detail, summary: [title, detail].filter(Boolean).join(" · ") }
+        ? { label, title, detail, status: taskStatus, controlNode, worker: workerLabel, summary: [title, detail].filter(Boolean).join(" · ") }
         : null;
+}
+
+function buildLiveExecutionBadge(task, flow, executionStrip = null) {
+    if (!task) {
+        return null;
+    }
+    const metadata = (flow?.task?.metadata && firstNonBlank(flow?.task?.id) === firstNonBlank(task.id))
+        ? flow.task.metadata
+        : (task.metadata || {});
+    const executionSurface = flow?.runtime_cognition_surface?.execution
+        || flow?.runtimeCognitionSurface?.execution
+        || {};
+    const status = firstNonBlank(
+        executionSurface.execution_status,
+        executionSurface.executionStatus,
+        metadata.execution_status,
+        metadata.executionStatus,
+        metadata.worker_execution_status,
+        metadata.workerExecutionStatus,
+        task.status
+    );
+    const controlNode = firstNonBlank(task.control_node, task.controlNode, executionStrip?.controlNode);
+    const statusLower = String(status || "").toLowerCase();
+    const isRunning = ["active", "running", "in_progress", "queued"].includes(statusLower)
+        || (statusLower === "" && String(task.status || "").toLowerCase() === "active");
+    if (!isRunning && statusLower !== "partial_timeout") {
+        return null;
+    }
+    const worker = firstNonBlank(
+        executionStrip?.worker,
+        executionSurface.selected_worker,
+        executionSurface.selectedWorker,
+        executionSurface.worker_id,
+        executionSurface.workerId,
+        activeWorkerLabel(task, flow)
+    );
+    const startedAt = firstNonBlank(
+        executionSurface.started_at,
+        executionSurface.startedAt,
+        metadata.worker_started_at,
+        metadata.workerStartedAt,
+        metadata.started_at,
+        metadata.startedAt,
+        task.updated_at,
+        task.updatedAt,
+        task.created_at,
+        task.createdAt
+    );
+    const elapsed = statusLower === "partial_timeout" ? "" : formatElapsedSince(startedAt);
+    const label = statusLower === "partial_timeout" ? "部分结果" : "执行中";
+    const detail = [
+        worker ? `worker ${worker}` : null,
+        elapsed ? `已运行 ${elapsed}` : null,
+        controlNode ? `节点 ${controlNode}` : null
+    ].filter(Boolean).join(" · ");
+    return {
+        label,
+        detail,
+        tone: statusLower === "partial_timeout" ? "paused" : "active",
+        running: statusLower !== "partial_timeout"
+    };
+}
+
+function renderLiveExecutionBadge(badge, variant = "summary") {
+    if (!badge) {
+        return "";
+    }
+    const runningClass = badge.running ? " is-running" : "";
+    return `
+        <div class="live-execution-badge live-execution-badge--${escapeHtml(variant)}${runningClass}" data-tone="${escapeHtml(badge.tone)}">
+            <span class="live-execution-badge__dot" aria-hidden="true"></span>
+            <span class="live-execution-badge__label">${escapeHtml(badge.label)}</span>
+            ${badge.detail ? `<span class="live-execution-badge__detail">${escapeHtml(badge.detail)}</span>` : ""}
+        </div>
+    `;
+}
+
+function formatElapsedSince(value) {
+    if (!value) {
+        return "";
+    }
+    const start = timestampMillis(value);
+    if (!start) {
+        return "";
+    }
+    const elapsedMs = Math.max(0, Date.now() - start);
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    if (totalSeconds < 60) {
+        return `${Math.max(1, totalSeconds)}s`;
+    }
+    const minutes = Math.floor(totalSeconds / 60);
+    if (minutes < 60) {
+        return `${minutes}m${String(totalSeconds % 60).padStart(2, "0")}s`;
+    }
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 function buildThreadOutcomeStrip(task, flow, max = 220) {
@@ -3344,7 +3663,9 @@ async function tryCatchUpPendingAutoTaskSelection(sessionId) {
         state.selectedTaskId = candidateTaskId;
         state.selectedTaskStickyUntil = Date.now() + 10000;
         state.pendingAutoTaskTracker = null;
+        await loadMessages(sessionId);
         renderThread();
+        renderDetails();
         renderComposerContext();
         renderMessageComposerContext();
         syncLocationSelection();
@@ -5180,6 +5501,68 @@ function startPolling() {
             console.error(error);
         }
     }, 5000);
+}
+
+function ensureTaskEventStream(taskId) {
+    if (!taskId || typeof EventSource === "undefined") {
+        return;
+    }
+    if (state.taskEventSource?.dataset?.taskId === taskId) {
+        return;
+    }
+    closeTaskEventStream();
+    const source = new EventSource(`/api/v1/tasks/${encodeURIComponent(taskId)}/events?stream=true&limit=12&interval_ms=1500`);
+    source.dataset = { taskId };
+    source.onmessage = () => scheduleTaskEventRefresh(taskId);
+    source.addEventListener("task.snapshot", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("worker_round", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("worker_round_failed", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("node_continue", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("task_control_action", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("task_state_changed", () => scheduleTaskEventRefresh(taskId));
+    source.addEventListener("task.stream.done", () => {
+        if (state.taskEventSource === source) {
+            closeTaskEventStream();
+        }
+    });
+    source.onerror = () => {
+        if (state.taskEventSource === source) {
+            closeTaskEventStream();
+        }
+    };
+    state.taskEventSource = source;
+}
+
+function closeTaskEventStream() {
+    if (state.taskEventSource) {
+        state.taskEventSource.close();
+        state.taskEventSource = null;
+    }
+    if (state.taskEventRefreshTimer) {
+        window.clearTimeout(state.taskEventRefreshTimer);
+        state.taskEventRefreshTimer = null;
+    }
+}
+
+function scheduleTaskEventRefresh(taskId) {
+    if (!taskId || taskId !== state.selectedTaskId || document.hidden) {
+        return;
+    }
+    if (state.taskEventRefreshTimer) {
+        return;
+    }
+    state.taskEventRefreshTimer = window.setTimeout(async () => {
+        state.taskEventRefreshTimer = null;
+        if (taskId !== state.selectedTaskId) {
+            return;
+        }
+        try {
+            await loadSelectedTask(taskId, false);
+            await loadMessages(taskSessionId(selectedTask()) || state.selectedSessionId);
+        } catch (error) {
+            console.warn("task event refresh failed", error);
+        }
+    }, 250);
 }
 
 function closeModal() {

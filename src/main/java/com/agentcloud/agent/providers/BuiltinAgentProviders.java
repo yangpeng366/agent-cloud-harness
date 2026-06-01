@@ -123,6 +123,15 @@ public final class BuiltinAgentProviders {
                 "trae",
                 "MULTICA_TRAE_PATH",
                 "MULTICA_TRAE_MODEL"
+            ),
+            new LocalCliAgentProvider(
+                "reasonix",
+                "Reasonix Code",
+                List.of("chat", "code", "patch", "research", "session"),
+                Map.of("model_tier", "strong"),
+                "reasonix",
+                "MULTICA_REASONIX_PATH",
+                "MULTICA_REASONIX_MODEL"
             )
         );
     }

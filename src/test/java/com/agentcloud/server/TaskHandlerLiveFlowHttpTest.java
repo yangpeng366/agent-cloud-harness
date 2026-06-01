@@ -324,6 +324,54 @@ class TaskHandlerLiveFlowHttpTest {
     }
 
     @Test
+    void taskEventsEndpointSupportsJsonAndSseViews() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-events-http.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "task events stream", "coding", "user", "high",
+                "检查 task event stream", "events endpoint should expose JSON and SSE", null, null, Map.of(), false
+            ));
+            EventDao eventDao = harness.db.jdbi().onDemand(EventDao.class);
+            eventDao.insert(new Event(
+                "evt_task_stream_1",
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-06-01T08:00:00Z"),
+                "worker_round",
+                "worker",
+                "codex",
+                "worker round completed",
+                Map.of("execution_status", "succeeded")
+            ));
+
+            HttpResponse<String> jsonResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/events?limit=5"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            Map<String, Object> jsonBody = harness.readJson(jsonResponse.body());
+            List<Map<String, Object>> events = harness.list(jsonBody.get("data"));
+            assertEquals(200, jsonResponse.statusCode());
+            assertEquals("evt_task_stream_1", events.get(0).get("id"));
+            assertEquals("worker_round", events.get(0).get("event_type"));
+
+            HttpResponse<String> sseResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id()
+                        + "/events?stream=true&limit=5&max_ticks=1&interval_ms=250"))
+                    .header("Accept", "text/event-stream")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8)
+            );
+            assertEquals(200, sseResponse.statusCode());
+            assertTrue(sseResponse.headers().firstValue("Content-Type").orElse("").startsWith("text/event-stream"));
+            assertTrue(sseResponse.body().contains("event: task.snapshot"));
+            assertTrue(sseResponse.body().contains("event: worker_round"));
+            assertTrue(sseResponse.body().contains("\"evt_task_stream_1\""));
+        }
+    }
+
+    @Test
     void liveFlowHttpExposesProviderExecutionDiagnostics() throws Exception {
         try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-provider-diagnostics.db"))) {
             Task task = harness.service.createTask(new TaskCreateRequest(

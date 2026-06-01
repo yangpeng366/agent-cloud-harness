@@ -135,7 +135,8 @@ a {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    min-height: calc(100vh - 16px);
+    height: calc(100vh - 16px);
+    overflow: hidden;
 }
 
 body.details-collapsed .dialogue-shell {
@@ -823,6 +824,73 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
     color: var(--ink);
     font-size: 7.5px;
     line-height: 1.18;
+}
+
+.live-execution-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: fit-content;
+    max-width: 100%;
+    margin-top: 5px;
+    padding: 4px 7px;
+    border-radius: 999px;
+    border: 1px solid rgba(23, 117, 103, 0.18);
+    background: rgba(23, 117, 103, 0.09);
+    color: var(--accent-deep);
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.live-execution-badge[data-tone="paused"] {
+    border-color: rgba(185, 132, 33, 0.22);
+    background: rgba(185, 132, 33, 0.1);
+    color: #7a5415;
+}
+
+.live-execution-badge--thread {
+    margin: 0 0 5px;
+}
+
+.live-execution-badge__dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow: 0 0 0 3px rgba(23, 117, 103, 0.1);
+}
+
+.live-execution-badge.is-running .live-execution-badge__dot {
+    animation: livePulse 1.25s ease-in-out infinite;
+}
+
+.live-execution-badge__label {
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+}
+
+.live-execution-badge__detail {
+    min-width: 0;
+    color: var(--ink-soft);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@keyframes livePulse {
+    0%,
+    100% {
+        transform: scale(0.82);
+        opacity: 0.58;
+        box-shadow: 0 0 0 2px rgba(23, 117, 103, 0.1);
+    }
+    50% {
+        transform: scale(1);
+        opacity: 1;
+        box-shadow: 0 0 0 5px rgba(23, 117, 103, 0.16);
+    }
 }
 
 .message-summary-card__execution-strip {
@@ -1812,6 +1880,64 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
     line-height: 1.48;
 }
 
+.execution-timeline {
+    display: grid;
+    gap: 6px;
+}
+
+.execution-timeline__item {
+    display: grid;
+    grid-template-columns: 8px minmax(0, 1fr);
+    gap: 8px;
+    padding: 5px 6px 5px 0;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(90deg, rgba(248, 249, 244, 0.9), rgba(255, 255, 255, 0.74));
+}
+
+.execution-timeline__rail {
+    width: 3px;
+    min-height: 100%;
+    border-radius: 99px;
+    background: rgba(96, 103, 112, 0.22);
+    justify-self: center;
+}
+
+.execution-timeline__rail[data-tone="active"] {
+    background: rgba(23, 117, 103, 0.6);
+}
+
+.execution-timeline__rail[data-tone="done"] {
+    background: rgba(71, 124, 79, 0.62);
+}
+
+.execution-timeline__rail[data-tone="paused"] {
+    background: rgba(185, 132, 33, 0.62);
+}
+
+.execution-timeline__rail[data-tone="failed"] {
+    background: rgba(174, 65, 55, 0.62);
+}
+
+.execution-timeline__body {
+    min-width: 0;
+}
+
+.execution-timeline__body strong {
+    display: block;
+    margin-top: 5px;
+    line-height: 1.42;
+}
+
+.execution-timeline__body p {
+    margin: 5px 0 0;
+    color: var(--ink-soft);
+    line-height: 1.48;
+}
+
+.execution-timeline__chips {
+    margin-top: 6px;
+}
+
 .route-box__recovery-note {
     margin: 0;
     color: var(--ink-soft);
@@ -2540,6 +2666,41 @@ body.sidebar-collapsed.details-collapsed .dialogue-shell {
 
 .artifact-output-drawer__preview {
     max-height: 420px;
+}
+
+.worker-round-artifacts {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px dashed rgba(28, 41, 52, 0.14);
+}
+
+.message-card .worker-round-artifacts .artifact-card {
+    background: rgba(255, 255, 255, 0.74);
+}
+
+.artifact-card--selected {
+    border-left: 3px solid var(--accent);
+    padding-left: 9px;
+    background: rgba(22, 117, 103, 0.04);
+}
+
+.artifact-card__summary {
+    margin: 2px 0 0;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.artifact-card__more-hint {
+    color: var(--accent);
+    font-size: 10px;
+}
+
+.worker-round-artifacts[data-selected-task] {
+    border-left: 3px solid var(--accent);
+    padding-left: 10px;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .modal-footer {

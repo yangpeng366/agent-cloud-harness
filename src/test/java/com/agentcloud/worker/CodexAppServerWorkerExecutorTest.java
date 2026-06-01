@@ -227,6 +227,38 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    void appServerErrorAfterPartialOutputReturnsPartialTimeoutAndKeepsOutput() throws Exception {
+        String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
+        String partialKey = "agentcloud.providers.codex.partial_timeout_min_output_chars";
+        Map<String, String> originals = snapshotProperties(propertyKey, runDirKey, modeKey, partialKey);
+        Path cli = fakePartialThenRpcErrorCodexAppServerCli();
+        System.setProperty(propertyKey, cli.toString());
+        System.setProperty(runDirKey, tempDir.resolve("partial-rpc-error-codex-runs").toString());
+        System.clearProperty(modeKey);
+        System.setProperty(partialKey, "20");
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("codex"), "codex");
+
+            assertEquals("partial_timeout", result.executionStatus());
+            assertEquals(ExecutionOutcome.COMPLETED_PARTIAL, result.outcome());
+            assertTrue(result.outputText().contains("codex partial answer before transport failure"));
+            assertEquals(true, result.metadata().get("partial_output"));
+            assertEquals("partial_timeout", result.metadata().get("provider_turn_status"));
+            assertTrue(result.metadata().get("provider_error").toString().contains("502 Bad Gateway"));
+            Path lastMessagePath = Path.of(result.metadata().get("provider_last_message_path").toString());
+            assertTrue(Files.readString(lastMessagePath).contains("codex partial answer before transport failure"));
+        } finally {
+            restoreProperties(originals);
+        }
+    }
+
+    @Test
     void codexRunFileMetadataIsAttachedToFailureResult() throws Exception {
         String runDirKey = "agentcloud.provider_runs.dir";
         String originalRunDir = System.getProperty(runDirKey);
@@ -399,6 +431,48 @@ class CodexAppServerWorkerExecutorTest {
         assertEquals("partial_timeout", status.invoke(result));
         assertEquals("partial_timeout", turnStatus.invoke(result));
         assertEquals("user_interrupted", abortReason.invoke(result));
+    }
+
+    @Test
+    void maxDurationRemainsHardLimitEvenWhenActivityTimeoutIsLarger() throws Exception {
+        Class<?> sessionClass = Class.forName("com.agentcloud.worker.CodexAppServerWorkerExecutor$JsonRpcSession");
+        Constructor<?> constructor = sessionClass.getDeclaredConstructor(
+            java.io.Writer.class,
+            BufferedReader.class,
+            java.io.OutputStream.class,
+            int.class
+        );
+        constructor.setAccessible(true);
+        String output = "partial output that is long enough";
+        StringReader input = new StringReader(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"codex/event\",\"params\":{\"msg\":{\"type\":\"agent_message\",\"message\":\"" + output + "\"}}}\n"
+        );
+        Object session = constructor.newInstance(
+            new StringWriter(),
+            new BufferedReader(input),
+            new ByteArrayOutputStream(),
+            10
+        );
+
+        Method awaitTurnCompletion = sessionClass.getDeclaredMethod("awaitTurnCompletion", String.class, long.class, long.class, int.class);
+        Method toOutput = sessionClass.getDeclaredMethod("toOutput", String.class, String.class);
+        Method status = null;
+        Method timeoutKind = null;
+        awaitTurnCompletion.setAccessible(true);
+        toOutput.setAccessible(true);
+
+        long startedAtMs = System.currentTimeMillis();
+        Object terminal = awaitTurnCompletion.invoke(session, "running", 30_000L, 25L, 10);
+        long elapsedMs = System.currentTimeMillis() - startedAtMs;
+        Object result = toOutput.invoke(session, "thread_hard_limit", terminal);
+        status = result.getClass().getDeclaredMethod("status");
+        timeoutKind = result.getClass().getDeclaredMethod("timeoutKind");
+        status.setAccessible(true);
+        timeoutKind.setAccessible(true);
+
+        assertTrue(elapsedMs < 5_000L, "max duration should not wait for larger activity timeout");
+        assertEquals("partial_timeout", status.invoke(result));
+        assertEquals("max_duration", timeoutKind.invoke(result));
     }
 
     @Test
@@ -767,5 +841,23 @@ class CodexAppServerWorkerExecutorTest {
             exit /b 0
             """;
         return Files.writeString(tempDir.resolve("codex-sticky-app-server.cmd"), body);
+    }
+
+    private Path fakePartialThenRpcErrorCodexAppServerCli() throws Exception {
+        String body = """
+            @echo off
+            setlocal EnableExtensions
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":1,"result":{}}
+            set /p LINE=
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":2,"result":{"threadId":"thread_partial_rpc_error"}}
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":3,"result":{"status":"running"}}
+            echo {"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"agentMessage","text":"codex partial answer before transport failure","phase":"final_answer"}}}
+            echo {"jsonrpc":"2.0","id":4,"error":{"message":"502 Bad Gateway"}}
+            exit /b 0
+            """;
+        return Files.writeString(tempDir.resolve("codex-partial-rpc-error.cmd"), body);
     }
 }

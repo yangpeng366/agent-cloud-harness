@@ -21,8 +21,8 @@ import java.util.stream.Collectors;
 public class WorkerRegistry {
     private static final Logger log = LoggerFactory.getLogger(WorkerRegistry.class);
     private static final long DEFAULT_TEMPORARY_UNAVAILABLE_MS = 10 * 60 * 1000L;
-    private static final long DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS = 30 * 1000L;
-    private static final long DEFAULT_DISPATCH_PREFLIGHT_UNAVAILABLE_MS = 2 * 60 * 1000L;
+    private static final long DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS = 2 * 60 * 1000L;
+    private static final long DEFAULT_DISPATCH_PREFLIGHT_UNAVAILABLE_MS = 10 * 60 * 1000L;
     private final Map<String, Worker> workers = Collections.synchronizedMap(new LinkedHashMap<>());
     private final Map<String, TemporaryUnavailability> temporarilyUnavailableWorkers =
         Collections.synchronizedMap(new LinkedHashMap<>());
@@ -162,6 +162,21 @@ public class WorkerRegistry {
                 "auto_route_task_types", List.of("coding", "reading", "writing")
             ),
             false, true));
+        register(new Worker("reasonix", "reasonix",
+            List.of("coding", "reading", "writing", "research"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.of(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 88,
+                "local_workspace_access", true,
+                "workspace_access_mode", "native_cli_cwd",
+                "execution_backend", "provider_native_cli",
+                "auto_route_task_types", List.of("coding", "reading", "writing", "research")
+            ),
+            false, true));
         register(new Worker("kimi", "kimi",
             List.of("coding", "research", "browser"),
             List.of(),
@@ -175,7 +190,7 @@ public class WorkerRegistry {
                 "workspace_access_mode", "native_cli_work_dir_arg",
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("coding", "research", "browser")
-            ), true, true));
+            ), false, true));
         register(new Worker("hermes", "hermes",
             List.of("coding", "research", "writing"),
             List.of(),
@@ -188,7 +203,7 @@ public class WorkerRegistry {
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("research", "writing")
             ),
-            true, true));
+            false, true));
         register(new Worker("pi", "pi",
             List.of("research", "writing", "message"),
             List.of(),
@@ -201,7 +216,7 @@ public class WorkerRegistry {
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("research", "writing", "message")
             ),
-            true, true));
+            false, true));
         register(new Worker("kiro", "kiro",
             List.of("coding", "reading"),
             List.of(),
@@ -216,7 +231,7 @@ public class WorkerRegistry {
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("coding", "reading")
             ),
-            true, true));
+            false, true));
         register(new Worker("codebuddy", "codebuddy",
             List.of("coding", "reading", "writing"),
             List.of(),
@@ -256,6 +271,40 @@ public class WorkerRegistry {
             enriched.workerId(), enriched.workerType(), enriched.capabilities(),
             enriched.toolCapabilities(), enriched.suggestOnly());
         return enriched;
+    }
+
+    public Worker registerProviderNativeWorker(String providerId,
+                                               List<String> capabilities,
+                                               Map<String, Object> metadata) {
+        String normalizedProviderId = blankToNull(providerId);
+        if (normalizedProviderId == null) {
+            throw new IllegalArgumentException("provider id is required");
+        }
+        LinkedHashMap<String, Object> workerMetadata = new LinkedHashMap<>();
+        workerMetadata.put("model_tier", "strong");
+        workerMetadata.put("primary_role", "planner_executor");
+        workerMetadata.put("selection_priority", 60);
+        workerMetadata.put("local_workspace_access", true);
+        workerMetadata.put("workspace_access_mode", "native_cli_cwd");
+        workerMetadata.put("execution_backend", "provider_native_cli");
+        workerMetadata.put("auto_route_task_types", capabilities == null || capabilities.isEmpty()
+            ? List.of("coding", "reading", "session")
+            : List.copyOf(capabilities));
+        workerMetadata.put("provider_discovery", true);
+        if (metadata != null) {
+            workerMetadata.putAll(metadata);
+        }
+        return register(new Worker(
+            normalizedProviderId,
+            normalizedProviderId,
+            capabilities == null || capabilities.isEmpty() ? List.of("coding", "reading", "session") : capabilities,
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            Map.copyOf(workerMetadata),
+            false,
+            true
+        ));
     }
 
     public List<Worker> listAll() {
@@ -567,7 +616,13 @@ public class WorkerRegistry {
             case "openclaw" -> "openclaw agent --local --json --session-id <id> --message <prompt>";
             case "claude" -> "claude -p --output-format stream-json --input-format stream-json";
             case "gemini" -> "gemini -p <prompt> -o stream-json";
-            case "deepseek" -> "deepseek exec <prompt>";
+            case "deepseek" -> "reasonix run --no-config --no-proxy --model deepseek-v4-flash <prompt>";
+            case "reasonix" -> "reasonix run --no-config --no-proxy <prompt>";
+            case "trae" -> "trae chat --mode agent <prompt>";
+            case "codebuddy" -> "codebuddy <prompt>";
+            case "hermes" -> "hermes <prompt>";
+            case "pi" -> "pi <prompt>";
+            case "kiro" -> "kiro-cli <prompt>";
             case "kimi" -> "kimi --print --output-format stream-json --work-dir <cwd> --prompt <prompt>";
             case "copilot" -> "copilot -p <prompt> --output-format json";
             case "opencode" -> "opencode run --format json <prompt>";
@@ -669,7 +724,7 @@ public class WorkerRegistry {
         if (!status.ready()) {
             markTemporarilyUnavailable(
                 workerId,
-                DEFAULT_DISPATCH_PREFLIGHT_UNAVAILABLE_MS,
+                dispatchPreflightUnavailableMs(),
                 firstNonBlank(status.reason(), "dispatch preflight failed")
             );
         }
@@ -679,15 +734,15 @@ public class WorkerRegistry {
     private DispatchPreflightStatus runDispatchPreflight(String workerId, Worker worker, String providerId, long now) {
         if (!providerBacked(worker)) {
             return new DispatchPreflightStatus(true, "dispatch preflight not required for non-provider worker",
-                false, "not_required", now + DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS, Map.of());
+                false, "not_required", now + dispatchPreflightCacheMs(), Map.of());
         }
         if (agentProviderRegistry == null) {
             return new DispatchPreflightStatus(true, "dispatch preflight skipped: provider registry unavailable",
-                false, "skipped", now + DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS, Map.of());
+                false, "skipped", now + dispatchPreflightCacheMs(), Map.of());
         }
         if (providerId == null) {
             return new DispatchPreflightStatus(false, "dispatch preflight provider not registered",
-                false, "missing_provider", now + DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS, Map.of());
+                false, "missing_provider", now + dispatchPreflightCacheMs(), Map.of());
         }
         try {
             AgentProviderStatus status = agentProviderRegistry.dispatchPreflight(providerId);
@@ -705,12 +760,33 @@ public class WorkerRegistry {
                 reason,
                 false,
                 mode,
-                now + DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS,
+                now + dispatchPreflightCacheMs(),
                 dispatchPreflightMetadata(status)
             );
         } catch (RuntimeException e) {
             return new DispatchPreflightStatus(false, "dispatch preflight failed: " + e.getMessage(),
-                false, "error", now + DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS, Map.of());
+                false, "error", now + dispatchPreflightCacheMs(), Map.of());
+        }
+    }
+
+    public static long dispatchPreflightCacheMs() {
+        return durationPropertyMs("agentcloud.dispatch.preflight.cache_ms", DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS);
+    }
+
+    public static long dispatchPreflightUnavailableMs() {
+        return durationPropertyMs("agentcloud.dispatch.preflight.unavailable_ms", DEFAULT_DISPATCH_PREFLIGHT_UNAVAILABLE_MS);
+    }
+
+    private static long durationPropertyMs(String key, long fallbackMs) {
+        String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return fallbackMs;
+        }
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed > 0 ? parsed : fallbackMs;
+        } catch (NumberFormatException e) {
+            return fallbackMs;
         }
     }
 

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.lang.reflect.Constructor;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -40,6 +41,239 @@ class ProviderCliWorkerExecutorTest {
         assertTrue(executor.supports("copilot", null));
         assertTrue(executor.supports("opencode", null));
         assertEquals(false, executor.supports("codex", null));
+    }
+
+    @Test
+    void supportsDynamicallyRegisteredNativeCliProvider() {
+        ProviderExecutionSupport.registerProviderNativeCli("local_agent");
+
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+        assertTrue(executor.supports("local_agent", null));
+    }
+
+    @Test
+    void providerProtocolParseOutputIsUsedForProtocolBackedProvider() throws Exception {
+        Path script = tempDir.resolve("protocol-backed-provider.cmd");
+        Files.writeString(script, "@echo protocol raw output\r\n");
+        System.setProperty("agentcloud.providers.deepseek.path", script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderProtocolRegistry protocols = new ProviderProtocolRegistry()
+                .register(new StubProtocol("deepseek"));
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry, null, protocols);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("deepseek"), "deepseek");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("parsed by protocol", result.outputText());
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("stub_protocol", result.metadata().get("provider_output_parser"));
+        } finally {
+            System.clearProperty("agentcloud.providers.deepseek.path");
+        }
+    }
+
+    @Test
+    void openCodeUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("opencode-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            echo {"type":"text","part":{"text":"opencode protocol ok","sessionID":"opencode-session-2"}}
+            """);
+        String propertyKey = "agentcloud.providers.opencode.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("opencode"), "opencode");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("opencode protocol ok", result.outputText());
+            assertEquals("opencode-session-2", result.metadata().get("provider_session_id"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("opencode_json", result.metadata().get("provider_output_parser"));
+            assertEquals("opencode", result.metadata().get("provider_protocol_id"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void copilotUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("copilot-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            echo {"type":"session.start","data":{"sessionId":"copilot-session-2","selectedModel":"gpt-test"}}
+            echo {"type":"assistant.message_delta","data":{"deltaContent":"copilot "}}
+            echo {"type":"assistant.message_delta","data":{"deltaContent":"protocol ok"}}
+            echo {"type":"result","sessionId":"copilot-session-2","exitCode":0}
+            """);
+        String propertyKey = "agentcloud.providers.copilot.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("copilot"), "copilot");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("copilot protocol ok", result.outputText());
+            assertEquals("copilot-session-2", result.metadata().get("provider_session_id"));
+            assertEquals("gpt-test", result.metadata().get("provider_active_model"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("copilot_jsonl", result.metadata().get("provider_output_parser"));
+            assertEquals("copilot", result.metadata().get("provider_protocol_id"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void kimiUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("kimi-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            echo To resume this session: kimi --resume kimi-session-2
+            echo {"role":"assistant","content":[{"type":"text","text":"kimi protocol ok"}]}
+            """);
+        String propertyKey = "agentcloud.providers.kimi.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("kimi"), "kimi");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("kimi protocol ok", result.outputText());
+            assertEquals("kimi-session-2", result.metadata().get("provider_session_id"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("kimi_stream_json", result.metadata().get("provider_output_parser"));
+            assertEquals("kimi", result.metadata().get("provider_protocol_id"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void geminiUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("gemini-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            echo {"type":"message","role":"assistant","content":"gemini protocol ok","session_id":"gemini-session-2"}
+            """);
+        String propertyKey = "agentcloud.providers.gemini.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("gemini"), "gemini");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("gemini protocol ok", result.outputText());
+            assertEquals("gemini-session-2", result.metadata().get("provider_session_id"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("gemini_stream_json", result.metadata().get("provider_output_parser"));
+            assertEquals("gemini", result.metadata().get("provider_protocol_id"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void cursorUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("cursor-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            echo stdout: {"type":"assistant","message":{"content":[{"type":"text","text":"cursor protocol ok"}]},"session_id":"cursor-session-2"}
+            """);
+        String propertyKey = "agentcloud.providers.cursor.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("cursor"), "cursor");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("cursor protocol ok", result.outputText());
+            assertEquals("cursor-session-2", result.metadata().get("provider_session_id"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("cursor_stream_json", result.metadata().get("provider_output_parser"));
+            assertEquals("cursor", result.metadata().get("provider_protocol_id"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
+    }
+
+    @Test
+    void claudeUsesDefaultProviderProtocolOnExecutePath() throws Exception {
+        Path script = tempDir.resolve("claude-protocol-provider.cmd");
+        Files.writeString(script, """
+            @echo off
+            more > nul
+            echo {"type":"assistant","message":{"content":[{"type":"text","text":"claude protocol ok"}]},"session_id":"claude-session-2"}
+            """);
+        String propertyKey = "agentcloud.providers.claude.path";
+        String original = System.getProperty(propertyKey);
+        System.setProperty(propertyKey, script.toString());
+        try {
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
+
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("claude"), "claude");
+
+            assertEquals("completed", result.executionStatus());
+            assertEquals("claude protocol ok", result.outputText());
+            assertEquals("claude-session-2", result.metadata().get("provider_session_id"));
+            assertEquals(true, result.metadata().get("provider_protocol_parser_used"));
+            assertEquals("claude_stream_json", result.metadata().get("provider_output_parser"));
+            assertEquals("claude", result.metadata().get("provider_protocol_id"));
+            assertEquals("stdin_jsonl", result.metadata().get("cli_prompt_delivery"));
+            assertEquals(true, result.metadata().get("cli_uses_stdin"));
+        } finally {
+            if (original == null) {
+                System.clearProperty(propertyKey);
+            } else {
+                System.setProperty(propertyKey, original);
+            }
+        }
     }
 
     @Test
@@ -136,10 +370,10 @@ class ProviderCliWorkerExecutorTest {
     }
 
     @Test
-    void deepSeekMissingBinaryReturnsFailedMetadataWithoutThrowing() {
-        String propertyKey = "agentcloud.providers.deepseek.path";
+    void deepSeekDelegatedReasonixMissingBinaryReturnsFailedMetadataWithoutThrowing() {
+        String propertyKey = "agentcloud.providers.reasonix.path";
         String original = System.getProperty(propertyKey);
-        System.setProperty(propertyKey, "definitely-missing-deepseek-binary-for-test");
+        System.setProperty(propertyKey, "definitely-missing-reasonix-binary-for-deepseek-test");
         try {
             AgentProviderRegistry registry = new AgentProviderRegistry();
             BuiltinAgentProviders.defaults().forEach(registry::register);
@@ -150,13 +384,16 @@ class ProviderCliWorkerExecutorTest {
             assertEquals("failed", result.executionStatus());
             assertEquals("provider_native_cli", result.metadata().get("execution_backend"));
             assertEquals("deepseek", result.metadata().get("provider_id"));
-            assertEquals("definitely-missing-deepseek-binary-for-test", result.metadata().get("cli_binary"));
+            assertEquals("definitely-missing-reasonix-binary-for-deepseek-test", result.metadata().get("cli_binary"));
             assertEquals("argv_prompt", result.metadata().get("cli_prompt_delivery"));
             assertEquals(false, result.metadata().get("cli_uses_stdin"));
             assertEquals(false, result.metadata().get("cli_uses_resume"));
             assertEquals("text", result.metadata().get("provider_expected_output_mode"));
-            assertEquals("deepseek_exec_text", result.metadata().get("provider_expected_parser"));
-            assertTrue(((List<?>) result.metadata().get("cli_command_shape")).contains("exec"));
+            assertEquals("deepseek_reasonix_text", result.metadata().get("provider_expected_parser"));
+            assertEquals("reasonix", result.metadata().get("execution_runtime"));
+            assertTrue(((List<?>) result.metadata().get("cli_command_shape")).contains("run"));
+            assertTrue(((List<?>) result.metadata().get("cli_command_shape")).contains("--model"));
+            assertTrue(((List<?>) result.metadata().get("cli_command_shape")).contains("deepseek-v4-flash"));
             assertTrue(((List<?>) result.metadata().get("cli_command_shape")).contains("<prompt>"));
         } finally {
             if (original == null) {
@@ -236,9 +473,9 @@ class ProviderCliWorkerExecutorTest {
 
     @Test
     void deepSeekUnexpectedArgumentStdoutIsClassifiedAsProtocolError() throws Exception {
-        String pathProperty = "agentcloud.providers.deepseek.path";
+        String pathProperty = "agentcloud.providers.reasonix.path";
         String originalPath = System.getProperty(pathProperty);
-        Path cli = fakeCli("deepseek-bad-args", unexpectedArgumentCliBody());
+        Path cli = fakeCli("reasonix-bad-args", unexpectedArgumentCliBody());
         System.setProperty(pathProperty, cli.toString());
         try {
             AgentProviderRegistry registry = new AgentProviderRegistry();
@@ -351,14 +588,13 @@ class ProviderCliWorkerExecutorTest {
     }
 
     @Test
-    void deepSeekPlanUsesExecSubcommandWithoutFacadeOnlyFlags() throws Exception {
+    void deepSeekPlanDelegatesToReasonixRunWithDeepSeekModel() throws Exception {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);
         ProviderCliWorkerExecutor executor = new ProviderCliWorkerExecutor(registry);
         TaskRuntimeContext context = runtimeContext("deepseek", new LinkedHashMap<>(Map.of(
             "task_type", "coding",
             "intent", "用 deepseek 非交互执行单轮任务。",
-            "provider_model", "deepseek-v4-flash",
             "workspace", "D:\\gitAll\\agent-cloud-harness"
         )));
 
@@ -386,13 +622,17 @@ class ProviderCliWorkerExecutorTest {
         @SuppressWarnings("unchecked")
         List<String> command = (List<String>) commandMethod.invoke(plan);
 
-        assertEquals("deepseek", configuredBinaryMethod.invoke(plan));
+        assertEquals("reasonix", configuredBinaryMethod.invoke(plan));
         assertTrue(List.of("direct", "cmd_file").contains(String.valueOf(launchModeMethod.invoke(plan))));
         assertEquals(false, command.contains("--skip-onboarding"));
         assertEquals(false, command.contains("--yolo"));
         assertEquals(false, command.contains("--provider"));
-        assertTrue(command.contains("exec"));
-        int promptIndex = command.indexOf("exec") + 1;
+        assertTrue(command.contains("run"));
+        assertTrue(command.contains("--no-config"));
+        assertTrue(command.contains("--no-proxy"));
+        assertTrue(command.contains("--model"));
+        assertTrue(command.contains("deepseek-v4-flash"));
+        int promptIndex = command.indexOf("deepseek-v4-flash") + 1;
         assertTrue(promptIndex > 0);
         assertTrue(command.get(promptIndex).contains("Workspaces:"));
         assertTrue(command.get(promptIndex).contains("D:\\gitAll\\agent-cloud-harness"));
@@ -666,11 +906,11 @@ class ProviderCliWorkerExecutorTest {
 
     @Test
     void providerNativeCliWritesRunFilesAndTruncatesSqliteOutputText() throws Exception {
-        String pathProperty = "agentcloud.providers.deepseek.path";
+        String pathProperty = "agentcloud.providers.reasonix.path";
         String runsProperty = "agentcloud.provider_runs.dir";
         String originalPath = System.getProperty(pathProperty);
         String originalRunsDir = System.getProperty(runsProperty);
-        Path cli = fakeCli("deepseek-run-files", oversizedCliBody());
+        Path cli = fakeCli("reasonix-run-files", oversizedCliBody());
         Path runRoot = tempDir.resolve("provider-runs");
         System.setProperty(pathProperty, cli.toString());
         System.setProperty(runsProperty, runRoot.toString());
@@ -887,6 +1127,69 @@ class ProviderCliWorkerExecutorTest {
             } else {
                 System.setProperty(propertyKey, original);
             }
+        }
+    }
+
+    private static final class StubProtocol implements ProviderProtocol {
+        private final String providerId;
+
+        private StubProtocol(String providerId) {
+            this.providerId = providerId;
+        }
+
+        @Override
+        public String providerId() {
+            return providerId;
+        }
+
+        @Override
+        public ProviderStatus detect(com.agentcloud.agent.providers.LocalCliProviderConfig.ResolvedConfig config) {
+            return new ProviderStatus(true, null, Map.of());
+        }
+
+        @Override
+        public ProviderCliPlan buildPlan(com.agentcloud.agent.providers.LocalCliProviderConfig.ResolvedConfig config,
+                                         TaskRuntimeContext context,
+                                         String cwd,
+                                         com.agentcloud.agent.providers.CliCapabilityProfile profile) {
+            return new ProviderCliPlan(
+                config.launchSpec().command(List.of()),
+                "stub",
+                "",
+                null,
+                Map.of(),
+                config.launchSpec().configuredBinary(),
+                config.launchSpec().executableTarget(),
+                config.launchSpec().launchMode(),
+                profile,
+                List.of()
+            );
+        }
+
+        @Override
+        public WorkerExecutionResult parseOutput(byte[] raw,
+                                                 ProviderCliPlan plan,
+                                                 long durationMs,
+                                                 Map<String, Object> baseMetadata) {
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(baseMetadata);
+            metadata.put("provider_output_parser", "stub_protocol");
+            metadata.put("raw_seen", raw != null && raw.length > 0);
+            return new WorkerExecutionResult(
+                "protocol summary",
+                "parsed by protocol",
+                false,
+                "",
+                "",
+                "",
+                "medium",
+                "completed",
+                List.of(),
+                List.of(),
+                0,
+                durationMs,
+                metadata,
+                ExecutionOutcome.COMPLETED
+            );
         }
     }
 

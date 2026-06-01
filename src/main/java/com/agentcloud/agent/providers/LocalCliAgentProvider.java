@@ -247,6 +247,12 @@ public class LocalCliAgentProvider implements AgentProvider {
             case "cursor" -> List.of("chat", "--help");
             case "opencode" -> List.of("run", "--help");
             case "deepseek" -> List.of("exec", "--help");
+            case "reasonix" -> List.of("run", "--help");
+            case "trae" -> List.of("chat", "--help");
+            case "codebuddy" -> List.of("--help");
+            case "hermes" -> List.of("--help");
+            case "pi" -> List.of("--help");
+            case "kiro" -> List.of("--help");
             case "codex" -> List.of("--version");
             default -> List.of("--help");
         };

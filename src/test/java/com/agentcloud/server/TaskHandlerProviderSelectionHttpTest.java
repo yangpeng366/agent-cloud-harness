@@ -661,6 +661,55 @@ class TaskHandlerProviderSelectionHttpTest {
     }
 
     @Test
+    void taskArtifactsEndpointReturnsPersistedArtifactsWithoutAgentRun() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("task-artifacts-http.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "task artifact fallback",
+                "coding",
+                "user",
+                "high",
+                "verify task artifacts endpoint",
+                "return artifacts table rows even without agent run",
+                null,
+                null,
+                Map.of("model_mode", "strong_only"),
+                false
+            ));
+            fixture.artifactDao.insert(new Artifact(
+                "art_direct_task",
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-05-28T09:54:54Z"),
+                "worker_artifact",
+                "Codex preserved output",
+                "file:///tmp/codex-output.md",
+                null,
+                "Codex completed but transport failed",
+                Map.of(
+                    "provider_id", "codex",
+                    "execution_status", "partial_timeout",
+                    "output_text", "partial codex output"
+                )
+            ));
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/artifacts"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            JsonNode artifacts = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data");
+            assertEquals(200, response.statusCode());
+            assertEquals(1, artifacts.size());
+            assertEquals("art_direct_task", artifacts.get(0).path("artifact_id").asText());
+            assertEquals("", artifacts.get(0).path("run_id").asText());
+            assertEquals("codex", artifacts.get(0).path("provider_id").asText());
+            assertEquals("file:///tmp/codex-output.md", artifacts.get(0).path("path").asText());
+            assertEquals("partial_timeout", artifacts.get(0).path("metadata").path("execution_status").asText());
+        }
+    }
+
+    @Test
     void harnessTraceEndpointReturnsAheReviewContract() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("harness-trace-http.db"))) {
             Task task = fixture.service.createTask(new TaskCreateRequest(
@@ -998,7 +1047,9 @@ class TaskHandlerProviderSelectionHttpTest {
                 toolInvocationDao,
                 sessionMessageDao,
                 experimentRunService,
-                agentRunService
+                agentRunService,
+                null,
+                artifactDao
             );
 
             this.server = HttpServer.create(new InetSocketAddress(0), 0);

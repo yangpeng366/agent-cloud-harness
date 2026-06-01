@@ -2,6 +2,7 @@ package com.agentcloud.worker;
 
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 统一维护当前 harness 已接入的 provider execution backend 支持矩阵，
@@ -9,9 +10,10 @@ import java.util.Set;
  */
 public final class ProviderExecutionSupport {
     private static final Set<String> PROVIDER_NATIVE_CLI = Set.of(
-        "cursor", "openclaw", "claude", "gemini", "deepseek", "kimi", "copilot", "opencode"
+        "cursor", "openclaw", "claude", "gemini", "deepseek", "kimi", "copilot", "opencode", "reasonix", "trae", "codebuddy", "hermes", "pi", "kiro"
     );
     private static final Set<String> PROVIDER_APP_SERVER = Set.of("codex");
+    private static final Set<String> DYNAMIC_PROVIDER_NATIVE_CLI = ConcurrentHashMap.newKeySet();
 
     private ProviderExecutionSupport() {
     }
@@ -26,7 +28,15 @@ public final class ProviderExecutionSupport {
     }
 
     public static boolean supportsProviderNativeCli(String providerId) {
-        return PROVIDER_NATIVE_CLI.contains(normalize(providerId));
+        String normalized = normalize(providerId);
+        return PROVIDER_NATIVE_CLI.contains(normalized) || DYNAMIC_PROVIDER_NATIVE_CLI.contains(normalized);
+    }
+
+    public static void registerProviderNativeCli(String providerId) {
+        String normalized = normalize(providerId);
+        if (!normalized.isBlank()) {
+            DYNAMIC_PROVIDER_NATIVE_CLI.add(normalized);
+        }
     }
 
     public static boolean supportsProviderAppServer(String providerId) {

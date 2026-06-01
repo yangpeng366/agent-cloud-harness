@@ -17,6 +17,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -121,6 +125,15 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var flow = svc.getLiveFlow(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(flow));
+                } else if (path.endsWith("/events")) {
+                    Map<String, String> params = parseQuery(query);
+                    if (acceptsEventStream(ex, params)) {
+                        streamTaskEvents(ex, id, params);
+                    } else {
+                        int limit = parseLimit(params.get("limit"));
+                        var events = svc.listEvents(id, limit);
+                        NioHttpServer.sendJson(ex, 200, ApiResponse.ok(events));
+                    }
                 } else if (path.endsWith("/provider_run_file")) {
                     Map<String, String> params = parseQuery(query);
                     var file = svc.getProviderRunFile(id, params.get("kind"));
@@ -154,6 +167,11 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var jobs = svc.listRecoveryJobs(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(jobs));
+                } else if (path.endsWith("/artifacts")) {
+                    Map<String, String> params = parseQuery(query);
+                    int limit = parseLimit(params.get("limit"));
+                    var artifacts = svc.listArtifacts(id, limit);
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(artifacts));
                 } else if (path.endsWith("/handoff_packet")) {
                     Map<String, String> params = parseQuery(query);
                     String target = params.getOrDefault("target_worker", "codex");
@@ -224,6 +242,79 @@ class TaskHandler implements HttpHandler {
             return Math.max(1, Math.min(limit, 20));
         } catch (Exception ignored) {
             return 5;
+        }
+    }
+
+    private boolean acceptsEventStream(HttpExchange ex, Map<String, String> params) {
+        String stream = params.get("stream");
+        String accept = ex.getRequestHeaders().getFirst("Accept");
+        return "true".equalsIgnoreCase(stream)
+            || "1".equals(stream)
+            || (accept != null && accept.toLowerCase().contains("text/event-stream"));
+    }
+
+    private void streamTaskEvents(HttpExchange ex, String taskId, Map<String, String> params) throws IOException {
+        int limit = parseLimit(params.get("limit"));
+        int intervalMs = parsePositiveInt(params.get("interval_ms"), 1500, 250, 10000);
+        int maxTicks = parsePositiveInt(params.get("max_ticks"), 120, 1, 600);
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=UTF-8");
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        ex.getResponseHeaders().set("Connection", "keep-alive");
+        ex.sendResponseHeaders(200, 0);
+        Set<String> sentIds = new LinkedHashSet<>();
+        try (OutputStream body = ex.getResponseBody()) {
+            writeSseEvent(body, "task.snapshot", Map.of(
+                "task_id", taskId,
+                "events", svc.listEvents(taskId, limit),
+                "created_at", Instant.now()
+            ));
+            for (int tick = 0; tick < maxTicks; tick++) {
+                List<Event> events = svc.listEvents(taskId, limit).stream()
+                    .sorted(Comparator.comparing(Event::createdAt, Comparator.nullsLast(Comparator.naturalOrder())))
+                    .toList();
+                for (Event event : events) {
+                    if (event != null && sentIds.add(event.id())) {
+                        writeSseEvent(body, event.eventType() == null ? "task.event" : event.eventType(), event);
+                    }
+                }
+                writeSseComment(body, "heartbeat " + Instant.now());
+                try {
+                    Thread.sleep(intervalMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            writeSseEvent(body, "task.stream.done", Map.of("task_id", taskId, "created_at", Instant.now()));
+        } catch (IOException e) {
+            if (NioHttpServer.isClientDisconnect(e)) {
+                return;
+            }
+            throw e;
+        } finally {
+            ex.close();
+        }
+    }
+
+    private void writeSseEvent(OutputStream body, String eventName, Object payload) throws IOException {
+        body.write(("event: " + eventName + "\n").getBytes(StandardCharsets.UTF_8));
+        body.write("data: ".getBytes(StandardCharsets.UTF_8));
+        body.write(mapper.writeValueAsBytes(payload));
+        body.write("\n\n".getBytes(StandardCharsets.UTF_8));
+        body.flush();
+    }
+
+    private void writeSseComment(OutputStream body, String comment) throws IOException {
+        body.write((": " + comment + "\n\n").getBytes(StandardCharsets.UTF_8));
+        body.flush();
+    }
+
+    private int parsePositiveInt(String raw, int fallback, int min, int max) {
+        try {
+            int parsed = raw == null ? fallback : Integer.parseInt(raw);
+            return Math.max(min, Math.min(parsed, max));
+        } catch (Exception ignored) {
+            return fallback;
         }
     }
 
