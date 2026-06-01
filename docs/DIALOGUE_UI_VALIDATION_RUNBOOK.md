@@ -234,6 +234,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - message card 与 pinned latest round output 的 failure badge 也已收成 `失败 · <failure class>`；`dialogue-recovery-label-render.test.mjs` 覆盖不回退到 `failure ·`。
 - message card 的 learning hint 状态也应人话化：当 richer context 可见时显示 `提示 · <worker> 已应用 / 已观测未应用`，而不是 `applied / observed`；验收入口是 `node --test src/test/js/dialogue-message-card-plan.test.mjs`。
 - message card 与 active task signal 的 route/tool 文案也不应保留 `via / steps`：route 显示 `来源：...`，tool chain 显示 `N 步`；同一个 `dialogue-message-card-plan.test.mjs` 覆盖 message card 计划层不回退。
+- route drawer 的 chip 源头也不应主动生成 `mode: / hint: / learning: / route/execution`；`dialogue-route-box-plan.test.mjs` 同时覆盖旧输入兼容映射和 app.js 源头中文化。
 - 右侧详情的 `实验对比` 指标也应遵守同一中文化口径：`runs / done / learned hint applied / avg tool steps / steps / cost` 不应作为用户可见文案；`dialogue-experiment-summary-plan.test.mjs` 静态锁住这些指标不回退。
 - execution boundary 的基础 chip 也不应继续裸露 `exec / worker` 风格标签；`dialogue-execution-boundary-plan.test.mjs` 覆盖 `执行回合 / 执行方` 不回退。
 - judgment/cognition timeline 的细节 chip 也应遵守同一中文化口径：`next/current/follow-up/action/route/status/aligned/diverged` 收成 `下一步/当前/跟进/动作/路由/状态/一致/不一致`；`dialogue-recovery-label-render.test.mjs` 静态锁住不回退。
