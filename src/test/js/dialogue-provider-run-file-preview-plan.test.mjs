@@ -32,6 +32,24 @@ test("provider run file preview includes truncation limit", () => {
     assert.equal(preview.includes("truncated at 65536 bytes"), true);
 });
 
+test("provider run file preview includes tail window metadata", () => {
+    const preview = formatProviderRunFilePreview({
+        kind: "events",
+        path: "D:\\runs\\codex\\events.jsonl",
+        sizeBytes: 80000,
+        limitBytes: 65536,
+        offsetBytes: 14464,
+        readMode: "tail",
+        maxLines: 80,
+        truncated: true,
+        content: "{\"type\":\"agent_message\"}"
+    });
+
+    assert.equal(preview.includes("tail window"), true);
+    assert.equal(preview.includes("80 lines"), true);
+    assert.equal(preview.includes("offset 14464"), true);
+});
+
 test("provider run file preview error stays visible in preview box", () => {
     const preview = formatProviderRunFilePreviewError(new Error("provider run file not found"), "prompt");
 

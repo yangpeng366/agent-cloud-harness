@@ -5730,9 +5730,11 @@ function renderProviderRunFiles(flow) {
     const buttons = plan.files.map((file) => `
         <button class="button button--ghost button--compact"
                 type="button"
-                title="${escapeHtml(file.path)}"
+                title="${escapeHtml([file.path, file.readHint].filter(Boolean).join(" · "))}"
                 data-provider-run-task-id="${escapeHtml(plan.taskId)}"
-                data-provider-run-kind="${escapeHtml(file.kind)}">
+                data-provider-run-kind="${escapeHtml(file.kind)}"
+                data-provider-run-tail="${file.tail ? "true" : "false"}"
+                data-provider-run-max-lines="${file.maxLines ? escapeHtml(String(file.maxLines)) : ""}">
             ${escapeHtml(file.label)}
         </button>
     `).join("");
@@ -5759,7 +5761,8 @@ async function onProviderRunFileClick(event) {
     button.disabled = true;
     previewBox.textContent = "读取中...";
     try {
-        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?kind=${encodeURIComponent(kind)}`);
+        const params = buildProviderRunFileQuery(button, kind);
+        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?${params.toString()}`);
         previewBox.textContent = formatProviderRunFilePreview(file, kind);
     } catch (error) {
         previewBox.textContent = formatProviderRunFilePreviewError(error, kind);
@@ -5767,4 +5770,15 @@ async function onProviderRunFileClick(event) {
     } finally {
         button.disabled = false;
     }
+}
+
+function buildProviderRunFileQuery(button, kind) {
+    const params = new URLSearchParams({ kind });
+    if (button.dataset.providerRunTail === "true") {
+        params.set("tail", "true");
+    }
+    if (button.dataset.providerRunMaxLines) {
+        params.set("max_lines", button.dataset.providerRunMaxLines);
+    }
+    return params;
 }

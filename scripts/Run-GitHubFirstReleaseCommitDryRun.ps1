@@ -130,6 +130,7 @@ $groups = [ordered]@{
         "scripts/dialogue-business-smoke.js",
         "scripts/provider-discovery-smoke.js",
         "docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md",
+        "docs/DIALOGUE_CODEX_UI_ADAPTATION_PLAN.md",
         "docs/DIALOGUE_UI_VALIDATION_RUNBOOK.md",
         "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RUNBOOK.md",
         "docs/DIALOGUE_CHAT_FACADE_ACCEPTANCE_RECORD_TEMPLATE.md"

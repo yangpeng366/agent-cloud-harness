@@ -292,7 +292,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - Copilot 已迁移为 `CopilotProtocol` 并注册到默认 protocol registry；正常执行路径会保留 `provider_session_id` / `provider_active_model`，并设置 `provider_protocol_parser_used=true`。
 - OpenCode 已迁移为 `OpenCodeProtocol` 并注册到默认 protocol registry；正常执行路径会设置 `provider_protocol_parser_used=true`，不再依赖 executor 内部 opencode parser 主路径。
 - Task 级 SSE 事件面已接入：`/api/v1/tasks/{id}/events` 普通 GET 返回最近 harness events，`stream=true` 返回 `text/event-stream`；Dialogue 使用该流缩短“执行中/最近输出”刷新延迟。
-- Provider run 文件受控读取已支持尾部窗口：`/api/v1/tasks/{id}/provider_run_file?kind=events&tail=true&max_lines=50` 可读取最新 `events.jsonl` 尾部行，默认调用仍保持文件头 64 KiB 的兼容行为。
+- Provider run 文件受控读取已支持尾部窗口：`/api/v1/tasks/{id}/provider_run_file?kind=events&tail=true&max_lines=50` 可读取最新 `events.jsonl` 尾部行；Dialogue / Console 的 `事件日志`、`标准输出` 预览默认使用 `tail=true&max_lines=80`，其他文件仍保持文件头 64 KiB 的兼容行为。
 - Dialogue 主视图已具备运行态徽标：选中 active/running task 后，pinned summary 与 task thread 会显示“执行中 · worker · 已运行 XmYs · 节点 scheduler/continue”，并由 task SSE 事件触发局部刷新；5s 轮询仍作为兜底，避免用户必须展开 details 才知道 Codex/worker 是否仍在跑。
 - Dialogue 对 `partial_timeout` worker_round 已提供操作入口：有 `provider_thread_id / provider_session_id` 时显示“继续 Codex thread”和“手动移交”；没有 provider thread 时只显示“手动移交”，避免把部分结果压成普通失败。
 - `scripts/Run-CodexPartialTimeoutSmoke.ps1` 已提供最小可重复验收入口：同时跑 Codex app-server 有输出通信失败、ControlNodeGraph partial_timeout 进入 human gate 且写 worker_round、provider thread continue metadata、Dialogue worker_round action plan。

@@ -1,3 +1,6 @@
+const TAIL_PREVIEW_MAX_LINES = 80;
+const TAIL_PREVIEW_KINDS = new Set(["events", "stdout"]);
+
 export function buildProviderRunFilePlan(flow) {
     const surface = flow?.runtime_cognition_surface?.execution
         || flow?.runtimeCognitionSurface?.execution
@@ -23,11 +26,17 @@ export function buildProviderRunFilePlan(flow) {
 
 function fileCandidate(kind, label, ...paths) {
     const path = firstNonBlank(...paths);
+    const tailPreview = TAIL_PREVIEW_KINDS.has(kind);
+    const maxLines = tailPreview ? TAIL_PREVIEW_MAX_LINES : null;
     return {
         kind,
         label,
         path,
-        previewLabel: path ? `${label}: ${compactPath(path)}` : ""
+        previewLabel: path ? `${label}: ${compactPath(path)}` : "",
+        tail: tailPreview,
+        maxLines,
+        query: tailPreview ? `tail=true&max_lines=${maxLines}` : "",
+        readHint: tailPreview ? `默认读取尾部 ${maxLines} 行` : "默认读取文件头 64 KiB"
     };
 }
 

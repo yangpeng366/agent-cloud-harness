@@ -2,6 +2,7 @@
 
 import { buildToolTraceStatusLabel, buildToolTraceSummary } from "../dialogue/tool-trace-plan.js";
 import { buildProviderRunFilePlan } from "../dialogue/provider-run-file-plan.js";
+import { formatProviderRunFilePreview } from "../dialogue/provider-run-file-preview-plan.js";
 import { buildAgentActionPlan } from "../dialogue/agent-action-plan.js";
 import { buildExecutionSurfaceSummaryPlan } from "../dialogue/execution-surface-summary-plan.js";
 
@@ -1732,9 +1733,11 @@ function renderProviderRunFiles(flow) {
     const buttons = plan.files.map((file) => `
         <button class="button button--ghost button--compact"
                 type="button"
-                title="${escapeHtml(file.path)}"
+                title="${escapeHtml([file.path, file.readHint].filter(Boolean).join(" · "))}"
                 data-provider-run-task-id="${escapeHtml(plan.taskId)}"
-                data-provider-run-kind="${escapeHtml(file.kind)}">
+                data-provider-run-kind="${escapeHtml(file.kind)}"
+                data-provider-run-tail="${file.tail ? "true" : "false"}"
+                data-provider-run-max-lines="${file.maxLines ? escapeHtml(String(file.maxLines)) : ""}">
             ${escapeHtml(file.label)}
         </button>
     `).join("");
@@ -1765,17 +1768,23 @@ async function onProviderRunFileClick(event) {
     button.disabled = true;
     previewBox.textContent = "读取中...";
     try {
-        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?kind=${encodeURIComponent(kind)}`);
-        const meta = [
-            file.kind || kind,
-            file.path,
-            file.size_bytes || file.sizeBytes ? `${file.size_bytes || file.sizeBytes} bytes` : null,
-            file.truncated ? `truncated at ${file.limit_bytes || file.limitBytes || "limit"} bytes` : null
-        ].filter(Boolean).join(" · ");
-        previewBox.textContent = [meta, file.content || ""].filter(Boolean).join("\n\n");
+        const params = buildProviderRunFileQuery(button, kind);
+        const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?${params.toString()}`);
+        previewBox.textContent = formatProviderRunFilePreview(file, kind);
     } finally {
         button.disabled = false;
     }
+}
+
+function buildProviderRunFileQuery(button, kind) {
+    const params = new URLSearchParams({ kind });
+    if (button.dataset.providerRunTail === "true") {
+        params.set("tail", "true");
+    }
+    if (button.dataset.providerRunMaxLines) {
+        params.set("max_lines", button.dataset.providerRunMaxLines);
+    }
+    return params;
 }
 
 function decisionCard(type, decision, executionBoundary = null, runtimeFacts = null) {
