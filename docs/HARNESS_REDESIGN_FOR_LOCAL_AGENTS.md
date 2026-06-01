@@ -260,6 +260,7 @@ Phase C（3周+）
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q -Dtest=TaskHandlerProviderSelectionHttpTest test }
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=ControlNodeGraphOrchestrationFlowTest#orchestratedTaskRunsPlannerThenExecutorInSingleEnter,TaskHandlerLiveFlowHttpTest#taskEventsEndpointSupportsJsonAndSseViews' test }
 node --test src/test/js/dialogue-worker-round-action-plan.test.mjs # covers provider_thread_id, provider_session_id fallback, and explicit resume_provider_session_id
+node --test src/test/js/dialogue-worker-round-artifact-plan.test.mjs
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven
 node .\scripts\provider-discovery-smoke.js --port 18432 --report .\.tmp\provider-discovery-smoke\report.json
 node .\scripts\screenshot.js --base-url http://localhost:8080 --profile desktop --out-dir .\.tmp\dialogue-verify --report .\.tmp\dialogue-verify\screenshot-report.json
@@ -287,6 +288,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - ControlNodeGraph 写入 worker artifact 后，会同步追加 `worker_round` session_message；消息 metadata 指向 `artifact_id`、worker/provider、provider run files，历史 artifact 仍可由 SessionService 回填。
 - 直接写入 `artifacts` 表、没有 `agent_run` 的任务，也能通过 `/api/v1/tasks/{id}/artifacts` 返回产物。
 - Dialogue 不再只依赖 `session_messages.content`，`worker_round` 下方会主动展示该 task 的 artifact 预览。
+- Dialogue worker_round artifact-first 渲染策略已抽成可测 plan：未加载时显示“正在加载 worker 产物”，空列表隐藏，最多内联 3 个 artifact 预览并显示剩余数量，选中 task 会打 `data-selected-task` 标记。
 - Claude 已迁移为 `ClaudeProtocol` 并注册到默认 protocol registry；正常执行路径保留 stdin JSONL 输入、stream-json 输出解析、resume/model/profile 降级和 `provider_protocol_parser_used=true`。
 - Cursor 已迁移为 `CursorProtocol` 并注册到默认 protocol registry；正常执行路径会清理 `stdout:` / `stderr:` 前缀、解析 stream-json assistant/result/system，并设置 `provider_protocol_parser_used=true`。
 - DeepSeek protocol 当前通过 `reasonix run --model deepseek-v4-flash` 委托执行，metadata 会保留 `execution_runtime=reasonix` / `delegated_provider=deepseek`，避免“显示 deepseek、实际跑 reasonix”的诊断断层。

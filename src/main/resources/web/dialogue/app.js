@@ -37,6 +37,7 @@ import { requestFacadeCompletion } from "./facade-client-plan.js";
 import { reconcileTaskSelection } from "./task-selection-plan.js";
 import { isTrueFlag } from "./mounted-object-plan.js";
 import { buildWorkerRoundActionPlan } from "./worker-round-action-plan.js";
+import { buildWorkerRoundArtifactPlan } from "./worker-round-artifact-plan.js";
 import {
     readFacadeSurfaceFromHash,
     facadeSurfaceSummaryLabel,
@@ -1477,24 +1478,21 @@ function renderMessageCard(message, options = {}) {
 }
 
 function renderWorkerRoundArtifacts(message) {
-    const type = normalizeMessageType(message?.message_type || message?.messageType);
-    const taskId = messageTaskId(message);
-    if (type !== "worker_round" || !taskId) {
+    const plan = buildWorkerRoundArtifactPlan(message, state.taskArtifactsById, state.selectedTaskId);
+    if (!plan.visible) {
         return "";
     }
-    const cached = state.taskArtifactsById.get(taskId);
-    if (!cached) {
-        return `<div class="worker-round-artifacts" data-task-artifacts="${escapeHtml(taskId)}">
+    if (plan.state === "loading") {
+        return `<div class="worker-round-artifacts" data-task-artifacts="${escapeHtml(plan.taskId)}">
             <div class="message-card__hint">正在加载 worker 产物...</div>
         </div>`;
     }
-    if (!cached.length) {
+    if (plan.state !== "ready") {
         return "";
     }
-    const isSelected = taskId === state.selectedTaskId;
-    const cards = cached.slice(0, 3).map((a) => renderArtifactCard(a, { highlightSelected: isSelected })).join("");
-    const more = cached.length > 3 ? `<div class="message-card__hint">还有 ${cached.length - 3} 个产物，可在 details 面板查看。</div>` : "";
-    return `<div class="worker-round-artifacts" data-task-id="${escapeHtml(taskId)}"${isSelected ? " data-selected-task" : ""}>${cards}${more}</div>`;
+    const cards = plan.previewArtifacts.map((a) => renderArtifactCard(a, { highlightSelected: plan.selected })).join("");
+    const more = plan.moreCount > 0 ? `<div class="message-card__hint">还有 ${plan.moreCount} 个产物，可在 details 面板查看。</div>` : "";
+    return `<div class="worker-round-artifacts" data-task-id="${escapeHtml(plan.taskId)}"${plan.selected ? " data-selected-task" : ""}>${cards}${more}</div>`;
 }
 
 function queueWorkerRoundArtifactLoads(messages) {
