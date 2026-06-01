@@ -80,6 +80,11 @@ function writeSmokeProviderConfig(workDir) {
     '    selection_priority: 62',
     '    env:',
     '      SMOKE_AGENT_MODE: local',
+    '  - id: inferred_agent',
+    '    display_name: Inferred Agent',
+    '    binary: inferred-agent-missing-binary',
+    '    args: ["run"]',
+    '    capabilities: ["reading"]',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(workDir, 'providers.yaml'), config, 'utf8');
@@ -176,10 +181,14 @@ async function run() {
     const agentsPayload = await fetchJson(`${baseUrl}/api/v1/agents`);
     const workersPayload = await fetchJson(`${baseUrl}/api/v1/workers`);
     const readinessPayload = await fetchJson(`${baseUrl}/api/v1/workers/smoke_agent/readiness`);
+    const inferredReadinessPayload = await fetchJson(`${baseUrl}/api/v1/workers/inferred_agent/readiness`);
 
     const agent = findById(agentsPayload.data, 'provider_id', 'smoke_agent');
     const worker = findById(workersPayload.data, 'worker_id', 'smoke_agent');
     const readiness = readinessPayload.data;
+    const inferredAgent = findById(agentsPayload.data, 'provider_id', 'inferred_agent');
+    const inferredWorker = findById(workersPayload.data, 'worker_id', 'inferred_agent');
+    const inferredReadiness = inferredReadinessPayload.data;
 
     assertCondition(report, 'agent discovered', Boolean(agent), 'smoke_agent appears in /api/v1/agents');
     assertCondition(report, 'worker discovered', Boolean(worker), 'smoke_agent appears in /api/v1/workers');
@@ -201,6 +210,19 @@ async function run() {
       readiness?.checks?.['provider:smoke_agent'] === false
         && /binary not found: smoke-agent-missing-binary/.test(readiness?.reason || ''),
       readiness?.reason || '');
+    assertCondition(report, 'protocol inferred for binary-only provider',
+      inferredAgent?.metadata?.provider_protocol === 'native_cli_text'
+        && inferredAgent?.metadata?.provider_protocol_inferred === true,
+      JSON.stringify(inferredAgent?.metadata || {}));
+    assertCondition(report, 'inferred provider projected to worker inventory',
+      Boolean(inferredWorker)
+        && Array.isArray(inferredWorker?.capabilities)
+        && inferredWorker.capabilities.includes('reading'),
+      JSON.stringify(inferredWorker || {}));
+    assertCondition(report, 'inferred provider readiness reports configured binary',
+      inferredReadiness?.checks?.['provider:inferred_agent'] === false
+        && /binary not found: inferred-agent-missing-binary/.test(inferredReadiness?.reason || ''),
+      inferredReadiness?.reason || '');
 
     report.completedAt = new Date().toISOString();
     report.passed = true;

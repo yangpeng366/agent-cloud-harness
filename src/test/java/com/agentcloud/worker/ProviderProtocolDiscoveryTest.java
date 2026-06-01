@@ -199,6 +199,70 @@ class ProviderProtocolDiscoveryTest {
         assertEquals("LINES", result.metadata().get("provider_output_parser"));
     }
 
+    @Test
+    void infersNativeCliTextProtocolWhenBinaryIsConfiguredWithoutProtocol() throws Exception {
+        Path config = tempDir.resolve("providers.yaml");
+        Files.writeString(config, """
+            providers:
+              - id: inferred_binary_agent
+                binary: inferred-agent
+                args: ["run"]
+            """);
+
+        ProviderProtocolDiscovery.DiscoveryResult result =
+            new ProviderProtocolDiscovery(List.of(config)).discoverDetailed();
+
+        ProviderProtocol protocol = result.registry().get("inferred_binary_agent");
+        assertNotNull(protocol);
+        assertEquals(1, result.providers().size());
+        assertEquals("native_cli_text", result.providers().get(0).protocol());
+        assertEquals(true, result.providers().get(0).metadata().get("provider_protocol_inferred"));
+
+        ProviderProtocol.ProviderCliPlan plan = protocol.buildPlan(
+            new LocalCliProviderConfig("inferred_binary_agent", "inferred-agent", null, null).resolve(),
+            runtimeContext("inferred protocol prompt"),
+            tempDir.toString(),
+            null
+        );
+
+        assertEquals("inferred-agent", plan.configuredBinary());
+        assertTrue(plan.command().contains("run"));
+        assertTrue(String.join(" ", plan.command()).contains("inferred protocol prompt"));
+    }
+
+    @Test
+    void infersNativeCliTextProtocolWhenCommandIsConfiguredWithoutProtocol() throws Exception {
+        Path config = tempDir.resolve("providers.json");
+        Files.writeString(config, """
+            {
+              "providers": [
+                {
+                  "id": "inferred_command_agent",
+                  "command": ["echo", "{{prompt}}"]
+                }
+              ]
+            }
+            """);
+
+        ProviderProtocolDiscovery.DiscoveryResult result =
+            new ProviderProtocolDiscovery(List.of(config)).discoverDetailed();
+
+        ProviderProtocol protocol = result.registry().get("inferred_command_agent");
+        assertNotNull(protocol);
+        assertEquals("native_cli_text", result.providers().get(0).protocol());
+        assertEquals(true, result.providers().get(0).metadata().get("provider_protocol_inferred"));
+
+        ProviderProtocol.ProviderCliPlan plan = protocol.buildPlan(
+            new LocalCliProviderConfig("inferred_command_agent", "echo", null, null).resolve(),
+            runtimeContext("command protocol prompt"),
+            tempDir.toString(),
+            null
+        );
+
+        assertEquals("echo", plan.command().get(0));
+        assertTrue(String.join(" ", plan.command()).contains("command protocol prompt"));
+    }
+
     private TaskRuntimeContext runtimeContext(String intent) {
         Task task = Task.create(
             "task_discovery_test",

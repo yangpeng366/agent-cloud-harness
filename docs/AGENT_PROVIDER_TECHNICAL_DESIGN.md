@@ -1272,7 +1272,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 阶段 B 剩余动作：
 
-- `providers.yaml` / `providers.json` 当前的动态发现是轻量 native CLI generic provider 能力，已支持 `protocol/native_cli_text/json/lines/stream_json`、`binary`、`args`、`env` 别名；其中 `native_cli_stream_json` 当前按行保留输出，不等同于 Claude/Cursor provider-specific stream-json parser。`app_server_json_rpc` 仍由 Codex app-server 执行器主链处理，`mcp` 与“未写 protocol 自动探测”还不能宣称已完成。
+- `providers.yaml` / `providers.json` 当前的动态发现是轻量 native CLI generic provider 能力，已支持 `protocol/native_cli_text/json/lines/stream_json`、`binary`、`args`、`env` 别名；其中 `native_cli_stream_json` 当前按行保留输出，不等同于 Claude/Cursor provider-specific stream-json parser。未写 `protocol` 但配置了 `binary` 或 `command` 时，会保守推断为 `native_cli_text`，并在 discovered provider metadata 标记 `provider_protocol_inferred=true`。`app_server_json_rpc` 仍由 Codex app-server 执行器主链处理，`mcp` 与基于真实 `--help` / handshake 的深度自动探测还不能宣称已完成。
 - 在安装 `cursor-agent / opencode / copilot / gemini / kimi` 后，继续补真实 CLI smoke 证据，确认 `cursor chat --help`、`opencode run --help` 等 probe args 与本机版本一致。
 - 当前 CLI profile 已有进程内 runtime cache，但没有落 SQLite；如果要跨进程复用，需要新增 profile 持久化或把 warm-up 结果写入 worker runtime cache 文件。
 - profile 解析仍是 help 文本启发式，后续应按 provider 增加更精确的 probe，例如 `cursor chat --help`、`gemini --help`、`kimi --help` 的真实输出 fixture。

@@ -48,6 +48,7 @@ Result:
 - Report: D:\gitAll\agent-cloud-harness\.tmp\provider-discovery-smoke\report.json
 - Passed: True
 - Validates `providers.yaml` dynamic provider appears in `/api/v1/agents` and `/api/v1/workers`, and worker list readiness matches runtime readiness
+- 2026-06-02 follow-up: `node .\scripts\provider-discovery-smoke.js --port 18461 --report .\.tmp\provider-discovery-smoke-18461\report.json --work-dir .\.tmp\provider-discovery-smoke-18461` passed, additionally validating a provider configured with `binary` but no `protocol` is conservatively inferred as `native_cli_text`, projected to worker inventory, and marked with `provider_protocol_inferred=true`.
 
 ### 5. Codex partial timeout smoke
 

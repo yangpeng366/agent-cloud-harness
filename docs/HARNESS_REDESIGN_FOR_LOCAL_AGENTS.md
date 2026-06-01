@@ -168,7 +168,7 @@ providers:
 - protocol 字段选已有 protocol 实现类（native_cli_text / native_cli_stream_json / app_server_json_rpc / mcp）
 - 未指定 protocol → 自动探测（先尝试 --help 看是否可用，再用 `GenericCliProtocol` 做文本解析）
 
-当前落地边界：`native_cli_text/json/lines/stream_json` generic provider 已支持动态发现；其中 `native_cli_stream_json` 暂按 lines parser 保留原始行，不等同于 Claude/Cursor 这类 provider-specific JSON event parser。`app_server_json_rpc`、`mcp` 与未指定 protocol 的自动探测仍属于后续收硬项。
+当前落地边界：`native_cli_text/json/lines/stream_json` generic provider 已支持动态发现；其中 `native_cli_stream_json` 暂按 lines parser 保留原始行，不等同于 Claude/Cursor 这类 provider-specific JSON event parser。未写 `protocol` 但配置了 `binary` 或 `command` 的 provider 会被保守推断为 `native_cli_text`，并在 metadata 标记 `provider_protocol_inferred=true`。`app_server_json_rpc`、`mcp` 与基于真实 `--help` / handshake 的深度自动探测仍属于后续收硬项。
 
 ---
 
@@ -247,7 +247,7 @@ Phase C（3周+）
 | B1: ProviderProtocol 接口 | 已落地 | `ProviderProtocol`、`DeepSeekProtocol`、`ReasonixProtocol`、`GenericCliProtocol`、`ProviderProtocolRegistry` 已存在。 |
 | B2: switch 迁移 | 已落地（主路径） | Claude / Cursor / DeepSeek / Reasonix / Gemini / Kimi / Copilot / OpenCode 已走 protocol build/parse 主路径；`ProviderCliWorkerExecutor` 内部旧 parser 仍保留为 fallback/反射测试兼容，后续可清理。 |
 | B3: GenericCliProtocol | 已落地 | `GenericCliProtocol` 支持 text/json/lines parser，可通过 discovery 注册。 |
-| B4: providers.yaml 自动发现 | 已落地（轻量版） | `ProviderProtocolDiscovery` 启动时从 `providers.yaml` / `providers.yml` / `providers.json` 发现协议配置，`Main` 已接入 discovery result 并在 worker preflight 前注册动态 provider/worker。当前 YAML parser 支持本方案里的简单 provider 列表，不是完整 YAML 规范实现；对 `native_cli_text/json/lines/stream_json` generic provider 已兼容 `protocol`、`command`、`binary`、`args`、`env`、`capabilities` 字段，JSON 配置同样支持这些别名。`command` 按完整命令执行；`binary + args` 使用 `binary` 作为启动目标并自动追加 task prompt。新 `id` 会进入 `/api/v1/agents`、`/api/v1/workers` 与 provider-native 路由候选；是否 ready 仍取决于本机 binary、认证和 dispatch preflight。动态 provider inventory 仍是内存态，未独立持久化。`native_cli_stream_json` 在 generic discovery 中当前只按行保留输出，不做 provider-specific event 语义解析；`app_server_json_rpc` 仍走 Codex app-server 主链，不由 generic discovery 动态注册；`mcp` 与未写 `protocol` 的自动探测仍未落地。 |
+| B4: providers.yaml 自动发现 | 已落地（轻量版） | `ProviderProtocolDiscovery` 启动时从 `providers.yaml` / `providers.yml` / `providers.json` 发现协议配置，`Main` 已接入 discovery result 并在 worker preflight 前注册动态 provider/worker。当前 YAML parser 支持本方案里的简单 provider 列表，不是完整 YAML 规范实现；对 `native_cli_text/json/lines/stream_json` generic provider 已兼容 `protocol`、`command`、`binary`、`args`、`env`、`capabilities` 字段，JSON 配置同样支持这些别名。`command` 按完整命令执行；`binary + args` 使用 `binary` 作为启动目标并自动追加 task prompt。未写 `protocol` 但配置了 `binary` 或 `command` 时，会保守推断为 `native_cli_text`，并在 discovered provider metadata 标记 `provider_protocol_inferred=true`。新 `id` 会进入 `/api/v1/agents`、`/api/v1/workers` 与 provider-native 路由候选；是否 ready 仍取决于本机 binary、认证和 dispatch preflight。动态 provider inventory 仍是内存态，未独立持久化。`native_cli_stream_json` 在 generic discovery 中当前只按行保留输出，不做 provider-specific event 语义解析；`app_server_json_rpc` 仍走 Codex app-server 主链，不由 generic discovery 动态注册；`mcp` 与基于真实 `--help` / handshake 的深度自动探测仍未落地。 |
 | C1: SSE 增量事件流 | 已落地（task event wrapper 版） | 新增 `GET /api/v1/tasks/{id}/events?stream=true`，基于 harness `events` 表输出 SSE；Dialogue 选中 task 后用 `EventSource` 订阅，并在 worker/control/state 事件到达时增量刷新 `live_flow` 与 messages。当前不是 token 级 provider stdout 流。 |
 | C2: Dialogue 实时状态徽标 | 已落地（SSE 触发刷新 + 轮询兜底版） | Dialogue 主视图 pinned summary 与 task thread 会对 active/running 任务展示“执行中”徽标、worker、elapsed 和 control node；选中 task 后 `EventSource` 会在 worker/control/state 事件到达时触发约 250ms 的局部刷新，5s 轮询保留为兜底。 |
 | C3: details event/tool 时间线 | 已落地（静态 live_flow 版） | Dialogue details 面板新增“执行时间线”，从 `live_flow` 聚合 cognition event、tool invocation、artifact、decision，按时间倒序展示。 |
@@ -314,6 +314,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 仍未闭合或不能夸大的边界：
 
 - `app_server_json_rpc` 和 `mcp` 还不是通用 dynamic provider protocol；Codex app-server 仍是内置 Codex 主链，不应把 `providers.yaml` 示例理解成所有 app-server provider 都已动态化。
+- 未写 `protocol` 的配置当前只做 `binary` / `command` 存在时的保守 `native_cli_text` 推断，不做真实 `--help` 能力识别或 handshake 探测。
 - `native_cli_stream_json` 的 generic discovery 当前只按行保留输出，不等同于 Claude/Cursor 等 provider-specific JSON event 语义解析。
 - Browser richer acceptance 的自动化 `Surface both` real lifecycle 已在 2026-06-02 通过隔离端口复核；严格人工 A-H 仍未闭合。历史低内存 OOM 仍是风险，需要继续用隔离 DB、关闭启动 preflight warmup 和明确 JVM/timeout 参数跑 gate。
 - 严格人工 A-H 手点仍未完成；现有 screenshot、business smoke、partial timeout smoke 和 scripted browser seam 不能替代人工 gate。

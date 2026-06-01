@@ -266,7 +266,7 @@ public class ProviderProtocolDiscovery {
     }
 
     private ProviderProtocol createProtocol(ProviderConfig config) {
-        String protocolType = firstNonBlank(config.type, config.protocol);
+        String protocolType = effectiveProtocolType(config);
         if (protocolType == null) {
             return null;
         }
@@ -323,7 +323,8 @@ public class ProviderProtocolDiscovery {
         if (id == null) {
             return null;
         }
-        String protocolType = firstNonBlank(config.type, config.protocol);
+        String configuredProtocolType = firstNonBlank(config.type, config.protocol);
+        String protocolType = effectiveProtocolType(config);
         String binary = firstNonBlank(config.binary, config.binaryPath, firstCommandPart(config.command), id);
         List<String> capabilities = config.capabilities != null && !config.capabilities.isEmpty()
             ? List.copyOf(config.capabilities)
@@ -332,6 +333,9 @@ public class ProviderProtocolDiscovery {
         metadata.put("configured_from", sourcePath == null ? "provider_discovery" : sourcePath.toString());
         metadata.put("provider_discovery", true);
         metadata.put("provider_protocol", protocolType);
+        if (configuredProtocolType == null && protocolType != null) {
+            metadata.put("provider_protocol_inferred", true);
+        }
         metadata.put("model_tier", firstNonBlank(config.modelTier, "strong"));
         metadata.put("selection_priority", config.selectionPriority != null ? config.selectionPriority : 60);
         if (config.model != null && !config.model.isBlank()) {
@@ -345,6 +349,20 @@ public class ProviderProtocolDiscovery {
             protocolType,
             Map.copyOf(metadata)
         );
+    }
+
+    private String effectiveProtocolType(ProviderConfig config) {
+        if (config == null) {
+            return null;
+        }
+        String protocolType = firstNonBlank(config.type, config.protocol);
+        if (protocolType != null) {
+            return protocolType;
+        }
+        if ((config.command != null && !config.command.isEmpty()) || firstNonBlank(config.binary, config.binaryPath) != null) {
+            return "native_cli_text";
+        }
+        return null;
     }
 
     private String firstCommandPart(List<String> command) {
