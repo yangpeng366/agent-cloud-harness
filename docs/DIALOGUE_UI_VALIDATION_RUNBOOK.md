@@ -154,7 +154,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
 - 如果本机构建链直接报 `mvn` 找不到，要先修构建环境；否则你后面看到的所有 `/dialogue/` 页面行为，都可能只是旧构建的假象
 - `Run-DialogueBrowserAcceptanceProbe.ps1` 会优先从 PATH 解析 `node`，PATH 漂移时会回退到常见本机 Node runtime；仍找不到时再用 `-NodePath <path-to-node.exe>` 显式指定，避免验收脚本因为当前 shell 环境漏配 PATH 而误判页面失败
 - 做 richer browser acceptance 时，如果当前机器内存紧张或 provider 二进制会触发真实长 worker，建议用独立端口、独立 DB，并关闭启动时 dispatch preflight warmup：
-  - JVM 参数：`-Dagentcloud.dispatch.preflight.warmup=false`
+  - PowerShell 启动脚本优先使用：`-DisableDispatchPreflightWarmup`
+  - 等价 JVM 参数：`-Dagentcloud.dispatch.preflight.warmup=false`
   - 该参数只跳过启动预热，不改变正常 task 调度语义；因此 `resume` 这类动作仍可能触发真实 worker 执行
   - dispatch preflight 失败缓存/冷却现在也可配置：`-Dagentcloud.dispatch.preflight.cache_ms=<ms>`、`-Dagentcloud.dispatch.preflight.unavailable_ms=<ms>`
   - 默认值已调到更适合浏览器验收的保守口径：cache `120000ms`，失败 unavailable `600000ms`，避免不可用 CLI 在长流程中反复 help/probe timeout

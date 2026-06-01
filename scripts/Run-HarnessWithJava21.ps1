@@ -6,6 +6,7 @@ param(
     [string]$StdOutPath = ".tmp\server.out.log",
     [string]$StdErrPath = ".tmp\server.err.log",
     [string[]]$JavaArgs = @(),
+    [switch]$DisableDispatchPreflightWarmup,
     [switch]$AutoStop = $true
 )
 
@@ -238,6 +239,11 @@ Write-Info "Step 2/3: Resolve JAR file path"
 $resolvedJar = Resolve-HarnessJar -RequestedJarPath $JarPath
 Write-Success "Found JAR: $resolvedJar"
 
+$effectiveJavaArgs = @($JavaArgs)
+if ($DisableDispatchPreflightWarmup) {
+    $effectiveJavaArgs += "-Dagentcloud.dispatch.preflight.warmup=false"
+}
+
 if ($Background) {
     Write-Info "Step 3/3: Start in background mode (port check + launch)"
     Assert-PortAvailable -PortNumber $Port -AutoStop:$AutoStop
@@ -245,7 +251,7 @@ if ($Background) {
     $runtimeJar = New-RuntimeJarCopy -SourceJarPath $resolvedJar -PortNumber $Port
 
     $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
-    $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $runtimeJar)
+    $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $effectiveJavaArgs + @("-jar", $runtimeJar)
 
     $process = Start-Process `
         -FilePath $javaExe `
@@ -265,6 +271,7 @@ Jar:        $resolvedJar
 RuntimeJar: $runtimeJar
 Stdout:     $StdOutPath
 Stderr:     $StdErrPath
+JavaArgs:   $($effectiveJavaArgs -join ' ')
 ------------------------------------------------------
 
 Access URLs:
@@ -283,7 +290,7 @@ else {
     Assert-PortAvailable -PortNumber $Port -AutoStop:$AutoStop
 
     $javaExe = Join-Path $env:JAVA_HOME "bin\java.exe"
-    $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $JavaArgs + @("-jar", $resolvedJar)
+    $argumentList = @("--enable-preview", "-Dserver.port=$Port") + $effectiveJavaArgs + @("-jar", $resolvedJar)
 
     Write-Host @"
 

@@ -135,6 +135,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 `
   -Port 18386 `
   -StdOutPath .tmp\server-18386.out.log `
   -StdErrPath .tmp\server-18386.err.log `
+  -DisableDispatchPreflightWarmup `
   -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\dialogue-smoke-18386.db")
 ```
 
@@ -418,6 +419,7 @@ kill -9 $(cat .tmp/harness.pid)
 | `-StdOutPath` | 标准输出日志路径 | `.tmp\server.out.log` |
 | `-StdErrPath` | 标准错误日志路径 | `.tmp\server.err.log` |
 | `-JavaArgs` | 额外的 Java 参数 | `@()` |
+| `-DisableDispatchPreflightWarmup` | 跳过启动时 worker dispatch preflight 预热，适合浏览器验收和隔离调试；不改变运行中 dispatch readiness 语义 | `false` |
 
 **Bash:**
 | 参数 | 说明 | 默认值 |

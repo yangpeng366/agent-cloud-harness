@@ -274,6 +274,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-CodexPartialTimeoutSmoke.
 node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18453 --report .tmp\dialogue-business-smoke-18453\report.json
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18455 -Surface chat -LifecycleMode real -DebugPort 19277 -UserDataDir .tmp\edge-dialogue-browser-probe-real-18455 -ScreenshotDir .tmp\dialogue-browser-screens-18455-real-chat
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18457 -Surface both -LifecycleMode real -DebugPort 19279 -UserDataDir .tmp\edge-dialogue-browser-probe-real-both-18457 -ScreenshotDir .tmp\dialogue-browser-screens-18457-real-both -NodeMaxOldSpaceMb 1024
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Port 18466 -Background -StdOutPath .tmp\harness-warmup-disabled-18466.out.log -StdErrPath .tmp\harness-warmup-disabled-18466.err.log -DisableDispatchPreflightWarmup
 ```
 
 关键验收点：
@@ -308,6 +309,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - 2026-06-02 追加 Console operator preflight 入口：Provider Detail 新增 `运行 Preflight` 按钮，直接调用 `POST /api/v1/agents/{id}/preflight`，并在页面展示 `dispatch_preflight_*`、exit code、output preview、failure class / retryable 等诊断；执行后刷新 Agent Inventory 与 worker dispatch readiness。验证命令：`node --test src/test/js/console-time-normalization.test.mjs src/test/js/console-provider-window-plan.test.mjs` 与 `ApiErrorContractHttpTest#agentPreflightEndpointRunsProviderDispatchPreflight,...`。
 - 2026-06-02 追加 Console browser preflight probe：扩展 `scripts/console-provider-window-probe.js`，在真实 Console 页面里选择 `codex` provider，点击 `运行 Preflight`，断言触发 `POST /api/v1/agents/codex/preflight` 且 Provider Detail 渲染 `provider preflight result`、`active_probe`、stdout preview 与 `worker dispatch probe`。隔离端口 `18461` 验证通过，报告 `.tmp/console-provider-window-preflight-probe-18461.json`，截图 `.tmp/console-provider-window-preflight-probe-18461.png`。
 - 2026-06-02 追加 Console startup protocol probe 面板：Provider Detail 会把 `provider_protocol_probe_*` 渲染为独立 `startup protocol probe` 诊断块，显示 probe 成败、command shape、protocol、parser hint 和输出预览，并明确提示该探测不自动切换协议。隔离端口 `18464` browser probe 通过，报告 `.tmp/console-provider-window-protocol-probe-18464.json`，截图 `.tmp/console-provider-window-protocol-probe-18464.png`。
+- 2026-06-02 追加启动 warmup 隔离开关：`Run-HarnessWithJava21.ps1 -DisableDispatchPreflightWarmup` 会注入 `-Dagentcloud.dispatch.preflight.warmup=false`，适合 Dialogue/Console 浏览器验收时避免启动阶段触发真实 provider dispatch probe；隔离端口 `18466` 日志 `.tmp/harness-warmup-disabled-18466.out.log` 已验证出现 `Worker dispatch preflight warmup skipped` 且未出现 `Worker dispatch preflight warmup completed`。
 
 当前闭环判断：
 
@@ -315,12 +317,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - Codex 通信失败/超时链路已经闭合到 partial：有输出时不再直接当失败移交，而是落为 `partial_timeout` / `COMPLETED_PARTIAL`，保留 provider run files，并在 Dialogue 暴露继续 thread / 手动移交入口。
 - 本地 agent 接入链路已经闭合到轻量 dynamic provider：`providers.yaml/json` 可注册 native CLI generic provider，进入 agent/worker inventory 和 provider-native 路由候选；ready 状态仍按本机 binary 与认证真实探测。Console Provider Detail 现在可以直接运行 provider preflight，减少“API 有能力但页面不可操作”的断点。
 - Dialogue 执行面板链路已经闭合到 task-event wrapper：选中 task 后能看到 worker/status/最近输出/执行时间线，并通过 task SSE 事件缩短刷新延迟；provider run file 读面支持 tail 窗口，便于查看最近 JSONL/stdout 输出，但这仍不是 token 级 stdout streaming。
+- 本地浏览器验收的运维链路已补齐到可配置启动口径：可通过 PowerShell 参数关闭启动时 dispatch preflight warmup，降低长 provider / 低内存机器对 UI 验收的干扰；运行中 readiness 和 task dispatch 的真实探测语义不变。
 
 仍未闭合或不能夸大的边界：
 
 - `app_server_json_rpc` 和 `mcp` 还不是通用 dynamic provider protocol；Codex app-server 仍是内置 Codex 主链，不应把 `providers.yaml` 示例理解成所有 app-server provider 都已动态化。当前 discovery 只把这类配置注册为 Agent Inventory 中的 unsupported provider，不注册 runnable worker。
 - 未写 `protocol` 的配置当前已做证据型 startup help/probe，并把结果写入 `provider_protocol_probe_*` metadata；但该探测只用于诊断，不自动把 provider 升级为 `stream_json`、不做 provider-specific 能力识别，也不替代 dispatch readiness 的真实验活。通用 handshake 探测仍未落地。
 - `native_cli_stream_json` 的 generic discovery 当前只覆盖通用 JSONL content/message/result/error 字段，不等同于 Claude/Cursor 等 provider-specific JSON event 语义解析。
+- `-DisableDispatchPreflightWarmup` 只跳过启动预热，不会禁用用户点击 Console preflight、`/workers/{id}/readiness?mode=dispatch` 或实际任务分发时的 dispatch readiness；它是验收隔离开关，不是 provider 可用性判定替代品。
 - Browser richer acceptance 的自动化 `Surface both` real lifecycle 已在 2026-06-02 通过隔离端口复核；严格人工 A-H 仍未闭合。历史低内存 OOM 仍是风险，需要继续用隔离 DB、关闭启动 preflight warmup 和明确 JVM/timeout 参数跑 gate。
 - 严格人工 A-H 手点仍未完成；现有 screenshot、business smoke、partial timeout smoke 和 scripted browser seam 不能替代人工 gate。
 
