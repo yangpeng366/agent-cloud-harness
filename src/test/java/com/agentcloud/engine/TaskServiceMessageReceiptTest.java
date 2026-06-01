@@ -529,10 +529,13 @@ class TaskServiceMessageReceiptTest {
             assertEquals(1, ((Number) progress.metadata().get("auto_handoff_count")).intValue());
             assertEquals("kimi", progress.metadata().get("auto_handoff_target"));
             assertEquals("codex", progress.metadata().get("previous_worker"));
-            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("Failure Summary"));
-            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("Recovery Mode"));
-            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("fresh session"));
-            assertTrue(String.valueOf(progress.metadata().get("full_content")).contains("worker codex failed: thread not found"));
+            String fullContent = String.valueOf(progress.metadata().get("full_content"));
+            assertTrue(fullContent.contains("失败摘要"));
+            assertTrue(fullContent.contains("恢复模式"));
+            assertTrue(fullContent.contains("新会话"));
+            assertTrue(fullContent.contains("worker codex failed: thread not found"));
+            assertFalse(fullContent.contains("Failure Summary"));
+            assertFalse(fullContent.contains("Recovery Mode"));
         }
     }
 
@@ -643,8 +646,9 @@ class TaskServiceMessageReceiptTest {
             assertEquals("codex turn completion timed out", progress.metadata().get("summary_preview"));
             assertTrue(progress.content().contains("codex turn completion timed out"));
             String fullContent = String.valueOf(progress.metadata().get("full_content"));
-            assertTrue(fullContent.contains("Failure Summary\ncodex turn completion timed out"));
-            assertFalse(fullContent.contains("Failure Summary\nworker codex failed: thread not found (27984)"));
+            assertTrue(fullContent.contains("失败摘要\ncodex turn completion timed out"));
+            assertFalse(fullContent.contains("失败摘要\nworker codex failed: thread not found (27984)"));
+            assertFalse(fullContent.contains("Failure Summary"));
         }
     }
 
@@ -742,10 +746,13 @@ class TaskServiceMessageReceiptTest {
             List<SessionMessage> messages = messageDao.listBySession(task.sessionId(), 20);
             SessionMessage progress = messages.get(messages.size() - 1);
             String fullContent = String.valueOf(progress.metadata().get("full_content"));
-            assertTrue(fullContent.contains("Failure Summary"));
+            assertTrue(fullContent.contains("失败摘要"));
             assertTrue(fullContent.contains("worker codex failed: thread not found (19120)"));
-            assertFalse(fullContent.contains("Worker Output\n" + noisy));
-            assertFalse(fullContent.contains("Artifact Content\n" + noisy));
+            assertFalse(fullContent.contains("worker 输出\n" + noisy));
+            assertFalse(fullContent.contains("产物内容\n" + noisy));
+            assertFalse(fullContent.contains("Failure Summary"));
+            assertFalse(fullContent.contains("Worker Output\n"));
+            assertFalse(fullContent.contains("Artifact Content\n"));
             assertFalse(fullContent.contains(".github"));
             assertFalse(fullContent.contains("我会先把"));
         }

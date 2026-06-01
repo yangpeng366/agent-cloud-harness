@@ -3016,23 +3016,23 @@ public class TaskService {
                 metadataString(taskMetadata, "recovery_execution_mode")
             );
             if (outputText != null && !suppressUnreadableOutput) {
-                parts.add("Worker Output\n" + outputText);
+                parts.add("worker 输出\n" + outputText);
             }
             if (artifactContent != null && !suppressUnreadableOutput) {
-                parts.add("Artifact Content\n" + artifactContent);
+                parts.add("产物内容\n" + artifactContent);
             }
             if (outputText == null && artifactContent == null && readableFailure != null) {
-                parts.add("Failure Summary\n" + readableFailure);
+                parts.add("失败摘要\n" + readableFailure);
             }
             if (readableFailure != null) {
-                putIfAbsent(parts, "Failure Summary\n" + readableFailure);
+                putIfAbsent(parts, "失败摘要\n" + readableFailure);
             }
             if ("fresh_session".equalsIgnoreCase(recoveryExecutionMode)) {
-                parts.add("Recovery Mode\nfresh session");
+                parts.add("恢复模式\n新会话");
             }
         }
         if (facts != null && facts.executionBoundary() != null && facts.executionBoundary().traceSummary() != null) {
-            parts.add("Execution Trace\n" + facts.executionBoundary().traceSummary());
+            parts.add("执行轨迹\n" + facts.executionBoundary().traceSummary());
         }
         String normalizedNextStep = blankToNull(nextStep);
         if (normalizedNextStep != null) {
