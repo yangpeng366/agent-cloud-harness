@@ -334,6 +334,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - Browser richer acceptance 的自动化 `Surface both` real lifecycle 已在 2026-06-02 通过隔离端口复核；严格人工 A-H 仍未闭合。历史低内存 OOM 仍是风险，需要继续用隔离 DB、关闭启动 preflight warmup 和明确 JVM/timeout 参数跑 gate。
 - 严格人工 A-H 手点仍未完成；现有 screenshot、business smoke、partial timeout smoke 和 scripted browser seam 不能替代人工 gate。
 - Manual backfill 模板只作为人工逐条复核后的记录载体：默认 `evidence_mode=manual_review_required` 且 `passed=false`；scripted browser bundle 只能提供辅助上下文，不能直接把严格人工 gate 回填为通过。
+- Acceptance record draft 生成器也按同一边界输出：A-H seam evidence 可以预填为上下文，但 strict manual `Passed` 仍必须由人工复核决定；token-level streaming 与完整 `/v1/responses` item/tool-call surface 仍以未勾选 gap 呈现，避免把“未验收”误读成完成项。
 
 ---
 

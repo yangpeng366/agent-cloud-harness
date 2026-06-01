@@ -41,10 +41,17 @@ Assert-True -Condition ($content.Contains("# Dialogue Chat Facade Acceptance Rec
 Assert-True -Condition ($content.Contains("## 2. Automation Evidence")) -Message "record draft missing automation section"
 Assert-True -Condition ($content.Contains("### 2.1 Local Harness Runner")) -Message "record draft missing local harness section"
 Assert-True -Condition ($content.Contains("## 3. Manual Browser Acceptance")) -Message "record draft missing manual acceptance section"
+Assert-True -Condition ($content.Contains("strict manual gates stay unchecked until a human review records the result")) -Message "record draft missing top-level manual gate boundary"
+Assert-True -Condition ($content.Contains("strict manual Passed checkboxes must remain a human review decision")) -Message "record draft missing strict manual review boundary"
+Assert-True -Condition (-not $content.Contains("Only leave Passed unchecked when the underlying bundle is stale")) -Message "record draft still suggests scripted seam evidence can close manual Passed"
+Assert-True -Condition (-not $content.Contains("only leave a gate unchecked when the underlying bundle")) -Message "record draft top note still suggests scripted seam evidence can close manual gates"
 Assert-True -Condition ($content.Contains("### A. default task_auto")) -Message "record draft missing section A"
 Assert-True -Condition ($content.Contains("### H. #facade=responses + task_required")) -Message "record draft missing section H"
 Assert-True -Condition ($content.Contains("## 4. Gaps And Conclusion")) -Message "record draft missing conclusion section"
 Assert-True -Condition ($content.Contains("manual browser acceptance is complete")) -Message "record draft missing final gate line"
+Assert-True -Condition ($content.Contains("- [ ] token-level streaming is still not accepted")) -Message "record draft should keep token-level streaming gap unchecked"
+Assert-True -Condition (($contentLines | Where-Object { $_ -match '^- \[ \] full .*responses.* item/tool-call surface is still not accepted$' }).Count -eq 1) -Message "record draft should keep responses item/tool-call gap unchecked"
+Assert-True -Condition (-not $content.Contains("- [x] token-level streaming not yet accepted")) -Message "record draft must not mark token-level streaming gap as checked"
 if (($manual.PSObject.Properties.Name -contains 'record_seed_probe') -and ($null -ne $manual.record_seed_probe)) {
     Assert-True -Condition ($content.Contains("record_seed_probe:")) -Message "record draft missing embedded record seed probe summary"
 }
