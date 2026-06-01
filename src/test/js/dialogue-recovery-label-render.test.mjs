@@ -64,3 +64,20 @@ test("dialogue judgment and cognition chips avoid raw English control labels", (
     assert.doesNotMatch(appJs, /summarizeJudgmentSurface\("exec judge"/);
     assert.doesNotMatch(appJs, /summarizeJudgmentSurface\("done judge"/);
 });
+
+test("dialogue mounted context object chips avoid raw English labels", () => {
+    assert.match(appJs, /保留状态：\$\{humanizeToken\(retention\)/);
+    assert.match(appJs, /已从归档恢复/);
+    assert.match(appJs, /需要刷新外部事实/);
+    assert.match(appJs, /候选目标：\$\{candidatePaths/);
+    assert.match(appJs, /下一步：\$\{nextFollowups/);
+    assert.match(appJs, /引用：\$\{refs\.length\}/);
+    assert.doesNotMatch(appJs, /retention: \$\{retention\}/);
+    assert.doesNotMatch(appJs, /"rehydrated"/);
+    assert.doesNotMatch(appJs, /"archive retrieval"/);
+    assert.doesNotMatch(appJs, /"external refresh"/);
+    assert.doesNotMatch(appJs, /"context reopen"/);
+    assert.doesNotMatch(appJs, /`refs: \$\{refs\.length\}`/);
+    assert.doesNotMatch(appJs, /`targets: \$\{candidatePaths/);
+    assert.doesNotMatch(appJs, /`next: \$\{nextFollowups/);
+});

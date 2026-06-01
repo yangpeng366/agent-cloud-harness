@@ -4884,9 +4884,9 @@ function renderMountedPanel(panel) {
 }
 
 function renderMountedObjectCard(object) {
-    const title = firstNonBlank(object?.title, object?.path, object?.id, "object");
+    const title = firstNonBlank(object?.title, object?.path, object?.id, "对象");
     const summary = firstNonBlank(object?.summary, object?.content_preview, object?.contentPreview, "");
-    const type = firstNonBlank(object?.type, "object");
+    const type = firstNonBlank(object?.type, "对象");
     const retention = firstNonBlank(object?.retention_state, object?.retentionState);
     const metadata = object?.metadata && typeof object.metadata === "object" ? object.metadata : {};
     const refs = Array.isArray(object?.refs) ? object.refs.filter(Boolean) : [];
@@ -4898,17 +4898,17 @@ function renderMountedObjectCard(object) {
     );
     const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
     const chips = [
-        retention ? `retention: ${retention}` : null,
-        isTrueFlag(metadata.rehydrated_from_archive) ? "rehydrated" : null,
-        isTrueFlag(metadata.needs_archive_retrieval) ? "archive retrieval" : null,
-        isTrueFlag(metadata.needs_external_fact_refresh) ? "external refresh" : null,
-        isTrueFlag(metadata.needs_context_reopen) ? "context reopen" : null,
-        refs.length > 0 ? `refs: ${refs.length}` : null
+        retention ? `保留状态：${humanizeToken(retention) || retention}` : null,
+        isTrueFlag(metadata.rehydrated_from_archive) ? "已从归档恢复" : null,
+        isTrueFlag(metadata.needs_archive_retrieval) ? "需要检索归档" : null,
+        isTrueFlag(metadata.needs_external_fact_refresh) ? "需要刷新外部事实" : null,
+        isTrueFlag(metadata.needs_context_reopen) ? "需要重开上下文" : null,
+        refs.length > 0 ? `引用：${refs.length}` : null
     ].filter(Boolean);
     const detailLines = [
         summary,
-        candidatePaths.length > 0 ? `targets: ${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
-        nextFollowups.length > 0 ? `next: ${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
+        candidatePaths.length > 0 ? `候选目标：${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
+        nextFollowups.length > 0 ? `下一步：${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
     ].filter(Boolean);
     return stackItem(
         humanizeToken(type) || type,
