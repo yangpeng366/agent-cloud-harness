@@ -1097,7 +1097,7 @@ function renderThreadTask(task, taskIndex, tasksById) {
                         <span class="task-badge" data-tone="${toneForStatus(task.status)}">${escapeHtml(task.status || "active")}</span>
                         <span class="task-badge">${escapeHtml(task.control_node || task.controlNode || "intake")}</span>
                         ${renderStartModeBadge(task)}
-                        ${workerLabel ? `<span class="task-badge" data-tone="active">${escapeHtml(`worker · ${workerLabel}`)}</span>` : ""}
+                        ${workerLabel ? `<span class="task-badge" data-tone="active">${escapeHtml(`执行方 · ${workerLabel}`)}</span>` : ""}
                     </div>
                     <div class="dialogue-task__body">${escapeHtml(buildAssistantMessage(task, flow))}</div>
                     ${outputPreview ? `
@@ -1618,7 +1618,7 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
             <div class="message-summary-card__meta">
                 <span class="task-badge" data-tone="active">latest round output</span>
                 <span>${escapeHtml(preview(task.title || task.id, 32))}</span>
-                ${workerLabel ? `<span>${escapeHtml(`worker · ${workerLabel}`)}</span>` : ""}
+                ${workerLabel ? `<span>${escapeHtml(`执行方 · ${workerLabel}`)}</span>` : ""}
                 ${failureClass ? `<span>${escapeHtml(`失败 · ${preview(failureClass, 28)}`)}</span>` : ""}
                 <span>${escapeHtml(formatTime(task.updated_at || task.updatedAt || task.created_at || task.createdAt))}</span>
             </div>
@@ -2754,7 +2754,7 @@ function buildThreadExecutionStrip(task, flow, workerLabel) {
     const label = schedulerPending
         ? "待继续"
         : ["active", "running"].includes(statusLower) ? "执行中" : "最近执行";
-    const title = workerLabel ? `worker ${workerLabel}` : `${taskStatus} / ${controlNode}`;
+    const title = workerLabel ? `执行方 ${workerLabel}` : `${taskStatus} / ${controlNode}`;
     const detail = workerLabel ? `${taskStatus} / ${controlNode}` : "";
     return title || detail
         ? { label, title, detail, summary: [title, detail].filter(Boolean).join(" · ") }

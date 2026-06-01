@@ -14,7 +14,7 @@ test("task overview plan keeps focus line separate and reduces cards to stable e
     });
 
     assert.equal(plan.focusLine, "active / scheduler");
-    assert.deepEqual(plan.cards.map((item) => item.label), ["任务 ID", "Worker", "实验模式", "工具链"]);
+    assert.deepEqual(plan.cards.map((item) => item.label), ["任务 ID", "执行方", "实验模式", "工具链"]);
     assert.equal(plan.cards[1].value, "codex");
     assert.equal(plan.cards[2].value, "orchestrated");
     assert.equal(plan.cards[3].value, "2 次工具调用");
@@ -33,6 +33,16 @@ test("task overview plan accepts caller-provided focus line base for queued reco
         toolLabel: "none"
     });
 
-    assert.equal(plan.focusLine, "active / scheduler / 移交已排队 / worker openclaw-native");
+    assert.equal(plan.focusLine, "active / scheduler / 移交已排队 / 执行方 openclaw-native");
     assert.equal(plan.cards[3].value, "无");
+});
+
+test("task overview source avoids raw worker label in visible chrome", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+
+    assert.doesNotMatch(appJs, /`worker \$\{workerLabel\}`/);
+    assert.doesNotMatch(appJs, /`worker · \$\{workerLabel\}`/);
+    assert.match(appJs, /`执行方 \$\{workerLabel\}`/);
+    assert.match(appJs, /`执行方 · \$\{workerLabel\}`/);
 });
