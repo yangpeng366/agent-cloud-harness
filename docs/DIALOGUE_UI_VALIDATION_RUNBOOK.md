@@ -232,6 +232,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 当前 `selectedStatus` focus line 已在 `human_gate_required` 时追加人话 failure class，例如 `等待人工确认 · 部分结果待确认 / 能力不匹配`；`dialogue-task-focus-line-plan.test.mjs` 覆盖不裸露 `worker_backend_deterministic` 原始枚举，也不再把新增恢复状态写成 `human gate / handoff queued`。
 - 当前主卡 / pinned / thread 的 recovery detail 也已把首屏标签从 `failure · / recovery · / hint ·` 收成 `失败 · / 恢复 · / 建议 ·`，保留短信号但减少 control-plane 英文标签外露；`dialogue-task-thread-preview-regression.test.mjs` 覆盖不回退到旧标签。
 - message card 与 pinned latest round output 的 failure badge 也已收成 `失败 · <failure class>`；`dialogue-recovery-label-render.test.mjs` 覆盖不回退到 `failure ·`。
+- message card 的 learning hint 状态也应人话化：当 richer context 可见时显示 `提示 · <worker> 已应用 / 已观测未应用`，而不是 `applied / observed`；验收入口是 `node --test src/test/js/dialogue-message-card-plan.test.mjs`。
 - recovery detail 的操作短信号也已收口成 `重试 N / 移交 N -> worker / 建议移交 -> worker`，不再把 `retry / handoff / manual handoff candidate` 这类英文控制面标签直接放在第一页。
 - `fresh_session` 恢复模式在 route chip 与 recovery detail 中也已显示为 `恢复：新会话 / 恢复 · 新会话`，不再把 `recovery: fresh session` 直接露在首屏。
 - 同样是 `human_gate_required`，第一页的短解释也不该一律写成同一句；`环境阻塞` 应更像“先修环境后继续”，`部分结果待确认` 应更像“先复核已有结果再决定是否 handoff / 重试”
