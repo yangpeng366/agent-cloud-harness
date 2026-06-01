@@ -85,6 +85,7 @@ $groups = [ordered]@{
         "src/main/java/com/agentcloud/engine/ChatFacadeService.java",
         "src/main/java/com/agentcloud/cli/Main.java",
         "src/main/java/com/agentcloud/engine/TaskService.java",
+        "src/main/java/com/agentcloud/model/ProviderRunFileView.java",
         "src/main/java/com/agentcloud/engine/router/WorkerRegistry.java",
         "src/main/java/com/agentcloud/engine/router/WorkerRouter.java",
         "src/main/java/com/agentcloud/server/NioHttpServer.java",

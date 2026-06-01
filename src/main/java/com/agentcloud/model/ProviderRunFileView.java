@@ -9,6 +9,9 @@ public record ProviderRunFileView(
     String path,
     Long sizeBytes,
     Integer limitBytes,
+    Long offsetBytes,
+    String readMode,
+    Integer maxLines,
     Boolean truncated,
     String content
 ) {}

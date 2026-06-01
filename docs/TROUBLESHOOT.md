@@ -265,7 +265,7 @@ providers:
   5. 再查 `/api/v1/workers/{id}/readiness`；如果 `provider:<id>=false`，优先处理 binary 路径、认证或 dispatch preflight
   6. 如果任务仍没有路由到该 worker，检查 task type 是否落在配置的 `capabilities` 内，以及该 worker 是否 ready
   7. 如果需要查看 provider 输出，优先查 artifact metadata 里的 `provider_run_dir / provider_last_message_path / provider_stdout_path / provider_event_log_path`
-  8. 也可通过 `GET /api/v1/tasks/{id}/provider_run_file?kind=last_message|stdout|events|metadata|prompt` 读取受控 run 文件
+  8. 也可通过 `GET /api/v1/tasks/{id}/provider_run_file?kind=last_message|stdout|events|metadata|prompt` 读取受控 run 文件；排查长 `events.jsonl` / `stdout.log` 时可加 `tail=true&max_lines=50` 只看尾部窗口
 - **已验证的真实 smoke**:
   1. 在临时工作目录放 `providers.yaml`，使用独立端口和临时 DB 启动 harness
   2. `/api/v1/agents` 返回 `smoke_agent`，metadata 含 `provider_discovery=true`、`configured_from=providers.yaml`

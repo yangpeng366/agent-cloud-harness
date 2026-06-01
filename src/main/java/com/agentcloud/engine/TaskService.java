@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -509,6 +510,10 @@ public class TaskService {
     }
 
     public ProviderRunFileView getProviderRunFile(String taskId, String kind) {
+        return getProviderRunFile(taskId, kind, false, null);
+    }
+
+    public ProviderRunFileView getProviderRunFile(String taskId, String kind, boolean tail, Integer maxLines) {
         Task task = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         String normalizedKind = normalizeProviderRunFileKind(kind);
         RuntimeFactSet facts = runtimeFactSetAssembler.assemble(task, 5);
@@ -529,24 +534,75 @@ public class TaskService {
         }
         try {
             long size = Files.size(path);
-            byte[] bytes;
-            boolean truncated = size > PROVIDER_RUN_FILE_READ_LIMIT_BYTES;
-            try (var input = Files.newInputStream(path)) {
-                bytes = input.readNBytes(PROVIDER_RUN_FILE_READ_LIMIT_BYTES);
+            FileSlice slice = readProviderRunFileSlice(path, size, tail);
+            String content = new String(slice.bytes(), StandardCharsets.UTF_8);
+            int normalizedMaxLines = normalizeProviderRunFileMaxLines(maxLines);
+            if (normalizedMaxLines > 0) {
+                content = tail ? lastLines(content, normalizedMaxLines) : firstLines(content, normalizedMaxLines);
             }
+            boolean truncated = tail
+                ? slice.offsetBytes() > 0
+                : size > PROVIDER_RUN_FILE_READ_LIMIT_BYTES;
             return new ProviderRunFileView(
                 task.id(),
                 normalizedKind,
                 path.toString(),
                 size,
                 PROVIDER_RUN_FILE_READ_LIMIT_BYTES,
+                slice.offsetBytes(),
+                tail ? "tail" : "head",
+                normalizedMaxLines > 0 ? normalizedMaxLines : null,
                 truncated,
-                new String(bytes, StandardCharsets.UTF_8)
+                content
             );
         } catch (java.io.IOException e) {
             throw new IllegalStateException("provider run file unreadable");
         }
     }
+
+    private FileSlice readProviderRunFileSlice(Path path, long size, boolean tail) throws java.io.IOException {
+        if (!tail || size <= PROVIDER_RUN_FILE_READ_LIMIT_BYTES) {
+            try (var input = Files.newInputStream(path)) {
+                return new FileSlice(input.readNBytes(PROVIDER_RUN_FILE_READ_LIMIT_BYTES), 0L);
+            }
+        }
+        long offset = Math.max(0L, size - PROVIDER_RUN_FILE_READ_LIMIT_BYTES);
+        int length = (int) Math.min(PROVIDER_RUN_FILE_READ_LIMIT_BYTES, size - offset);
+        byte[] bytes = new byte[length];
+        try (var channel = Files.newByteChannel(path, StandardOpenOption.READ)) {
+            channel.position(offset);
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(bytes);
+            while (buffer.hasRemaining() && channel.read(buffer) > 0) {
+                // keep reading until the bounded tail window is filled or EOF is reached
+            }
+        }
+        return new FileSlice(bytes, offset);
+    }
+
+    private int normalizeProviderRunFileMaxLines(Integer maxLines) {
+        if (maxLines == null || maxLines <= 0) {
+            return 0;
+        }
+        return Math.min(maxLines, 200);
+    }
+
+    private String firstLines(String content, int maxLines) {
+        if (content == null || content.isBlank() || maxLines <= 0) {
+            return content;
+        }
+        return content.lines().limit(maxLines).collect(java.util.stream.Collectors.joining("\n"));
+    }
+
+    private String lastLines(String content, int maxLines) {
+        if (content == null || content.isBlank() || maxLines <= 0) {
+            return content;
+        }
+        List<String> lines = content.lines().toList();
+        int start = Math.max(0, lines.size() - maxLines);
+        return String.join("\n", lines.subList(start, lines.size()));
+    }
+
+    private record FileSlice(byte[] bytes, long offsetBytes) {}
 
     private String normalizeProviderRunFileKind(String kind) {
         String normalized = blankToNull(kind);

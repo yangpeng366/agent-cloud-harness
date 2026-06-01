@@ -136,7 +136,12 @@ class TaskHandler implements HttpHandler {
                     }
                 } else if (path.endsWith("/provider_run_file")) {
                     Map<String, String> params = parseQuery(query);
-                    var file = svc.getProviderRunFile(id, params.get("kind"));
+                    var file = svc.getProviderRunFile(
+                        id,
+                        params.get("kind"),
+                        isTruthy(params.get("tail")),
+                        parseOptionalPositiveInt(params.get("max_lines"))
+                    );
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(file));
                 } else if (path.endsWith("/experiment_run")) {
                     var run = svc.getExperimentRun(id);
@@ -341,6 +346,18 @@ class TaskHandler implements HttpHandler {
     private boolean isTruthy(String value) {
         return value != null
             && ("true".equalsIgnoreCase(value) || "1".equals(value) || "yes".equalsIgnoreCase(value));
+    }
+
+    private Integer parseOptionalPositiveInt(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            int value = Integer.parseInt(raw.trim());
+            return value > 0 ? value : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private Map<String, Object> readJsonBodyAsMap(HttpExchange ex) throws IOException {

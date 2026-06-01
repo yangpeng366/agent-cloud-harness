@@ -52,7 +52,7 @@
 | GET | `/api/v1/tasks/{id}/judgment_trace` | 查看最近一次 execution/completion judgment 诊断视图 | 路径参数 `id` | `JudgmentTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/live_flow` | 聚合查看 live flow 诊断面 | Query: `limit` | `TaskLiveFlowView` | 否 |
 | GET | `/api/v1/tasks/{id}/events` | 查看或订阅 task 级 harness event 流 | Query: `limit?`, `stream=true?`, `interval_ms?`, `max_ticks?`; `Accept: text/event-stream` 也会启用流式响应 | `Event[]` 或 `text/event-stream` | 否 |
-| GET | `/api/v1/tasks/{id}/provider_run_file` | 受控读取最新 provider run 文件内容，用于排查 Codex/Kimi/DeepSeek 等 worker round | Query: `kind=last_message\|events\|stdout\|metadata\|prompt` | `ProviderRunFileView` | 否 |
+| GET | `/api/v1/tasks/{id}/provider_run_file` | 受控读取最新 provider run 文件内容，用于排查 Codex/Kimi/DeepSeek 等 worker round | Query: `kind=last_message\|events\|stdout\|metadata\|prompt`, `tail=true?`, `max_lines?` | `ProviderRunFileView` | 否 |
 | GET | `/api/v1/tasks/{id}/artifacts` | 查询任务产物列表；用于 Dialogue 的 artifact-first worker round 渲染，合并任务 `artifacts` 表与最新 `agent_run` artifacts | Query: `limit?` | `AgentRunArtifactView[]` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_run` | 查看该任务最新 experiment run 指标快照 | 路径参数 `id` | `ExperimentRunRecord` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_summary` | 以当前任务所属 `experiment_name` 为键，查看整组 matrix 汇总与 case 对比 | 路径参数 `id` | `ExperimentMatrixSummary` | 否 |

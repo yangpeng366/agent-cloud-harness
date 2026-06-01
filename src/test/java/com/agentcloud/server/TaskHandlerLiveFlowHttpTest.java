@@ -510,6 +510,59 @@ class TaskHandlerLiveFlowHttpTest {
         assertEquals(expectedPath, data.get("path"));
         assertEquals(expectedContent, data.get("content"));
         assertEquals(Boolean.FALSE, data.get("truncated"));
+        assertEquals("head", data.get("read_mode"));
+        assertEquals(0, ((Number) data.get("offset_bytes")).longValue());
+    }
+
+    @Test
+    void providerRunFileHttpCanReadTailWindowWithLineLimit() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file-tail.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider run file tail", "coding", "user", "high",
+                "读取 provider events 尾部", "HTTP should read provider run file tail lines",
+                null, null, Map.of(), false
+            ));
+            Path runDir = tempDir.resolve("provider-run-tail").toAbsolutePath().normalize();
+            Path eventsPath = runDir.resolve("events.jsonl");
+            Files.createDirectories(runDir);
+            Files.writeString(eventsPath, "line-1\nline-2\nline-3\nline-4\n", StandardCharsets.UTF_8);
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "worker output",
+                Map.of("latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "partial_timeout",
+                    "provider_run_dir", runDir.toString(),
+                    "provider_event_log_path", eventsPath.toString()
+                ))
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri(
+                    "/api/v1/tasks/" + task.id() + "/provider_run_file?kind=events&tail=true&max_lines=2"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+            assertEquals(200, response.statusCode());
+            assertEquals("events", data.get("kind"));
+            assertEquals("tail", data.get("read_mode"));
+            assertEquals(2, ((Number) data.get("max_lines")).intValue());
+            assertEquals(0, ((Number) data.get("offset_bytes")).longValue());
+            assertEquals("line-3\nline-4", data.get("content"));
+            assertEquals(Boolean.FALSE, data.get("truncated"));
+        }
     }
 
     @Test
