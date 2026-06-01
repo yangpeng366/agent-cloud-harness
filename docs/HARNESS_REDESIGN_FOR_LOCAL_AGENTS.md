@@ -305,12 +305,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - 2026-06-02 追加 Codex hard-limit 复核：扩展 `Run-CodexPartialTimeoutSmoke.ps1`，纳入 `CodexAppServerWorkerExecutorTest#maxDurationRemainsHardLimitEvenWhenActivityTimeoutIsLarger`；报告 `.tmp/codex-partial-timeout-smoke/report-hard-limit-20260602.json` 显示 Java partial-timeout regression 与 Dialogue worker-round action plan 均通过。
 - 2026-06-02 追加 real browser chat 复核：`Run-DialogueBrowserAcceptanceProbe.ps1 -Surface chat -LifecycleMode real` 在隔离端口 `18455` 通过，报告写入 `.tmp/dialogue-browser-real-18455/probe-output.json`；`pause` / `resume` 均走真实 `POST /api/v1/tasks/{id}/...`，`task_action` 投影为 POST，且 `hashTaskId == selectedTaskId == action target task id`。这证明 chat surface 的真实 lifecycle gate，不等于 `Surface both` 或人工 A-H 全量完成。
 - 2026-06-02 追加 real browser both-surface 复核：`Run-DialogueBrowserAcceptanceProbe.ps1 -Surface both -LifecycleMode real` 在隔离端口 `18457` 通过，报告写入 `.tmp/dialogue-browser-real-both-18457/probe-output.json`；顶层 `surface=both`，`chat_surface=chat_completions`，`responses_surface=responses`，两套 surface 的 `pause` / `resume` 均为真实 POST，且 `hashTaskId == selectedTaskId == action target task id`。这闭合了自动化 richer browser lifecycle gate；人工 A-H 仍需单独确认。
+- 2026-06-02 追加 Console operator preflight 入口：Provider Detail 新增 `运行 Preflight` 按钮，直接调用 `POST /api/v1/agents/{id}/preflight`，并在页面展示 `dispatch_preflight_*`、exit code、output preview、failure class / retryable 等诊断；执行后刷新 Agent Inventory 与 worker dispatch readiness。验证命令：`node --test src/test/js/console-time-normalization.test.mjs src/test/js/console-provider-window-plan.test.mjs` 与 `ApiErrorContractHttpTest#agentPreflightEndpointRunsProviderDispatchPreflight,...`。
 
 当前闭环判断：
 
 - 业务主链路已经闭合：任务进入 scheduler 后能选 worker、写 worker artifact、追加 `worker_round` session message、通过 `/api/v1/tasks/{id}/artifacts` 暴露产物，并在 Dialogue 中以内联 artifact/worker round 方式展示。
 - Codex 通信失败/超时链路已经闭合到 partial：有输出时不再直接当失败移交，而是落为 `partial_timeout` / `COMPLETED_PARTIAL`，保留 provider run files，并在 Dialogue 暴露继续 thread / 手动移交入口。
-- 本地 agent 接入链路已经闭合到轻量 dynamic provider：`providers.yaml/json` 可注册 native CLI generic provider，进入 agent/worker inventory 和 provider-native 路由候选；ready 状态仍按本机 binary 与认证真实探测。
+- 本地 agent 接入链路已经闭合到轻量 dynamic provider：`providers.yaml/json` 可注册 native CLI generic provider，进入 agent/worker inventory 和 provider-native 路由候选；ready 状态仍按本机 binary 与认证真实探测。Console Provider Detail 现在可以直接运行 provider preflight，减少“API 有能力但页面不可操作”的断点。
 - Dialogue 执行面板链路已经闭合到 task-event wrapper：选中 task 后能看到 worker/status/最近输出/执行时间线，并通过 task SSE 事件缩短刷新延迟；provider run file 读面支持 tail 窗口，便于查看最近 JSONL/stdout 输出，但这仍不是 token 级 stdout streaming。
 
 仍未闭合或不能夸大的边界：

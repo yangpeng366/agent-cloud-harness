@@ -46,6 +46,21 @@ test("console provider detail fetches and renders worker dispatch probe metadata
     assert.match(appJs, /return "openclaw-native";/);
 });
 
+test("console provider detail can run provider preflight from the page", () => {
+    assert.match(appJs, /async function runAgentPreflight\(providerId\)/);
+    assert.match(
+        appJs,
+        /api\(`\/api\/v1\/agents\/\$\{encodedProviderId\}\/preflight`,\s*\{\s*method: "POST",\s*body: "\{\}"/s
+    );
+    assert.match(appJs, /data-provider-action="preflight"/);
+    assert.match(appJs, />运行 Preflight</);
+    assert.match(appJs, /renderProviderPreflightDiagnostics\(agent\)/);
+    assert.match(appJs, /function renderProviderPreflightDiagnostics\(agent\)/);
+    assert.match(appJs, /provider preflight result/);
+    assert.match(appJs, /dispatch_preflight_exit_code/);
+    assert.match(appJs, /dispatch_preflight_output_preview/);
+});
+
 test("console recovery job panel renders operator labels", () => {
     assert.match(appJs, />恢复任务</);
     assert.match(appJs, /请求 \$\{escapeHtml\(plan\.requestId\)\}/);

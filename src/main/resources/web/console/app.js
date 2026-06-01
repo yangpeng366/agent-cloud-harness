@@ -233,6 +233,25 @@ async function refreshAgent(providerId) {
     showToast(`Provider ${providerId} 状态已刷新`);
 }
 
+async function runAgentPreflight(providerId) {
+    const encodedProviderId = encodeURIComponent(providerId);
+    const agent = await api(`/api/v1/agents/${encodedProviderId}/preflight`, {
+        method: "POST",
+        body: "{}"
+    });
+    state.selectedAgentId = providerId;
+    state.selectedAgent = agent;
+    await loadAgents(false);
+    state.selectedAgent = state.agents.find((item) => providerIdOf(item) === providerId) || agent;
+    const workerId = workerIdForProvider(providerId);
+    state.selectedWorkerReadiness = workerId
+        ? await apiOrNull(`/api/v1/workers/${encodeURIComponent(workerId)}/readiness?mode=dispatch`)
+        : null;
+    renderAgentInventory();
+    renderAgentDetail();
+    showToast(`Provider ${providerId} preflight 已完成`);
+}
+
 async function loadAgentRunDetail(runId, loud = false) {
     const encodedRunId = encodeURIComponent(runId);
     const [run, events, artifacts] = await Promise.all([
@@ -551,6 +570,8 @@ function onAgentInventoryClick(event) {
         const providerAction = action.dataset.providerAction;
         if (providerAction === "refresh") {
             refreshAgent(providerId).catch(handleError);
+        } else if (providerAction === "preflight") {
+            runAgentPreflight(providerId).catch(handleError);
         } else if (providerAction === "view_runs") {
             filterAgentRunSearchByProvider(providerId);
         } else if (providerAction === "copy_diagnostics") {
@@ -572,6 +593,8 @@ function onAgentDetailClick(event) {
     if (action?.dataset.providerId) {
         if (action.dataset.providerAction === "refresh") {
             refreshAgent(action.dataset.providerId).catch(handleError);
+        } else if (action.dataset.providerAction === "preflight") {
+            runAgentPreflight(action.dataset.providerId).catch(handleError);
         } else if (action.dataset.providerAction === "view_runs") {
             filterAgentRunSearchByProvider(action.dataset.providerId);
         } else if (action.dataset.providerAction === "copy_diagnostics") {
@@ -1395,10 +1418,12 @@ function renderAgentDetail() {
             <div class="chip-group">${chips}</div>
             <p>${escapeHtml(preview(readinessReason, 220))}</p>
             ${renderProviderRuntimeDiagnostics(agent, runs)}
+            ${renderProviderPreflightDiagnostics(agent)}
             ${renderWorkerDispatchReadiness(state.selectedWorkerReadiness, workerId)}
             ${renderMetadataGrid(agent.metadata, 6)}
             <div class="agent-action-row">
                 <button class="link-button" type="button" data-provider-action="refresh" data-provider-id="${escapeHtml(providerId)}">刷新 Provider</button>
+                <button class="link-button" type="button" data-provider-action="preflight" data-provider-id="${escapeHtml(providerId)}">运行 Preflight</button>
                 <button class="link-button" type="button" data-provider-action="view_runs" data-provider-id="${escapeHtml(providerId)}">筛选 Runs</button>
                 <button class="link-button" type="button" data-provider-action="copy_diagnostics" data-provider-id="${escapeHtml(providerId)}">Copy Diagnostics</button>
             </div>
@@ -1406,6 +1431,44 @@ function renderAgentDetail() {
         <div class="agent-trace-list">
             <div class="decision-item__type">recent provider runs</div>
             ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 provider 暂无 run 记录。")}
+        </div>
+    `;
+}
+
+function renderProviderPreflightDiagnostics(agent) {
+    const metadata = agent?.metadata || {};
+    if (!metadata || typeof metadata !== "object") {
+        return "";
+    }
+    const mode = firstNonBlank(metadata.dispatch_preflight_mode, metadata.dispatchPreflightMode);
+    const probeArgs = normalizeTextList(metadata.dispatch_preflight_probe_args, metadata.dispatchPreflightProbeArgs);
+    const commandShape = normalizeTextList(metadata.dispatch_preflight_command_shape, metadata.dispatchPreflightCommandShape);
+    const exitCode = numberOrNull(metadata.dispatch_preflight_exit_code, metadata.dispatchPreflightExitCode);
+    const outputPreview = firstNonBlank(metadata.dispatch_preflight_output_preview, metadata.dispatchPreflightOutputPreview);
+    const failureClass = firstNonBlank(metadata.provider_failure_class, metadata.providerFailureClass);
+    const failureReason = firstNonBlank(metadata.provider_failure_reason, metadata.providerFailureReason);
+    const retryable = booleanValue(metadata.provider_retryable, metadata.providerRetryable);
+    if (!mode && probeArgs.length === 0 && commandShape.length === 0 && exitCode === null && !outputPreview && !failureClass) {
+        return "";
+    }
+    const ok = exitCode === null ? booleanValue(agent.ready) === true : exitCode === 0;
+    return `
+        <div class="agent-trace-list provider-diagnostics">
+            <div class="decision-item__type">provider preflight result</div>
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "preflight ok" : "preflight failed"}</span>
+                ${mode ? `<span class="task-badge" data-tone="${mode === "active_probe" ? "active" : "paused"}">${escapeHtml(mode)}</span>` : ""}
+                ${failureClass ? `<span class="task-badge" data-tone="failed">${escapeHtml(failureClass)}</span>` : ""}
+                ${retryable !== null ? `<span class="task-badge" data-tone="${retryable ? "paused" : "failed"}">${retryable ? "retryable" : "manual"}</span>` : ""}
+            </div>
+            <div class="agent-detail__grid">
+                ${overviewCard("Exit Code", exitCode === null ? "n/a" : String(exitCode))}
+                ${overviewCard("Probe Args", probeArgs.length > 0 ? probeArgs.join(" ") : "n/a")}
+                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
+                ${overviewCard("Checked", firstNonBlank(agent.checked_at, agent.checkedAt) ? formatTime(firstNonBlank(agent.checked_at, agent.checkedAt)) : "unknown")}
+            </div>
+            ${outputPreview ? `<p class="mono">${escapeHtml(preview(outputPreview, 260))}</p>` : ""}
+            ${failureReason ? `<p>${escapeHtml(preview(failureReason, 220))}</p>` : ""}
         </div>
     `;
 }

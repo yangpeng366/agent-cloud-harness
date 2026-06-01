@@ -564,6 +564,11 @@
 - Provider Detail
 - Agent Run Detail
 
+当前 Provider Detail 已接入 operator preflight 入口：
+- `运行 Preflight` 按钮调用 `POST /api/v1/agents/{id}/preflight`
+- 页面会展示 `dispatch_preflight_mode`、probe args、command shape、exit code、output preview、failure class / retryable 等诊断
+- 执行后同步刷新 Agent Inventory 与 worker dispatch readiness，便于判断本地 CLI 是否能接收新任务
+
 ## 9.2 Task Detail
 建议显示：
 - selected provider
