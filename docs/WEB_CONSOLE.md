@@ -101,7 +101,7 @@
 - 默认 UI 仍然走 `chat completions`；如果要验证最小 `/v1/responses` 发送面，可用 `#facade=responses` 切到可选 façade surface，而不影响默认 chat-first 路径；这个 surface 也会跟随当前 session/task 一起写回 URL hash
 - 这条响应分流现在也有独立 contract helper 和 smoke：前端会按 `Content-Type` 先判定 `event-stream / json`，`event-stream` 下若 body 实际更像普通 completion JSON，也会在同一次响应内直接回退到 JSON 解析，而不是重新提交请求
 - `/dialogue/` 现在也会消费 façade 返回的 `agentcloud.reply_type / reply_source`：至少会区分“已记录 / 已推进 / 已完成”三类发送回执，不再把所有 task reply 都提示成同一种“任务已发布”
-- 对 task receipt/progress/result 这类 façade 回执，transcript 里当前作用域下最新一条 assistant/system 回执卡也会带 `latest receipt / latest progress / latest result` 标记，不必只看 toast 或 composer inline state
+- 对 task receipt/progress/result 这类 façade 回执，transcript 里当前作用域下最新一条 assistant/system 回执卡也会带 `最新回执 / 最新进展 / 最新结果` 标记，不必只看 toast 或 composer inline state
 - 这三处 façade reply 消费（toast、composer inline、transcript latest badge）现在已经共用同一套 reply-kind helper，减少 `reply_type / reply_source` 文案和 tone 的漂移风险
 - composer 的内联上下文现在也会短暂保留这条最近 façade 回执，形成稳定的“上一轮系统反馈”，不再只靠瞬时 toast 传达任务已记录、已推进或已完成
 - 这条内联 façade 回执现在也会按当前 `session/task` 作用域约束，切到别的会话或别的任务时不会继续显示上一轮不相关的反馈
