@@ -43,6 +43,52 @@ test("worker round completed status keeps transcript actions quiet", () => {
     assert.deepEqual(actions, []);
 });
 
+test("worker round partial timeout can continue from provider session id fallback", () => {
+    const actions = buildWorkerRoundActionPlan({
+        message_type: "worker_round",
+        id: "msg_round_session",
+        task_id: "task_456",
+        metadata: {
+            selected_worker: "kimi",
+            execution_status: "partial_timeout",
+            provider_id: "kimi",
+            provider_session_id: "session_kimi_456"
+        }
+    });
+
+    assert.deepEqual(actions.map((item) => item.action), [
+        "continue-worker-thread",
+        "prepare-worker-handoff"
+    ]);
+    assert.equal(actions[0].label, "继续 kimi thread");
+    assert.deepEqual(actions[0].requestBody, {
+        continue_mode: "provider_thread",
+        provider_id: "kimi",
+        provider_thread_id: "session_kimi_456",
+        resume_provider_session_id: "session_kimi_456",
+        source_worker_round_message_id: "msg_round_session"
+    });
+});
+
+test("worker round partial timeout preserves explicit resume provider session id", () => {
+    const actions = buildWorkerRoundActionPlan({
+        messageType: "worker_round",
+        id: "msg_round_resume",
+        taskId: "task_789",
+        metadata: {
+            workerId: "copilot",
+            executionStatus: "partial_timeout",
+            providerId: "copilot",
+            providerThreadId: "thread_copilot_789",
+            resumeProviderSessionId: "resume_copilot_789"
+        }
+    });
+
+    assert.equal(actions[0].requestBody.provider_thread_id, "thread_copilot_789");
+    assert.equal(actions[0].requestBody.resume_provider_session_id, "resume_copilot_789");
+    assert.equal(actions[0].requestBody.provider_id, "copilot");
+});
+
 test("worker round partial timeout without thread only exposes manual handoff", () => {
     const actions = buildWorkerRoundActionPlan({
         message_type: "worker_round",

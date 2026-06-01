@@ -259,7 +259,7 @@ Phase C（3周+）
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=ProviderProtocolDiscoveryTest,ProviderCliWorkerExecutorTest' test }
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q -Dtest=TaskHandlerProviderSelectionHttpTest test }
 & { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=ControlNodeGraphOrchestrationFlowTest#orchestratedTaskRunsPlannerThenExecutorInSingleEnter,TaskHandlerLiveFlowHttpTest#taskEventsEndpointSupportsJsonAndSseViews' test }
-node --test src/test/js/dialogue-worker-round-action-plan.test.mjs
+node --test src/test/js/dialogue-worker-round-action-plan.test.mjs # covers provider_thread_id, provider_session_id fallback, and explicit resume_provider_session_id
 powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven
 node .\scripts\provider-discovery-smoke.js --port 18432 --report .\.tmp\provider-discovery-smoke\report.json
 node .\scripts\screenshot.js --base-url http://localhost:8080 --profile desktop --out-dir .\.tmp\dialogue-verify --report .\.tmp\dialogue-verify\screenshot-report.json
@@ -301,6 +301,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - Dialogue / Console 的 provider run 文件按钮已接入该 SSE 读面：`事件日志`、`标准输出` 优先通过 EventSource 订阅 `provider_run_file.snapshot/update/done`；关闭详情弹窗、切换任务或会话时会关闭旧订阅，避免跨任务残留连接。
 - Dialogue 主视图已具备运行态徽标：选中 active/running task 后，pinned summary 与 task thread 会显示“执行中 · worker · 已运行 XmYs · 节点 scheduler/continue”，并由 task SSE 事件触发局部刷新；5s 轮询仍作为兜底，避免用户必须展开 details 才知道 Codex/worker 是否仍在跑。
 - Dialogue 对 `partial_timeout` worker_round 已提供操作入口：有 `provider_thread_id / provider_session_id` 时显示“继续 Codex thread”和“手动移交”；没有 provider thread 时只显示“手动移交”，避免把部分结果压成普通失败。
+- Dialogue worker_round action plan 已补回归覆盖：`provider_thread_id`、仅有 `provider_session_id`、以及显式 `resume_provider_session_id` 三种 partial timeout 元数据都会生成正确的继续 thread 请求体；没有 thread/session 时仍只显示“手动移交”。
 - `scripts/Run-CodexPartialTimeoutSmoke.ps1` 已提供最小可重复验收入口：同时跑 Codex app-server 有输出通信失败、ControlNodeGraph partial_timeout 进入 human gate 且写 worker_round、provider thread continue metadata、Dialogue worker_round action plan。
 - Dialogue details 面板已具备静态执行面板能力：选中 task 后可直接看到 event/tool/artifact/decision 聚合时间线，避免 worker 输出只藏在消息摘要或下沉列表里。
 - 真实浏览器验证已覆盖 `/dialogue/` 默认壳层：desktop 截图断言通过，workspace/details 比例为 1080/292，未复现中间大块异常空白。
