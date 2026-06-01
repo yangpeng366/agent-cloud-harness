@@ -132,7 +132,7 @@
 - 当前验证入口：`node --test src/test/js/dialogue-task-thread-preview-regression.test.mjs`
 - 任务气泡和链头会直接显示 `auto-start / manual-start` 标记，信号来自任务元数据里的 `start_mode`
 - message card 会额外显示 `trigger / completion / action` 信号标签，便于快速判断这条 assistant 回执是由哪次推进动作触发的
-- `/dialogue/` 的 message card 现在也会直接把 route / tool chain / mode / learning hint 转成 badge，不必切到右侧 detail 才能看当前执行上下文；learning hint 的应用状态应显示为 `已应用 / 已观测未应用`，不要把 `applied / observed` 继续裸露到主 transcript
+- `/dialogue/` 的 message card 现在也会直接把 route / tool chain / mode / learning hint 转成 badge，不必切到右侧 detail 才能看当前执行上下文；route 应显示 `来源：...`，tool step 应显示 `N 步`，learning hint 的应用状态应显示为 `已应用 / 已观测未应用`，不要把 `via / steps / applied / observed` 继续裸露到主 transcript
 - `GET /api/v1/sessions/{id}/messages` 现在已经能直接返回上述结构化 message metadata，前端不需要再从 `live_flow` 或右侧 inspector 反推 route / next-step / control action
 - 右侧任务面板现在默认收起，通过 header 上的 `查看任务面板` 再展开；窄屏下继续以单列方式展示
 - 展开的任务面板内部也进一步做成 progressive disclosure：`迭代链 / Related Messages / 连续性摘要` 常驻，`Mounted Context / 路由与判断 / 实验对比 / 最近产物 / 工具轨迹` 默认折叠，避免 inspector 一打开就把整页诊断信息全部铺开
