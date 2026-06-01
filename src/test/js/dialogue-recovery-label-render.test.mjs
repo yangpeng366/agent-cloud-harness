@@ -38,3 +38,29 @@ test("dialogue recovery job panel renders operator labels", () => {
     assert.match(appJs, /请求 \$\{escapeHtml\(plan\.requestId\)\}/);
     assert.doesNotMatch(appJs, />Recovery Job</);
 });
+
+test("dialogue judgment and cognition chips avoid raw English control labels", () => {
+    assert.match(appJs, /`下一步 · \$\{preview\(nextStep,/);
+    assert.match(appJs, /`当前 · \$\{current\}`/);
+    assert.match(appJs, /动作：\$\{humanizeToken\(continuityAction\)/);
+    assert.match(appJs, /路由：\$\{humanizeToken\(routeSource\)/);
+    assert.match(appJs, /状态：\$\{humanizeToken\(executionStatus\)/);
+    assert.match(appJs, /需要检索归档/);
+    assert.match(appJs, /提示词一致/);
+    assert.match(appJs, /`\$\{label\}：一致`/);
+    assert.match(appJs, />跟进 \$\{escapeHtml\(parentTask\.title/);
+    assert.match(appJs, /`跟进 \$\{followupParent\.title/);
+    assert.match(appJs, /summarizeJudgmentSurface\("执行判断"/);
+    assert.match(appJs, /summarizeJudgmentSurface\("完成判断"/);
+    assert.doesNotMatch(appJs, /`next · \$\{preview\(nextStep,/);
+    assert.doesNotMatch(appJs, /`current · \$\{current\}`/);
+    assert.doesNotMatch(appJs, /action: \$\{humanizeToken\(continuityAction\)/);
+    assert.doesNotMatch(appJs, /route: \$\{humanizeToken\(routeSource\)/);
+    assert.doesNotMatch(appJs, /status: \$\{humanizeToken\(executionStatus\)/);
+    assert.doesNotMatch(appJs, /archive retrieval requested/);
+    assert.doesNotMatch(appJs, /prompt aligned/);
+    assert.doesNotMatch(appJs, /`\$\{label\}: aligned`/);
+    assert.doesNotMatch(appJs, /follow-up of/);
+    assert.doesNotMatch(appJs, /summarizeJudgmentSurface\("exec judge"/);
+    assert.doesNotMatch(appJs, /summarizeJudgmentSurface\("done judge"/);
+});

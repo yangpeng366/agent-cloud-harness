@@ -1069,7 +1069,7 @@ function renderThreadTask(task, taskIndex, tasksById) {
                         <span class="dialogue-task__role">Brief</span>
                         <span>${escapeHtml(task.title || task.id)}</span>
                         ${task.goal ? `<span>${escapeHtml(preview(task.goal, 84))}</span>` : ""}
-                        ${parentTask ? `<span>follow-up of ${escapeHtml(parentTask.title || parentTask.id)}</span>` : ""}
+                        ${parentTask ? `<span>跟进 ${escapeHtml(parentTask.title || parentTask.id)}</span>` : ""}
                     </div>
                     <div class="dialogue-task__body">${escapeHtml(buildUserMessage(task))}</div>
                 </div>
@@ -2354,10 +2354,10 @@ function messageCardDetail(message, compact = false) {
         }
     }
     if (isWorkerOutcomeMessageType(type) && nextStep) {
-        detailParts.push(`next · ${preview(nextStep, compact ? 80 : 120)}`);
+        detailParts.push(`下一步 · ${preview(nextStep, compact ? 80 : 120)}`);
     }
     if ((type === "task_action" || type === "task_state" || type === "task_receipt") && current) {
-        detailParts.push(`current · ${current}`);
+        detailParts.push(`当前 · ${current}`);
     }
     return detailParts.length > 0 ? detailParts.join("  ") : "";
 }
@@ -2403,7 +2403,7 @@ function decisionCard(type, decision, executionBoundary = null, runtimeFacts = n
     const boundaryFacts = buildExecutionBoundaryFacts({ execution_boundary: executionBoundary }, []);
     return stackItem(
         type,
-        decision.summary || "no summary",
+        decision.summary || "暂无摘要",
         buildJudgmentCardBody({
             rationale: decision.rationale,
             reason: decision.reason,
@@ -2523,8 +2523,8 @@ function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundar
     const cognitionRows = [
         summarizeExecutionSurface(executionSurface),
         summarizeProviderRunFiles(executionSurface),
-        summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
-        summarizeJudgmentSurface("done judge", completionJudgmentSurface)
+        summarizeJudgmentSurface("执行判断", executionJudgmentSurface),
+        summarizeJudgmentSurface("完成判断", completionJudgmentSurface)
     ].filter(Boolean);
     const alignmentChips = summarizeAlignmentSurface(alignmentSurface);
     return {
@@ -3168,9 +3168,9 @@ function renderComposerContext() {
         ? `${task.title || task.id} · ${firstNonBlank(task.status, "active")}/${firstNonBlank(task.control_node, task.controlNode, "intake")}`
         : null;
     const followupLine = followupParent
-        ? `follow-up of ${followupParent.title || followupParent.id}`
+        ? `跟进 ${followupParent.title || followupParent.id}`
         : null;
-    const nextLine = nextStep ? `next · ${preview(nextStep, 64)}` : null;
+    const nextLine = nextStep ? `下一步 · ${preview(nextStep, 64)}` : null;
 
     if (dom.composerTaskHint) {
         dom.composerTaskHint.textContent = firstNonBlank(
@@ -4109,7 +4109,7 @@ function renderCognitionTimeline(entries) {
 function renderCognitionTimelineEntry(entry) {
     const stage = firstNonBlank(entry?.stage, "unknown");
     const label = firstNonBlank(entry?.label, humanizeToken(stage) || stage);
-    const summary = firstNonBlank(entry?.summary, summarizeCognitionTimelineEntry(entry), "no summary");
+    const summary = firstNonBlank(entry?.summary, summarizeCognitionTimelineEntry(entry), "暂无摘要");
     const chips = cognitionTimelineChips(entry);
     return `
         <div class="cognition-timeline__entry">
@@ -4170,20 +4170,20 @@ function cognitionTimelineChips(entry) {
     const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
     const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
     return [
-        workerId ? `worker: ${workerId}` : null,
-        continuityAction ? `action: ${humanizeToken(continuityAction) || continuityAction}` : null,
-        checkpointType ? `checkpoint: ${humanizeToken(checkpointType) || checkpointType}` : null,
-        targetWorker ? `target: ${targetWorker}` : null,
-        routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
-        promptMode ? `提示词: ${humanizeToken(promptMode) || promptMode}` : null,
-        executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
-        needsArchiveRetrieval === true ? "archive retrieval requested" : null,
-        needsExternalFactRefresh === true ? "external fact refresh requested" : null,
-        needsContextReopen === true ? "context reopen requested" : null,
-        evidenceGapDetected === true ? "evidence gap detected" : null,
-        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} reopen targets` : null,
-        reopenSummary ? `reopen: ${preview(reopenSummary, 72)}` : null,
-        toolCount === null ? null : `${toolCount} tools`,
+        workerId ? `worker：${workerId}` : null,
+        continuityAction ? `动作：${humanizeToken(continuityAction) || continuityAction}` : null,
+        checkpointType ? `checkpoint：${humanizeToken(checkpointType) || checkpointType}` : null,
+        targetWorker ? `目标：${targetWorker}` : null,
+        routeSource ? `路由：${humanizeToken(routeSource) || routeSource}` : null,
+        promptMode ? `提示词：${humanizeToken(promptMode) || promptMode}` : null,
+        executionStatus ? `状态：${humanizeToken(executionStatus) || executionStatus}` : null,
+        needsArchiveRetrieval === true ? "需要检索归档" : null,
+        needsExternalFactRefresh === true ? "需要刷新外部事实" : null,
+        needsContextReopen === true ? "需要重开上下文" : null,
+        evidenceGapDetected === true ? "发现证据缺口" : null,
+        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} 个重开目标` : null,
+        reopenSummary ? `重开：${preview(reopenSummary, 72)}` : null,
+        toolCount === null ? null : `${toolCount} 个工具调用`,
         mountedRendered === true ? "上下文已渲染" : null,
         mountedInjected === true ? "上下文已注入" : null,
         mountedPanelCount === null ? null : `${mountedPanelCount} 个面板`,
@@ -4194,11 +4194,11 @@ function cognitionTimelineChips(entry) {
             ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
         budgetTruncated === true ? "预算已截断" : null,
-        aligned === true ? "prompt aligned" : null,
-        aligned === false ? "prompt diverged" : null,
-        reason ? `reason: ${preview(reason, 48)}` : null,
-        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
-        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+        aligned === true ? "提示词一致" : null,
+        aligned === false ? "提示词不一致" : null,
+        reason ? `原因：${preview(reason, 48)}` : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} 条证据` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} 项未完成` : null
     ].filter(Boolean);
 }
 
@@ -4212,13 +4212,13 @@ function summarizeCognitionTimelineEntry(entry) {
         firstNonBlank(entry?.execution_status, entry?.executionStatus),
         firstNonBlank(entry?.route_source, entry?.routeSource),
         booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval) === true
-            ? "archive retrieval requested"
+            ? "需要检索归档"
             : null,
         booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh) === true
-            ? "external fact refresh requested"
+            ? "需要刷新外部事实"
             : null,
         booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen) === true
-            ? "context reopen requested"
+            ? "需要重开上下文"
             : null,
         firstNonBlank(entry?.reopen_summary, entry?.reopenSummary),
         firstNonBlank(entry?.reason)
@@ -4377,18 +4377,18 @@ function summarizeAlignmentSurface(surface) {
     }
     return [
         alignmentChip(
-            "route/execution",
+            "路由/执行",
             booleanValue(surface.route_worker_matches_execution_worker, surface.routeWorkerMatchesExecutionWorker)
         ),
         alignmentChip(
-            "exec/judge prompt",
+            "执行/判断提示词",
             booleanValue(
                 surface.execution_and_execution_judgment_prompt_mode_aligned,
                 surface.executionAndExecutionJudgmentPromptModeAligned
             )
         ),
         alignmentChip(
-            "exec/done prompt",
+            "执行/完成提示词",
             booleanValue(
                 surface.execution_and_completion_judgment_prompt_mode_aligned,
                 surface.executionAndCompletionJudgmentPromptModeAligned
@@ -4399,10 +4399,10 @@ function summarizeAlignmentSurface(surface) {
 
 function alignmentChip(label, aligned) {
     if (aligned === true) {
-        return `${label}: aligned`;
+        return `${label}：一致`;
     }
     if (aligned === false) {
-        return `${label}: diverged`;
+        return `${label}：不一致`;
     }
     return null;
 }
