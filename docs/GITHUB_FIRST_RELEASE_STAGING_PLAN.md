@@ -209,7 +209,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-GitHubFirstReleaseDryRun.
 
 - baseline / product / harness 三组都已有真实命中项
 - 当前 `unmatched = none`
-- 当前 `defer` 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`、`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md`，这些属于本机/后续演进项，不进入首发主 slice
+- 当前 `defer` 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`，这些属于本机运行残留或临时调试入口，不进入首发主 slice；`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md` 已脱敏并纳入 baseline 文档
 - 这说明首发提交批次已经不仅是纸面方案，而是有真实 worktree 快照支撑
 
 同时现在还已有一轮 stage-level proof：

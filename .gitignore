@@ -6,10 +6,15 @@ target/
 .idea/
 .vscode/
 .tmp/
+tmp/
+.reasonix/
 test-results/
 *.db
 *.db-journal
 hs_err_pid*
 replay_pid*
+*.stackdump
 target/
 node_modules/
+/task-ops.js
+/version

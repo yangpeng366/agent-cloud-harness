@@ -156,7 +156,7 @@
 - 最新 `all` commit dry-run：见
   - `docs/GITHUB_FIRST_RELEASE_COMMIT_DRY_RUN_all_2026-05-11.md`
   - 当前 `unmatched = none`
-  - 当前 defer/exclude 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`、`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md`，这些不应被误当作首发遗漏项
+  - 当前 defer/exclude 明确包含 `.reasonix/`、`tmp/`、`task-ops.js`、`version`，这些不应被误当作首发遗漏项；`docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md` 已脱敏并纳入 baseline 文档
 - 当前真实本地首发主提交：见
   - `8350a8c chore: prepare repository baseline for public first release`
   - `d7fefea feat: ship chat-first dialogue facade and related UI flows`

@@ -77,6 +77,7 @@ $groups = [ordered]@{
         "docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md",
         "docs/HARNESS_REDESIGN_FOR_LOCAL_AGENTS.md",
         "docs/PROJECT_EVALUATION_AND_NEXT_PLAN.md",
+        "docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md",
         "docs/TROUBLESHOOT.md"
     )
     product = @(
@@ -163,7 +164,6 @@ $deferPrefixes = @(
     "hs_err_pid",
     "replay_pid",
     "docs/GOAL_RUNTIME_LANDING_DIFF_2026-05-11.md",
-    "docs/GITHUB_SUBMISSION_AND_EVOLUTION_PLAN.md",
     "task-ops.js",
     "version"
 )
