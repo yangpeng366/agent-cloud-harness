@@ -1476,7 +1476,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven "-Dtest=ProviderProtocolDiscoveryTest#recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols"
-node .\scripts\provider-discovery-smoke.js --port 18461 --report .\.tmp\provider-discovery-smoke-18461\report.json --work-dir .\.tmp\provider-discovery-smoke-18461
+node .\scripts\provider-discovery-smoke.js --port 18467 --report .\.tmp\provider-discovery-smoke-18467\report.json --work-dir .\.tmp\provider-discovery-smoke-18467
 ```
 
 ---

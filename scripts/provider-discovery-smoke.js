@@ -67,7 +67,11 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function writeSmokeProviderConfig(workDir) {
+function yamlQuote(value) {
+  return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function writeSmokeProviderConfig(workDir, probeBinary) {
   const config = '\uFEFF' + [
     'providers:',
     '  - id: smoke_agent',
@@ -88,12 +92,14 @@ function writeSmokeProviderConfig(workDir) {
     '  - id: unsupported_app_server',
     '    display_name: Unsupported App Server',
     '    protocol: app_server_json_rpc',
-    '    binary: codex',
+    `    binary: ${yamlQuote(probeBinary)}`,
+    '    dispatch_probe_args: ["--version"]',
     '    capabilities: ["coding"]',
     '  - id: unsupported_mcp',
     '    display_name: Unsupported MCP',
     '    protocol: mcp',
-    '    binary: mcp-agent',
+    `    binary: ${yamlQuote(probeBinary)}`,
+    '    dispatch_probe_args: ["--version"]',
     '    capabilities: ["tool_use"]',
     '',
   ].join('\n');
@@ -153,7 +159,7 @@ async function run() {
 
   ensureDir(args.workDir);
   ensureDir(path.dirname(args.reportPath));
-  writeSmokeProviderConfig(args.workDir);
+  writeSmokeProviderConfig(args.workDir, args.javaPath);
 
   const stdoutPath = path.join(args.workDir, 'server.out.log');
   const stderrPath = path.join(args.workDir, 'server.err.log');
@@ -251,11 +257,25 @@ async function run() {
         && unsupportedAppServer?.metadata?.provider_discovery_supported === false
         && /built-in codex app-server/.test(unsupportedAppServer?.readiness_reason || ''),
       JSON.stringify(unsupportedAppServer || {}));
+    assertCondition(report, 'unsupported app-server provider includes startup probe diagnostics',
+      unsupportedAppServer?.metadata?.provider_protocol_probe_mode === 'unsupported_startup_probe'
+        && Array.isArray(unsupportedAppServer?.metadata?.provider_protocol_probe_command_shape)
+        && unsupportedAppServer.metadata.provider_protocol_probe_command_shape.includes('--version')
+        && unsupportedAppServer?.metadata?.provider_protocol_probe_exit_code === 0
+        && unsupportedAppServer?.metadata?.provider_protocol_probe_success === true,
+      JSON.stringify(unsupportedAppServer?.metadata || {}));
     assertCondition(report, 'unsupported mcp provider visible in agent inventory',
       unsupportedMcp?.ready === false
         && unsupportedMcp?.metadata?.provider_protocol === 'mcp'
         && /not implemented/.test(unsupportedMcp?.readiness_reason || ''),
       JSON.stringify(unsupportedMcp || {}));
+    assertCondition(report, 'unsupported mcp provider includes startup probe diagnostics',
+      unsupportedMcp?.metadata?.provider_protocol_probe_mode === 'unsupported_startup_probe'
+        && Array.isArray(unsupportedMcp?.metadata?.provider_protocol_probe_command_shape)
+        && unsupportedMcp.metadata.provider_protocol_probe_command_shape.includes('--version')
+        && unsupportedMcp?.metadata?.provider_protocol_probe_exit_code === 0
+        && unsupportedMcp?.metadata?.provider_protocol_probe_success === true,
+      JSON.stringify(unsupportedMcp?.metadata || {}));
     assertCondition(report, 'unsupported providers are not registered as workers',
       !unsupportedWorker,
       JSON.stringify(unsupportedWorker || {}));
