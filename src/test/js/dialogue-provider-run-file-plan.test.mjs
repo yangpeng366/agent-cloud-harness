@@ -23,12 +23,16 @@ test("provider run file plan exposes available execution surface files", () => {
     assert.equal(plan.files[0].label, "最后输出");
     assert.match(plan.files[0].previewLabel, /^最后输出: .*last_message\.md$/);
     assert.equal(plan.files[0].tail, false);
+    assert.equal(plan.files[0].stream, false);
     assert.equal(plan.files[0].query, "");
     assert.equal(plan.files.find((file) => file.kind === "events").tail, true);
+    assert.equal(plan.files.find((file) => file.kind === "events").stream, true);
     assert.equal(plan.files.find((file) => file.kind === "events").maxLines, 80);
     assert.equal(plan.files.find((file) => file.kind === "events").query, "tail=true&max_lines=80");
     assert.equal(plan.files.find((file) => file.kind === "stdout").tail, true);
+    assert.equal(plan.files.find((file) => file.kind === "stdout").stream, true);
     assert.equal(plan.files.find((file) => file.kind === "stdout").query, "tail=true&max_lines=80");
+    assert.equal(plan.files.find((file) => file.kind === "metadata").stream, false);
 });
 
 test("provider run file plan accepts camelCase execution surface paths", () => {

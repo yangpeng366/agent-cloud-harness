@@ -664,7 +664,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptance
 - `/dialogue/` 已有 fresh 隔离实例下的 light business smoke 证据
 - 第三轮默认密度收口已经落到真实 HTML/CSS/JS；details/status surface 已开始收口，当前已覆盖 partial timeout provider 诊断、worker recovery action 与 header recovery state
 - 消息元信息标签已完成中文化收口：`会话续跑`、`任务绑定`、`任务 · <id>`、`N 条消息` 替代旧的 control-plane 英文文案；浏览器验收探针按 task identity badge 语义匹配，不再依赖 `task-bound` / `task ·` 固定英文显示
-- Provider run 排障面板与 worker round 展开区已将可见文件/诊断标签收口为中文：`运行目录`、`最后输出`、`事件日志`、`标准输出`、`运行元数据`、`Provider 诊断`、`Provider 运行文件`；底层 `kind=last_message|events|stdout|metadata|prompt` API 合同不变。Dialogue / Console 点击 `事件日志`、`标准输出` 时默认追加 `tail=true&max_lines=80`，避免长 JSONL / stdout 只看到文件头；其他文件仍按默认文件头 64 KiB 预览。
+- Provider run 排障面板与 worker round 展开区已将可见文件/诊断标签收口为中文：`运行目录`、`最后输出`、`事件日志`、`标准输出`、`运行元数据`、`Provider 诊断`、`Provider 运行文件`；底层 `kind=last_message|events|stdout|metadata|prompt` API 合同不变。Dialogue / Console 点击 `事件日志`、`标准输出` 时优先用 `stream=true` 订阅尾部窗口，并带 `tail=true&max_lines=80`，避免长 JSONL / stdout 只看到文件头；其他文件仍按默认文件头 64 KiB 预览。
 - partial timeout 首屏语义已收口为“部分结果待确认”：message signal、header focus line、execution surface 摘要不再直接展示裸 `partial timeout / max duration / chars`，而是显示 `部分结果待确认`、`达到最大时长`、`已有输出 N/M 字符`，让用户能直接判断“有中间结果，需继续或移交”
 - transcript signal 前缀已从 control-plane 英文收口为中文显示：`provider/route/trigger/completion/action/tools` 仍作为内部 entry key 保留，但页面与 summary 里显示为 `诊断/路由/触发/完成/动作/工具`
 - execution boundary / judgment mounted context 读面已把 `exec/run/last/stdout/meta/prompt` 与 `mounted rendered/panels/objects/traces/budget truncated` 收口为中文标签，避免 details 中的 worker round 诊断继续像 raw trace

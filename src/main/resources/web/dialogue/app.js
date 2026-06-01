@@ -73,6 +73,7 @@ const state = {
     pollingTimer: null,
     taskEventSource: null,
     taskEventRefreshTimer: null,
+    providerRunFileEventSource: null,
     facadeSurface: "chat_completions",
     selectedTaskLoading: false
 };
@@ -539,6 +540,7 @@ async function onCreateSession(event) {
     state.selectedTaskId = null;
     state.selectedTaskStickyUntil = 0;
     closeTaskEventStream();
+    closeProviderRunFileStream();
     state.liveFlow = null;
     state.experimentSummary = null;
     state.relatedMessages = [];
@@ -571,6 +573,7 @@ async function createRecoverySession() {
     state.selectedTaskId = null;
     state.selectedTaskStickyUntil = 0;
     closeTaskEventStream();
+    closeProviderRunFileStream();
     state.liveFlow = null;
     state.experimentSummary = null;
     state.relatedMessages = [];
@@ -5566,6 +5569,7 @@ function scheduleTaskEventRefresh(taskId) {
 }
 
 function closeModal() {
+    closeProviderRunFileStream();
     dom.taskDetailModal.style.display = "none";
     document.body.style.overflow = "";
 }
@@ -5734,6 +5738,7 @@ function renderProviderRunFiles(flow) {
                 data-provider-run-task-id="${escapeHtml(plan.taskId)}"
                 data-provider-run-kind="${escapeHtml(file.kind)}"
                 data-provider-run-tail="${file.tail ? "true" : "false"}"
+                data-provider-run-stream="${file.stream ? "true" : "false"}"
                 data-provider-run-max-lines="${file.maxLines ? escapeHtml(String(file.maxLines)) : ""}">
             ${escapeHtml(file.label)}
         </button>
@@ -5762,6 +5767,10 @@ async function onProviderRunFileClick(event) {
     previewBox.textContent = "读取中...";
     try {
         const params = buildProviderRunFileQuery(button, kind);
+        if (button.dataset.providerRunStream === "true" && typeof EventSource !== "undefined") {
+            streamProviderRunFilePreview(taskId, params, previewBox, button, kind);
+            return;
+        }
         const file = await api(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?${params.toString()}`);
         previewBox.textContent = formatProviderRunFilePreview(file, kind);
     } catch (error) {
@@ -5781,4 +5790,44 @@ function buildProviderRunFileQuery(button, kind) {
         params.set("max_lines", button.dataset.providerRunMaxLines);
     }
     return params;
+}
+
+function streamProviderRunFilePreview(taskId, params, previewBox, button, kind) {
+    closeProviderRunFileStream();
+    params.set("stream", "true");
+    params.set("max_ticks", "120");
+    params.set("interval_ms", "1500");
+    previewBox.textContent = "订阅 provider run 文件尾部...";
+    const source = new EventSource(`/api/v1/tasks/${encodeURIComponent(taskId)}/provider_run_file?${params.toString()}`);
+    const finish = () => {
+        if (state.providerRunFileEventSource === source) {
+            state.providerRunFileEventSource = null;
+        }
+        source.close();
+        button.disabled = false;
+    };
+    const update = (event) => {
+        try {
+            const file = JSON.parse(event.data);
+            previewBox.textContent = formatProviderRunFilePreview(file, kind);
+        } catch (error) {
+            previewBox.textContent = formatProviderRunFilePreviewError(error, kind);
+            finish();
+        }
+    };
+    source.addEventListener("provider_run_file.snapshot", update);
+    source.addEventListener("provider_run_file.update", update);
+    source.addEventListener("provider_run_file.stream.done", finish);
+    source.onerror = () => {
+        previewBox.textContent = "provider run 文件订阅中断，点击可重新读取。";
+        finish();
+    };
+    state.providerRunFileEventSource = source;
+}
+
+function closeProviderRunFileStream() {
+    if (state.providerRunFileEventSource) {
+        state.providerRunFileEventSource.close();
+        state.providerRunFileEventSource = null;
+    }
 }
