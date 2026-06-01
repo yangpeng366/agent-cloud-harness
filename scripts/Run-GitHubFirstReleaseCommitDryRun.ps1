@@ -129,6 +129,8 @@ $groups = [ordered]@{
         "scripts/Run-GitHubFirstReleaseIndexAudit.ps1",
         "scripts/Run-GitHubFirstReleasePrecheck.ps1",
         "scripts/Run-CodexPartialTimeoutSmoke.ps1",
+        "scripts/Run-ConsoleProviderWindowProbe.ps1",
+        "scripts/console-provider-window-probe.js",
         "scripts/dialogue-business-smoke.js",
         "scripts/provider-discovery-smoke.js",
         "docs/CHAT_FIRST_DIALOGUE_AND_OPENAI_API_ALIGNMENT_PLAN.md",

@@ -155,6 +155,80 @@ function buildRuntimeHealthFixture() {
   };
 }
 
+function buildAgentFixture() {
+  const checkedAt = new Date().toISOString();
+  return {
+    provider_id: 'codex',
+    display_name: 'Codex',
+    provider_type: 'local_cli',
+    transport: 'process',
+    capabilities: ['coding', 'reading', 'ops'],
+    installed: true,
+    version: '0.0.0-probe',
+    auth_status: 'ok',
+    ready: true,
+    readiness_reason: 'probe fixture ready',
+    checked_at: checkedAt,
+    metadata: {
+      provider_protocol: 'app_server_json_rpc',
+      execution_backend: 'provider_app_server'
+    }
+  };
+}
+
+function buildPreflightAgentFixture() {
+  return {
+    ...buildAgentFixture(),
+    checked_at: new Date().toISOString(),
+    metadata: {
+      provider_protocol: 'app_server_json_rpc',
+      execution_backend: 'provider_app_server',
+      dispatch_preflight_mode: 'active_probe',
+      dispatch_preflight_probe_kind: 'cli_help',
+      dispatch_preflight_probe_args: ['--version'],
+      dispatch_preflight_command_shape: ['direct', '--version'],
+      dispatch_preflight_exit_code: 0,
+      dispatch_preflight_output_preview: 'codex 0.0.0-probe',
+      provider_failure_class: 'none',
+      provider_retryable: false
+    }
+  };
+}
+
+function buildWorkerReadinessFixture() {
+  return {
+    worker_id: 'codex',
+    worker_type: 'codex',
+    ready: true,
+    reason: 'dispatch preflight ready',
+    mode: 'dispatch',
+    checks: {
+      passive_readiness: true,
+      dispatch_preflight: true
+    },
+    dispatch_preflight_ready: true,
+    dispatch_preflight_reason: 'dispatch preflight ready',
+    dispatch_preflight_cached: false,
+    dispatch_preflight_mode: 'active_probe',
+    dispatch_preflight_active_probe: true,
+    dispatch_preflight_metadata: {
+      launch_mode: 'direct',
+      launch_target: 'codex',
+      dispatch_preflight_probe_kind: 'cli_help',
+      dispatch_preflight_probe_args: ['--version'],
+      dispatch_preflight_command_shape: ['direct', '--version'],
+      dispatch_preflight_exit_code: 0,
+      dispatch_preflight_output_preview: 'codex 0.0.0-probe'
+    },
+    cli_profile: {
+      cli_profile_evidence_available: true,
+      supports_model: true,
+      supports_resume: true,
+      supports_json_output: true
+    }
+  };
+}
+
 function buildLiveFlowFixture(task) {
   return {
     task: {
@@ -227,6 +301,9 @@ async function main() {
   const fixture = await createFixture(args.baseUrl);
   const runtimeHealthFixture = buildRuntimeHealthFixture();
   const liveFlowFixture = buildLiveFlowFixture(fixture.task);
+  const agentFixture = buildAgentFixture();
+  const preflightAgentFixture = buildPreflightAgentFixture();
+  const workerReadinessFixture = buildWorkerReadinessFixture();
 
   const browser = await puppeteer.launch({
     executablePath: browserPath,
@@ -244,6 +321,10 @@ async function main() {
     log(`open console probe: ${targetUrl}`);
     await page.evaluateOnNewDocument((payload) => {
       const originalFetch = window.fetch.bind(window);
+      window.__consoleProviderPreflightProbe = {
+        preflightCount: 0,
+        lastPreflightMethod: null
+      };
       const okJson = (body) => new Response(JSON.stringify({ data: body }), {
         status: 200,
         headers: {
@@ -252,6 +333,7 @@ async function main() {
       });
       window.fetch = async (input, init) => {
         const url = typeof input === 'string' ? input : String(input && input.url ? input.url : '');
+        const method = String(init && init.method ? init.method : 'GET').toUpperCase();
         if (url.includes('/api/v1/runtime_health?limit=8')) {
           return okJson(payload.runtimeHealthFixture);
         }
@@ -261,8 +343,23 @@ async function main() {
         if (url.includes(`/api/v1/tasks/${payload.taskId}/provider_selection`)) {
           return okJson(payload.liveFlowFixture.provider_selection);
         }
-        if (url.endsWith('/api/v1/agents')) {
+        if (url.includes('/api/v1/workers/codex/readiness?mode=dispatch')) {
+          return okJson(payload.workerReadinessFixture);
+        }
+        if (url.includes('/api/v1/agents/codex/preflight')) {
+          window.__consoleProviderPreflightProbe.preflightCount += 1;
+          window.__consoleProviderPreflightProbe.lastPreflightMethod = method;
+          return okJson(payload.preflightAgentFixture);
+        }
+        if (url.includes('/api/v1/agents/codex/runs?')) {
           return okJson([]);
+        }
+        if (url.endsWith('/api/v1/agents/codex')) {
+          return okJson(payload.agentFixture);
+        }
+        if (url.endsWith('/api/v1/agents')) {
+          const preflightRan = window.__consoleProviderPreflightProbe.preflightCount > 0;
+          return okJson([preflightRan ? payload.preflightAgentFixture : payload.agentFixture]);
         }
         if (url.includes('/api/v1/agent_runs?')) {
           return okJson([]);
@@ -272,7 +369,10 @@ async function main() {
     }, {
       taskId: fixture.task.id,
       runtimeHealthFixture,
-      liveFlowFixture
+      liveFlowFixture,
+      agentFixture,
+      preflightAgentFixture,
+      workerReadinessFixture
     });
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForSelector('#runtimeHealth', { timeout: 30000 });
@@ -290,17 +390,42 @@ async function main() {
       waitError = error;
     }
 
+    await page.waitForSelector('#agentInventory [data-provider-id="codex"]', { timeout: 30000 });
+    await page.click('#agentInventory [data-provider-id="codex"]');
+    await page.waitForFunction(() => {
+      const detail = document.querySelector('#agentDetail');
+      return detail && detail.textContent.includes('Codex') && detail.textContent.includes('运行 Preflight');
+    }, { timeout: 30000 });
+    await page.waitForSelector('#agentDetail [data-provider-action="preflight"][data-provider-id="codex"]', { timeout: 30000 });
+    await page.click('#agentDetail [data-provider-action="preflight"][data-provider-id="codex"]');
+    await page.waitForFunction(() => {
+      const detail = document.querySelector('#agentDetail');
+      const probe = window.__consoleProviderPreflightProbe || {};
+      return probe.preflightCount === 1
+        && probe.lastPreflightMethod === 'POST'
+        && detail
+        && detail.textContent.includes('provider preflight result')
+        && detail.textContent.includes('active_probe')
+        && detail.textContent.includes('codex 0.0.0-probe')
+        && detail.textContent.includes('worker dispatch probe');
+    }, { timeout: 30000 });
+
     const result = await page.evaluate(() => {
       const runtimeHealth = document.querySelector('#runtimeHealth');
       const routeBox = document.querySelector('#routeBox');
+      const agentDetail = document.querySelector('#agentDetail');
       const providerComparison = Array.from(document.querySelectorAll('.provider-stats-row')).map((row) => row.textContent.replace(/\s+/g, ' ').trim());
       const activeTaskCard = document.querySelector('.task-card.is-active');
+      const probe = window.__consoleProviderPreflightProbe || {};
       return {
         hash: window.location.hash || '',
         runtimeHealthText: runtimeHealth ? runtimeHealth.textContent.replace(/\s+/g, ' ').trim() : '',
         routeBoxText: routeBox ? routeBox.textContent.replace(/\s+/g, ' ').trim() : '',
+        agentDetailText: agentDetail ? agentDetail.textContent.replace(/\s+/g, ' ').trim() : '',
         providerComparison,
-        activeTaskText: activeTaskCard ? activeTaskCard.textContent.replace(/\s+/g, ' ').trim() : ''
+        activeTaskText: activeTaskCard ? activeTaskCard.textContent.replace(/\s+/g, ' ').trim() : '',
+        preflightCount: probe.preflightCount || 0,
+        lastPreflightMethod: probe.lastPreflightMethod || null
       };
     });
 
@@ -316,7 +441,13 @@ async function main() {
       checks: {
         runtime_health_window: result.runtimeHealthText.includes('当前恢复降级窗口：claude'),
         provider_row_hint: result.providerComparison.some((text) => text.includes('恢复阶段会优先避开 claude')),
-        route_box_hint: result.routeBoxText.includes('恢复阶段会优先避开 claude')
+        route_box_hint: result.routeBoxText.includes('恢复阶段会优先避开 claude'),
+        provider_preflight_post: result.preflightCount === 1 && result.lastPreflightMethod === 'POST',
+        provider_preflight_rendered: result.agentDetailText.includes('provider preflight result')
+          && result.agentDetailText.includes('active_probe')
+          && result.agentDetailText.includes('codex 0.0.0-probe'),
+        worker_dispatch_probe_rendered: result.agentDetailText.includes('worker dispatch probe')
+          && result.agentDetailText.includes('dispatch ready')
       },
       observed: result
     };
