@@ -566,6 +566,58 @@ class TaskHandlerLiveFlowHttpTest {
     }
 
     @Test
+    void providerRunFileHttpSupportsSseTailSnapshots() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file-sse.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "provider run file sse", "coding", "user", "high",
+                "流式读取 provider stdout 尾部", "HTTP should expose provider run file tail snapshots as SSE",
+                null, null, Map.of(), false
+            ));
+            Path runDir = tempDir.resolve("provider-run-sse").toAbsolutePath().normalize();
+            Path stdoutPath = runDir.resolve("stdout.log");
+            Files.createDirectories(runDir);
+            Files.writeString(stdoutPath, "stdout-1\nstdout-2\nstdout-3\n", StandardCharsets.UTF_8);
+
+            harness.db.jdbi().onDemand(ArtifactDao.class).insert(new Artifact(
+                IdGenerator.newId("art"),
+                task.sessionId(),
+                task.id(),
+                Instant.now(),
+                "worker_round",
+                "Provider worker round",
+                "",
+                "",
+                "worker output",
+                Map.of("latest_worker_metadata", Map.of(
+                    "selected_worker", "codex",
+                    "execution_status", "partial_timeout",
+                    "provider_run_dir", runDir.toString(),
+                    "provider_stdout_path", stdoutPath.toString()
+                ))
+            ));
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri(
+                    "/api/v1/tasks/" + task.id()
+                        + "/provider_run_file?kind=stdout&stream=true&max_ticks=1&interval_ms=250&max_lines=2"))
+                    .header("Accept", "text/event-stream")
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.headers().firstValue("content-type").orElse("")
+                .contains("text/event-stream"));
+            assertTrue(response.body().contains("event: provider_run_file.snapshot"));
+            assertTrue(response.body().contains("\"kind\":\"stdout\""));
+            assertTrue(response.body().contains("\"read_mode\":\"tail\""));
+            assertTrue(response.body().contains("stdout-2\\nstdout-3"));
+            assertTrue(response.body().contains("event: provider_run_file.stream.done"));
+        }
+    }
+
+    @Test
     void providerRunFileHttpRejectsPathOutsideProviderRunDir() throws Exception {
         try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-provider-run-file-outside.db"))) {
             Task task = harness.service.createTask(new TaskCreateRequest(

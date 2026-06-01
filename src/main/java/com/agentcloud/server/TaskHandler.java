@@ -136,13 +136,17 @@ class TaskHandler implements HttpHandler {
                     }
                 } else if (path.endsWith("/provider_run_file")) {
                     Map<String, String> params = parseQuery(query);
-                    var file = svc.getProviderRunFile(
-                        id,
-                        params.get("kind"),
-                        isTruthy(params.get("tail")),
-                        parseOptionalPositiveInt(params.get("max_lines"))
-                    );
-                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(file));
+                    if (acceptsEventStream(ex, params)) {
+                        streamProviderRunFile(ex, id, params);
+                    } else {
+                        var file = svc.getProviderRunFile(
+                            id,
+                            params.get("kind"),
+                            isTruthy(params.get("tail")),
+                            parseOptionalPositiveInt(params.get("max_lines"))
+                        );
+                        NioHttpServer.sendJson(ex, 200, ApiResponse.ok(file));
+                    }
                 } else if (path.endsWith("/experiment_run")) {
                     var run = svc.getExperimentRun(id);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(run));
@@ -299,6 +303,81 @@ class TaskHandler implements HttpHandler {
         } finally {
             ex.close();
         }
+    }
+
+    private void streamProviderRunFile(HttpExchange ex, String taskId, Map<String, String> params) throws IOException {
+        String kind = params.get("kind");
+        boolean tail = providerRunFileStreamDefaultsToTail(kind);
+        if (params.containsKey("tail")) {
+            tail = isTruthy(params.get("tail"));
+        }
+        Integer maxLines = parseOptionalPositiveInt(params.get("max_lines"));
+        int intervalMs = parsePositiveInt(params.get("interval_ms"), 1500, 250, 10000);
+        int maxTicks = parsePositiveInt(params.get("max_ticks"), 120, 1, 600);
+        ProviderRunFileView initialFile = svc.getProviderRunFile(taskId, kind, tail, maxLines);
+        ex.getResponseHeaders().set("Content-Type", "text/event-stream; charset=UTF-8");
+        ex.getResponseHeaders().set("Cache-Control", "no-cache");
+        ex.getResponseHeaders().set("Connection", "keep-alive");
+        ex.sendResponseHeaders(200, 0);
+        String lastFingerprint = null;
+        try (OutputStream body = ex.getResponseBody()) {
+            for (int tick = 0; tick < maxTicks; tick++) {
+                ProviderRunFileView file = tick == 0
+                    ? initialFile
+                    : svc.getProviderRunFile(taskId, kind, tail, maxLines);
+                String fingerprint = providerRunFileFingerprint(file);
+                if (tick == 0) {
+                    writeSseEvent(body, "provider_run_file.snapshot", file);
+                } else if (!fingerprint.equals(lastFingerprint)) {
+                    writeSseEvent(body, "provider_run_file.update", file);
+                }
+                lastFingerprint = fingerprint;
+                writeSseComment(body, "heartbeat " + Instant.now());
+                try {
+                    Thread.sleep(intervalMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            writeSseEvent(body, "provider_run_file.stream.done", Map.of(
+                "task_id", taskId,
+                "kind", kind == null ? "last_message" : kind,
+                "created_at", Instant.now()
+            ));
+        } catch (IOException e) {
+            if (NioHttpServer.isClientDisconnect(e)) {
+                return;
+            }
+            throw e;
+        } finally {
+            ex.close();
+        }
+    }
+
+    private String providerRunFileFingerprint(ProviderRunFileView file) {
+        if (file == null) {
+            return "";
+        }
+        return String.join("|",
+            String.valueOf(file.kind()),
+            String.valueOf(file.path()),
+            String.valueOf(file.sizeBytes()),
+            String.valueOf(file.offsetBytes()),
+            String.valueOf(file.content())
+        );
+    }
+
+    private boolean providerRunFileStreamDefaultsToTail(String kind) {
+        if (kind == null || kind.isBlank()) {
+            return false;
+        }
+        String normalized = kind.trim().toLowerCase(java.util.Locale.ROOT).replace('-', '_');
+        return "events".equals(normalized)
+            || "event_log".equals(normalized)
+            || "events_jsonl".equals(normalized)
+            || "stdout".equals(normalized)
+            || "output".equals(normalized);
     }
 
     private void writeSseEvent(OutputStream body, String eventName, Object payload) throws IOException {

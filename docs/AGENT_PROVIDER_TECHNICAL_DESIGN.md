@@ -1381,11 +1381,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 - `ControlNodeGraph` 已把上述 provider run 文件字段同步到 artifact 顶层 metadata，并在 `artifact.metadata.output_text` 后追加明确截断提示，operator 可直接从 metadata 找到完整 stdout。
 - `metadata.json` 写入顺序已调整为先补齐 SQLite 截断 metadata，再写文件，避免文件元数据与 artifact metadata 不一致。
 - 已补回归验证：超长 provider output 不会完整进入 SQLite output text，artifact 顶层 metadata 能投影 `provider_output_truncated` 与完整输出路径。
+- `GET /api/v1/tasks/{id}/provider_run_file` 已支持 `stream=true` / `Accept: text/event-stream`：服务端返回受控 SSE 窗口流，先发 `provider_run_file.snapshot`，文件内容变化时发 `provider_run_file.update`，并用心跳和 `provider_run_file.stream.done` 收口；默认读取尾部窗口，适合观察长 `stdout.log` / `events.jsonl`。这仍是 provider run file polling/SSE 读面，不是 token 级执行 stdout streaming。
 
 验证命令：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven "-Dtest=ProviderCliWorkerExecutorTest#providerNativeCliWritesRunFilesAndTruncatesSqliteOutputText,ProviderCliWorkerExecutorTest#deepSeekMissingBinaryReturnsFailedMetadataWithoutThrowing,ControlNodeGraphActionResolutionTest#workerArtifactMetadataProjectsProviderRunFilesAndBoundedOutputText"
+& { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=TaskHandlerLiveFlowHttpTest#providerRunFileHttpSupportsSseTailSnapshots' test }
 ```
 
 阶段 D 剩余动作：

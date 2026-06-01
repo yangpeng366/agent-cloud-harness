@@ -248,7 +248,7 @@ Phase C（3周+）
 | B2: switch 迁移 | 已落地（主路径） | Claude / Cursor / DeepSeek / Reasonix / Gemini / Kimi / Copilot / OpenCode 已走 protocol build/parse 主路径；`ProviderCliWorkerExecutor` 内部旧 parser 仍保留为 fallback/反射测试兼容，后续可清理。 |
 | B3: GenericCliProtocol | 已落地 | `GenericCliProtocol` 支持 text/json/lines parser，可通过 discovery 注册。 |
 | B4: providers.yaml 自动发现 | 已落地（轻量版） | `ProviderProtocolDiscovery` 启动时从 `providers.yaml` / `providers.yml` / `providers.json` 发现协议配置，`Main` 已接入 discovery result 并在 worker preflight 前注册动态 provider/worker。当前 YAML parser 支持本方案里的简单 provider 列表，不是完整 YAML 规范实现；对 `native_cli_text/json/lines/stream_json` generic provider 已兼容 `protocol`、`command`、`binary`、`args`、`env`、`capabilities`、`dispatch_probe_args` 字段，JSON 配置同样支持这些别名。`command` 按完整命令执行；`binary + args` 使用 `binary` 作为启动目标并自动追加 task prompt。未写 `protocol` 但配置了 `binary` 或 `command` 时，会保守推断为 `native_cli_text`，并在 discovered provider metadata 标记 `provider_protocol_inferred=true`；同时执行短超时 startup help/probe，写入 `provider_protocol_probe_mode`、`provider_protocol_probe_command_shape`、`provider_protocol_probe_exit_code`、`provider_protocol_probe_success`、`provider_protocol_probe_suggested_parser`、`provider_protocol_probe_output_preview` 等诊断。新 `id` 会进入 `/api/v1/agents`、`/api/v1/workers` 与 provider-native 路由候选；是否 ready 仍取决于本机 binary、认证和 dispatch preflight；若配置了 `dispatch_probe_args`，分发前 readiness 和 `POST /api/v1/agents/{id}/preflight` 会优先执行这组低副作用 probe。动态 provider inventory 仍是内存态，未独立持久化。`native_cli_stream_json` 在 generic discovery 中已能解析通用 JSONL content/message/result/error 字段并标记 failed/error 事件，但仍不做 Claude/Cursor 等 provider-specific event 语义解析；`app_server_json_rpc` 仍走 Codex app-server 主链，不由 generic discovery 动态注册；`mcp` 与通用 handshake / tool bridge 仍未落地。配置了未支持协议的 provider 不再静默丢失，会以 `provider_type=unsupported` 出现在 `/api/v1/agents`，但不会进入 `/api/v1/workers` 或路由候选。 |
-| C1: SSE 增量事件流 | 已落地（task event wrapper 版） | 新增 `GET /api/v1/tasks/{id}/events?stream=true`，基于 harness `events` 表输出 SSE；Dialogue 选中 task 后用 `EventSource` 订阅，并在 worker/control/state 事件到达时增量刷新 `live_flow` 与 messages。Provider run 文件读面已支持 `tail=true&max_lines=N`，便于查看 `events.jsonl` / `stdout.log` 尾部窗口；当前仍不是 token 级 provider stdout SSE。 |
+| C1: SSE 增量事件流 | 已落地（task event + provider run file wrapper 版） | 新增 `GET /api/v1/tasks/{id}/events?stream=true`，基于 harness `events` 表输出 SSE；Dialogue 选中 task 后用 `EventSource` 订阅，并在 worker/control/state 事件到达时增量刷新 `live_flow` 与 messages。Provider run 文件读面已支持 `tail=true&max_lines=N`，也支持 `/provider_run_file?stream=true` / `Accept: text/event-stream` 返回 `provider_run_file.snapshot/update/done` 窗口流，便于观察 `events.jsonl` / `stdout.log` 尾部变化；当前仍不是 token 级 provider stdout SSE。 |
 | C2: Dialogue 实时状态徽标 | 已落地（SSE 触发刷新 + 轮询兜底版） | Dialogue 主视图 pinned summary 与 task thread 会对 active/running 任务展示“执行中”徽标、worker、elapsed 和 control node；选中 task 后 `EventSource` 会在 worker/control/state 事件到达时触发约 250ms 的局部刷新，5s 轮询保留为兜底。 |
 | C3: details event/tool 时间线 | 已落地（静态 live_flow 版） | Dialogue details 面板新增“执行时间线”，从 `live_flow` 聚合 cognition event、tool invocation、artifact、decision，按时间倒序展示。 |
 
@@ -275,6 +275,7 @@ node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18453 --re
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18455 -Surface chat -LifecycleMode real -DebugPort 19277 -UserDataDir .tmp\edge-dialogue-browser-probe-real-18455 -ScreenshotDir .tmp\dialogue-browser-screens-18455-real-chat
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-DialogueBrowserAcceptanceProbe.ps1 -BaseUrl http://localhost:18457 -Surface both -LifecycleMode real -DebugPort 19279 -UserDataDir .tmp\edge-dialogue-browser-probe-real-both-18457 -ScreenshotDir .tmp\dialogue-browser-screens-18457-real-both -NodeMaxOldSpaceMb 1024
 powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Port 18466 -Background -StdOutPath .tmp\harness-warmup-disabled-18466.out.log -StdErrPath .tmp\harness-warmup-disabled-18466.err.log -DisableDispatchPreflightWarmup
+& { . .\scripts\Use-Java21.ps1 -Quiet; $mvn = & .\scripts\Resolve-MavenCommand.ps1; & $mvn -q '-Dtest=TaskHandlerLiveFlowHttpTest#providerRunFileHttpSupportsSseTailSnapshots' test }
 ```
 
 关键验收点：
@@ -293,7 +294,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - Copilot 已迁移为 `CopilotProtocol` 并注册到默认 protocol registry；正常执行路径会保留 `provider_session_id` / `provider_active_model`，并设置 `provider_protocol_parser_used=true`。
 - OpenCode 已迁移为 `OpenCodeProtocol` 并注册到默认 protocol registry；正常执行路径会设置 `provider_protocol_parser_used=true`，不再依赖 executor 内部 opencode parser 主路径。
 - Task 级 SSE 事件面已接入：`/api/v1/tasks/{id}/events` 普通 GET 返回最近 harness events，`stream=true` 返回 `text/event-stream`；Dialogue 使用该流缩短“执行中/最近输出”刷新延迟。
-- Provider run 文件受控读取已支持尾部窗口：`/api/v1/tasks/{id}/provider_run_file?kind=events&tail=true&max_lines=50` 可读取最新 `events.jsonl` 尾部行；Dialogue / Console 的 `事件日志`、`标准输出` 预览默认使用 `tail=true&max_lines=80`，其他文件仍保持文件头 64 KiB 的兼容行为。
+- Provider run 文件受控读取已支持尾部窗口和 SSE 窗口流：`/api/v1/tasks/{id}/provider_run_file?kind=events&tail=true&max_lines=50` 可读取最新 `events.jsonl` 尾部行；`stream=true` 或 `Accept: text/event-stream` 会返回 `provider_run_file.snapshot/update/done`，用于观察长 `stdout.log` / `events.jsonl` 的尾部变化；Dialogue / Console 的 `事件日志`、`标准输出` 预览默认使用 `tail=true&max_lines=80`，其他文件仍保持文件头 64 KiB 的兼容行为。
 - Dialogue 主视图已具备运行态徽标：选中 active/running task 后，pinned summary 与 task thread 会显示“执行中 · worker · 已运行 XmYs · 节点 scheduler/continue”，并由 task SSE 事件触发局部刷新；5s 轮询仍作为兜底，避免用户必须展开 details 才知道 Codex/worker 是否仍在跑。
 - Dialogue 对 `partial_timeout` worker_round 已提供操作入口：有 `provider_thread_id / provider_session_id` 时显示“继续 Codex thread”和“手动移交”；没有 provider thread 时只显示“手动移交”，避免把部分结果压成普通失败。
 - `scripts/Run-CodexPartialTimeoutSmoke.ps1` 已提供最小可重复验收入口：同时跑 Codex app-server 有输出通信失败、ControlNodeGraph partial_timeout 进入 human gate 且写 worker_round、provider thread continue metadata、Dialogue worker_round action plan。
@@ -316,7 +317,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - 业务主链路已经闭合：任务进入 scheduler 后能选 worker、写 worker artifact、追加 `worker_round` session message、通过 `/api/v1/tasks/{id}/artifacts` 暴露产物，并在 Dialogue 中以内联 artifact/worker round 方式展示。
 - Codex 通信失败/超时链路已经闭合到 partial：有输出时不再直接当失败移交，而是落为 `partial_timeout` / `COMPLETED_PARTIAL`，保留 provider run files，并在 Dialogue 暴露继续 thread / 手动移交入口。
 - 本地 agent 接入链路已经闭合到轻量 dynamic provider：`providers.yaml/json` 可注册 native CLI generic provider，进入 agent/worker inventory 和 provider-native 路由候选；ready 状态仍按本机 binary 与认证真实探测。Console Provider Detail 现在可以直接运行 provider preflight，减少“API 有能力但页面不可操作”的断点。
-- Dialogue 执行面板链路已经闭合到 task-event wrapper：选中 task 后能看到 worker/status/最近输出/执行时间线，并通过 task SSE 事件缩短刷新延迟；provider run file 读面支持 tail 窗口，便于查看最近 JSONL/stdout 输出，但这仍不是 token 级 stdout streaming。
+- Dialogue 执行面板链路已经闭合到 task-event/provider-run-file wrapper：选中 task 后能看到 worker/status/最近输出/执行时间线，并通过 task SSE 事件缩短刷新延迟；provider run file 读面支持 tail 窗口与 SSE snapshot/update，便于查看最近 JSONL/stdout 输出，但这仍不是 token 级 stdout streaming。
 - 本地浏览器验收的运维链路已补齐到可配置启动口径：可通过 PowerShell 参数关闭启动时 dispatch preflight warmup，降低长 provider / 低内存机器对 UI 验收的干扰；运行中 readiness 和 task dispatch 的真实探测语义不变。
 
 仍未闭合或不能夸大的边界：
@@ -324,6 +325,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - `app_server_json_rpc` 和 `mcp` 还不是通用 dynamic provider protocol；Codex app-server 仍是内置 Codex 主链，不应把 `providers.yaml` 示例理解成所有 app-server provider 都已动态化。当前 discovery 只把这类配置注册为 Agent Inventory 中的 unsupported provider，不注册 runnable worker。
 - 未写 `protocol` 的配置当前已做证据型 startup help/probe，并把结果写入 `provider_protocol_probe_*` metadata；但该探测只用于诊断，不自动把 provider 升级为 `stream_json`、不做 provider-specific 能力识别，也不替代 dispatch readiness 的真实验活。通用 handshake 探测仍未落地。
 - `native_cli_stream_json` 的 generic discovery 当前只覆盖通用 JSONL content/message/result/error 字段，不等同于 Claude/Cursor 等 provider-specific JSON event 语义解析。
+- Provider run file SSE 当前是受控读取面的轮询式窗口流，不会从正在运行的 provider process 直接推 token；它改善 operator 观察 `stdout.log` / `events.jsonl` 的路径，但不等同于 Phase C 设想里的 provider stdout token-level streaming。
 - `-DisableDispatchPreflightWarmup` 只跳过启动预热，不会禁用用户点击 Console preflight、`/workers/{id}/readiness?mode=dispatch` 或实际任务分发时的 dispatch readiness；它是验收隔离开关，不是 provider 可用性判定替代品。
 - Browser richer acceptance 的自动化 `Surface both` real lifecycle 已在 2026-06-02 通过隔离端口复核；严格人工 A-H 仍未闭合。历史低内存 OOM 仍是风险，需要继续用隔离 DB、关闭启动 preflight warmup 和明确 JVM/timeout 参数跑 gate。
 - 严格人工 A-H 手点仍未完成；现有 screenshot、business smoke、partial timeout smoke 和 scripted browser seam 不能替代人工 gate。

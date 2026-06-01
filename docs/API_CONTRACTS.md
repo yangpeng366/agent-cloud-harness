@@ -52,7 +52,7 @@
 | GET | `/api/v1/tasks/{id}/judgment_trace` | 查看最近一次 execution/completion judgment 诊断视图 | 路径参数 `id` | `JudgmentTraceView` | 否 |
 | GET | `/api/v1/tasks/{id}/live_flow` | 聚合查看 live flow 诊断面 | Query: `limit` | `TaskLiveFlowView` | 否 |
 | GET | `/api/v1/tasks/{id}/events` | 查看或订阅 task 级 harness event 流 | Query: `limit?`, `stream=true?`, `interval_ms?`, `max_ticks?`; `Accept: text/event-stream` 也会启用流式响应 | `Event[]` 或 `text/event-stream` | 否 |
-| GET | `/api/v1/tasks/{id}/provider_run_file` | 受控读取最新 provider run 文件内容，用于排查 Codex/Kimi/DeepSeek 等 worker round | Query: `kind=last_message\|events\|stdout\|metadata\|prompt`, `tail=true?`, `max_lines?` | `ProviderRunFileView` | 否 |
+| GET | `/api/v1/tasks/{id}/provider_run_file` | 受控读取或订阅最新 provider run 文件内容，用于排查 Codex/Kimi/DeepSeek 等 worker round | Query: `kind=last_message\|events\|stdout\|metadata\|prompt`, `tail=true?`, `max_lines?`, `stream=true?`, `interval_ms?`, `max_ticks?`; `Accept: text/event-stream` 也会启用流式响应 | `ProviderRunFileView` 或 `text/event-stream` | 否 |
 | GET | `/api/v1/tasks/{id}/artifacts` | 查询任务产物列表；用于 Dialogue 的 artifact-first worker round 渲染，合并任务 `artifacts` 表与最新 `agent_run` artifacts | Query: `limit?` | `AgentRunArtifactView[]` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_run` | 查看该任务最新 experiment run 指标快照 | 路径参数 `id` | `ExperimentRunRecord` | 否 |
 | GET | `/api/v1/tasks/{id}/experiment_summary` | 以当前任务所属 `experiment_name` 为键，查看整组 matrix 汇总与 case 对比 | 路径参数 `id` | `ExperimentMatrixSummary` | 否 |
@@ -558,6 +558,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
   - `reason?`
 
 也就是说，`GET /api/v1/sessions/{id}/messages` 现在已经足够支持 `/dialogue/` 直接把消息渲染成 thread-style lifecycle reply，而不需要额外回查一轮 `live_flow` 才知道当前状态或下一步。
+
+`GET /api/v1/tasks/{id}/provider_run_file` 是 provider run 文件的受控读取面。当前语义：
+
+- 默认返回一次性 JSON：`ApiResponse<ProviderRunFileView>`。
+- `stream=true` 或请求头 `Accept: text/event-stream` 时返回 SSE，事件包括 `provider_run_file.snapshot`、后续内容变化时的 `provider_run_file.update`、心跳 comment、以及 `provider_run_file.stream.done`。
+- SSE 对 `events/stdout` 默认按 `tail=true` 读取尾部窗口，避免长 `stdout.log` / `events.jsonl` 一次性灌入浏览器；`last_message/metadata/prompt` 默认仍按头部窗口读取。调用方可显式传 `tail=true/false` 覆盖默认行为。
+- `interval_ms` 默认 `1500`，clamp 到 `250..10000`；`max_ticks` 默认 `120`，clamp 到 `1..600`。测试或短轮询场景可用 `max_ticks=1` 获取单次 SSE snapshot。
+- 这是 provider run file 的窗口流，不是 provider 执行器 token 级 stdout streaming。它依赖 provider 已经把 `stdout.log`、`events.jsonl`、`last_message.md` 等路径写入 worker metadata。
 
 `GET /api/v1/tasks/{id}/tool_trace` 当前返回的是已经真实落库的 `ToolInvocationRecord[]`，字段至少包括：
 
