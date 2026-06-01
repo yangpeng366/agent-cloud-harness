@@ -69,8 +69,8 @@ export function buildExecutionBoundaryFacts(flow, tools = []) {
         durationMs !== null ? formatDurationMs(durationMs) : null
     ].filter(Boolean);
     const chips = [
-        executionId ? `执行: ${executionId}` : null,
-        workerId ? `worker: ${workerId}` : null,
+        executionId ? `执行回合：${executionId}` : null,
+        workerId ? `执行方：${workerId}` : null,
         providerRunDir ? `运行目录: ${providerRunDir}` : null,
         providerLastMessagePath ? `最后输出: ${providerLastMessagePath}` : null,
         providerEventLogPath ? `事件日志: ${providerEventLogPath}` : null,

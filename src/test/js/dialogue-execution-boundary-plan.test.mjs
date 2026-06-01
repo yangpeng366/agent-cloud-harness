@@ -16,7 +16,8 @@ test("execution boundary facts keep trace summary and derive compact label", () 
 
     assert.equal(facts.traceSummary, "mounted context rendered and tool chain entered");
     assert.equal(facts.label, "工具执行中 · 2 次工具调用 · 1.4 s");
-    assert.deepEqual(facts.chips, ["执行: exec_1", "worker: codex"]);
+    assert.deepEqual(facts.chips, ["执行回合：exec_1", "执行方：codex"]);
+    assert.equal(facts.chips.some((chip) => /^执行:|^worker:/.test(chip)), false);
 });
 
 test("execution boundary facts fall back to tool list size when count is absent", () => {
