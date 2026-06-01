@@ -138,6 +138,7 @@
 - 展开的任务面板内部也进一步做成 progressive disclosure：`迭代链 / Related Messages / 连续性摘要` 常驻，`Mounted Context / 路由与判断 / 实验对比 / 最近产物 / 工具轨迹` 默认折叠，避免 inspector 一打开就把整页诊断信息全部铺开
 - 右侧 `实验对比` 面板的指标也不应继续露出 `runs / done / learned hint applied / avg tool steps / steps / cost`；对 operator 可见的统计项应显示为 `次运行 / 完成 / 学习偏好已应用 / 平均工具步数 / 步骤 / 成本`
 - `路由与判断` 里的 judgment 卡片现在默认也只保留 summary、execution boundary 和少量关键 diagnostics，不再把 alignment/candidate/evidence/unfinished 等所有细项一次性拼成大段文本
+- `路由与判断` 和 cognition timeline 的可见 chip 也应人话化：`next/current/follow-up/action/route/status/aligned/diverged` 不应直接裸露，显示为 `下一步/当前/跟进/动作/路由/状态/一致/不一致`
 - `/dialogue/` 右侧现在也会直接显示当前 task 的 experiment 对比卡片，但默认只常驻当前 mode headline；其余 mode 对比、prompt rollout 和 case 对照已下沉到折叠区
 - `/dialogue/` 的 route 卡片也会补 `route_source / preferred_worker_hint / learning_hint_applied / fallback_reason` 等字段，不再只显示一个 selected worker
 - 如果当前恢复链已经把某个 provider 判成热失败窗口，`/console/` 与 `/dialogue/` 的 route box 还会直接显示 `恢复阶段会优先避开 <provider>`；这条说明对应的是 recovery 视角，不是普通 route 永久禁用
