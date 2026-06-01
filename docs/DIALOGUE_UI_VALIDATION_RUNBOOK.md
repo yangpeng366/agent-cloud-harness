@@ -208,6 +208,7 @@ node .\scripts\screenshot.js --base-url http://localhost:18386 --report .tmp\dia
 - 顶部 `selectedStatus` 不能只停留在 `waiting_human / human_gate` 这类低信息状态；如果当前任务 metadata 已有 `execution_status=partial_timeout`、`recovery_stage=human_gate_required` 或 `auto_handoff_scheduled`，首屏 header 应直接显示 `部分结果待确认 / 等待人工确认 / 移交已排队` 这类恢复状态，让用户不用先打开 details 才知道恢复链停在哪里
 - 同样地，如果当前 focused task 的 `failure_summary_readable` 已经更干净，而 `task.summary` / `continuity_summary` 仍是历史脏摘要，第一页 `Harness` bubble、continuity 区和详情 modal 也必须优先显示这条干净失败摘要；不能继续把旧 `task.summary` 顶在最前面
 - 对当前选中的 active task，第一页还应有更强的运行态条带：至少把 `执行中/最近执行 worker` 与当前 `status / control node` 放在结果气泡上沿，而不是只混在普通 badge 里
+- 运行态条带和 task overview 里的 worker 标签应显示为 `执行方`，不要回退成 `Worker`、`worker <id>` 或 `worker · <id>`。
 - 这条运行态条带最好显式分成两层：第一层是 `执行中/最近执行 worker + status/control node`，第二层是 `最近输出 + short failure/result`；不能退化成只有一段普通正文或一串 badge
 - 这两层条带还应继续接近真正的执行面：`worker` 与 `status/control node` 最好拆成独立 headline/detail，而不是全挤在同一行长句里；`最近输出` 也应优先展示短结果 headline，避免用户先扫到一大段自然语言正文
 - 移动端也要守住同一条 transcript-first contract：即使新增了更明显的 worker/output 条带，`430px` 左右窄屏下也不应让 header 或 composer 重新长到压过 transcript；否则应直接判定为 **narrow transcript dominance regression**

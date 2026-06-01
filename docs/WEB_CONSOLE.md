@@ -69,6 +69,7 @@
 - 已知 provider/runtime 失败摘要应在 Dialogue 第一屏人话化：`thread not found` 显示为 `线程未找到 (...)`，`timeout / timed out` 显示为 `执行超时`，避免用户只能看到 `worker failed: timeout` 这类内部英文诊断
 - 顶部状态 focus line 里的新增恢复状态也应人话化：partial timeout 显示为 `部分结果待确认`，human gate 显示为 `等待人工确认`，auto handoff pending 显示为 `移交已排队`
 - 对当前选中的 active task，`Harness` 结果气泡上沿现在应优先形成更明显的运行态条带：直接露出 `执行中/最近执行 worker` 与当前 `status / control node`，更接近 `codex/openclaw` 的 first-screen execution strip
+- 这条运行态条带里的 worker 标签也应人话化为 `执行方`，不要在首屏继续显示 `worker <id>` 或 `worker · <id>` 这类 raw 标签
 - 这条 execution strip 不应只剩一层普通摘要文本；更合理的第一页形态是两层结构：`执行中/最近执行 worker + status/control node`，再加一层独立的 `最近输出 + short failure/result`
 - 这两层不应只是“两个色块里塞长句”；更接近执行面的做法是优先突出 `label / worker / short result`，把长叙述继续留在正文或展开态
 - 这条规则不只适用于下方 task thread；上半区 transcript 里的 `task_progress / task_result` 消息卡也应在默认折叠态就带出 `worker + 短结果预览`，避免用户先看到一条 `failed` 却不知道是哪轮 worker 的结果
