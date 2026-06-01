@@ -5,6 +5,7 @@ import com.agentcloud.agent.AgentProviderDescriptor;
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.agent.providers.CodexProvider;
+import com.agentcloud.agent.providers.UnsupportedAgentProvider;
 import com.agentcloud.engine.ControlNodeGraph;
 import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
@@ -289,6 +290,47 @@ class ApiErrorContractHttpTest {
             assertFalse(readiness.body().path("data").path("checks")
                 .path("executor_backend:provider_native_cli").asBoolean(true));
             assertTrue(readiness.body().path("data").path("reason").asText().contains("executor backend not supported"));
+        }
+    }
+
+    @Test
+    void unsupportedDiscoveredProviderIsVisibleInAgentsButNotWorkers() throws Exception {
+        AgentProviderRegistry providerRegistry = new AgentProviderRegistry().register(new UnsupportedAgentProvider(
+            "unsupported_app_server",
+            "Unsupported App Server",
+            List.of("coding"),
+            Map.of(
+                "provider_discovery", true,
+                "provider_protocol", "app_server_json_rpc",
+                "provider_discovery_supported", false
+            ),
+            "app_server_json_rpc is only wired for built-in codex app-server, not dynamic provider discovery"
+        ));
+        try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
+            tempDir.resolve("unsupported-discovered-provider.db"),
+            providerRegistry,
+            true
+        )) {
+            ApiCall agents = fixture.get("/api/v1/agents");
+            ApiCall detail = fixture.get("/api/v1/agents/unsupported_app_server");
+            ApiCall workers = fixture.get("/api/v1/workers");
+
+            assertEquals(200, agents.statusCode());
+            JsonNode agent = agentById(agents.body().path("data"), "unsupported_app_server");
+            assertFalse(agent.path("ready").asBoolean(true));
+            assertEquals("unsupported", agent.path("provider_type").asText());
+            assertEquals("unsupported", agent.path("transport").asText());
+            assertEquals("unsupported", agent.path("auth_status").asText());
+            assertTrue(agent.path("readiness_reason").asText().contains("built-in codex app-server"));
+            assertFalse(agent.path("metadata").path("provider_discovery_supported").asBoolean(true));
+            assertTrue(agent.path("metadata").path("unsupported_backend").asBoolean(false));
+            assertEquals("app_server_json_rpc", agent.path("metadata").path("provider_protocol").asText());
+
+            assertEquals(200, detail.statusCode());
+            assertEquals("unsupported_app_server", detail.body().path("data").path("provider_id").asText());
+
+            assertEquals(200, workers.statusCode());
+            assertFalse(hasWorker(workers.body().path("data"), "unsupported_app_server"));
         }
     }
 
@@ -623,6 +665,24 @@ class ApiErrorContractHttpTest {
         throw new AssertionError("worker not found: " + workerId);
     }
 
+    private JsonNode agentById(JsonNode agents, String providerId) {
+        for (JsonNode agent : agents) {
+            if (providerId.equals(agent.path("provider_id").asText())) {
+                return agent;
+            }
+        }
+        throw new AssertionError("agent not found: " + providerId);
+    }
+
+    private boolean hasWorker(JsonNode workers, String workerId) {
+        for (JsonNode worker : workers) {
+            if (workerId.equals(worker.path("worker_id").asText())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private List<String> supportedCommandToolCapabilities() {
         return HostToolAvailability.supportedCommandToolCapabilities();
     }
@@ -635,12 +695,21 @@ class ApiErrorContractHttpTest {
         private final String baseUrl;
 
         private ProviderAwareWorkerHttpFixture(Path dbPath, AgentProviderRegistry providerRegistry) throws IOException {
+            this(dbPath, providerRegistry, false);
+        }
+
+        private ProviderAwareWorkerHttpFixture(Path dbPath,
+                                               AgentProviderRegistry providerRegistry,
+                                               boolean includeAgentHandler) throws IOException {
             this.db = new DatabaseManager(dbPath);
             WorkerRegistry workerRegistry = new WorkerRegistry(providerRegistry);
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
             this.server.setExecutor(executor);
             this.server.createContext("/api/v1/workers", new WorkerHandler(workerRegistry, NioHttpServer.SHARED_MAPPER));
+            if (includeAgentHandler) {
+                this.server.createContext("/api/v1/agents", new AgentHandler(providerRegistry, NioHttpServer.SHARED_MAPPER));
+            }
             this.server.start();
             this.client = HttpClient.newHttpClient();
             this.baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();

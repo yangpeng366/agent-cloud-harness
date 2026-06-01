@@ -85,6 +85,16 @@ function writeSmokeProviderConfig(workDir) {
     '    binary: inferred-agent-missing-binary',
     '    args: ["run"]',
     '    capabilities: ["reading"]',
+    '  - id: unsupported_app_server',
+    '    display_name: Unsupported App Server',
+    '    protocol: app_server_json_rpc',
+    '    binary: codex',
+    '    capabilities: ["coding"]',
+    '  - id: unsupported_mcp',
+    '    display_name: Unsupported MCP',
+    '    protocol: mcp',
+    '    binary: mcp-agent',
+    '    capabilities: ["tool_use"]',
     '',
   ].join('\n');
   fs.writeFileSync(path.join(workDir, 'providers.yaml'), config, 'utf8');
@@ -182,6 +192,7 @@ async function run() {
     const workersPayload = await fetchJson(`${baseUrl}/api/v1/workers`);
     const readinessPayload = await fetchJson(`${baseUrl}/api/v1/workers/smoke_agent/readiness`);
     const inferredReadinessPayload = await fetchJson(`${baseUrl}/api/v1/workers/inferred_agent/readiness`);
+    const unsupportedAppServerPayload = await fetchJson(`${baseUrl}/api/v1/agents/unsupported_app_server`);
 
     const agent = findById(agentsPayload.data, 'provider_id', 'smoke_agent');
     const worker = findById(workersPayload.data, 'worker_id', 'smoke_agent');
@@ -189,6 +200,10 @@ async function run() {
     const inferredAgent = findById(agentsPayload.data, 'provider_id', 'inferred_agent');
     const inferredWorker = findById(workersPayload.data, 'worker_id', 'inferred_agent');
     const inferredReadiness = inferredReadinessPayload.data;
+    const unsupportedAppServer = findById(agentsPayload.data, 'provider_id', 'unsupported_app_server');
+    const unsupportedMcp = findById(agentsPayload.data, 'provider_id', 'unsupported_mcp');
+    const unsupportedWorker = findById(workersPayload.data, 'worker_id', 'unsupported_app_server')
+      || findById(workersPayload.data, 'worker_id', 'unsupported_mcp');
 
     assertCondition(report, 'agent discovered', Boolean(agent), 'smoke_agent appears in /api/v1/agents');
     assertCondition(report, 'worker discovered', Boolean(worker), 'smoke_agent appears in /api/v1/workers');
@@ -223,6 +238,23 @@ async function run() {
       inferredReadiness?.checks?.['provider:inferred_agent'] === false
         && /binary not found: inferred-agent-missing-binary/.test(inferredReadiness?.reason || ''),
       inferredReadiness?.reason || '');
+    assertCondition(report, 'unsupported app-server provider visible in agent inventory',
+      unsupportedAppServer?.ready === false
+        && unsupportedAppServer?.metadata?.provider_discovery_supported === false
+        && /built-in codex app-server/.test(unsupportedAppServer?.readiness_reason || ''),
+      JSON.stringify(unsupportedAppServer || {}));
+    assertCondition(report, 'unsupported mcp provider visible in agent inventory',
+      unsupportedMcp?.ready === false
+        && unsupportedMcp?.metadata?.provider_protocol === 'mcp'
+        && /not implemented/.test(unsupportedMcp?.readiness_reason || ''),
+      JSON.stringify(unsupportedMcp || {}));
+    assertCondition(report, 'unsupported providers are not registered as workers',
+      !unsupportedWorker,
+      JSON.stringify(unsupportedWorker || {}));
+    assertCondition(report, 'unsupported provider detail is readable',
+      unsupportedAppServerPayload?.data?.provider_id === 'unsupported_app_server'
+        && unsupportedAppServerPayload?.data?.provider_type === 'unsupported',
+      JSON.stringify(unsupportedAppServerPayload?.data || {}));
 
     report.completedAt = new Date().toISOString();
     report.passed = true;

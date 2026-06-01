@@ -275,6 +275,7 @@ class ProviderProtocolDiscoveryTest {
               - id: mcp_agent
                 protocol: mcp
                 binary: mcp-agent
+                capabilities: ["tool_use"]
             """);
 
         ProviderProtocolDiscovery.DiscoveryResult result =
@@ -288,12 +289,14 @@ class ProviderProtocolDiscoveryTest {
         ProviderProtocolDiscovery.UnsupportedProvider codex = result.unsupportedProviders().get(0);
         assertEquals("codex_dynamic", codex.id());
         assertEquals("Dynamic Codex", codex.displayName());
+        assertTrue(codex.capabilities().contains("coding"));
         assertEquals("app_server_json_rpc", codex.protocol());
         assertTrue(codex.reason().contains("built-in codex app-server"));
         assertEquals(false, codex.metadata().get("provider_discovery_supported"));
 
         ProviderProtocolDiscovery.UnsupportedProvider mcp = result.unsupportedProviders().get(1);
         assertEquals("mcp_agent", mcp.id());
+        assertEquals(List.of("tool_use"), mcp.capabilities());
         assertEquals("mcp", mcp.protocol());
         assertTrue(mcp.reason().contains("not implemented"));
         assertEquals(false, mcp.metadata().get("provider_discovery_supported"));

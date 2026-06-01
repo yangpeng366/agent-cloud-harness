@@ -380,9 +380,13 @@ public class ProviderProtocolDiscovery {
         metadata.put("provider_discovery_supported", false);
         metadata.put("provider_protocol", protocolType);
         metadata.put("provider_discovery_unsupported_reason", reason);
+        List<String> capabilities = config.capabilities != null && !config.capabilities.isEmpty()
+            ? List.copyOf(config.capabilities)
+            : List.of("coding", "reading", "session");
         return new UnsupportedProvider(
             id,
             firstNonBlank(config.displayName, id),
+            capabilities,
             protocolType,
             reason,
             Map.copyOf(metadata)
@@ -523,12 +527,14 @@ public class ProviderProtocolDiscovery {
 
     public record UnsupportedProvider(String id,
                                       String displayName,
+                                      List<String> capabilities,
                                       String protocol,
                                       String reason,
                                       Map<String, Object> metadata) {
         public UnsupportedProvider {
             if (id == null) id = "";
             if (displayName == null || displayName.isBlank()) displayName = id;
+            if (capabilities == null) capabilities = List.of();
             if (protocol == null) protocol = "";
             if (reason == null) reason = "provider protocol is not supported by current dynamic discovery";
             if (metadata == null) metadata = Map.of();

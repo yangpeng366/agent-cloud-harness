@@ -1465,13 +1465,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 当前进展（2026-06-02，dynamic discovery unsupported visibility）：
 
 - `ProviderProtocolDiscovery` 现在把 `app_server_json_rpc`、`mcp` 以及其他未知协议记录到 `DiscoveryResult.unsupportedProviders`，metadata 包含 `provider_discovery_supported=false` 与 `provider_discovery_unsupported_reason`。
-- 这些 unsupported provider 不会注册到 `ProviderProtocolRegistry`、`AgentProviderRegistry` 或 `WorkerRegistry`，因此不会被 router 当作 runnable worker 分发。
-- 这一步只解决“配置被静默忽略”的可观测性问题；`app_server_json_rpc` 的通用动态执行器、`mcp` handshake / tool bridge 仍未实现。
+- `Main` 会把这些 unsupported provider 注册为只读 `UnsupportedAgentProvider`，因此 `/api/v1/agents` 和 `/api/v1/agents/{id}` 能看到 `provider_type=unsupported`、`ready=false`、`ready_for_dispatch=false` 与跳过原因。
+- 这些 unsupported provider 不会注册到 `ProviderProtocolRegistry` 或 `WorkerRegistry`，也不会调用 `ProviderExecutionSupport.registerProviderNativeCli`，因此不会被 router 当作 runnable worker 分发。
+- 这一步只解决“配置被静默忽略”和“operator 读面不可见”的问题；`app_server_json_rpc` 的通用动态执行器、`mcp` handshake / tool bridge 仍未实现。
 
 当前验证入口：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven "-Dtest=ProviderProtocolDiscoveryTest#recordsUnsupportedAppServerAndMcpProvidersWithoutRegisteringRunnableProtocols"
+node .\scripts\provider-discovery-smoke.js --port 18461 --report .\.tmp\provider-discovery-smoke-18461\report.json --work-dir .\.tmp\provider-discovery-smoke-18461
 ```
 
 ---

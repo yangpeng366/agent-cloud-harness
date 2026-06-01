@@ -5,6 +5,7 @@ import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.SimpleAgentDiscoveryService;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
 import com.agentcloud.agent.providers.LocalCliAgentProvider;
+import com.agentcloud.agent.providers.UnsupportedAgentProvider;
 import com.agentcloud.engine.*;
 import com.agentcloud.engine.memory.ContextReconstructor;
 import com.agentcloud.engine.memory.PacketBuilder;
@@ -301,9 +302,10 @@ public class Main {
     private static void registerDiscoveredProviders(ProviderProtocolDiscovery.DiscoveryResult discovery,
                                                     AgentProviderRegistry agentProviderRegistry,
                                                     WorkerRegistry workerRegistry) {
-        if (discovery == null || discovery.providers().isEmpty()) {
+        if (discovery == null) {
             return;
         }
+        registerUnsupportedDiscoveredProviders(discovery, agentProviderRegistry);
         for (ProviderProtocolDiscovery.DiscoveredProvider provider : discovery.providers()) {
             if (provider == null || provider.id() == null || provider.id().isBlank()) {
                 continue;
@@ -326,6 +328,27 @@ public class Main {
                     provider.capabilities(),
                     provider.metadata()
                 );
+            }
+        }
+    }
+
+    private static void registerUnsupportedDiscoveredProviders(ProviderProtocolDiscovery.DiscoveryResult discovery,
+                                                               AgentProviderRegistry agentProviderRegistry) {
+        if (discovery.unsupportedProviders().isEmpty()) {
+            return;
+        }
+        for (ProviderProtocolDiscovery.UnsupportedProvider provider : discovery.unsupportedProviders()) {
+            if (provider == null || provider.id() == null || provider.id().isBlank()) {
+                continue;
+            }
+            if (agentProviderRegistry.get(provider.id()) == null) {
+                agentProviderRegistry.register(new UnsupportedAgentProvider(
+                    provider.id(),
+                    provider.displayName(),
+                    provider.capabilities(),
+                    provider.metadata(),
+                    provider.reason()
+                ));
             }
         }
     }
