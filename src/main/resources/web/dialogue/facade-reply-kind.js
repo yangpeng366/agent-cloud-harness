@@ -17,7 +17,7 @@ export function classifyFacadeReply(input) {
             category: "result",
             toneClass: "signal--done",
             badgeTone: "done",
-            badgeText: "latest result",
+            badgeText: "最新结果",
             inlineVerb: "任务已完成",
             toastVerb: "任务已完成"
         };
@@ -27,7 +27,7 @@ export function classifyFacadeReply(input) {
             category: "progress",
             toneClass: "signal--active",
             badgeTone: "active",
-            badgeText: "latest progress",
+            badgeText: "最新进展",
             inlineVerb: "任务已推进",
             toastVerb: "任务已推进"
         };
@@ -37,7 +37,7 @@ export function classifyFacadeReply(input) {
             category: "worker_round",
             toneClass: "signal--active",
             badgeTone: "active",
-            badgeText: "latest round",
+            badgeText: "最新回合",
             inlineVerb: "执行回合已更新",
             toastVerb: "执行回合已更新"
         };
@@ -47,7 +47,7 @@ export function classifyFacadeReply(input) {
             category: "receipt",
             toneClass: "signal--manual",
             badgeTone: "manual",
-            badgeText: "latest receipt",
+            badgeText: "最新回执",
             inlineVerb: "任务已记录",
             toastVerb: "任务已记录"
         };

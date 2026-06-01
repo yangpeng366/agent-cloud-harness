@@ -94,5 +94,5 @@ test("responses path matrix covers task_required progress path end to end", () =
     }, "task_resp_1");
 
     assert.match(feedback.toastText, /任务已推进：task_resp_1 · active/);
-    assert.equal(highlight?.badgeText, "latest progress");
+    assert.equal(highlight?.badgeText, "最新进展");
 });

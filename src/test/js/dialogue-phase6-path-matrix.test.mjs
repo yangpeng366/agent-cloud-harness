@@ -119,7 +119,7 @@ test("phase6 path matrix covers task_required auto-start path end to end", () =>
     ], scopedReply, "task_auto_1");
 
     assert.match(feedback.toastText, /任务已推进：task_auto_1 · active/);
-    assert.equal(highlight?.badgeText, "latest progress");
+    assert.equal(highlight?.badgeText, "最新进展");
 });
 
 test("phase6 path matrix covers follow-up manual-start receipt path end to end", () => {
@@ -184,7 +184,7 @@ test("phase6 path matrix covers follow-up manual-start receipt path end to end",
     ], scopedReply, "task_followup_1");
 
     assert.match(feedback.toastText, /任务已记录：task_followup_1 · active/);
-    assert.equal(highlight?.badgeText, "latest receipt");
+    assert.equal(highlight?.badgeText, "最新回执");
 });
 
 test("phase6 path matrix covers manual-start continuity task note attach semantics", () => {

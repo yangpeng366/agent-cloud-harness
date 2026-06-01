@@ -14,7 +14,7 @@ test("facade reply highlight plan marks the latest matching task reply message",
     }, "task_1");
 
     assert.equal(plan.messageId, "m3");
-    assert.equal(plan.badgeText, "latest progress");
+    assert.equal(plan.badgeText, "最新进展");
     assert.equal(plan.badgeTone, "active");
 });
 
