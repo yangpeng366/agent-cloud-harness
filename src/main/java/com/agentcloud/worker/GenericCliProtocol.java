@@ -236,9 +236,148 @@ public class GenericCliProtocol implements ProviderProtocol {
                 return new ParsedOutput(status, summary, text,
                     "failed".equals(status) ? ExecutionOutcome.FAILED : ExecutionOutcome.COMPLETED, null);
             }
+        },
+        STREAM_JSON {
+            @Override
+            ParsedOutput parse(String raw) {
+                if (raw == null || raw.isBlank()) {
+                    return TEXT.parse("");
+                }
+                StringBuilder output = new StringBuilder();
+                String status = "completed";
+                String errorText = null;
+                int eventCount = 0;
+                int parsedEventCount = 0;
+                for (String line : raw.split("\\R")) {
+                    String trimmed = line == null ? "" : line.trim();
+                    if (trimmed.isBlank()) {
+                        continue;
+                    }
+                    eventCount++;
+                    if (!trimmed.startsWith("{")) {
+                        appendLine(output, trimmed);
+                        continue;
+                    }
+                    try {
+                        JsonNode event = MAPPER.readTree(trimmed);
+                        parsedEventCount++;
+                        String type = text(event, "type");
+                        String extracted = extractStreamText(event, type);
+                        appendLine(output, extracted);
+                        if (isErrorEvent(event, type)) {
+                            status = "failed";
+                            errorText = firstNonBlank(errorText, extracted, text(event, "message"), text(event, "error"), trimmed);
+                        }
+                    } catch (Exception ignored) {
+                        appendLine(output, trimmed);
+                    }
+                }
+                String text = output.toString().trim();
+                String summary = summarize(text.isBlank() ? errorText : text);
+                Map<String, Object> metadata = new LinkedHashMap<>();
+                metadata.put("stream_json_event_count", eventCount);
+                metadata.put("stream_json_parsed_event_count", parsedEventCount);
+                if (errorText != null && !errorText.isBlank()) {
+                    metadata.put("stream_json_error_text", errorText);
+                }
+                return new ParsedOutput(status, summary, text,
+                    "failed".equals(status) ? ExecutionOutcome.FAILED : ExecutionOutcome.COMPLETED, metadata);
+            }
         };
 
         abstract ParsedOutput parse(String raw);
+    }
+
+    private static String extractStreamText(JsonNode event, String type) {
+        String direct = firstNonBlank(
+            text(event, "content"),
+            text(event, "text"),
+            text(event, "delta"),
+            text(event, "response"),
+            text(event, "result"),
+            text(event, "message")
+        );
+        if (direct != null) {
+            return direct;
+        }
+        JsonNode message = event.path("message");
+        if (message.isTextual()) {
+            return message.asText();
+        }
+        if (message.isObject()) {
+            String nested = firstNonBlank(text(message, "content"), text(message, "text"));
+            if (nested != null) {
+                return nested;
+            }
+            JsonNode content = message.path("content");
+            if (content.isArray()) {
+                StringBuilder blocks = new StringBuilder();
+                for (JsonNode block : content) {
+                    appendLine(blocks, firstNonBlank(text(block, "text"), text(block, "content")));
+                }
+                return blocks.toString();
+            }
+        }
+        if ("error".equalsIgnoreCase(type)) {
+            return firstNonBlank(text(event, "error"), text(event, "reason"));
+        }
+        return null;
+    }
+
+    private static boolean isErrorEvent(JsonNode event, String type) {
+        String status = text(event, "status");
+        String subtype = text(event, "subtype");
+        return "error".equalsIgnoreCase(type)
+            || "failed".equalsIgnoreCase(type)
+            || "error".equalsIgnoreCase(status)
+            || "failed".equalsIgnoreCase(status)
+            || "error".equalsIgnoreCase(subtype)
+            || event.path("is_error").asBoolean(false);
+    }
+
+    private static void appendLine(StringBuilder target, String text) {
+        if (target == null || text == null || text.isBlank()) {
+            return;
+        }
+        if (!target.isEmpty()) {
+            target.append('\n');
+        }
+        target.append(text.trim());
+    }
+
+    private static String summarize(String value) {
+        String text = value != null ? value.trim() : "";
+        return text.length() > 240 ? text.substring(0, 240) + "..." : text;
+    }
+
+    private static String text(JsonNode node, String field) {
+        if (node == null || field == null) {
+            return null;
+        }
+        JsonNode value = node.path(field);
+        if (value.isMissingNode() || value.isNull()) {
+            return null;
+        }
+        if (value.isTextual()) {
+            String text = value.asText();
+            return text.isBlank() ? null : text;
+        }
+        if (value.isNumber() || value.isBoolean()) {
+            return value.asText();
+        }
+        return null;
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private record ParsedOutput(String status, String summary, String outputText,

@@ -169,7 +169,7 @@ class ProviderProtocolDiscoveryTest {
     }
 
     @Test
-    void discoversNativeCliStreamJsonProviderAsLinesParser() throws Exception {
+    void discoversNativeCliStreamJsonProviderAsStreamJsonParser() throws Exception {
         Path config = tempDir.resolve("providers.yaml");
         Files.writeString(config, """
             providers:
@@ -196,7 +196,39 @@ class ProviderProtocolDiscoveryTest {
         );
 
         assertEquals("completed", result.executionStatus());
-        assertEquals("LINES", result.metadata().get("provider_output_parser"));
+        assertEquals("STREAM_JSON", result.metadata().get("provider_output_parser"));
+        assertEquals("first\ndone", result.outputText());
+        assertEquals(2, result.metadata().get("stream_json_event_count"));
+        assertEquals(2, result.metadata().get("stream_json_parsed_event_count"));
+    }
+
+    @Test
+    void nativeCliStreamJsonParserMarksErrorEventsAsFailed() throws Exception {
+        Path config = tempDir.resolve("providers.yaml");
+        Files.writeString(config, """
+            providers:
+              - id: stream_error_agent
+                protocol: native_cli_stream_json
+                binary: stream-agent
+            """);
+
+        ProviderProtocol protocol = new ProviderProtocolDiscovery(List.of(config)).discover().get("stream_error_agent");
+        assertNotNull(protocol);
+
+        WorkerExecutionResult result = protocol.parseOutput(
+            """
+            {"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}
+            {"type":"result","status":"error","message":"provider failed"}
+            """.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+            new ProviderProtocol.ProviderCliPlan(List.of("stream-agent"), "", ""),
+            12,
+            Map.of()
+        );
+
+        assertEquals("failed", result.executionStatus());
+        assertEquals(ExecutionOutcome.FAILED, result.outcome());
+        assertEquals("partial\nprovider failed", result.outputText());
+        assertEquals("provider failed", result.metadata().get("stream_json_error_text"));
     }
 
     @Test

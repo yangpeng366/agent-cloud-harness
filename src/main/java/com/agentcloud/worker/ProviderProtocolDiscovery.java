@@ -432,7 +432,8 @@ public class ProviderProtocolDiscovery {
         }
         return switch (protocol.toLowerCase()) {
             case "native_cli_json" -> "json";
-            case "native_cli_lines", "native_cli_stream_json" -> "lines";
+            case "native_cli_lines" -> "lines";
+            case "native_cli_stream_json" -> "stream_json";
             default -> "text";
         };
     }
@@ -444,6 +445,7 @@ public class ProviderProtocolDiscovery {
         return switch (parserName.toLowerCase()) {
             case "json" -> GenericCliProtocol.OutputParser.JSON;
             case "lines" -> GenericCliProtocol.OutputParser.LINES;
+            case "stream_json" -> GenericCliProtocol.OutputParser.STREAM_JSON;
             default -> GenericCliProtocol.OutputParser.TEXT;
         };
     }
