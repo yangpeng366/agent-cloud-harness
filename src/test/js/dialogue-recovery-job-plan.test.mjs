@@ -30,10 +30,11 @@ test("recovery job plan summarizes latest async recovery job", () => {
     assert.deepEqual(plan.cards.map((item) => item.label), ["恢复任务", "请求", "动作", "模式"]);
     assert.equal(plan.cards[3].value, "新会话");
     assert.deepEqual(plan.chips, [
-        "worker codex",
+        "执行方 codex",
         "失败 临时运行失败",
         "受理 05/17 18:00"
     ]);
+    assert.equal(plan.chips.some((chip) => /^worker /.test(chip)), false);
 });
 
 test("recovery job plan surfaces failed error summary", () => {
@@ -65,7 +66,8 @@ test("recovery job plan surfaces async handoff target", () => {
         label: "动作",
         value: "移交"
     });
-    assert.equal(plan.chips.includes("worker claude"), true);
+    assert.equal(plan.chips.includes("执行方 claude"), true);
+    assert.equal(plan.chips.includes("worker claude"), false);
     assert.equal(plan.chips.includes("失败 临时运行失败"), true);
 });
 

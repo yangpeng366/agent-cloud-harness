@@ -58,7 +58,7 @@ export function buildRecoveryJobPlan(jobs, options = {}) {
             failureEvidence ? { label: "失败证据", value: failureEvidence } : null
         ].filter(Boolean),
         chips: [
-            targetWorker ? `worker ${targetWorker}` : "",
+            targetWorker ? `执行方 ${targetWorker}` : "",
             failureClass ? `失败 ${humanizeFailureClass(failureClass)}` : "",
             failureEvidence ? `证据 ${preview(failureEvidence, 48)}` : "",
             acceptedAt ? `受理 ${formatTime(acceptedAt)}` : "",

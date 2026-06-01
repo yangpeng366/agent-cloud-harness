@@ -4,7 +4,7 @@ const ACTIONS = {
     resume: { action: "resume", label: "恢复" },
     recover: { action: "recover", label: "自动恢复" },
     escalate: { action: "escalate", label: "转人工处理" },
-    handoff: { action: "handoff", label: "移交 Worker" }
+    handoff: { action: "handoff", label: "移交执行方" }
 };
 
 export function buildTaskActionPlan(task) {

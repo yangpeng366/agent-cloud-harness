@@ -8,7 +8,7 @@ test("task action render plan emits one primary action and secondary drawer acti
         secondary: [
             { action: "pause", label: "暂停" },
             { action: "escalate", label: "转人工处理" },
-            { action: "handoff", label: "移交 Worker" }
+            { action: "handoff", label: "移交执行方" }
         ]
     }, {
         renderButton: (item, ghost) => `<button data-action="${item.action}" data-ghost="${ghost}">${item.label}</button>`,
@@ -25,7 +25,7 @@ test("task action render plan emits one primary action and secondary drawer acti
 test("task action render plan falls back to empty primary for terminal tasks", () => {
     const rendered = renderTaskActionHtml({
         primary: null,
-        secondary: [{ action: "handoff", label: "移交 Worker" }]
+        secondary: [{ action: "handoff", label: "移交执行方" }]
     }, {
         renderButton: (item) => `<button data-action="${item.action}">${item.label}</button>`,
         renderEmpty: (text) => `<p>${text}</p>`
@@ -34,4 +34,12 @@ test("task action render plan falls back to empty primary for terminal tasks", (
     assert.match(rendered.primaryHtml, /当前任务已到终态/);
     assert.equal(rendered.secondaryHtml, "");
     assert.equal(rendered.drawerHidden, false);
+});
+
+test("task action source does not expose Worker in handoff label", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(new URL("../../main/resources/web/dialogue/task-action-plan.js", import.meta.url), "utf8");
+
+    assert.match(source, /label: "移交执行方"/);
+    assert.doesNotMatch(source, /移交 Worker/);
 });
