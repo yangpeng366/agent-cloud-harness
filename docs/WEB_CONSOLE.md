@@ -51,7 +51,7 @@
 - 左侧 session rail 现在支持收起；窄屏下会退化成抽屉式 thread picker，更接近 chat app
 - 中间主视图现在默认就是单一 transcript surface：先看 `session message` 流；`任务链` 被下沉到 transcript 下方的折叠区，需要时再展开
 - 顶部状态区已经从大块 metrics 卡收成轻量 status pills，只保留会话数、任务数、链路数和当前焦点
-- task details 头部现在也只把 `状态 / 控制节点` 保留在焦点线，overview 卡缩成 `任务 ID / Worker / 实验模式 / Tool chain` 四项，避免和顶部焦点重复
+- task details 头部现在也只把 `状态 / 控制节点` 保留在焦点线，overview 卡缩成 `任务 ID / 执行方 / 实验模式 / 工具链` 四项；无 experiment metadata 时实验模式显示 `临时任务`，不要露出 `ad hoc`
 - 在 `聊天流` 视图里，会混合显示 `user / assistant / system` 三种角色，并支持按 `role` 与 `scope(task-only / session-only)` 过滤
 - `聊天流` 前面会额外给出 `assistant / system` 分组摘要卡片，快速显示最近回执、top message types 和最新 trigger/completion/action 信号
 - 这组 `assistant / system` 摘要卡片现在默认只保留一条最强的生命周期信号和更短的最新摘要，避免它本身又变成一块新的诊断面板
