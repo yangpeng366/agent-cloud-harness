@@ -113,3 +113,25 @@ test("dialogue route chip source does not emit raw English control labels", asyn
     assert.match(appJs, /"学习记忆：已应用"/);
     assert.match(appJs, /"路由\/执行：一致"/);
 });
+
+test("dialogue task modal route labels avoid raw worker and empty English fallbacks", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+    const modalSource = appJs.slice(
+        appJs.indexOf("async function openTaskDetailModal"),
+        appJs.indexOf("function renderProviderRunFiles")
+    );
+
+    assert.doesNotMatch(modalSource, /<label>Worker<\/label>/);
+    assert.doesNotMatch(modalSource, /<label>选中 Worker<\/label>/);
+    assert.doesNotMatch(modalSource, /<label>候选 Workers<\/label>/);
+    assert.doesNotMatch(modalSource, /"unassigned"/);
+    assert.doesNotMatch(modalSource, /"unknown"/);
+    assert.doesNotMatch(modalSource, /"not specified"/);
+    assert.doesNotMatch(modalSource, /"no result"/);
+    assert.doesNotMatch(modalSource, /"tool"/);
+    assert.doesNotMatch(modalSource, /\|\| "none"/);
+    assert.match(modalSource, /<label>执行方<\/label>/);
+    assert.match(modalSource, /<label>选中执行方<\/label>/);
+    assert.match(modalSource, /<label>候选执行方<\/label>/);
+});

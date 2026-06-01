@@ -5213,8 +5213,8 @@ async function openTaskDetailModal(taskId) {
             <value>${escapeHtml(task.control_node || task.controlNode || "intake")}</value>
         </div>
         <div class="info-item">
-            <label>Worker</label>
-            <value>${escapeHtml(task.assigned_worker || task.assignedWorker || "unassigned")}</value>
+            <label>执行方</label>
+            <value>${escapeHtml(task.assigned_worker || task.assignedWorker || "未分配")}</value>
         </div>
         <div class="info-item">
             <label>优先级</label>
@@ -5257,19 +5257,19 @@ async function openTaskDetailModal(taskId) {
             <div class="info-grid" style="grid-template-columns: 1fr;">
                 <div class="info-item">
                     <label>路由来源</label>
-                    <value>${escapeHtml(routePreview.route_source || routePreview.routeSource || "unknown")}</value>
+                    <value>${escapeHtml(routePreview.route_source || routePreview.routeSource || "未知")}</value>
                 </div>
                 <div class="info-item">
-                    <label>选中 Worker</label>
-                    <value>${escapeHtml(routePreview.selected_worker || routePreview.selectedWorker || "unknown")}</value>
+                    <label>选中执行方</label>
+                    <value>${escapeHtml(routePreview.selected_worker || routePreview.selectedWorker || "未分配")}</value>
                 </div>
                 <div class="info-item">
                     <label>选择原因</label>
-                    <value>${escapeHtml(routePreview.why_selected || routePreview.whySelected || routePreview.route_reason || routePreview.routeReason || "not specified")}</value>
+                    <value>${escapeHtml(routePreview.why_selected || routePreview.whySelected || routePreview.route_reason || routePreview.routeReason || "暂无")}</value>
                 </div>
                 <div class="info-item">
-                    <label>候选 Workers</label>
-                    <value>${escapeHtml((routePreview.candidate_workers || routePreview.candidateWorkers || []).join(", ") || "none")}</value>
+                    <label>候选执行方</label>
+                    <value>${escapeHtml((routePreview.candidate_workers || routePreview.candidateWorkers || []).join(", ") || "暂无")}</value>
                 </div>
             </div>
         `;
@@ -5287,7 +5287,7 @@ async function openTaskDetailModal(taskId) {
         decisionItems.push(`
             <div class="info-item">
                 <label>执行判断</label>
-                <value>${escapeHtml(executionJudgment.action || executionJudgment.status || "unknown")}</value>
+                <value>${escapeHtml(executionJudgment.action || executionJudgment.status || "未知")}</value>
             </div>
         `);
     }
@@ -5295,7 +5295,7 @@ async function openTaskDetailModal(taskId) {
         decisionItems.push(`
             <div class="info-item">
                 <label>完成判断</label>
-                <value>${escapeHtml(completionJudgment.status || "unknown")}</value>
+                <value>${escapeHtml(completionJudgment.status || "未知")}</value>
             </div>
         `);
     }
@@ -5303,7 +5303,7 @@ async function openTaskDetailModal(taskId) {
         decisionItems.push(`
             <div class="info-item">
                 <label>决策 ${index + 1}</label>
-                <value>${escapeHtml(decision.decision_type || decision.decisionType || "decision")}: ${escapeHtml(decision.result || decision.summary || "no result")}</value>
+                <value>${escapeHtml(decision.decision_type || decision.decisionType || "decision")}: ${escapeHtml(decision.result || decision.summary || "暂无结果")}</value>
             </div>
         `);
     });
@@ -5316,7 +5316,7 @@ async function openTaskDetailModal(taskId) {
     if (tools.length > 0) {
         dom.modalTools.innerHTML = tools.map((tool) => `
             <div class="info-item">
-                <label>${escapeHtml(tool.tool_name || tool.toolName || "tool")}</label>
+                <label>${escapeHtml(tool.tool_name || tool.toolName || "工具")}</label>
                 <value>${escapeHtml(toolTraceStatusLabel(tool))} · ${escapeHtml(toolTraceSummary(tool))}</value>
             </div>
         `).join("");
