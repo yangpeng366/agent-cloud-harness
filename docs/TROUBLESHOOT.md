@@ -36,6 +36,19 @@
 - **现象**: 访问 `http://localhost:8080/` 会直接跳到 `/dialogue/`。
 - **规避方式**: 调试前端问题时，明确区分 `/dialogue/` 和 `/console/` 两套页面；API 调试仍走 `/api/v1/*`。
 
+### G06: Windows + Surefire 可能冒出 manifest classpath 假失败
+
+- **位置**: `pom.xml`, `target/surefire-reports/*.dumpstream`
+- **现象**: 在 Windows/JDK 21 下跑 Maven 测试时，偶发出现：
+  - `ClassNotFoundException: com.agentcloud.runtime.TaskRuntimeContextBuilder`
+  - `schema.sql not found`
+- **根因**: Surefire manifest classpath 在当前工作站会触发绝对路径根盘校验，属于测试引导层噪音，不是业务类或资源真实缺失。
+- **当前口径**: 仓库已经把 `-Djdk.net.URLClassPath.disableClassPathURLCheck=true` 固化进 `pom.xml` 的 `maven-surefire-plugin.argLine`，正常通过 `scripts/Test-WithJava21.ps1` 或直接 `mvn test` 不应再要求手工设置 `JDK_JAVA_OPTIONS`。
+- **排查方式**:
+  1. 先看 `pom.xml` 的 Surefire `argLine` 是否仍包含该 JVM 参数
+  2. 再看 `target/surefire-reports/*.dumpstream` 是否仍是类路径校验噪音，而不是某个真实测试失败
+  3. 只有在 `argLine` 已生效后仍复现时，才继续怀疑构建产物或资源打包问题
+
 ## 2. 常见错误场景
 
 ### 2.0.a 最近失败任务恢复入口验收
@@ -266,6 +279,7 @@ providers:
   6. 如果任务仍没有路由到该 worker，检查 task type 是否落在配置的 `capabilities` 内，以及该 worker 是否 ready
   7. 如果需要查看 provider 输出，优先查 artifact metadata 里的 `provider_run_dir / provider_last_message_path / provider_stdout_path / provider_event_log_path`
   8. 也可通过 `GET /api/v1/tasks/{id}/provider_run_file?kind=last_message|stdout|events|metadata|prompt` 读取受控 run 文件；排查长 `events.jsonl` / `stdout.log` 时可加 `tail=true&max_lines=50` 只看尾部窗口
+  9. 如果要确认文件尾部是否仍在变化，优先改用 `stream=true` 或请求头 `Accept: text/event-stream`，观察 `provider_run_file.snapshot` 和后续 `provider_run_file.update`；这条读面验证的是“尾部窗口内容变化是否能被观测到”，不是 token 级 stdout streaming
 - **已验证的真实 smoke**:
   1. 在临时工作目录放 `providers.yaml`，使用独立端口和临时 DB 启动 harness
   2. `/api/v1/agents` 返回 `smoke_agent`，metadata 含 `provider_discovery=true`、`configured_from=providers.yaml`
@@ -958,6 +972,28 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
   1. 先打 `GET /v1/models`
   2. 再跑 `.\scripts\Run-ChatFacadeAcceptanceProbe.ps1 -BaseUrl http://localhost:18080`
 
+### 2.8.1.a worker round 经常空输出，但 judgment 仍然有结果
+
+- **典型表现**:
+  1. `live_flow`、`judgment_trace` 或任务详情里能看到 execution/completion judgment
+  2. 但最近一轮 worker output 很短、为空，或根本没有形成有价值 artifact
+  3. 于是会出现“有判断、无产物”的观感
+- **已确认根因方向**:
+  1. worker round 通常比 judgment round 更容易超时，因为输出更长、预算更高
+  2. 某些 OpenAI-compatible 网关根路径并不是真正的 JSON API，实际可用端点可能是 `/v1/chat/completions`
+  3. 当 worker round 首先失败或空跑时，judgment 仍可能基于已有上下文返回判断结果
+- **解决方案**:
+  1. 先确认 `OPENAI_BASE_URL` 是否真的命中可用 JSON 端点，不要默认根路径可用
+  2. 对真实 live validation，优先使用：
+     - `OPENAI_TIMEOUT_SECONDS=90`
+     - `OPENAI_MAX_RETRIES=2`
+     - `OPENAI_MAX_TOKENS=800`
+  3. 用 `GET /api/v1/tasks/{id}/live_flow`、`GET /api/v1/tasks/{id}/runtime_context`、`GET /api/v1/tasks/{id}/tool_trace` 一起判断，不要只看 judgment 是否存在
+- **快速验证**:
+  1. 新建一个文档类或调研类任务
+  2. 检查 `worker_round` 是否产出非空 output / artifact
+  3. 同时确认 judgment 和 worker 是否都在命中同一条可用模型端点
+
 ### 2.8.2 `Run-ChatFacadeAcceptanceWithLocalHarness.ps1` 跑通了，但 `.tmp` 下还看到 `chat-facade-acceptance*.log`
 
 - **典型表现**:
@@ -1060,6 +1096,11 @@ java --enable-preview -jar target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar
   3. 已确认 `Use-Java21.ps1`、`Build-WithJava21.ps1`、`Run-HarnessWithJava21.ps1`、`Test-WithJava21.ps1` 文件头均不再带 UTF-8 BOM，且四个脚本不含非 ASCII 字符。
   4. 已验证 `powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -Dtest=ProviderFailureClassifierTest` 成功退出。
   5. 已验证 `powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven` 成功产出 `target/agent-cloud-harness-0.1.0-SNAPSHOT-shaded.jar`。
+  6. `Test-WithJava21.ps1` 现已兼容两种窄跑写法：
+     - `powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -Dtest=ProviderFailureClassifierTest`
+     - `powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMaven -MavenArgs "-Dtest=ProviderFailureClassifierTest"`
+  7. 当前推荐文档示例优先写 `-MavenArgs "-Dtest=..."`，因为它更明确，也更不容易和脚本参数绑定混淆；裸 `-Dtest=...` 继续保留兼容。
+  8. `Use-Java21.ps1` 在 `-Quiet` 模式下不再额外打印 `[INFO] Configuring Java 21 environment...`，避免把依赖它的 acceptance 脚本输出污染成“非纯 JSON”。
 
 ### 2.8.7 调研类真实任务自动执行失败，但证据已经收集到了
 
@@ -1221,6 +1262,16 @@ codex debug app-server send-message-v2 --help
   2. 先用 `agent_runs` 的结构化字段定根因，再看 artifact 原文补证据
   3. 对 `thread not found / timeout / session expired` 类 transient failure，优先走 `/api/v1/tasks/{id}/recover` 触发 fresh-session 恢复，而不是手工沿用旧 thread id
 
+
+### 2.10.2 Codex app-server 报 `unexpected argument '--no-alt-screen' found` 或表现成 initialize 超时
+
+- **典型表现**:
+  1. `provider_error=initialize: timed out waiting for response`
+  2. `.tmp\provider-runs\codex\<task_id>\run-*\events.jsonl` 中，`harness_send initialize` 后立刻出现 `error: unexpected argument '--no-alt-screen' found`
+  3. `last_message.md` 为空，`events.jsonl` 只有 CLI usage 输出，没有 JSON-RPC initialize response
+- **根因**：Codex CLI `0.144.4` 的 `app-server` 不接受 `--no-alt-screen`，旧 harness 启动命令 `codex app-server --no-alt-screen --listen stdio://` 会在进入 JSON-RPC 握手前失败。
+- **当前修复**：`CodexAppServerWorkerExecutor` 的 app-server plan 固定为 `codex app-server --listen stdio://`；`--no-alt-screen` 仅保留在 `codex exec --json` 的 exec-json 路径。
+- **验证入口**：跑 `CodexAppServerWorkerExecutorTest,AgentProviderSupportTest,ApiErrorContractHttpTest`，再重建 shaded jar 后复跑 `Run-BaselineMatrixRealWorkerSmoke.ps1`。
 ### 2.11 任务已经 handoff 到别的 worker，但 live flow / judgment 仍显示旧 worker 身份
 
 - **典型表现**:

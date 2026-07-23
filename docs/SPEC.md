@@ -98,7 +98,79 @@
 **与 hardness phase-1 的当前对齐判断**:
 - 当前代码里已经存在 `WorkerExecutionResult`、`ToolInvocationRecord`、runtime context、judgment trace 与 checkpoint / packet 主线，所以这条流程不是 blueprint，而是已运行的 outer-loop 雏形。
 - 当前最主要的缺口不再是“有没有多步工具执行”或“有没有 judgment 层”，而是还没有把这些能力统一压成 `WorkerExecutionEnvelope -> ToolInvocationRecord -> RuntimeFactSet -> ResumeCheckpoint -> JudgmentInput / ContinuationAction` 这样的更硬 contract 链。
+#### RuntimeJudgmentService / Goal Progress 最小规则
 
+`RuntimeJudgmentService` 当前已经消费 `Task.metadata.subgoal_status` 作为 P1/P2 最小 goal-progress decision 输入。该输入允许三种形态：
+
+- `string[]`：例如 `['done', 'in_progress']`
+- `object[]`：元素可带 `status` 或 `state`
+- `object`：key 为子目标标识，value 为状态或带 `status/state` 的对象
+
+当前状态归一规则：
+
+| subgoal 状态 | 归一语义 | ContinuationAction |
+|------|------|------|
+| `done / complete / completed / accepted` | 已完成 | 全部完成时 `halt` |
+| `blocked / waiting_human / human_gate` | 阻塞 | 任一阻塞时 `escalate`（控制图/页面语义为 human gate） |
+| `pending / in_progress` 或其他非空状态 | 未完成 | `continue` |
+
+优先级顺序为：task 空/暂停/等待人工状态 -> 显式 metadata 控制信号（`auto_halt / pause_requested / requires_human_confirmation`）-> `subgoal_status` -> `target_worker` handoff -> 默认 continue。
+
+`ContinuationDecision.metadata` 至少带 `subgoal_total / subgoal_done_count / subgoal_blocked_count` 三个计数字段，后续 UI 可以用它区分“goal 已达成 / 仍在执行 / 等待人工”，但这不是任务失败判定。
+
+控制图 `continueNode` 已把同一套 `subgoal_status` 接入 `resolveAction`。当 `subgoal_status` 存在时，goal progress 判断优先于单轮 execution result 判断（验收标准 #2）：
+
+- blocked subgoal -> `human_gate`（无论 execution 说 done/continue/checkpoint）
+- all subgoals done -> `done`（无论 execution 说什么）
+- open subgoals + execution done -> `checkpoint`（保存进度但不标记完成）
+- open subgoals + execution continue -> `continue`（继续走原逻辑）
+- 无 subgoal_status -> 保持原有行为
+
+也就是说 goal-progress decision 已经进入 runtime loop 并优先于单轮执行结果，不再只是独立 judgment helper。
+
+#### Goal Progress Auto-Update
+
+`continueNode` 在 `enrichTaskFromJudgment` 后自动调用 `autoUpdateSubgoalStatus(task, executionResult)`：worker `completed` 时将当前 `in_progress`/`pending` subgoal 标为 `done`；worker `failed` 时标为 `blocked`；其他状态不触发迁移。迁移后更新 `metadata.progress_summary`。
+
+回归保护：GoalProgressAutoUpdateTest 7 个场景。
+
+#### Task 终态 partial
+
+`finalizeCompletedTask` 在 task 到达终态时检查 `subgoal_status`：全部 done -> `done`；部分完成（有 done 但不是全部）-> `partial`；无 subgoal_status 或为空 -> `done`。`partial` 状态在 UI 展示层有独立 tone，不被误判为 done 或 failed。
+
+回归保护：TaskPartialStatusTest 6 个场景。
+
+#### Goal Progress pending -> in_progress 自动迁移
+
+`autoUpdateSubgoalStatus` 在 worker executionStatus 为 `running` 时，将第一个 `pending` subgoal 迁移为 `in_progress`。这补全了 subgoal 生命周期：`pending -> in_progress -> done/blocked`。
+
+回归保护：GoalProgressAutoUpdateTest 新增 2 个场景。
+
+#### Worker Execution 超时保护
+
+`schedulerNode` 中 worker 执行通过 `executeOneRoundWithTimeout` 使用 `CompletableFuture.get(120s)` 设置超时。worker hang 时抛出 RuntimeException 进入 failure recovery 路径，控制图线程不会被无限阻塞。
+
+回归保护：WorkerExecutionTimeoutTest 3 个场景。
+
+#### Loop Activity
+
+每次 `continueNode` 完成后写入 `task.metadata.last_loop_tick`（ISO timestamp）。前端基于此判断 loop 活跃度：<=10s active / <=30s stall / >30s stale。
+
+回归保护：dialogue-loop-activity-detector-plan.test.mjs 16 个场景。
+
+#### Task 创建时的 Goal Contract 初始化
+
+`TaskService.createTask(...)` 会先用 `ProviderTaskContractNormalizer.normalize(...)` 补齐工作区/路径等 provider contract，再调用 `ProviderTaskContractNormalizer.initializeGoalContract(meta, goal)` 初始化最小 goal contract。这里的 `goal` 取 `firstNonBlank(req.goal(), req.intent())`，因此即使上游只传了 `intent`，任务创建时也会得到可判断、可展示、可交接的最小 goal 元数据。
+
+当前初始化口径：
+
+- 若 `metadata.goal` 缺失且 `goal` 非空，则补齐 `metadata.goal`
+- 若 `metadata.subgoals` 缺失，则默认生成 `[goal]`
+- 若 `metadata.subgoal_status` 缺失，则默认生成 `[{ title: goal, status: pending }]`
+- 若 `metadata.progress_summary` 缺失，则根据当前 `subgoal_status` 生成类似 `0/1 subgoals done` 的摘要
+- 若请求中已经显式给出 `subgoals / subgoal_status / progress_summary / acceptance_criteria`，则保持原值，不被默认逻辑覆盖
+
+这保证 `RuntimeJudgmentService`、`ControlNodeGraph`、packet/handoff 文档和 UI 状态展示从 task 创建开始就能读取同一套 goal contract，而不必等待 worker 首轮输出后再补齐。
 ### 2.2 暂停任务并生成 checkpoint
 
 **触发方式**: HTTP 请求  
@@ -191,6 +263,54 @@
    (回到 scheduler)
 ```
 
+### 2.4A Advisory Handoff（模型间咨询升级）
+
+**触发方式**: 控制图自动判断（非 HTTP 直接触发）
+**涉及模块**: `engine/ControlNodeGraph, `engine/router/WorkerRegistry, `engine/memory/PacketBuilder
+
+当 
+esolveAction 输出 `escalate 且当前 worker 为 small tier 时，控制图优先尝试 advisory handoff：
+
+``text
+[continueNode: resolveAction=escalate]
+        |
+        v
+(check current worker model_tier)
+        |
+   +----+----+
+   |         |
+ small     strong
+   |         |
+   v         v
+(find strong-tier  (direct human_gate)
+ ready worker)
+   |
+   +----+----+
+   |         |
+ found    not found
+   |         |
+   v         v
+ advisory   human_gate
+ handoff    (existing behavior)
+   |
+   v
+(handoff_reason=advisory_consult)
+(advisory_source/target worker in metadata)
+   |
+   v
+(handoffNode -> schedulerNode)
+(strong-tier worker executes one round)
+   |
+   v
+(auto-resume original path after advisory)
+`
+
+Advisory handoff 与普通 handoff 的区别：
+- HandoffPacket.why_handoff = advisory_consult（而非 worker_failure 或通用 handoff 文本）
+- metadata.advisory_trigger = escalate_from_small_tier
+- advisory round 完成后控制图自动 resume，不需要人工介入
+- 如果 advisory round 也判断 `escalate，则进入 human_gate（strong-tier 已是最高可用）
+
 ### 2.5 Experiment Matrix 基线运行
 
 **触发方式**: HTTP 请求  
@@ -214,6 +334,16 @@
              v
  (按 mode / case 聚合指标)
 ```
+
+当前 `experiment_matrix/summary` 的 mode 级聚合口径，除完成率、接受率、handoff / resume / human gate 外，还固定暴露一组 O03 acceptance gate 字段：
+
+- `acceptance_gate_result_counts`
+- `artifact_quality_gate_status_counts`
+- `cost_gate_status_counts`
+- `runs_with_failure_reason`
+- `failure_reason_counts`
+
+其中 baseline case 创建出来的 task metadata 也会继续携带 `baseline_cost_threshold_units` 与 `cost_gate_basis`，让未真正启动的 matrix run 也能在 summary 上区分“质量未评估”与“成本 gate 已在阈值内”。
 
 ## 3. 数据模型
 
@@ -274,34 +404,52 @@
 
 - **存储位置**: `resume_packets`
 - **对应代码**: `src/main/java/com/agentcloud/model/ResumePacket.java`
+- **协议头**: `packet_version=1.1`、`machine_readable_first=true`
+
+Resume packet 当前固定为 machine-readable first。除历史兼容字段外，稳定暴露以下最小协议字段（与 `API_CONTRACTS.md` 的 `ResumePacket 最小字段` 表一致）：
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
-| `packet_version` | TEXT | 协议版本 |
-| `active_task_summary` | TEXT | 面向人类的摘要 |
-| `decision_summary` | TEXT | 最近决策摘要 |
-| `artifact_summary` | TEXT | 最近产物摘要 |
-| `open_questions_json` | TEXT | 未决问题列表 |
-| `next_step` | TEXT | 建议下一步 |
-| `payload_json` | TEXT | machine-readable continuity payload |
+| `task_identity` | object | `task_id/session_id/parent_task_id/title/task_type` |
+| `current_objective` | TEXT | 当前连续执行目标 |
+| `current_status` | TEXT | 当前任务状态 |
+| `current_node` | TEXT | 当前控制节点 |
+| `assigned_worker` | TEXT | 当前指派 worker |
+| `latest_summary` | TEXT | 最近一版最适合续跑的摘要 |
+| `next_step` | TEXT | 恢复后建议动作 |
+| `blockers` | TEXT[] | 当前阻塞项 |
+| `open_questions` | TEXT[] | 当前未决问题 |
+| `recent_artifacts` | object[] | 最近产物引用，含 `artifact_type/title/summary/created_at` |
+| `recent_decisions` | object[] | 最近决策引用，含 `decision_type/summary/rationale/created_at` |
+
+历史兼容字段仍保留但不再作为主协议依赖：`active_task_summary`、`decision_summary`、`artifact_summary`、`payload`（扩展包，会镜像上述 machine-readable 字段）。跨 worker 续跑时下游必须消费上述最小字段，而不是依赖散装 `payload`。
 
 #### HandoffPacket
 
 - **生成位置**: `TaskService.getHandoffPacket` / `TaskService.handoffTask`
 - **对应代码**: `src/main/java/com/agentcloud/model/HandoffPacket.java`
+- **协议头**: `packet_version=1.0`、`machine_readable_first=true`
+
+Handoff packet 当前已固定为 typed schema，不再是散装 `Map`。稳定暴露以下最小协议字段（与 `API_CONTRACTS.md` 的 `HandoffPacket 最小字段` 表一致）：
 
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
-| `task_identity` | OBJECT | 交接任务身份 |
+| `task_identity` | object | 当前交接任务身份 |
 | `from_worker` | TEXT | 当前交出方 |
 | `to_worker` | TEXT | 目标接收方 |
-| `current_objective` | TEXT | 当前目标 |
-| `what_done` | TEXT[] | 已完成工作 |
+| `current_objective` | TEXT | 当前交接目标 |
+| `current_status` | TEXT | 当前任务状态 |
+| `current_node` | TEXT | 当前控制节点 |
+| `why_handoff` | TEXT | 交接原因 |
+| `what_done` | TEXT[] | 已完成工作摘要 |
 | `what_remaining` | TEXT[] | 剩余待做事项 |
-| `cautions` | TEXT[] | 风险或阻塞 |
-| `resume_hint` | TEXT | 接手建议 |
-| `metadata` | OBJECT | model mode / stage / planner/executor 等上下文 |
+| `cautions` | TEXT[] | 风险、阻塞或注意事项 |
+| `resume_hint` | TEXT | 接手后最直接的恢复提示 |
+| `latest_summary` | TEXT | 最近一次适合交接的摘要 |
+| `handoff_summary` | TEXT | 面向人类快速浏览的交接描述 |
+| `metadata` | object | 扩展 trace（`model_mode / orchestration_stage / planner_worker / executor_worker / selected_model_tier / fallback_reason` 等），不替代上述最小字段 |
 
+跨 worker handoff 时下游 worker 必须消费上述最小字段；`metadata` 只承载扩展 trace，不替代最小字段。handoff 与 resume 的跨 worker 稳定性由 `TaskServicePacketContractTest` 覆盖。
 #### Checkpoint
 
 - **存储位置**: `checkpoints`

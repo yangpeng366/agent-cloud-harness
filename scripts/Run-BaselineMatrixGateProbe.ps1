@@ -58,7 +58,22 @@ function Has-TextArray([object]$Value) {
     }
     return $true
 }
+function Get-MapCount {
+    param(
+        [object]$Value,
+        [string]$Key
+    )
+    if ($null -eq $Value -or [string]::IsNullOrWhiteSpace($Key)) {
+        return 0
+    }
+    $observed = $Value.$Key
+    if ($null -eq $observed) {
+        return 0
+    }
+    return [int]$observed
+}
 
+$experimentNameWasProvided = -not [string]::IsNullOrWhiteSpace($ExperimentName)
 if ([string]::IsNullOrWhiteSpace($ExperimentName)) {
     $ExperimentName = 'baseline-gate-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
 }
@@ -68,6 +83,14 @@ New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetDirectoryName($r
 
 $health = Invoke-AgentApi -Method GET -Path '/api/v1/health'
 Assert-True ($health.status -eq 'up') "harness health check failed at $BaseUrl"
+
+if ($experimentNameWasProvided) {
+    $existingSummaryResponse = Invoke-AgentApi -Method GET -Path "/api/v1/experiment_matrix/summary?experiment_name=$([System.Uri]::EscapeDataString($ExperimentName))"
+    Assert-True ($existingSummaryResponse.success -eq $true) 'experiment matrix summary precheck failed'
+    $existingTotalRuns = [int]$existingSummaryResponse.data.total_runs
+    $existingExperimentMessage = "experiment_name already contains $existingTotalRuns runs: $ExperimentName; use a unique name or omit -ExperimentName"
+    Assert-True ($existingTotalRuns -eq 0) $existingExperimentMessage
+}
 
 $casesResponse = Invoke-AgentApi -Method GET -Path '/api/v1/experiment_matrix/cases'
 Assert-True ($casesResponse.success -eq $true) 'experiment matrix cases endpoint failed'
@@ -120,6 +143,8 @@ foreach ($task in $createdTasks) {
     Assert-True (Has-TextArray $metadata.baseline_acceptance_criteria) "task $($task.id) missing baseline_acceptance_criteria"
     Assert-True (Has-TextArray $metadata.baseline_expected_artifacts) "task $($task.id) missing baseline_expected_artifacts"
     Assert-True (-not [string]::IsNullOrWhiteSpace([string]$metadata.baseline_recovery_policy)) "task $($task.id) missing baseline_recovery_policy"
+    Assert-True ([double]$metadata.baseline_cost_threshold_units -gt 0.0) "task $($task.id) missing baseline_cost_threshold_units"
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$metadata.cost_gate_basis)) "task $($task.id) missing cost_gate_basis"
 }
 
 $summaryResponse = Invoke-AgentApi -Method GET -Path "/api/v1/experiment_matrix/summary?experiment_name=$([System.Uri]::EscapeDataString($ExperimentName))"
@@ -130,10 +155,24 @@ Assert-True ($summary.total_runs -eq $expectedRunCount) "expected summary total_
 Assert-True ((@($summary.mode_summaries)).Count -eq 3) 'expected 3 mode summaries'
 Assert-True ((@($summary.case_comparisons)).Count -eq $CaseKeys.Count) "expected $($CaseKeys.Count) case comparisons"
 
+$modeGateRollup = [ordered]@{}
 foreach ($mode in $Modes) {
     $modeSummary = @($summary.mode_summaries | Where-Object { $_.model_mode -eq $mode }) | Select-Object -First 1
     Assert-True ($null -ne $modeSummary) "missing mode summary: $mode"
     Assert-True ($modeSummary.run_count -eq $CaseKeys.Count) "mode $mode expected run_count $($CaseKeys.Count), got $($modeSummary.run_count)"
+    $acceptanceGateNotEvaluatedCount = Get-MapCount $modeSummary.acceptance_gate_result_counts 'not_evaluated'
+    $artifactQualityNotEvaluatedCount = Get-MapCount $modeSummary.artifact_quality_gate_status_counts 'not_evaluated'
+    $costGateWithinThresholdCount = Get-MapCount $modeSummary.cost_gate_status_counts 'within_threshold'
+    Assert-True ($acceptanceGateNotEvaluatedCount -eq $CaseKeys.Count) "mode $mode expected acceptance_gate_result_counts.not_evaluated $($CaseKeys.Count), got $acceptanceGateNotEvaluatedCount"
+    Assert-True ($artifactQualityNotEvaluatedCount -eq $CaseKeys.Count) "mode $mode expected artifact_quality_gate_status_counts.not_evaluated $($CaseKeys.Count), got $artifactQualityNotEvaluatedCount"
+    Assert-True ($costGateWithinThresholdCount -eq $CaseKeys.Count) "mode $mode expected cost_gate_status_counts.within_threshold $($CaseKeys.Count), got $costGateWithinThresholdCount"
+    Assert-True (([int]$modeSummary.runs_with_failure_reason) -eq 0) "mode $mode expected runs_with_failure_reason 0, got $($modeSummary.runs_with_failure_reason)"
+    $modeGateRollup[$mode] = [ordered]@{
+        acceptance_gate_result_counts = $modeSummary.acceptance_gate_result_counts
+        artifact_quality_gate_status_counts = $modeSummary.artifact_quality_gate_status_counts
+        cost_gate_status_counts = $modeSummary.cost_gate_status_counts
+        runs_with_failure_reason = [int]$modeSummary.runs_with_failure_reason
+    }
 }
 
 foreach ($caseKey in $CaseKeys) {
@@ -162,9 +201,14 @@ $report = [ordered]@{
         created_tasks_have_baseline_contract = $true
         summary_has_mode_summaries = $true
         summary_has_case_comparisons = $true
+        summary_has_acceptance_gate_counts = $true
+        summary_has_artifact_quality_gate_counts = $true
+        summary_has_cost_gate_counts = $true
+        summary_has_failure_reason_rollup = $true
     }
+    mode_gate_rollup = $modeGateRollup
     created_task_ids = @($createdTasks | ForEach-Object { $_.id })
 }
 
-$report | ConvertTo-Json -Depth 20 | Set-Content -Path $resolvedReportPath -Encoding UTF8
+[System.IO.File]::WriteAllText($resolvedReportPath, ($report | ConvertTo-Json -Depth 20), [System.Text.UTF8Encoding]::new($false))
 Write-Host "Baseline matrix gate probe passed: $resolvedReportPath"

@@ -5,6 +5,12 @@ import { renderTaskActionHtml } from "../../main/resources/web/dialogue/task-act
 test("task action render plan emits one primary action and secondary drawer actions", () => {
     const rendered = renderTaskActionHtml({
         primary: { action: "continue", label: "继续推进" },
+        contextNote: {
+            tone: "manual-window",
+            chip: "手动窗口：trae",
+            headline: "自动链路已停下，建议切到 trae 手动继续。",
+            detail: "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。"
+        },
         secondary: [
             { action: "pause", label: "暂停" },
             { action: "escalate", label: "转人工处理" },
@@ -15,6 +21,9 @@ test("task action render plan emits one primary action and secondary drawer acti
         renderEmpty: (text) => `<p>${text}</p>`
     });
 
+    assert.match(rendered.noteHtml, /task-action-note--manual-window/);
+    assert.match(rendered.noteHtml, /手动窗口：trae/);
+    assert.match(rendered.noteHtml, /建议切到 trae 手动继续/);
     assert.match(rendered.primaryHtml, /data-action="continue"/);
     assert.match(rendered.secondaryHtml, /data-action="pause"/);
     assert.match(rendered.secondaryHtml, /data-action="escalate"/);
@@ -32,6 +41,7 @@ test("task action render plan falls back to empty primary for terminal tasks", (
     });
 
     assert.match(rendered.primaryHtml, /当前任务已到终态/);
+    assert.equal(rendered.noteHtml, "");
     assert.equal(rendered.secondaryHtml, "");
     assert.equal(rendered.drawerHidden, false);
 });

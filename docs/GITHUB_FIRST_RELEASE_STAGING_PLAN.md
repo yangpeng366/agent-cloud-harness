@@ -1,6 +1,8 @@
 # GitHub First Release Staging Plan
 
 > 本文档不是要求立刻执行 `git add`，而是给出一套可直接复用的首发收口顺序与 staging 边界。
+>
+> 历史材料说明：本文保留首发阶段对 staging 顺序的拆解，当前主要用于回看当时的分批思路。相关执行入口已优先收敛到 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`，因此本文不再作为 release 第一入口。
 
 ## 1. 目标
 

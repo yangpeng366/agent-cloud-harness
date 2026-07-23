@@ -31,6 +31,9 @@ public class RuntimeCognitionSurfaceAssembler {
             : new RuntimeCognitionSurfaceView.RouteSurface(
                 blankToNull(routePreview.selectedWorker()),
                 blankToNull(routePreview.routeSource()),
+                blankToNull(routePreview.selectedProviderProfile()),
+                blankToNull(routePreview.preferredProviderProfile()),
+                blankToNull(routePreview.workflowStage()),
                 blankToNull(routePreview.selectedModelTier()),
                 blankToNull(routePreview.selectedExecutionRole()),
                 blankToNull(routePreview.selectionScope()),
@@ -38,6 +41,14 @@ public class RuntimeCognitionSurfaceAssembler {
                 blankToNull(routePreview.preferredWorkerHint()),
                 routePreview.learningHintApplied(),
                 blankToNull(routePreview.fallbackReason()),
+                routePreview.freeFirstRouting(),
+                routePreview.freeCandidateWorkers() == null ? List.of() : routePreview.freeCandidateWorkers(),
+                routePreview.paidCandidateWorkers() == null ? List.of() : routePreview.paidCandidateWorkers(),
+                blankToNull(routePreview.costRouteStage()),
+                routePreview.manualWindowRequired(),
+                blankToNull(routePreview.recommendedManualProvider()),
+                blankToNull(routePreview.manualFollowupInstruction()),
+                routePreview.manualWindowCandidates() == null ? List.of() : routePreview.manualWindowCandidates(),
                 routeSkippedWorkerMetadata(routePreview.dispatchSkippedWorkers())
             );
 
@@ -216,7 +227,8 @@ public class RuntimeCognitionSurfaceAssembler {
             executionSurface,
             executionJudgmentSurface,
             completionJudgmentSurface,
-            alignment
+            alignment,
+            null
         );
     }
 

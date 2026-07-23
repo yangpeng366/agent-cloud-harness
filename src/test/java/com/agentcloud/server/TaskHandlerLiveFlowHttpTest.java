@@ -37,6 +37,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -48,9 +51,11 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -649,25 +654,51 @@ class TaskHandlerLiveFlowHttpTest {
                 ))
             ));
 
-            Future<HttpResponse<String>> responseFuture = harness.executor.submit(() -> harness.client.send(
+            Future<HttpResponse<InputStream>> responseFuture = harness.executor.submit(() -> harness.client.send(
                 HttpRequest.newBuilder(harness.uri(
                     "/api/v1/tasks/" + task.id()
                         + "/provider_run_file?kind=stdout&stream=true&max_ticks=4&interval_ms=250&max_lines=2"))
                     .header("Accept", "text/event-stream")
                     .GET()
                     .build(),
-                HttpResponse.BodyHandlers.ofString()
+                HttpResponse.BodyHandlers.ofInputStream()
             ));
-            Thread.sleep(350);
+            HttpResponse<InputStream> response = responseFuture.get(3, TimeUnit.SECONDS);
+            CountDownLatch initialSnapshotSeen = new CountDownLatch(1);
+            StringBuilder body = new StringBuilder();
+            Future<?> bodyReader = harness.executor.submit(() -> {
+                try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                    boolean sawSnapshotEvent = false;
+                    boolean sawInitialContent = false;
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        body.append(line).append('\n');
+                        if (line.contains("event: provider_run_file.snapshot")) {
+                            sawSnapshotEvent = true;
+                        }
+                        if (line.contains("\"content\":\"stdout-1\\nstdout-2\"")) {
+                            sawInitialContent = true;
+                        }
+                        if (sawSnapshotEvent && sawInitialContent) {
+                            initialSnapshotSeen.countDown();
+                        }
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            assertTrue(initialSnapshotSeen.await(3, TimeUnit.SECONDS));
             Files.writeString(stdoutPath, "stdout-1\nstdout-2\nstdout-3\n", StandardCharsets.UTF_8);
 
-            HttpResponse<String> response = responseFuture.get();
+            bodyReader.get(5, TimeUnit.SECONDS);
+            String responseBody = body.toString();
             assertEquals(200, response.statusCode());
-            assertTrue(response.body().contains("event: provider_run_file.snapshot"));
-            assertTrue(response.body().contains("stdout-1\\nstdout-2"));
-            assertTrue(response.body().contains("event: provider_run_file.update"));
-            assertTrue(response.body().contains("stdout-2\\nstdout-3"));
-            assertTrue(response.body().contains("event: provider_run_file.stream.done"));
+            assertTrue(responseBody.contains("event: provider_run_file.snapshot"));
+            assertTrue(responseBody.contains("stdout-1\\nstdout-2"));
+            assertTrue(responseBody.contains("event: provider_run_file.update"));
+            assertTrue(responseBody.contains("stdout-2\\nstdout-3"));
+            assertTrue(responseBody.contains("event: provider_run_file.stream.done"));
         }
     }
 
@@ -955,6 +986,58 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(List.of("tool-http-beta"), packetEntry.get("tool_invocation_ids"));
             assertEquals(List.of("/tasks/http/packets/packet-1"), packetEntry.get("evidence_refs"));
             assertEquals(List.of("confirm packet replay"), packetEntry.get("unfinished_items"));
+        }
+    }
+
+    @Test
+    void liveFlowHttpExposesLegacyControlRouteAuditSurface() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-legacy-control.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "http legacy control audit task", "continuation", "user", "high",
+                "确认 live_flow 会透出 legacy GET 控制调用迁移摘要",
+                "HTTP JSON should expose legacy control audit surface",
+                null, null, Map.of(), false
+            ));
+
+            harness.db.jdbi().onDemand(EventDao.class).insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-06-30T09:00:00Z"),
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: escalate",
+                Map.of(
+                    "action", "escalate",
+                    "action_category", "task_control",
+                    "request_method", "GET",
+                    "request_path", "/api/v1/tasks/" + task.id() + "/escalate",
+                    "legacy_control_route", true
+                )
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=8"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> flowSurface = harness.map(flowData.get("runtime_cognition_surface"));
+            Map<String, Object> legacyAudit = harness.map(flowSurface.get("legacy_control_audit"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals(Boolean.TRUE, legacyAudit.get("legacy_control_route_observed"));
+            assertEquals("GET", legacyAudit.get("request_method"));
+            assertEquals("/api/v1/tasks/" + task.id() + "/escalate", legacyAudit.get("request_path"));
+            assertEquals("POST", legacyAudit.get("replacement_method"));
+            assertEquals("escalate", legacyAudit.get("latest_action"));
+            assertEquals("2026-06-30T09:00:00Z", legacyAudit.get("observed_at"));
+            assertTrue(String.valueOf(legacyAudit.get("summary")).contains("legacy GET control route observed"));
+            assertTrue(String.valueOf(legacyAudit.get("summary")).contains("migrate caller to POST"));
         }
     }
 
@@ -1329,6 +1412,62 @@ class TaskHandlerLiveFlowHttpTest {
     }
 
     @Test
+    void liveFlowRoutePreviewProjectsManualWindowRecommendation() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-manual-window.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "manual window route preview", "coding", "user", "high",
+                "确认 live_flow route_preview 会带 manual window 推荐",
+                "manual window recommendation should be visible", null, null,
+                Map.of(
+                    "provider_routing_policy", "free_first",
+                    "paid_fallback_allowed", false,
+                    "manual_window_fallback_allowed", true,
+                    "manual_window_candidates", List.of("trae", "zcode"),
+                    "user_reported_quota_state", Map.of(
+                        "deveco", "quota_exhausted",
+                        "codebuddy", "quota_exhausted"
+                    )
+                ),
+                false
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+            Map<String, Object> routeSurface = harness.map(
+                harness.map(flowData.get("runtime_cognition_surface")).get("route")
+            );
+            Map<String, Object> providerSelection = harness.map(flowData.get("provider_selection"));
+            Map<String, Object> providerSelectionMetadata = harness.map(providerSelection.get("metadata"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals(Boolean.TRUE, routePreview.get("manual_window_required"));
+            assertEquals("manual_window_recommendation", routePreview.get("cost_route_stage"));
+            assertEquals("trae", routePreview.get("recommended_manual_provider"));
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                routePreview.get("manual_followup_instruction")
+            );
+            assertEquals(List.of("trae", "zcode"), harness.list(routePreview.get("manual_window_candidates")));
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                routeSurface.get("manual_followup_instruction")
+            );
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                providerSelectionMetadata.get("manual_followup_instruction")
+            );
+        }
+    }
+
+    @Test
     void liveFlowRoutePreviewPromotesContinuationRepoModificationTaskToEffectiveCodingType() throws Exception {
         try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-effective-task-type.db"))) {
             Task task = harness.service.createTask(new TaskCreateRequest(
@@ -1351,6 +1490,48 @@ class TaskHandlerLiveFlowHttpTest {
             assertEquals(200, flowResponse.statusCode());
             assertEquals("coding", routePreview.get("task_type"));
             assertEquals("codex", routePreview.get("selected_worker"));
+        }
+    }
+
+    @Test
+    void liveFlowProjectsCodexProfileRoutingIntoRoutePreviewAndRouteSurface() throws Exception {
+        try (HttpHarness harness = new HttpHarness(tempDir.resolve("task-handler-live-flow-profile-route.db"))) {
+            Task task = harness.service.createTask(new TaskCreateRequest(
+                "route preview codex profile", "coding", "user", "high",
+                "确认 live_flow 会透出 codex profile lane 路由字段",
+                "route preview and route surface should expose codex profile routing context",
+                null, null,
+                Map.of(
+                    "preferred_provider_profile", "codex_openai_strong",
+                    "workflow_stage", "design"
+                ),
+                false
+            ));
+
+            HttpResponse<String> flowResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/live_flow?limit=6"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> flowPayload = harness.readJson(flowResponse.body());
+            Map<String, Object> flowData = harness.map(flowPayload.get("data"));
+            Map<String, Object> routePreview = harness.map(flowData.get("route_preview"));
+            Map<String, Object> runtimeSurface = harness.map(flowData.get("runtime_cognition_surface"));
+            Map<String, Object> routeSurface = harness.map(runtimeSurface.get("route"));
+
+            assertEquals(200, flowResponse.statusCode());
+            assertEquals("codex-openai", routePreview.get("selected_worker"));
+            assertEquals("codex_profile_routing", routePreview.get("route_source"));
+            assertEquals("codex_openai_strong", routePreview.get("selected_provider_profile"));
+            assertEquals("codex_openai_strong", routePreview.get("preferred_provider_profile"));
+            assertEquals("design", routePreview.get("workflow_stage"));
+            assertEquals("codex-openai", routeSurface.get("selected_worker"));
+            assertEquals("codex_profile_routing", routeSurface.get("route_source"));
+            assertEquals("codex_openai_strong", routeSurface.get("selected_provider_profile"));
+            assertEquals("codex_openai_strong", routeSurface.get("preferred_provider_profile"));
+            assertEquals("design", routeSurface.get("workflow_stage"));
         }
     }
 

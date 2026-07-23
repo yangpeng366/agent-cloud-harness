@@ -51,6 +51,7 @@ test("browser acceptance probe guards message body to composer seam", () => {
 test("browser acceptance probe requires pinned latest round output to carry execution signal", () => {
     const runner = readFileSync(new URL("../../../scripts/dialogue-browser-acceptance-probe-runner.cjs", import.meta.url), "utf8");
     const appJs = readFileSync(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../../main/resources/web/dialogue/app.css", import.meta.url), "utf8");
 
     assert.match(
         runner,
@@ -70,7 +71,11 @@ test("browser acceptance probe requires pinned latest round output to carry exec
     );
     assert.match(appJs, /data-testid="pinned-latest-round-output"/);
     assert.match(appJs, />最近输出<\/span>/);
+    assert.match(appJs, /label:\s*"当前结果"/);
+    assert.match(appJs, />原因</);
+    assert.match(appJs, />下一步</);
     assert.doesNotMatch(appJs, />latest round output<\/span>/);
+    assert.match(css, /\.message-summary-card__result-card\s*\{/);
 });
 
 test("browser acceptance probe reselects target task before lifecycle state checks", () => {

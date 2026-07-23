@@ -119,7 +119,12 @@ public record ExperimentMatrixSummary(
         Double averageToolChainStepCount,
         Integer maxToolChainStepCount,
         Map<String, Integer> toolExecutionModeCounts,
-        Map<String, Integer> toolChainTerminationReasonCounts
+        Map<String, Integer> toolChainTerminationReasonCounts,
+        Map<String, Integer> acceptanceGateResultCounts,
+        Map<String, Integer> artifactQualityGateStatusCounts,
+        Map<String, Integer> costGateStatusCounts,
+        Integer runsWithFailureReason,
+        Map<String, Integer> failureReasonCounts
     ) {
         public ModeSummary {
             if (modelMode == null) modelMode = "";
@@ -358,6 +363,11 @@ public record ExperimentMatrixSummary(
             if (maxToolChainStepCount == null || maxToolChainStepCount < 0) maxToolChainStepCount = 0;
             if (toolExecutionModeCounts == null) toolExecutionModeCounts = Map.of();
             if (toolChainTerminationReasonCounts == null) toolChainTerminationReasonCounts = Map.of();
+            if (acceptanceGateResultCounts == null) acceptanceGateResultCounts = Map.of();
+            if (artifactQualityGateStatusCounts == null) artifactQualityGateStatusCounts = Map.of();
+            if (costGateStatusCounts == null) costGateStatusCounts = Map.of();
+            if (runsWithFailureReason == null || runsWithFailureReason < 0) runsWithFailureReason = 0;
+            if (failureReasonCounts == null) failureReasonCounts = Map.of();
         }
     }
 

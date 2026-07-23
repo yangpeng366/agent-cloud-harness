@@ -74,6 +74,42 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    void continueWithAllSubgoalsDoneResolvesToDone() throws Exception {
+        assertEquals("done", invokeResolveAction(
+            "continue", "partially_done", "medium", false, false, false,
+            List.of("done", "completed")
+        ));
+    }
+
+    @Test
+    void continueWithBlockedSubgoalResolvesToHumanGate() throws Exception {
+        assertEquals("human_gate", invokeResolveAction(
+            "continue", "partially_done", "medium", false, false, false,
+            List.of("done", "blocked")
+        ));
+    }
+
+    @Test
+    void continueWithOpenSubgoalsStillResolvesToContinue() throws Exception {
+        assertEquals("continue", invokeResolveAction(
+            "continue", "partially_done", "medium", false, false, false,
+            List.of("done", "in_progress")
+        ));
+    }
+    @Test
+    void blockedSubgoalReasonExplainsHumanGate() throws Exception {
+        assertEquals(
+            "subgoal blocked requires human gate",
+            invokeResolveGoalProgressReason(List.of("done", "blocked"))
+        );
+    }
+
+    @Test
+    void openSubgoalReasonStaysEmpty() throws Exception {
+        assertNull(invokeResolveGoalProgressReason(List.of("done", "in_progress")));
+    }
+
+    @Test
     void finalizeCompletedTaskClearsNextStepAndSetsCompletedAt() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
@@ -1123,6 +1159,47 @@ class ControlNodeGraphActionResolutionTest {
     }
 
     @Test
+    void applyRecoveryDirectiveRetainsAutoHandoffCountWhenHumanGateFollowsPriorHandoff() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, router, null, null,
+            null, null, null, null, null, null
+        );
+        Method planMethod = ControlNodeGraph.class.getDeclaredMethod(
+            "maybePlanFailureRecovery", Task.class, Map.class, String.class
+        );
+        planMethod.setAccessible(true);
+        Method applyMethod = ControlNodeGraph.class.getDeclaredMethod(
+            "applyRecoveryDirective", Task.class, Class.forName("com.agentcloud.engine.ControlNodeGraph$RecoveryDirective")
+        );
+        applyMethod.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("kimi")
+            .withMetadata(Map.ofEntries(
+                Map.entry("assigned_worker", "kimi"),
+                Map.entry("task_type", "coding"),
+                Map.entry("auto_same_worker_retry_count", 1),
+                Map.entry("auto_handoff_count", 1),
+                Map.entry("auto_handoff_target", "kimi"),
+                Map.entry("previous_worker", "codex")
+            ));
+        Object directive = planMethod.invoke(graph, task, Map.of(
+            "execution_status", "empty",
+            "selected_worker", "kimi",
+            "candidate_workers", List.of("kimi", "codex")
+        ), "");
+
+        Task updated = (Task) applyMethod.invoke(graph, task, directive);
+
+        assertEquals("human_gate_required", updated.metadata().get("recovery_stage"));
+        assertEquals(1, updated.metadata().get("auto_handoff_count"));
+        assertFalse(updated.metadata().containsKey("auto_handoff_target"));
+        assertEquals("kimi", updated.assignedWorker());
+    }
+
+    @Test
     void maybePlanFailureRecoveryClassifiesTaskEnvironmentBlocked() throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
@@ -1293,25 +1370,45 @@ class ControlNodeGraphActionResolutionTest {
                                       boolean needsContextReopen,
                                       boolean needsArchiveRetrieval,
                                       boolean needsExternalFactRefresh) throws Exception {
+        return invokeResolveAction(
+            executionAction, completionStatus, alignmentLevel,
+            needsContextReopen, needsArchiveRetrieval, needsExternalFactRefresh, null
+        );
+    }
+
+    private String invokeResolveAction(String executionAction,
+                                      String completionStatus,
+                                      String alignmentLevel,
+                                      boolean needsContextReopen,
+                                      boolean needsArchiveRetrieval,
+                                      boolean needsExternalFactRefresh,
+                                      Object subgoalStatus) throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,
             null, null, null, null, null, null
         );
         Method method = ControlNodeGraph.class.getDeclaredMethod(
-            "resolveAction", String.class, String.class, String.class, boolean.class, boolean.class, boolean.class
+            "resolveAction", String.class, String.class, String.class,
+            boolean.class, boolean.class, boolean.class, Object.class
         );
         method.setAccessible(true);
         return (String) method.invoke(
             graph,
-            executionAction,
-            completionStatus,
-            alignmentLevel,
-            needsContextReopen,
-            needsArchiveRetrieval,
-            needsExternalFactRefresh
+            executionAction, completionStatus, alignmentLevel,
+            needsContextReopen, needsArchiveRetrieval, needsExternalFactRefresh,
+            subgoalStatus
         );
     }
 
+    private String invokeResolveGoalProgressReason(Object subgoalStatus) throws Exception {
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod("resolveGoalProgressReason", Object.class);
+        method.setAccessible(true);
+        return (String) method.invoke(graph, subgoalStatus);
+    }
     private Task invokeEnrichTaskFromJudgment(Task task,
                                              WorkerExecutionResult result,
                                              String latestOutput,

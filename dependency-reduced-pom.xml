@@ -42,7 +42,10 @@
         <version>3.2.5</version>
         <configuration>
           <useModulePath>false</useModulePath>
-          <argLine>--enable-preview</argLine>
+          <argLine>--enable-preview -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+          <systemPropertyVariables>
+            <agentcloud.worker.priority.config.enabled>false</agentcloud.worker.priority.config.enabled>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
       <plugin>

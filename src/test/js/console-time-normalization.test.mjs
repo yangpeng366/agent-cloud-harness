@@ -53,10 +53,10 @@ test("console provider detail can run provider preflight from the page", () => {
         /api\(`\/api\/v1\/agents\/\$\{encodedProviderId\}\/preflight`,\s*\{\s*method: "POST",\s*body: "\{\}"/s
     );
     assert.match(appJs, /data-provider-action="preflight"/);
-    assert.match(appJs, />运行 Preflight</);
+    assert.match(appJs, />运行预检</);
     assert.match(appJs, /renderProviderPreflightDiagnostics\(agent\)/);
     assert.match(appJs, /function renderProviderPreflightDiagnostics\(agent\)/);
-    assert.match(appJs, /provider preflight result/);
+    assert.match(appJs, /Provider 预检结果/);
     assert.match(appJs, /dispatch_preflight_exit_code/);
     assert.match(appJs, /dispatch_preflight_output_preview/);
 });
@@ -64,12 +64,12 @@ test("console provider detail can run provider preflight from the page", () => {
 test("console provider detail renders startup protocol probe diagnostics", () => {
     assert.match(appJs, /renderProviderStartupProtocolProbe\(agent\)/);
     assert.match(appJs, /function renderProviderStartupProtocolProbe\(agent\)/);
-    assert.match(appJs, /startup protocol probe/);
+    assert.match(appJs, /启动协议探测/);
     assert.match(appJs, /provider_protocol_probe_mode/);
     assert.match(appJs, /provider_protocol_probe_command_shape/);
     assert.match(appJs, /provider_protocol_probe_suggested_parser/);
     assert.match(appJs, /provider_protocol_inferred/);
-    assert.match(appJs, /该探测只作为 discovery 诊断证据/);
+    assert.match(appJs, /该探测只作为协议发现诊断证据/);
 });
 
 test("console recovery job panel renders operator labels", () => {

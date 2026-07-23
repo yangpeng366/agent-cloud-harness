@@ -983,6 +983,52 @@ class TaskServiceLiveFlowViewTest {
     }
 
     @Test
+    void getLiveFlowExposesLegacyControlRouteAuditSurface() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-legacy-control-audit.db"))) {
+            TaskService service = service(db);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "legacy control audit task", "continuation", "user", "high",
+                "让 live_flow 直接解释最近一次 legacy GET 控制调用",
+                "不需要手翻 raw message metadata", null, null, Map.of(), false
+            ));
+
+            eventDao.insert(new Event(
+                IdGenerator.newId("evt"),
+                task.sessionId(),
+                task.id(),
+                Instant.parse("2026-06-30T08:00:00Z"),
+                "task_control_action",
+                "task_service",
+                null,
+                "Task control action: continue",
+                Map.of(
+                    "action", "continue",
+                    "action_category", "task_control",
+                    "request_method", "GET",
+                    "request_path", "/api/v1/tasks/" + task.id() + "/continue",
+                    "legacy_control_route", true
+                )
+            ));
+
+            var flow = service.getLiveFlow(task.id(), 10);
+
+            assertNotNull(flow.runtimeCognitionSurface());
+            assertNotNull(flow.runtimeCognitionSurface().legacyControlAudit());
+            assertEquals(Boolean.TRUE, flow.runtimeCognitionSurface().legacyControlAudit().legacyControlRouteObserved());
+            assertEquals("GET", flow.runtimeCognitionSurface().legacyControlAudit().requestMethod());
+            assertEquals("/api/v1/tasks/" + task.id() + "/continue",
+                flow.runtimeCognitionSurface().legacyControlAudit().requestPath());
+            assertEquals("POST", flow.runtimeCognitionSurface().legacyControlAudit().replacementMethod());
+            assertEquals("continue", flow.runtimeCognitionSurface().legacyControlAudit().latestAction());
+            assertEquals("2026-06-30T08:00:00Z", flow.runtimeCognitionSurface().legacyControlAudit().observedAt());
+            assertTrue(flow.runtimeCognitionSurface().legacyControlAudit().summary().contains("legacy GET control route observed"));
+            assertTrue(flow.runtimeCognitionSurface().legacyControlAudit().summary().contains("migrate caller to POST"));
+        }
+    }
+
+    @Test
     void getLiveFlowLabelsExternalFactRefreshCheckpoint() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("live-flow-external-fact-refresh-checkpoint.db"))) {
             TaskService service = service(db);

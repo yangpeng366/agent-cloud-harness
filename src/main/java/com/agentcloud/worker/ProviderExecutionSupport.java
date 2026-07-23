@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class ProviderExecutionSupport {
     private static final Set<String> PROVIDER_NATIVE_CLI = Set.of(
-        "cursor", "openclaw", "claude", "gemini", "deepseek", "kimi", "copilot", "opencode", "reasonix", "trae", "codebuddy", "hermes", "pi", "kiro"
+        "cursor", "openclaw", "claude", "gemini", "deepseek", "kimi", "copilot", "opencode", "reasonix", "trae", "codebuddy", "hermes", "pi", "kiro", "deveco"
     );
     private static final Set<String> PROVIDER_APP_SERVER = Set.of("codex");
     private static final Set<String> DYNAMIC_PROVIDER_NATIVE_CLI = ConcurrentHashMap.newKeySet();

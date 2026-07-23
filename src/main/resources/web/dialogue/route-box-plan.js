@@ -1,3 +1,6 @@
+import { buildFreeFirstRoutePlan } from "./free-first-route-plan.js";
+import { buildLegacyControlAuditPlan } from "./legacy-control-audit-plan.js";
+
 export function buildRouteBoxPlan(input) {
     const source = input || {};
     const worker = firstNonBlank(source.selectedWorker, "unassigned");
@@ -8,12 +11,15 @@ export function buildRouteBoxPlan(input) {
     const routeChips = normalizeTextList(source.routeChips).map(humanizeRouteChip);
     const providerDeprioritization = source.providerDeprioritization || null;
     const hasProviderDeprioritization = providerDeprioritization?.providerDeprioritized === true;
+    const freeFirstRoute = buildFreeFirstRoutePlan(source);
+    const legacyControlNote = buildLegacyControlAuditPlan(source.legacyControlAudit || source.legacy_control_audit);
     const timelineCount = Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline.length : 0;
     const detailGroupCount = [
         taskType ? 1 : 0,
         candidateWorkers.length > 0 ? 1 : 0,
         routeChips.length > 0 ? 1 : 0,
-        hasProviderDeprioritization ? 1 : 0
+        hasProviderDeprioritization ? 1 : 0,
+        freeFirstRoute.visible ? 1 : 0
     ].reduce((sum, count) => sum + count, 0);
 
     return {
@@ -23,11 +29,18 @@ export function buildRouteBoxPlan(input) {
         taskType,
         candidateWorkers,
         routeChips,
+        freeFirstRoute,
         providerDeprioritization,
-        primaryRecoveryNote: hasProviderDeprioritization ? {
-            headline: providerDeprioritization.headline,
-            detail: providerDeprioritization.detail
-        } : null,
+        legacyControlNote: legacyControlNote.visible ? legacyControlNote : null,
+        primaryRecoveryNote: freeFirstRoute.visible
+            ? {
+                headline: freeFirstRoute.headline,
+                detail: freeFirstRoute.detail
+            }
+            : (hasProviderDeprioritization ? {
+                headline: providerDeprioritization.headline,
+                detail: providerDeprioritization.detail
+            } : null),
         cognitionTimeline: Array.isArray(source.cognitionTimeline) ? source.cognitionTimeline : [],
         hasDrawer: detailGroupCount > 0 || timelineCount > 0,
         drawerSummary: buildDrawerSummary(detailGroupCount, timelineCount)

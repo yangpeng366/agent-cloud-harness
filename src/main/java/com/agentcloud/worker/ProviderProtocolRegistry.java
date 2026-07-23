@@ -57,6 +57,10 @@ public class ProviderProtocolRegistry {
             .register(new GeminiProtocol())
             .register(new KimiProtocol())
             .register(new CopilotProtocol())
-            .register(new OpenCodeProtocol());
+            .register(new OpenCodeProtocol())
+            .register(new CodeBuddyProtocol())
+            .register(new DevecoProtocol())
+            .register(new PiProtocol())
+            .register(new TraeProtocol());
     }
 }

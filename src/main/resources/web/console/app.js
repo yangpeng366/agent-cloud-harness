@@ -1,10 +1,15 @@
-﻿import { buildRecoveryJobPlan } from "../dialogue/recovery-job-plan.js";
+import { buildRecoveryJobPlan } from "../dialogue/recovery-job-plan.js";
 
 import { buildToolTraceStatusLabel, buildToolTraceSummary } from "../dialogue/tool-trace-plan.js";
 import { buildProviderRunFilePlan } from "../dialogue/provider-run-file-plan.js";
 import { formatProviderRunFilePreview } from "../dialogue/provider-run-file-preview-plan.js";
 import { buildAgentActionPlan } from "../dialogue/agent-action-plan.js";
 import { buildExecutionSurfaceSummaryPlan } from "../dialogue/execution-surface-summary-plan.js";
+import { buildFreeFirstRoutePlan } from "../dialogue/free-first-route-plan.js";
+import { buildLegacyControlAuditPlan } from "../dialogue/legacy-control-audit-plan.js";
+import { buildTaskFocusLineBase } from "../dialogue/task-focus-line-plan.js";
+import { buildTaskOverviewPlan } from "../dialogue/task-overview-plan.js";
+import { toneForConsoleTaskStatus as toneForStatus, toneForConsoleRunStatus as toneForRunStatus } from "./console-status-tone-plan.js";
 
 const state = {
     sessions: [],
@@ -39,6 +44,7 @@ const state = {
     agentRunArtifacts: [],
     agentActions: [],
     experimentSummary: null,
+    inspectorSurface: "summary",
     toastTimer: null,
     pollingTimer: null,
     providerRunFileEventSource: null
@@ -70,8 +76,11 @@ const dom = {
     followupButton: document.getElementById("followupButton"),
     clearFollowupButton: document.getElementById("clearFollowupButton"),
     inspectorTitle: document.getElementById("inspectorTitle"),
+    taskFocusLine: document.getElementById("taskFocusLine"),
     taskOverview: document.getElementById("taskOverview"),
+    taskRecoveryPanel: document.getElementById("taskRecoveryPanel"),
     taskActions: document.getElementById("taskActions"),
+    operatorSummary: document.getElementById("operatorSummary"),
     refreshAgentsButton: document.getElementById("refreshAgentsButton"),
     refreshRuntimeButton: document.getElementById("refreshRuntimeButton"),
     refreshRunSearchButton: document.getElementById("refreshRunSearchButton"),
@@ -93,6 +102,8 @@ const dom = {
     toolList: document.getElementById("toolList"),
     rawJson: document.getElementById("rawJson"),
     refreshTaskButton: document.getElementById("refreshTaskButton"),
+    inspectorSurfaceSwitch: document.getElementById("inspectorSurfaceSwitch"),
+    inspectorSurfaceCopy: document.getElementById("inspectorSurfaceCopy"),
     handoffWorker: document.getElementById("handoffWorker"),
     handoffButton: document.getElementById("handoffButton"),
     heroTitle: document.getElementById("heroTitle"),
@@ -135,6 +146,7 @@ function bindEvents() {
             loadSelectedTask(state.selectedTaskId, true).catch(handleError);
         }
     });
+    dom.inspectorSurfaceSwitch.addEventListener("click", onInspectorSurfaceClick);
     dom.handoffButton.addEventListener("click", onHandoff);
     window.addEventListener("hashchange", () => {
         applyLocationSelection();
@@ -147,6 +159,7 @@ function bindEvents() {
 
 async function init() {
     applyLocationSelection();
+    applyInspectorSurface();
     await Promise.all([loadHealth(), loadWorkers(), loadAgents(false), loadRuntimeHealth(false), loadAgentRunSearch(false)]);
     await refreshAll(false);
     startPolling();
@@ -721,7 +734,7 @@ function renderSessions() {
                 <div class="session-card__meta">
                     <span class="task-badge" data-tone="${toneForStatus(session.status)}">${escapeHtml(session.status || "active")}</span>
                     <span>${formatTime(session.updated_at || session.updatedAt)}</span>
-                    ${taskCount !== "" ? `<span>${taskCount} tasks</span>` : ""}
+                    ${taskCount !== "" ? `<span>${taskCount} 个任务</span>` : ""}
                 </div>
                 <div class="session-card__meta mono">${escapeHtml(session.id)}</div>
             </button>
@@ -762,11 +775,11 @@ function renderTimeline() {
             <section class="chain ${selectedInChain}">
                 <header class="chain__header">
                     <div>
-                        <p class="eyebrow">Iteration Chain ${String(chainIndex + 1).padStart(2, "0")}</p>
+                        <p class="eyebrow">迭代链 ${String(chainIndex + 1).padStart(2, "0")}</p>
                         <h3 class="chain__title">${escapeHtml(rootTask?.title || chain.rootId)}</h3>
                     </div>
                     <div class="chain__meta">
-                        <span class="task-badge">${escapeHtml(`${chain.tasks.length} tasks`)}</span>
+                        <span class="task-badge">${escapeHtml(chainTaskCountLabel(chain.tasks.length))}</span>
                         <span class="task-badge" data-tone="${toneForStatus(latestTask?.status)}">${escapeHtml(latestTask?.status || "active")}</span>
                         <span class="task-badge">${escapeHtml(latestTask?.control_node || latestTask?.controlNode || "intake")}</span>
                         ${latestStartMode ? `<span class="task-badge" data-tone="${startModeTone(latestStartMode)}">${escapeHtml(latestStartMode)}</span>` : ""}
@@ -787,7 +800,7 @@ function renderTimeline() {
                             : null;
                         const parentTask = taskParent(task, tasksById);
                         const startMode = taskStartMode(task);
-                        const roundLabel = taskIndex === 0 ? "root" : `round ${taskIndex + 1}`;
+                        const roundLabel = chainRoundLabel(taskIndex);
                         return `
                             <article class="thread ${active}" data-task-id="${escapeHtml(task.id)}" role="button" tabindex="0" aria-label="当前任务： ${escapeHtml(task.title || task.id)}">
                                 <div class="thread__rail">
@@ -801,7 +814,7 @@ function renderTimeline() {
                                             <span class="message__role">Brief</span>
                                             <span>${escapeHtml(task.title || task.id)}</span>
                                             ${task.goal ? `<span>${escapeHtml(preview(task.goal, 84))}</span>` : ""}
-                                            ${parentTask ? `<span class="message__parent">follow-up of ${escapeHtml(parentTask.title || parentTask.id)}</span>` : ""}
+                                            ${parentTask ? `<span class="message__parent">跟进 ${escapeHtml(parentTask.title || parentTask.id)}</span>` : ""}
                                         </div>
                                         <div class="message__body">${escapeHtml(userMessage)}</div>
                                     </div>
@@ -812,7 +825,7 @@ function renderTimeline() {
                                             <span class="task-badge" data-tone="${toneForStatus(task.status)}">${escapeHtml(task.status)}</span>
                                             <span class="task-badge">${escapeHtml(task.control_node || task.controlNode || "intake")}</span>
                                             ${startMode ? `<span class="task-badge" data-tone="${startModeTone(startMode)}">${escapeHtml(startMode)}</span>` : ""}
-                                            ${task.assigned_worker || task.assignedWorker ? `<span class="task-badge">${escapeHtml(task.assigned_worker || task.assignedWorker)}</span>` : ""}
+                                            ${task.assigned_worker || task.assignedWorker ? `<span class="task-badge">${escapeHtml(`执行方 ${task.assigned_worker || task.assignedWorker}`)}</span>` : ""}
                                         </div>
                                         <div class="message__body">${escapeHtml(assistantMessage)}</div>
                                         ${assistantSignals.length > 0 ? `
@@ -821,9 +834,9 @@ function renderTimeline() {
                                             </div>
                                         ` : ""}
                                         <div class="message__foot">
-                                            ${task.next_step || task.nextStep ? `<span class="message__hint">Next: ${escapeHtml(preview(task.next_step || task.nextStep, 92))}</span>` : ""}
-                                            ${toolCount !== null ? `<span class="message__hint">Tools: ${escapeHtml(String(toolCount))}</span>` : ""}
-                                            ${artifactCount !== null ? `<span class="message__hint">Artifacts: ${escapeHtml(String(artifactCount))}</span>` : ""}
+                                            ${task.next_step || task.nextStep ? `<span class="message__hint">下一步：${escapeHtml(preview(task.next_step || task.nextStep, 92))}</span>` : ""}
+                                            ${toolCount !== null ? `<span class="message__hint">工具：${escapeHtml(String(toolCount))}</span>` : ""}
+                                            ${artifactCount !== null ? `<span class="message__hint">产物：${escapeHtml(String(artifactCount))}</span>` : ""}
                                             <span class="message__hint mono">${escapeHtml(task.id)}</span>
                                         </div>
                                     </div>
@@ -838,12 +851,16 @@ function renderTimeline() {
 }
 
 function renderInspector() {
+    applyInspectorSurface();
     const flow = state.liveFlow;
     const task = flow?.task || state.tasks.find((item) => item.id === state.selectedTaskId);
 
     if (!task) {
         dom.inspectorTitle.textContent = "当前任务";
-        dom.taskOverview.innerHTML = emptyState("当前任务没有状态、控制节点、工作节点、工具 trace 等信息。");
+        dom.taskFocusLine.textContent = "状态 / 控制节点";
+        dom.taskOverview.innerHTML = emptyState("当前任务没有任务 ID、执行方、实验模式或工具链信息。");
+        dom.taskRecoveryPanel.innerHTML = "";
+        dom.operatorSummary.innerHTML = emptyState("当前任务还没有阻塞摘要、建议动作或恢复窗口。");
         dom.agentExecution.innerHTML = emptyState("当前任务没有执行信息。");
         dom.chainContext.innerHTML = emptyState("当前任务没有上下文信息。");
         dom.continuitySummary.innerHTML = emptyState("当前任务没有连续性信息。");
@@ -885,26 +902,44 @@ function renderInspector() {
         experimentRun.modelMode,
         task.metadata?.model_mode,
         task.metadata?.modelMode,
-        "ad hoc"
+        "临时任务"
     );
     const toolFacts = toolChainFacts(flow, tools);
     const toolLabel = toolChainLabel(flow, tools);
     const toolSummary = toolChainNarrative(flow, tools);
     const executionFacts = executionBoundaryFacts(flow, tools);
     const recoveryJobPlan = buildRecoveryJobPlan(state.recoveryJobs, { formatTime });
+    const assignedWorker = firstNonBlank(
+        task.assigned_worker,
+        task.assignedWorker,
+        routePreview?.selected_worker,
+        routePreview?.selectedWorker,
+        flow?.runtime_cognition_surface?.route?.selected_worker,
+        flow?.runtime_cognition_surface?.route?.selectedWorker,
+        "未分配"
+    );
+    const focusLineBase = buildTaskFocusLineBase(task, flow || {});
+    const overviewPlan = buildTaskOverviewPlan(task, {
+        focusLineBase,
+        workerLabel: assignedWorker,
+        focusWorker: "",
+        experimentMode: humanizeToken(experimentMode) || experimentMode || "临时任务",
+        toolLabel
+    });
+    const operatorSummaryPlan = buildOperatorSummaryPlan({
+        task,
+        flow,
+        runtimeHealth: state.runtimeHealth,
+        providerSelection: state.providerSelection,
+        recoveryJobPlan,
+        executionFacts
+    });
 
     dom.inspectorTitle.textContent = task.title || task.id;
-    dom.taskOverview.innerHTML = [
-        overviewCard("状态", task.status),
-        overviewCard("控制节点", task.control_node || task.controlNode || "intake"),    
-        overviewCard("工作节点", task.worker || task.worker || "intake"),
-        overviewCard("工具 trace", task.assigned_worker || task.assignedWorker || "unassigned"),
-        overviewCard("实验模式", humanizeToken(experimentMode) || experimentMode),
-        overviewCard("下一步", task.next_step || task.nextStep || latestPacket?.next_step || latestPacket?.nextStep || "none"),
-        overviewCard("Tool chain", toolLabel || "none"),
-        overviewCard("Execution", executionFacts.label || "none"),
-        renderRecoveryJobPanel(recoveryJobPlan)
-    ].join("");
+    dom.taskFocusLine.textContent = overviewPlan.focusLine;
+    dom.taskOverview.innerHTML = overviewPlan.cards.map((card) => overviewCard(card.label, card.value)).join("");
+    dom.taskRecoveryPanel.innerHTML = renderRecoveryJobPanel(recoveryJobPlan);
+    dom.operatorSummary.innerHTML = renderOperatorSummary(operatorSummaryPlan);
     dom.agentExecution.innerHTML = renderAgentExecution(flow, task);
     renderAgentDetail();
     renderAgentRunDetail();
@@ -1033,12 +1068,12 @@ function renderRuntimeHealth() {
     }
 
     const metricCards = [
-        overviewCard("Active", String(activeRunCount)),
-        overviewCard("Failed 24h", String(failedRunCount)),
-        overviewCard("Crashed 24h", String(crashedRunCount)),
-        overviewCard("Unavailable", String(unavailableProviderCount)),
-        overviewCard("Auth Needed", String(authNeededProviderCount)),
-        overviewCard("Avg Duration", averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))
+        overviewCard("运行中", String(activeRunCount)),
+        overviewCard("24h 失败", String(failedRunCount)),
+        overviewCard("24h 崩溃", String(crashedRunCount)),
+        overviewCard("不可用", String(unavailableProviderCount)),
+        overviewCard("需认证", String(authNeededProviderCount)),
+        overviewCard("平均耗时", averageDurationMs === null ? "暂无" : formatDurationMs(averageDurationMs))
     ].join("");
 
     const providerStatsRows = providerStats.slice(0, 5)
@@ -1047,18 +1082,18 @@ function renderRuntimeHealth() {
 
     const activeRows = activeRuns.slice(0, 4).map((run) => {
         const runId = runIdOf(run);
-        const providerId = providerIdOf(run) || "unknown provider";
-        const taskId = firstNonBlank(run.task_id, run.taskId, "unknown task");
+        const providerId = providerIdOf(run) || "未知执行方";
+        const taskId = firstNonBlank(run.task_id, run.taskId, "未知任务");
         const status = firstNonBlank(run.status, "running");
         return `
             <button class="artifact-item runtime-health__row runtime-health__row--clickable" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
                 <div>
                     <div class="artifact-item__meta">
-                        <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                        <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(humanizeRunStatusLabel(status))}</span>
                         <span>${escapeHtml(providerId)}</span>
                         <span>${escapeHtml(formatTime(run.started_at || run.startedAt))}</span>
                     </div>
-                    <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                    <strong class="mono">${escapeHtml(runId || "未知运行")}</strong>
                     <p>${escapeHtml(taskId)}</p>
                 </div>
             </button>
@@ -1067,17 +1102,18 @@ function renderRuntimeHealth() {
 
     const failureRows = recentFailures.slice(0, 4).map((run) => {
         const runId = runIdOf(run);
-        const providerId = providerIdOf(run) || "unknown provider";
-        const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "failed run");
+        const providerId = providerIdOf(run) || "未知执行方";
+        const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "失败运行");
+        const status = firstNonBlank(run.status, "failed");
         return `
             <button class="artifact-item runtime-health__row runtime-health__row--clickable" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
                 <div>
                     <div class="artifact-item__meta">
-                        <span class="task-badge" data-tone="${toneForRunStatus(firstNonBlank(run.status, "failed"))}">${escapeHtml(firstNonBlank(run.status, "failed"))}</span>
+                        <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(humanizeRunStatusLabel(status))}</span>
                         <span>${escapeHtml(providerId)}</span>
                         <span>${escapeHtml(formatTime(run.started_at || run.startedAt))}</span>
                     </div>
-                    <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                    <strong class="mono">${escapeHtml(runId || "未知运行")}</strong>
                     <p>${escapeHtml(preview(summary, 150))}</p>
                 </div>
             </button>
@@ -1088,13 +1124,13 @@ function renderRuntimeHealth() {
         .filter((provider, index, list) => list.findIndex((item) => providerIdOf(item) === providerIdOf(provider)) === index)
         .slice(0, 4)
         .map((provider) => {
-            const providerId = providerIdOf(provider) || "unknown";
+            const providerId = providerIdOf(provider) || "未知执行方";
             const authStatus = firstNonBlank(provider.auth_status, provider.authStatus, "unknown");
-            const reason = firstNonBlank(provider.readiness_reason, provider.readinessReason, "provider not ready");
+            const reason = firstNonBlank(provider.readiness_reason, provider.readinessReason, "执行通道未就绪");
             return `
                 <button class="agent-trace-row agent-trace-row--clickable" type="button" data-provider-id="${escapeHtml(providerId)}">
                     <span class="task-badge" data-tone="${authStatus === "auth_needed" ? "manual" : "paused"}">${escapeHtml(providerId)}</span>
-                    <span>${escapeHtml(authStatus)} 路 ${escapeHtml(preview(reason, 120))}</span>
+                    <span>认证：${escapeHtml(humanizeAuthStatusLabel(authStatus))} · ${escapeHtml(preview(reason, 120))}</span>
                 </button>
             `;
         }).join("");
@@ -1104,28 +1140,28 @@ function renderRuntimeHealth() {
         ${runtimeHealthPlan.deprioritizedProviders.length > 0 ? `
             <div class="artifact-item runtime-health__deprioritization">
                 <div class="artifact-item__meta">
-                    <span class="task-badge" data-tone="manual">recovery window</span>
-                    <span>${escapeHtml(String(runtimeHealthPlan.deprioritizedProviders.length))} provider</span>
+                    <span class="task-badge" data-tone="manual">恢复窗口</span>
+                    <span>${escapeHtml(String(runtimeHealthPlan.deprioritizedProviders.length))} 个 Provider</span>
                 </div>
                 <strong>${escapeHtml(runtimeHealthPlan.headline)}</strong>
                 <p>${escapeHtml(runtimeHealthPlan.detail)}</p>
             </div>
         ` : ""}
         <div class="agent-trace-list runtime-health__section">
-            <div class="decision-item__type">provider comparison</div>
-            ${providerStatsRows || emptyState("最近 24h 暂无 provider run 统计。")}
+            <div class="decision-item__type">Provider 对比</div>
+            ${providerStatsRows || emptyState("最近 24h 暂无 Provider 运行统计。")}
         </div>
         <div class="agent-trace-list runtime-health__section">
-            <div class="decision-item__type">active runs</div>
-            ${activeRows || emptyState("当前没有 active run。")}
+            <div class="decision-item__type">运行中任务</div>
+            ${activeRows || emptyState("当前没有运行中的任务。")}
         </div>
         <div class="agent-trace-list runtime-health__section">
-            <div class="decision-item__type">recent failures</div>
-            ${failureRows || emptyState("最近没有失败 run。")}
+            <div class="decision-item__type">最近失败</div>
+            ${failureRows || emptyState("最近没有失败运行。")}
         </div>
         <div class="agent-trace-list runtime-health__section">
-            <div class="decision-item__type">provider problems</div>
-            ${providerProblems || emptyState("当前没有 provider auth/ready 问题。")}
+            <div class="decision-item__type">Provider 问题</div>
+            ${providerProblems || emptyState("当前没有 Provider 认证或就绪问题。")}
         </div>
     `;
 }
@@ -1139,7 +1175,7 @@ function renderProviderRuntimeStatsRow(stat) {
             stat?.metadata?.deprioritizationReason
         )
     });
-    const providerId = providerIdOf(stat) || "unknown";
+    const providerId = providerIdOf(stat) || "未知执行方";
     const totalRuns = numberValue(stat.total_runs, stat.totalRuns, 0);
     const activeRuns = numberValue(stat.active_runs, stat.activeRuns, 0);
     const completedRuns = numberValue(stat.completed_runs, stat.completedRuns, 0);
@@ -1152,29 +1188,29 @@ function renderProviderRuntimeStatsRow(stat) {
     const lastFailureSummary = firstNonBlank(stat.last_failure_summary, stat.lastFailureSummary);
     const tone = failedRuns > 0 || crashedRuns > 0 ? "failed" : activeRuns > 0 ? "active" : "done";
     const summary = [
-        `${completedRuns} completed`,
-        `${failedRuns} failed`,
-        crashedRuns > 0 ? `${crashedRuns} crashed` : null,
-        cancelledRuns > 0 ? `${cancelledRuns} cancelled` : null
-    ].filter(Boolean).join(" 路 ");
+        `${completedRuns} 已完成`,
+        `${failedRuns} 失败`,
+        crashedRuns > 0 ? `${crashedRuns} 崩溃` : null,
+        cancelledRuns > 0 ? `${cancelledRuns} 已取消` : null
+    ].filter(Boolean).join(" · ");
     return `
         <button class="artifact-item runtime-health__row runtime-health__row--clickable provider-stats-row" type="button" data-provider-id="${escapeHtml(providerId)}">
             <div>
                 <div class="artifact-item__meta">
-                    <span class="task-badge" data-tone="${tone}">${escapeHtml(formatRate(failureRate))} failed</span>
-                    <span>${escapeHtml(formatCount(totalRuns, "run"))}</span>
-                    <span>${escapeHtml(`${activeRuns} active`)}</span>
-                    <span>avg ${escapeHtml(averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))}</span>
+                    <span class="task-badge" data-tone="${tone}">${escapeHtml(formatRate(failureRate))} 失败</span>
+                    <span>${escapeHtml(`${totalRuns} 次运行`)}</span>
+                    <span>${escapeHtml(`${activeRuns} 运行中`)}</span>
+                    <span>平均 ${escapeHtml(averageDurationMs === null ? "暂无" : formatDurationMs(averageDurationMs))}</span>
                 </div>
                 <strong>${escapeHtml(providerId)}</strong>
-                <p>${escapeHtml(summary || "no completed status yet")}${lastRunAt ? ` 路 last ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
+                <p>${escapeHtml(summary || "尚无已完成记录")}${lastRunAt ? ` · 最近 ${escapeHtml(formatTime(lastRunAt))}` : ""}</p>
                 ${providerDeprioritization.providerDeprioritized ? `
                     <p class="runtime-health__hint">
                         <strong>${escapeHtml(providerDeprioritization.headline)}</strong>
-                        ${providerDeprioritization.detail ? ` 路 ${escapeHtml(providerDeprioritization.detail)}` : ""}
+                        ${providerDeprioritization.detail ? ` · ${escapeHtml(providerDeprioritization.detail)}` : ""}
                     </p>
                 ` : ""}
-                ${lastFailureSummary ? `<p class="agent-warning">Last failure: ${escapeHtml(preview(lastFailureSummary, 140))}</p>` : ""}
+                ${lastFailureSummary ? `<p class="agent-warning">最近失败：${escapeHtml(preview(lastFailureSummary, 140))}</p>` : ""}
             </div>
         </button>
     `;
@@ -1190,49 +1226,49 @@ function renderAgentRunSearch() {
     const role = filters.role || "";
     const resultRows = results.length > 0
         ? results.map(renderAgentRunSearchRow).join("")
-        : emptyState("没有匹配的 agent run。可放宽 status、role 或 task_id 过滤。");
+        : emptyState("没有匹配的运行。可放宽状态、角色或 task_id 过滤。");
 
     dom.agentRunSearch.innerHTML = `
         <form class="agent-run-search__form" data-agent-run-search-form>
             <div class="agent-run-search__grid">
                 <label class="field">
-                    <span>Provider</span>
+                    <span>执行方</span>
                     <input name="providerId" type="text" placeholder="codex" value="${providerId}">
                 </label>
                 <label class="field">
-                    <span>Status</span>
+                    <span>状态</span>
                     <select name="status">
                         <option value="" ${status === "" ? "selected" : ""}>全部</option>
-                        <option value="running" ${status === "running" ? "selected" : ""}>running</option>
-                        <option value="completed" ${status === "completed" ? "selected" : ""}>completed</option>
-                        <option value="failed" ${status === "failed" ? "selected" : ""}>failed</option>
-                        <option value="crashed" ${status === "crashed" ? "selected" : ""}>crashed</option>
+                        <option value="running" ${status === "running" ? "selected" : ""}>运行中</option>
+                        <option value="completed" ${status === "completed" ? "selected" : ""}>已完成</option>
+                        <option value="failed" ${status === "failed" ? "selected" : ""}>失败</option>
+                        <option value="crashed" ${status === "crashed" ? "selected" : ""}>崩溃</option>
                     </select>
                 </label>
                 <label class="field">
-                    <span>Role</span>
+                    <span>角色</span>
                     <select name="role">
                         <option value="" ${role === "" ? "selected" : ""}>全部</option>
-                        <option value="planner" ${role === "planner" ? "selected" : ""}>planner</option>
-                        <option value="executor" ${role === "executor" ? "selected" : ""}>executor</option>
-                        <option value="judge" ${role === "judge" ? "selected" : ""}>judge</option>
+                        <option value="planner" ${role === "planner" ? "selected" : ""}>规划</option>
+                        <option value="executor" ${role === "executor" ? "selected" : ""}>执行</option>
+                        <option value="judge" ${role === "judge" ? "selected" : ""}>判断</option>
                     </select>
                 </label>
                 <label class="field">
-                    <span>Task ID</span>
+                    <span>任务 ID</span>
                     <input name="taskId" type="text" placeholder="task_..." value="${taskId}">
                 </label>
                 <label class="field">
-                    <span>Limit</span>
+                    <span>条数</span>
                     <input name="limit" type="number" min="1" max="100" value="${limit}">
                 </label>
             </div>
             <div class="agent-action-row">
-                <button class="button button--ghost" type="submit">Search Runs</button>
+                <button class="button button--ghost" type="submit">搜索运行</button>
                 <button class="link-button" type="button" data-run-search-action="reset">重置</button>
             </div>
         </form>
-        <p class="agent-run-search__summary">返回 ${results.length} 条，点击 run 打开详情。</p>
+        <p class="agent-run-search__summary">返回 ${results.length} 条，点击运行打开详情。</p>
         <div class="agent-run-search__results">
             ${resultRows}
         </div>
@@ -1240,12 +1276,12 @@ function renderAgentRunSearch() {
 }
 
 function renderAgentInventoryCard(agent) {
-    const providerId = providerIdOf(agent) || "unknown";
+    const providerId = providerIdOf(agent) || "未知执行通道";
     const displayName = firstNonBlank(agent.display_name, agent.displayName, providerId);
     const providerType = firstNonBlank(agent.provider_type, agent.providerType, "local_cli");
     const transport = firstNonBlank(agent.transport, "process");
     const authStatus = firstNonBlank(agent.auth_status, agent.authStatus, "unknown");
-    const version = firstNonBlank(agent.version, "unknown");
+    const version = firstNonBlank(agent.version, "未知");
     const ready = booleanValue(agent.ready) === true;
     const installed = booleanValue(agent.installed) === true;
     const selected = providerId === state.selectedAgentId;
@@ -1254,21 +1290,21 @@ function renderAgentInventoryCard(agent) {
     const capabilities = normalizeTextList(agent.capabilities).slice(0, 5);
     const capabilityLine = capabilities.length > 0
         ? capabilities.map((capability) => `<span class="chip">${escapeHtml(capability)}</span>`).join("")
-        : `<span class="chip">no capability</span>`;
+        : `<span class="chip">暂无能力</span>`;
     return `
         <div class="artifact-item agent-provider-card${ready ? " is-ready" : ""}${selected ? " is-selected" : ""}" data-provider-id="${escapeHtml(providerId)}">
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "ready" : "not ready"}</span>
-                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "installed" : "missing"}</span>
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "就绪" : "未就绪"}</span>
+                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "已安装" : "缺失"}</span>
                 <span>${escapeHtml(providerType)} / ${escapeHtml(transport)}</span>
             </div>
             <strong>${escapeHtml(displayName)}</strong>
             <p class="mono">${escapeHtml(providerId)}</p>
             <div class="chip-group">${capabilityLine}</div>
             <div class="artifact-item__meta">
-                <span>auth: ${escapeHtml(authStatus)}</span>
-                <span>version: ${escapeHtml(version)}</span>
-                ${checkedAt ? `<span>checked: ${escapeHtml(formatTime(checkedAt))}</span>` : ""}
+                <span>认证：${escapeHtml(humanizeAuthStatusLabel(authStatus))}</span>
+                <span>版本：${escapeHtml(version)}</span>
+                ${checkedAt ? `<span>检查：${escapeHtml(formatTime(checkedAt))}</span>` : ""}
             </div>
             ${readinessReason ? `<p>${escapeHtml(preview(readinessReason, 160))}</p>` : ""}
             <div class="agent-action-row">
@@ -1297,7 +1333,7 @@ function renderAgentExecution(flow, task) {
         run.selectedWorkerId,
         task?.assigned_worker,
         task?.assignedWorker,
-        "unassigned"
+        "未分配"
     );
     const displayName = firstNonBlank(
         selection.provider_display_name,
@@ -1305,7 +1341,7 @@ function renderAgentExecution(flow, task) {
         run.provider_display_name,
         run.providerDisplayName,
         providerId,
-        "unknown provider"
+        "未知执行方"
     );
     const runId = firstNonBlank(run.run_id, run.runId);
     const runStatus = firstNonBlank(run.status);
@@ -1321,43 +1357,43 @@ function renderAgentExecution(flow, task) {
     const artifactPreview = artifacts.slice(0, 3);
 
     if (!providerId && !runId) {
-        return emptyState("当前任务还没有 provider selection 或 agent run 记录。");
+        return emptyState("当前任务还没有执行方选择或运行记录。");
     }
 
     return `
         <div class="agent-run-card">
             <div class="artifact-item__meta">
-                ${runStatus ? `<span class="task-badge" data-tone="${toneForRunStatus(runStatus)}">${escapeHtml(runStatus)}</span>` : ""}
-                ${providerReady !== null ? `<span class="task-badge" data-tone="${providerReady ? "active" : "paused"}">${providerReady ? "provider ready" : "provider not ready"}</span>` : ""}
-                <span>${escapeHtml(workerRole)}</span>
+                ${runStatus ? `<span class="task-badge" data-tone="${toneForRunStatus(runStatus)}">${escapeHtml(humanizeRunStatusLabel(runStatus))}</span>` : ""}
+                ${providerReady !== null ? `<span class="task-badge" data-tone="${providerReady ? "active" : "paused"}">${providerReady ? "执行通道就绪" : "执行通道未就绪"}</span>` : ""}
+                <span>${escapeHtml(humanizeWorkerRoleLabel(workerRole))}</span>
                 ${selectedModelTier ? `<span>${escapeHtml(selectedModelTier)}</span>` : ""}
             </div>
             <strong>${escapeHtml(displayName)}</strong>
-            <p class="mono">${escapeHtml([providerId, selectedWorker, runId].filter(Boolean).join(" 路 "))}</p>
+            <p class="mono">${escapeHtml([providerId, selectedWorker ? `执行方 ${selectedWorker}` : null, runId].filter(Boolean).join(" · "))}</p>
             <div class="agent-run-card__grid">
-                ${runId ? overviewCard("Run ID", runId) : ""}
-                ${run.started_at || run.startedAt ? overviewCard("Started", formatTime(run.started_at || run.startedAt)) : ""}
-                ${run.duration_ms || run.durationMs ? overviewCard("Duration", formatDurationMs(run.duration_ms || run.durationMs)) : ""}
-                ${run.artifact_count || run.artifactCount ? overviewCard("Artifacts", String(run.artifact_count || run.artifactCount)) : ""}
+                ${runId ? overviewCard("运行 ID", runId) : ""}
+                ${run.started_at || run.startedAt ? overviewCard("开始时间", formatTime(run.started_at || run.startedAt)) : ""}
+                ${run.duration_ms || run.durationMs ? overviewCard("耗时", formatDurationMs(run.duration_ms || run.durationMs)) : ""}
+                ${run.artifact_count || run.artifactCount ? overviewCard("产物数", String(run.artifact_count || run.artifactCount)) : ""}
             </div>
             ${selectionReason ? `<p>${escapeHtml(preview(selectionReason, 220))}</p>` : ""}
-            ${fallbackReason ? `<p class="agent-warning">Fallback: ${escapeHtml(preview(fallbackReason, 180))}</p>` : ""}
+            ${fallbackReason ? `<p class="agent-warning">回退原因：${escapeHtml(preview(fallbackReason, 180))}</p>` : ""}
             ${runSummary ? `<p>${escapeHtml(preview(runSummary, 220))}</p>` : ""}
             <div class="artifact-item__meta">
-                ${authStatus ? `<span>auth: ${escapeHtml(authStatus)}</span>` : ""}
-                ${providerVersion ? `<span>version: ${escapeHtml(providerVersion)}</span>` : ""}
+                ${authStatus ? `<span>认证：${escapeHtml(humanizeAuthStatusLabel(authStatus))}</span>` : ""}
+                ${providerVersion ? `<span>版本：${escapeHtml(providerVersion)}</span>` : ""}
             </div>
             <div class="agent-action-row">
-                ${providerId ? `<button class="link-button" type="button" data-provider-id="${escapeHtml(providerId)}">View Provider</button>` : ""}
-                ${runId ? `<button class="link-button" type="button" data-run-id="${escapeHtml(runId)}">View Run</button>` : ""}
+                ${providerId ? `<button class="link-button" type="button" data-provider-id="${escapeHtml(providerId)}">查看 Provider</button>` : ""}
+                ${runId ? `<button class="link-button" type="button" data-run-id="${escapeHtml(runId)}">查看运行</button>` : ""}
             </div>
         </div>
         ${eventPreview.length > 0 ? `
             <div class="agent-trace-list">
-                <div class="decision-item__type">recent events</div>
+                <div class="decision-item__type">最近事件</div>
                 ${eventPreview.map((event) => `
                     <div class="agent-trace-row">
-                        <span class="task-badge">${escapeHtml(event.event_type || event.eventType || "event")}</span>
+                        <span class="task-badge">${escapeHtml(event.event_type || event.eventType || "事件")}</span>
                         <span>${escapeHtml(preview(event.summary || event.event_id || event.eventId, 120))}</span>
                     </div>
                 `).join("")}
@@ -1365,10 +1401,10 @@ function renderAgentExecution(flow, task) {
         ` : ""}
         ${artifactPreview.length > 0 ? `
             <div class="agent-trace-list">
-                <div class="decision-item__type">agent artifacts</div>
+                <div class="decision-item__type">执行产物</div>
                 ${artifactPreview.map((artifact) => `
                     <div class="agent-trace-row">
-                        <span class="task-badge">${escapeHtml(artifact.artifact_type || artifact.artifactType || "artifact")}</span>
+                        <span class="task-badge">${escapeHtml(artifact.artifact_type || artifact.artifactType || "产物")}</span>
                         <span>${escapeHtml(preview(artifact.title || artifact.path || artifact.artifact_id || artifact.artifactId, 120))}</span>
                     </div>
                 `).join("")}
@@ -1381,19 +1417,19 @@ function renderAgentDetail() {
     const agent = state.selectedAgent
         || (state.selectedAgentId ? state.agents.find((item) => providerIdOf(item) === state.selectedAgentId) : null);
     if (!agent) {
-        dom.agentDetail.innerHTML = emptyState("点击 Agent Inventory、Runtime Health 或任务执行卡片里的 provider 后显示详情。");
+        dom.agentDetail.innerHTML = emptyState("点击执行方清单、运行健康或任务执行卡片里的 Provider 后显示详情。");
         return;
     }
 
-    const providerId = providerIdOf(agent) || state.selectedAgentId || "unknown";
+    const providerId = providerIdOf(agent) || state.selectedAgentId || "未知执行通道";
     const displayName = firstNonBlank(agent.display_name, agent.displayName, providerId);
     const providerType = firstNonBlank(agent.provider_type, agent.providerType, "local_cli");
     const transport = firstNonBlank(agent.transport, "process");
     const authStatus = firstNonBlank(agent.auth_status, agent.authStatus, "unknown");
-    const version = firstNonBlank(agent.version, "unknown");
+    const version = firstNonBlank(agent.version, "未知");
     const ready = booleanValue(agent.ready) === true;
     const installed = booleanValue(agent.installed) === true;
-    const readinessReason = firstNonBlank(agent.readiness_reason, agent.readinessReason, "no readiness reason");
+    const readinessReason = firstNonBlank(agent.readiness_reason, agent.readinessReason, "暂无就绪说明");
     const activeRunCount = numberValue(agent.active_run_count, agent.activeRunCount, 0);
     const lastSeenAt = firstNonBlank(agent.checked_at, agent.checkedAt, agent.last_seen_at, agent.lastSeenAt);
     const capabilities = normalizeTextList(agent.capabilities);
@@ -1401,22 +1437,22 @@ function renderAgentDetail() {
     const workerId = workerIdForProvider(providerId);
     const chips = capabilities.length > 0
         ? capabilities.map((capability) => `<span class="chip">${escapeHtml(capability)}</span>`).join("")
-        : `<span class="chip">no capability</span>`;
+        : `<span class="chip">暂无能力</span>`;
 
     dom.agentDetail.innerHTML = `
         <div class="artifact-item agent-detail-card">
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "ready" : "not ready"}</span>
-                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "installed" : "missing"}</span>
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "就绪" : "未就绪"}</span>
+                <span class="task-badge" data-tone="${installed ? "auto" : "manual"}">${installed ? "已安装" : "缺失"}</span>
                 <span>${escapeHtml(providerType)} / ${escapeHtml(transport)}</span>
             </div>
             <strong>${escapeHtml(displayName)}</strong>
             <p class="mono">${escapeHtml(providerId)}</p>
             <div class="agent-detail__grid">
-                ${overviewCard("Auth", authStatus)}
-                ${overviewCard("Version", version)}
-                ${overviewCard("Active Runs", String(activeRunCount ?? 0))}
-                ${overviewCard("Checked", lastSeenAt ? formatTime(lastSeenAt) : "unknown")}
+                ${overviewCard("认证", humanizeAuthStatusLabel(authStatus))}
+                ${overviewCard("版本", version)}
+                ${overviewCard("运行中任务", String(activeRunCount ?? 0))}
+                ${overviewCard("最近检查", lastSeenAt ? formatTime(lastSeenAt) : "未知")}
             </div>
             <div class="chip-group">${chips}</div>
             <p>${escapeHtml(preview(readinessReason, 220))}</p>
@@ -1427,14 +1463,14 @@ function renderAgentDetail() {
             ${renderMetadataGrid(agent.metadata, 6)}
             <div class="agent-action-row">
                 <button class="link-button" type="button" data-provider-action="refresh" data-provider-id="${escapeHtml(providerId)}">刷新 Provider</button>
-                <button class="link-button" type="button" data-provider-action="preflight" data-provider-id="${escapeHtml(providerId)}">运行 Preflight</button>
-                <button class="link-button" type="button" data-provider-action="view_runs" data-provider-id="${escapeHtml(providerId)}">筛选 Runs</button>
-                <button class="link-button" type="button" data-provider-action="copy_diagnostics" data-provider-id="${escapeHtml(providerId)}">Copy Diagnostics</button>
+                <button class="link-button" type="button" data-provider-action="preflight" data-provider-id="${escapeHtml(providerId)}">运行预检</button>
+                <button class="link-button" type="button" data-provider-action="view_runs" data-provider-id="${escapeHtml(providerId)}">筛选运行</button>
+                <button class="link-button" type="button" data-provider-action="copy_diagnostics" data-provider-id="${escapeHtml(providerId)}">复制诊断</button>
             </div>
         </div>
         <div class="agent-trace-list">
-            <div class="decision-item__type">recent provider runs</div>
-            ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 provider 暂无 run 记录。")}
+            <div class="decision-item__type">最近 Provider 运行</div>
+            ${runs.length > 0 ? runs.slice(0, 8).map(renderAgentRunListRow).join("") : emptyState("这个 Provider 暂无运行记录。")}
         </div>
     `;
 }
@@ -1457,21 +1493,21 @@ function renderProviderStartupProtocolProbe(agent) {
     const ok = success === null ? exitCode === 0 : success === true;
     return `
         <div class="agent-trace-list provider-diagnostics">
-            <div class="decision-item__type">startup protocol probe</div>
+            <div class="decision-item__type">启动协议探测</div>
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "probe ok" : "probe failed"}</span>
-                ${mode ? `<span class="task-badge" data-tone="paused">${escapeHtml(mode)}</span>` : ""}
-                ${inferred === true ? `<span class="task-badge" data-tone="paused">protocol inferred</span>` : ""}
-                ${suggestedParser ? `<span class="task-badge" data-tone="auto">parser: ${escapeHtml(suggestedParser)}</span>` : ""}
+                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "探测通过" : "探测失败"}</span>
+                ${mode ? `<span class="task-badge" data-tone="paused">${escapeHtml(humanizeProviderProbeMode(mode))}</span>` : ""}
+                ${inferred === true ? `<span class="task-badge" data-tone="paused">协议推断</span>` : ""}
+                ${suggestedParser ? `<span class="task-badge" data-tone="auto">解析器：${escapeHtml(suggestedParser)}</span>` : ""}
             </div>
             <div class="agent-detail__grid">
-                ${overviewCard("Exit Code", exitCode === null ? "n/a" : String(exitCode))}
-                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
-                ${overviewCard("Protocol", firstNonBlank(metadata.provider_protocol, metadata.providerProtocol, "unknown"))}
-                ${overviewCard("Parser Hint", suggestedParser || "n/a")}
+                ${overviewCard("退出码", exitCode === null ? "暂无" : String(exitCode))}
+                ${overviewCard("命令形态", commandShape.length > 0 ? commandShape.join(" ") : "暂无")}
+                ${overviewCard("协议", firstNonBlank(metadata.provider_protocol, metadata.providerProtocol, "未知"))}
+                ${overviewCard("解析提示", suggestedParser || "暂无")}
             </div>
             ${outputPreview ? `<p class="mono">${escapeHtml(preview(outputPreview, 260))}</p>` : ""}
-            <p>${escapeHtml("该探测只作为 discovery 诊断证据，不自动切换协议，也不替代 dispatch readiness。")}</p>
+            <p>${escapeHtml("该探测只作为协议发现诊断证据，不自动切换协议，也不替代执行前探测。")}</p>
         </div>
     `;
 }
@@ -1495,18 +1531,18 @@ function renderProviderPreflightDiagnostics(agent) {
     const ok = exitCode === null ? booleanValue(agent.ready) === true : exitCode === 0;
     return `
         <div class="agent-trace-list provider-diagnostics">
-            <div class="decision-item__type">provider preflight result</div>
+            <div class="decision-item__type">Provider 预检结果</div>
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "preflight ok" : "preflight failed"}</span>
-                ${mode ? `<span class="task-badge" data-tone="${mode === "active_probe" ? "active" : "paused"}">${escapeHtml(mode)}</span>` : ""}
+                <span class="task-badge" data-tone="${ok ? "active" : "failed"}">${ok ? "预检通过" : "预检失败"}</span>
+                ${mode ? `<span class="task-badge" data-tone="${mode === "active_probe" ? "active" : "paused"}">${escapeHtml(humanizeProviderProbeMode(mode))}</span>` : ""}
                 ${failureClass ? `<span class="task-badge" data-tone="failed">${escapeHtml(failureClass)}</span>` : ""}
-                ${retryable !== null ? `<span class="task-badge" data-tone="${retryable ? "paused" : "failed"}">${retryable ? "retryable" : "manual"}</span>` : ""}
+                ${retryable !== null ? `<span class="task-badge" data-tone="${retryable ? "paused" : "failed"}">${retryable ? "可重试" : "需人工处理"}</span>` : ""}
             </div>
             <div class="agent-detail__grid">
-                ${overviewCard("Exit Code", exitCode === null ? "n/a" : String(exitCode))}
-                ${overviewCard("Probe Args", probeArgs.length > 0 ? probeArgs.join(" ") : "n/a")}
-                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
-                ${overviewCard("Checked", firstNonBlank(agent.checked_at, agent.checkedAt) ? formatTime(firstNonBlank(agent.checked_at, agent.checkedAt)) : "unknown")}
+                ${overviewCard("退出码", exitCode === null ? "暂无" : String(exitCode))}
+                ${overviewCard("探测参数", probeArgs.length > 0 ? probeArgs.join(" ") : "暂无")}
+                ${overviewCard("命令形态", commandShape.length > 0 ? commandShape.join(" ") : "暂无")}
+                ${overviewCard("检查时间", firstNonBlank(agent.checked_at, agent.checkedAt) ? formatTime(firstNonBlank(agent.checked_at, agent.checkedAt)) : "未知")}
             </div>
             ${outputPreview ? `<p class="mono">${escapeHtml(preview(outputPreview, 260))}</p>` : ""}
             ${failureReason ? `<p>${escapeHtml(preview(failureReason, 220))}</p>` : ""}
@@ -1520,7 +1556,7 @@ function renderWorkerDispatchReadiness(readiness, workerId) {
     }
     const ready = booleanValue(readiness.ready) === true;
     const mode = firstNonBlank(readiness.mode, "dispatch");
-    const reason = firstNonBlank(readiness.reason, readiness.dispatch_preflight_reason, readiness.dispatchPreflightReason, "no readiness reason");
+    const reason = firstNonBlank(readiness.reason, readiness.dispatch_preflight_reason, readiness.dispatchPreflightReason, "暂无就绪说明");
     const dispatchReady = booleanValue(readiness.dispatch_preflight_ready, readiness.dispatchPreflightReady);
     const cached = booleanValue(readiness.dispatch_preflight_cached, readiness.dispatchPreflightCached);
     const activeProbe = booleanValue(readiness.dispatch_preflight_active_probe, readiness.dispatchPreflightActiveProbe);
@@ -1538,22 +1574,22 @@ function renderWorkerDispatchReadiness(readiness, workerId) {
 
     return `
         <div class="agent-trace-list provider-diagnostics">
-            <div class="decision-item__type">worker dispatch probe</div>
+            <div class="decision-item__type">执行方派发探测</div>
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "dispatch ready" : "dispatch blocked"}</span>
-                ${dispatchReady !== null ? `<span class="task-badge" data-tone="${dispatchReady ? "active" : "failed"}">${dispatchReady ? "preflight ok" : "preflight failed"}</span>` : ""}
+                <span class="task-badge" data-tone="${ready ? "active" : "paused"}">${ready ? "派发就绪" : "派发阻塞"}</span>
+                ${dispatchReady !== null ? `<span class="task-badge" data-tone="${dispatchReady ? "active" : "failed"}">${dispatchReady ? "预检通过" : "预检失败"}</span>` : ""}
                 ${providerFailureClass ? `<span class="task-badge" data-tone="failed">${escapeHtml(providerFailureClass)}</span>` : ""}
-                ${providerRetryable !== null ? `<span class="task-badge" data-tone="${providerRetryable ? "paused" : "failed"}">${providerRetryable ? "retryable" : "manual"}</span>` : ""}
-                <span>${escapeHtml(mode)}</span>
-                <span>${escapeHtml(probeMode)}</span>
-                ${cached !== null ? `<span>${cached ? "cached" : "fresh probe"}</span>` : ""}
-                ${activeProbe !== null ? `<span>${activeProbe ? "active probe" : "passive fallback"}</span>` : ""}
+                ${providerRetryable !== null ? `<span class="task-badge" data-tone="${providerRetryable ? "paused" : "failed"}">${providerRetryable ? "可重试" : "需人工处理"}</span>` : ""}
+                <span>${escapeHtml(humanizeProviderProbeMode(mode))}</span>
+                <span>${escapeHtml(humanizeProviderProbeMode(probeMode))}</span>
+                ${cached !== null ? `<span>${cached ? "缓存结果" : "最新探测"}</span>` : ""}
+                ${activeProbe !== null ? `<span>${activeProbe ? "主动探测" : "被动回退"}</span>` : ""}
             </div>
             <div class="agent-detail__grid">
-                ${overviewCard("Worker", workerId || readiness.worker_id || readiness.workerId || "unknown")}
-                ${overviewCard("Launch", launchMode || "unknown")}
-                ${overviewCard("Probe Args", probeArgs.length > 0 ? probeArgs.join(" ") : "n/a")}
-                ${overviewCard("Command Shape", commandShape.length > 0 ? commandShape.join(" ") : "n/a")}
+                ${overviewCard("执行方", workerId || readiness.worker_id || readiness.workerId || "未分配")}
+                ${overviewCard("启动方式", launchMode || "未知")}
+                ${overviewCard("探测参数", probeArgs.length > 0 ? probeArgs.join(" ") : "暂无")}
+                ${overviewCard("命令形态", commandShape.length > 0 ? commandShape.join(" ") : "暂无")}
             </div>
             ${launchTarget ? `<p class="mono">${escapeHtml(preview(launchTarget, 220))}</p>` : ""}
             ${profileBadges}
@@ -1583,11 +1619,11 @@ function renderCliProfileBadges(profile) {
     }
     const badges = entries.map(([label, value]) => {
         const supported = booleanValue(value) === true;
-        return `<span class="task-badge" data-tone="${supported ? "active" : "failed"}">${escapeHtml(`${label}: ${supported ? "yes" : "no"}`)}</span>`;
+        return `<span class="task-badge" data-tone="${supported ? "active" : "failed"}">${escapeHtml(`${humanizeCliCapabilityLabel(label)}：${supported ? "支持" : "不支持"}`)}</span>`;
     }).join("");
     return `
         <div class="artifact-item__meta">
-            <span class="task-badge" data-tone="${evidence ? "active" : "paused"}">${evidence ? "cli profile" : "profile inferred"}</span>
+            <span class="task-badge" data-tone="${evidence ? "active" : "paused"}">${evidence ? "CLI 画像" : "画像推断"}</span>
             ${badges}
         </div>
     `;
@@ -1610,37 +1646,37 @@ function renderProviderRuntimeDiagnostics(agent, runs) {
         : null;
     const failureRate = recentRuns.length > 0
         ? `${Math.round((failedRuns.length / recentRuns.length) * 100)}%`
-        : "n/a";
+        : "暂无";
     const lastFailure = failedRuns[0] || null;
     const lastSuccess = completedRuns[0] || null;
     const providerActiveRunCount = numberValue(agent.active_run_count, agent.activeRunCount, activeRuns.length);
     const lastFailureExitCode = numberOrNull(lastFailure?.exit_code, lastFailure?.exitCode);
     const lastFailureSummary = lastFailure
-        ? firstNonBlank(lastFailure.summary, lastFailure.output_preview, lastFailure.outputPreview, lastFailure.last_event_type, lastFailure.lastEventType, "failed run")
+        ? firstNonBlank(lastFailure.summary, lastFailure.output_preview, lastFailure.outputPreview, lastFailure.last_event_type, lastFailure.lastEventType, "失败运行")
         : null;
     const lastFailureRunId = runIdOf(lastFailure);
 
     return `
         <div class="agent-trace-list provider-diagnostics">
-            <div class="decision-item__type">runtime diagnostics</div>
+            <div class="decision-item__type">运行诊断</div>
             <div class="agent-detail__grid">
-                ${overviewCard("Recent Runs", String(recentRuns.length))}
-                ${overviewCard("Active", String(providerActiveRunCount ?? activeRuns.length))}
-                ${overviewCard("Completed", String(completedRuns.length))}
-                ${overviewCard("Failed", `${failedRuns.length} / ${failureRate}`)}
-                ${overviewCard("Avg Duration", averageDurationMs === null ? "n/a" : formatDurationMs(averageDurationMs))}
-                ${overviewCard("Last Success", lastSuccess ? formatTime(lastSuccess.started_at || lastSuccess.startedAt) : "n/a")}
+                ${overviewCard("最近运行", String(recentRuns.length))}
+                ${overviewCard("运行中", String(providerActiveRunCount ?? activeRuns.length))}
+                ${overviewCard("已完成", String(completedRuns.length))}
+                ${overviewCard("失败", `${failedRuns.length} / ${failureRate}`)}
+                ${overviewCard("平均耗时", averageDurationMs === null ? "暂无" : formatDurationMs(averageDurationMs))}
+                ${overviewCard("最近成功", lastSuccess ? formatTime(lastSuccess.started_at || lastSuccess.startedAt) : "暂无")}
             </div>
             ${lastFailure ? `
                 <button class="agent-trace-row agent-trace-row--clickable" type="button" ${lastFailureRunId ? `data-run-id="${escapeHtml(lastFailureRunId)}"` : "disabled"}>
-                    <span class="task-badge" data-tone="failed">last failure</span>
+                    <span class="task-badge" data-tone="failed">最近失败</span>
                     <span>
                         ${escapeHtml(formatTime(lastFailure.started_at || lastFailure.startedAt))}
-                        ${lastFailureExitCode === null ? "" : ` 路 exit ${escapeHtml(String(lastFailureExitCode))}`}
-                        路 ${escapeHtml(preview(lastFailureSummary, 140))}
+                        ${lastFailureExitCode === null ? "" : ` · 退出码 ${escapeHtml(String(lastFailureExitCode))}`}
+                        · ${escapeHtml(preview(lastFailureSummary, 140))}
                     </span>
                 </button>
-            ` : emptyState("最近 provider runs 里没有失败记录。")}
+            ` : emptyState("最近 Provider 运行里没有失败记录。")}
         </div>
     `;
 }
@@ -1650,48 +1686,48 @@ function renderAgentRunDetail() {
     const events = state.selectedAgentRun ? state.selectedAgentRunEvents : state.agentRunEvents;
     const artifacts = state.selectedAgentRun ? state.selectedAgentRunArtifacts : state.agentRunArtifacts;
     if (!run) {
-        dom.agentRunDetail.innerHTML = emptyState("点击任务执行卡片、Provider Detail 或 Runtime Health 里的 run 后显示详情。");
+        dom.agentRunDetail.innerHTML = emptyState("点击任务执行卡片、Provider 详情或运行健康里的运行后显示详情。");
         return;
     }
 
-    const runId = runIdOf(run) || state.selectedAgentRunId || "unknown run";
-    const providerId = providerIdOf(run) || "unknown provider";
+    const runId = runIdOf(run) || state.selectedAgentRunId || "未知运行";
+    const providerId = providerIdOf(run) || "未知执行方";
     const status = firstNonBlank(run.status, "unknown");
-    const selectedWorker = firstNonBlank(run.selected_worker_id, run.selectedWorkerId, run.worker_id, run.workerId, "unassigned");
-    const modelTier = firstNonBlank(run.selected_model_tier, run.selectedModelTier, run.model_tier, run.modelTier, "unknown");
+    const selectedWorker = firstNonBlank(run.selected_worker_id, run.selectedWorkerId, run.worker_id, run.workerId, "未分配");
+    const modelTier = firstNonBlank(run.selected_model_tier, run.selectedModelTier, run.model_tier, run.modelTier, "未知");
     const durationMs = numberOrNull(run.duration_ms, run.durationMs);
     const artifactCount = numberOrNull(run.artifact_count, run.artifactCount);
-    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "no summary");
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, "暂无摘要");
     const taskId = firstNonBlank(run.task_id, run.taskId);
     const sessionId = firstNonBlank(run.session_id, run.sessionId);
 
     dom.agentRunDetail.innerHTML = `
         <div class="artifact-item agent-run-detail-card">
             <div class="artifact-item__meta">
-                <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(humanizeRunStatusLabel(status))}</span>
                 <span>${escapeHtml(providerId)}</span>
-                <span>${escapeHtml(selectedWorker)}</span>
+                <span>${escapeHtml(`执行方 ${selectedWorker}`)}</span>
                 <span>${escapeHtml(modelTier)}</span>
             </div>
             <strong class="mono">${escapeHtml(runId)}</strong>
             <p>${escapeHtml(preview(summary, 260))}</p>
             <div class="agent-detail__grid">
-                ${overviewCard("Task", taskId || "unknown")}
-                ${overviewCard("Session", sessionId || "unknown")}
-                ${overviewCard("Started", formatTime(run.started_at || run.startedAt))}
-                ${overviewCard("Duration", durationMs === null ? "unknown" : formatDurationMs(durationMs))}
-                ${overviewCard("Artifacts", artifactCount === null ? String((artifacts || []).length) : String(artifactCount))}
-                ${overviewCard("Last Event", firstNonBlank(run.last_event_type, run.lastEventType, "unknown"))}
+                ${overviewCard("任务", taskId || "未知")}
+                ${overviewCard("会话", sessionId || "未知")}
+                ${overviewCard("开始时间", formatTime(run.started_at || run.startedAt))}
+                ${overviewCard("耗时", durationMs === null ? "未知" : formatDurationMs(durationMs))}
+                ${overviewCard("产物数", artifactCount === null ? String((artifacts || []).length) : String(artifactCount))}
+                ${overviewCard("最近事件", firstNonBlank(run.last_event_type, run.lastEventType, "未知"))}
             </div>
             ${renderMetadataGrid(run.metadata, 8)}
         </div>
         <div class="agent-trace-list">
-            <div class="decision-item__type">run timeline</div>
-            ${(events || []).length > 0 ? events.slice(0, 20).map(renderAgentRunEventRow).join("") : emptyState("这个 run 暂无 event。")}
+            <div class="decision-item__type">运行时间线</div>
+            ${(events || []).length > 0 ? events.slice(0, 20).map(renderAgentRunEventRow).join("") : emptyState("这个运行暂无事件。")}
         </div>
         <div class="agent-trace-list">
-            <div class="decision-item__type">run artifacts</div>
-            ${(artifacts || []).length > 0 ? artifacts.slice(0, 20).map(renderAgentRunArtifactRow).join("") : emptyState("这个 run 暂无 artifact。")}
+            <div class="decision-item__type">运行产物</div>
+            ${(artifacts || []).length > 0 ? artifacts.slice(0, 20).map(renderAgentRunArtifactRow).join("") : emptyState("这个运行暂无产物。")}
         </div>
     `;
 }
@@ -1699,18 +1735,18 @@ function renderAgentRunDetail() {
 function renderAgentRunListRow(run) {
     const runId = runIdOf(run);
     const status = firstNonBlank(run.status, "unknown");
-    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, run.task_id, run.taskId, "run");
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, run.task_id, run.taskId, "运行");
     const startedAt = firstNonBlank(run.started_at, run.startedAt);
     const durationMs = numberOrNull(run.duration_ms, run.durationMs);
     return `
         <button class="agent-run-row" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
             <div>
                 <div class="artifact-item__meta">
-                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(humanizeRunStatusLabel(status))}</span>
                     <span>${escapeHtml(formatTime(startedAt))}</span>
                     ${durationMs === null ? "" : `<span>${escapeHtml(formatDurationMs(durationMs))}</span>`}
                 </div>
-                <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
+                <strong class="mono">${escapeHtml(runId || "未知运行")}</strong>
                 <p>${escapeHtml(preview(summary, 140))}</p>
             </div>
         </button>
@@ -1719,25 +1755,25 @@ function renderAgentRunListRow(run) {
 
 function renderAgentRunSearchRow(run) {
     const runId = runIdOf(run);
-    const providerId = providerIdOf(run) || "unknown provider";
+    const providerId = providerIdOf(run) || "未知执行方";
     const status = firstNonBlank(run.status, "unknown");
     const role = firstNonBlank(run.worker_role, run.workerRole, "executor");
-    const taskId = firstNonBlank(run.task_id, run.taskId, "unknown task");
-    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, taskId, "run");
+    const taskId = firstNonBlank(run.task_id, run.taskId, "未知任务");
+    const summary = firstNonBlank(run.summary, run.last_event_type, run.lastEventType, taskId, "运行");
     const startedAt = firstNonBlank(run.started_at, run.startedAt);
     const durationMs = numberOrNull(run.duration_ms, run.durationMs);
     return `
         <button class="agent-run-row agent-run-search__row" type="button" ${runId ? `data-run-id="${escapeHtml(runId)}"` : "disabled"}>
             <div>
                 <div class="artifact-item__meta">
-                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(status)}</span>
+                    <span class="task-badge" data-tone="${toneForRunStatus(status)}">${escapeHtml(humanizeRunStatusLabel(status))}</span>
                     <span>${escapeHtml(providerId)}</span>
-                    <span>${escapeHtml(role)}</span>
+                    <span>${escapeHtml(humanizeWorkerRoleLabel(role))}</span>
                     <span>${escapeHtml(formatTime(startedAt))}</span>
                     ${durationMs === null ? "" : `<span>${escapeHtml(formatDurationMs(durationMs))}</span>`}
                 </div>
-                <strong class="mono">${escapeHtml(runId || "unknown run")}</strong>
-                <p>${escapeHtml(taskId)} 路 ${escapeHtml(preview(summary, 160))}</p>
+                <strong class="mono">${escapeHtml(runId || "未知运行")}</strong>
+                <p>${escapeHtml(taskId)} · ${escapeHtml(preview(summary, 160))}</p>
             </div>
         </button>
     `;
@@ -1809,7 +1845,7 @@ function renderRecoveryJobPanel(plan) {
         return "";
     }
     return `
-        <div class="overview-card">
+        <div class="overview-card recovery-job-card">
             <span>恢复任务</span>
             <strong>${escapeHtml(plan.summary)}</strong>
             <small class="message__hint mono">请求 ${escapeHtml(plan.requestId)}</small>
@@ -1819,6 +1855,31 @@ function renderRecoveryJobPanel(plan) {
                 </div>
             ` : ""}
             ${plan.error ? `<small class="message__hint">${escapeHtml(plan.error)}</small>` : ""}
+        </div>
+    `;
+}
+
+function renderOperatorSummary(plan) {
+    if (!plan?.visible) {
+        return emptyState("当前任务还没有阻塞摘要、建议动作或恢复窗口。");
+    }
+    const chips = plan.chips || [];
+    return `
+        <div class="operator-summary-card" data-tone="${escapeHtml(plan.tone || "done")}">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${escapeHtml(plan.tone || "done")}">${escapeHtml(plan.statusLabel || "当前状态")}</span>
+                ${plan.recoveryWindow ? `<span class="task-badge" data-tone="manual">${escapeHtml(plan.recoveryWindow)}</span>` : ""}
+            </div>
+            <strong>${escapeHtml(plan.blocker || "当前没有明确阻塞点。")}</strong>
+            ${plan.action ? `<p>建议动作：${escapeHtml(plan.action)}</p>` : ""}
+            ${plan.nextStep ? `<p>下一步：${escapeHtml(plan.nextStep)}</p>` : ""}
+            ${plan.legacyControlAlert ? `<p>兼容路由：${escapeHtml(plan.legacyControlAlert)}</p>` : ""}
+            ${plan.supportingDetail ? `<p>${escapeHtml(plan.supportingDetail)}</p>` : ""}
+            ${chips.length > 0 ? `
+                <div class="operator-summary-card__foot">
+                    ${chips.map((chip) => `<span class="task-badge">${escapeHtml(chip)}</span>`).join("")}
+                </div>
+            ` : ""}
         </div>
     `;
 }
@@ -1948,11 +2009,11 @@ function decisionCard(type, decision, executionBoundary = null, runtimeFacts = n
                 ? `
                     <div class="decision-item__execution">
                         <div class="decision-item__meta">
-                            <span class="task-badge" data-tone="active">execution</span>
-                            ${boundaryFacts.executionId ? `<span>${escapeHtml(`id ${boundaryFacts.executionId}`)}</span>` : ""}
-                            ${boundaryFacts.workerId ? `<span>${escapeHtml(`worker ${boundaryFacts.workerId}`)}</span>` : ""}
+                            <span class="task-badge" data-tone="active">执行回合</span>
+                            ${boundaryFacts.executionId ? `<span>${escapeHtml(`执行回合：${boundaryFacts.executionId}`)}</span>` : ""}
+                            ${boundaryFacts.workerId ? `<span>${escapeHtml(`执行方：${boundaryFacts.workerId}`)}</span>` : ""}
                         </div>
-                        <p>${escapeHtml(preview(boundaryFacts.traceSummary || boundaryFacts.label || "execution boundary captured", 180))}</p>
+                        <p>${escapeHtml(preview(boundaryFacts.traceSummary || boundaryFacts.label || "已记录执行边界", 180))}</p>
                     </div>
                 `
                 : ""}
@@ -2021,19 +2082,19 @@ function judgmentDiagnosticFacts(decision, runtimeFacts = null, executionBoundar
         boundaryMetadata.unfinishedItems
     );
     const metrics = [
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null
+        promptMode ? `提示词 ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedRendered === false ? "上下文未渲染" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedInjected === false ? "上下文未注入" : null,
+        panelCount ? `${panelCount} 个面板` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} 个非空` : null
     ].filter(Boolean);
     const cognitionRows = [
         summarizeExecutionSurface(executionSurface),
         summarizeProviderRunFiles(executionSurface),
-        summarizeJudgmentSurface("exec judge", executionJudgmentSurface),
-        summarizeJudgmentSurface("done judge", completionJudgmentSurface)
+        summarizeJudgmentSurface("执行判断", executionJudgmentSurface),
+        summarizeJudgmentSurface("完成判断", completionJudgmentSurface)
     ].filter(Boolean);
     const alignmentChips = summarizeAlignmentSurface(alignmentSurface);
     return {
@@ -2242,6 +2303,9 @@ function renderRouteBox(flow, task) {
     const cognitionSurface = flow?.runtime_cognition_surface || flow?.runtimeCognitionSurface || {};
     const cognitionTimeline = flow?.runtime_cognition_timeline || flow?.runtimeCognitionTimeline || [];
     const routeSurface = cognitionSurface.route || {};
+    const legacyControlAudit = buildLegacyControlAuditPlan(
+        cognitionSurface.legacy_control_audit || cognitionSurface.legacyControlAudit || {}
+    );
     const experimentRun = experimentRunView(flow);
     const metadata = experimentRunMetadata(flow);
     const selectedWorker = firstNonBlank(
@@ -2251,7 +2315,7 @@ function renderRouteBox(flow, task) {
         routePreview.selectedWorker,
         task?.assigned_worker,
         task?.assignedWorker,
-        "unassigned"
+        "未分配"
     );
     const routeSource = firstNonBlank(
         routeSurface.route_source,
@@ -2320,12 +2384,13 @@ function renderRouteBox(flow, task) {
         || routePreview
     );
     const routeChips = [
-        modelMode ? `mode: ${humanizeToken(modelMode) || modelMode}` : null,
-        preferredWorkerHint ? `hint: ${preferredWorkerHint}` : null,
-        learningHintApplied === true ? "learning: applied" : null,
-        learningHintApplied === false ? "learning: observed, not applied" : null,
-        routeAlignment === true ? "route/execution aligned" : null,
-        routeAlignment === false ? "route/execution diverged" : null,
+        modelMode ? `模式：${humanizeToken(modelMode) || modelMode}` : null,
+        preferredWorkerHint ? `偏好：${preferredWorkerHint}` : null,
+        learningHintApplied === true ? "学习记忆：已应用" : null,
+        learningHintApplied === false ? "学习记忆：已观察未应用" : null,
+        routeAlignment === true ? "路由/执行：一致" : null,
+        routeAlignment === false ? "路由/执行：不一致" : null,
+        legacyControlAudit.visible ? legacyControlAudit.chip : null,
         providerDeprioritization.chip || null
     ].filter(Boolean);
     const executionFacts = executionBoundaryFacts(flow);
@@ -2338,7 +2403,7 @@ function renderRouteBox(flow, task) {
     return `
         <div class="route-box">
             <div class="artifact-item__meta">
-                <span class="task-badge">${escapeHtml(selectedWorker)}</span>
+                <span class="task-badge">${escapeHtml(`选中执行方 ${selectedWorker}`)}</span>
                 <span>${escapeHtml(routeSource)}</span>
                 <span>${escapeHtml(taskType)}</span>
             </div>
@@ -2349,7 +2414,13 @@ function renderRouteBox(flow, task) {
                     ${providerDeprioritization.detail ? `<span>${escapeHtml(providerDeprioritization.detail)}</span>` : ""}
                 </p>
             ` : ""}
-            ${candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(candidateWorkers.join(", "))}</p>` : ""}
+            ${legacyControlAudit.visible ? `
+                <p class="route-box__recovery-note">
+                    <strong>${escapeHtml(legacyControlAudit.headline)}</strong>
+                    ${legacyControlAudit.detail ? `<span>${escapeHtml(legacyControlAudit.detail)}</span>` : ""}
+                </p>
+            ` : ""}
+            ${candidateWorkers.length > 0 ? `<p class="mono">${escapeHtml(`候选执行方：${candidateWorkers.join(", ")}`)}</p>` : ""}
             ${routeChips.length > 0 ? `
                 <div class="chip-group experiment-summary__chips">
                     ${routeChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
@@ -2434,17 +2505,17 @@ function renderExperimentSummary(flow, summary) {
         ? caseComparisons.find((item) => firstNonBlank(item.task_case_key, item.taskCaseKey) === taskCaseKey)
         : null;
     const summaryChips = [
-        `mode: ${humanizeToken(currentMode) || currentMode}`,
-        taskCaseKey ? `case: ${taskCaseKey}` : null,
-        `acceptance: ${humanizeToken(acceptanceResult) || acceptanceResult}`,
-        `bucket: ${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
-        summary ? `runs: ${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)}` : null
+        `模式：${humanizeToken(currentMode) || currentMode}`,
+        taskCaseKey ? `用例：${taskCaseKey}` : null,
+        `验收：${humanizeToken(acceptanceResult) || acceptanceResult}`,
+        `长度桶：${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
+        summary ? `${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)} 次运行` : null
     ].filter(Boolean);
     return `
         <div class="experiment-summary">
             <div class="artifact-item__meta">
                 <span class="task-badge">${escapeHtml(experimentName)}</span>
-                <span>${escapeHtml(firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "current task"))}</span>
+                <span>${escapeHtml(firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "当前任务"))}</span>
             </div>
             <div class="chip-group experiment-summary__chips">
                 ${summaryChips.map((chip) => `<span class="chip">${escapeHtml(chip)}</span>`).join("")}
@@ -2538,34 +2609,34 @@ function renderExperimentModeCard(modeSummary, currentMode) {
         <div class="experiment-mode-card${isCurrent}">
             <div class="artifact-item__meta">
                 <span class="task-badge" data-tone="${modelMode === currentMode ? "active" : "default"}">${escapeHtml(modelMode)}</span>
-                <span>${escapeHtml(String(numberOrNull(modeSummary?.run_count, modeSummary?.runCount) ?? 0))} runs</span>
-                <span>${escapeHtml(formatRate(acceptanceRate))} accept</span>
+                <span>${escapeHtml(String(numberOrNull(modeSummary?.run_count, modeSummary?.runCount) ?? 0))} 次运行</span>
+                <span>${escapeHtml(formatRate(acceptanceRate))} 验收通过</span>
             </div>
-            <strong>${escapeHtml(`${formatRate(completionRate)} done · ${formatRate(learningHintAppliedRate)} learned hint applied`)}</strong>
-            <p>${escapeHtml(`${formatDecimal(averageToolChainStepCount)} avg tool steps · ${summarizeCountMap(routeSourceCounts)}`)}</p>
+            <strong>${escapeHtml(`${formatRate(completionRate)} 完成 · ${formatRate(learningHintAppliedRate)} 学习偏好已应用`)}</strong>
+            <p>${escapeHtml(`平均工具步数 ${formatDecimal(averageToolChainStepCount)} · ${summarizeCountMap(routeSourceCounts)}`)}</p>
             <div class="experiment-rollout-grid">
-                ${renderExperimentRolloutBlock("worker", workerPromptModeCounts, workerPromptModeSampleCount, workerMountedRenderedRate, workerMountedInjectedRate, averageMountedContextPanelCount)}
-                ${renderExperimentRolloutBlock("exec judge", executionJudgmentPromptModeCounts, executionJudgmentPromptModeSampleCount, executionJudgmentMountedRenderedRate, executionJudgmentMountedInjectedRate)}
-                ${renderExperimentRolloutBlock("done judge", completionJudgmentPromptModeCounts, completionJudgmentPromptModeSampleCount, completionJudgmentMountedRenderedRate, completionJudgmentMountedInjectedRate)}
+                ${renderExperimentRolloutBlock("worker", "工作者", workerPromptModeCounts, workerPromptModeSampleCount, workerMountedRenderedRate, workerMountedInjectedRate, averageMountedContextPanelCount)}
+                ${renderExperimentRolloutBlock("exec judge", "执行判断", executionJudgmentPromptModeCounts, executionJudgmentPromptModeSampleCount, executionJudgmentMountedRenderedRate, executionJudgmentMountedInjectedRate)}
+                ${renderExperimentRolloutBlock("done judge", "完成判断", completionJudgmentPromptModeCounts, completionJudgmentPromptModeSampleCount, completionJudgmentMountedRenderedRate, completionJudgmentMountedInjectedRate)}
             </div>
         </div>
     `;
 }
 
-function renderExperimentRolloutBlock(label, promptModeCounts, sampleCount, renderedRate, injectedRate, averagePanelCount = null) {
+function renderExperimentRolloutBlock(label, displayLabel, promptModeCounts, sampleCount, renderedRate, injectedRate, averagePanelCount = null) {
     const metrics = [
-        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
-        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`,
-        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`
+        renderedRate === null ? null : `已渲染 ${formatRate(renderedRate)}`,
+        injectedRate === null ? null : `已注入 ${formatRate(injectedRate)}`,
+        averagePanelCount === null ? null : `平均面板 ${formatDecimal(averagePanelCount)}`
     ].filter(Boolean);
     return `
         <div class="experiment-rollout-block">
             <div class="experiment-rollout-block__meta">
-                <span class="task-badge">${escapeHtml(label)}</span>
-                <span>${escapeHtml(String(sampleCount))} sampled</span>
+                <span class="task-badge" title="${escapeHtml(label)}">${escapeHtml(displayLabel)}</span>
+                <span>${escapeHtml(String(sampleCount))} 次采样</span>
             </div>
-            <strong>${escapeHtml(summarizeFrequencyMap(promptModeCounts, "no prompt sample"))}</strong>
-            <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "no mounted-context telemetry")}</p>
+            <strong>${escapeHtml(summarizeFrequencyMap(promptModeCounts, "暂无提示词样本"))}</strong>
+            <p>${escapeHtml(metrics.length > 0 ? metrics.join(" · ") : "暂无挂载上下文遥测")}</p>
         </div>
     `;
 }
@@ -2587,18 +2658,20 @@ function renderExperimentPromptModeComparisonSection(
     return `
         <div class="experiment-prompt-section">
             <div class="artifact-item__meta">
-                <span class="task-badge">prompt rollout</span>
-                <span>mounted-context prompt-mode comparison</span>
+                <span class="task-badge">提示词 rollout</span>
+                <span>挂载上下文提示词模式对比</span>
             </div>
             <div class="experiment-summary__grid">
-                ${renderExperimentPromptModeComparisonCard("worker", promptModeSummaries, currentWorkerPromptMode)}
+                ${renderExperimentPromptModeComparisonCard("worker", "工作者", promptModeSummaries, currentWorkerPromptMode)}
                 ${renderExperimentPromptModeComparisonCard(
                     "exec judge",
+                    "执行判断",
                     executionJudgmentPromptModeSummaries,
                     currentExecutionJudgmentPromptMode
                 )}
                 ${renderExperimentPromptModeComparisonCard(
                     "done judge",
+                    "完成判断",
                     completionJudgmentPromptModeSummaries,
                     currentCompletionJudgmentPromptMode
                 )}
@@ -2607,7 +2680,7 @@ function renderExperimentPromptModeComparisonSection(
     `;
 }
 
-function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, currentPromptMode) {
+function renderExperimentPromptModeComparisonCard(label, displayLabel, promptModeSummaries, currentPromptMode) {
     const promptModes = orderedPromptModeKeys(promptModeSummaries);
     const sampledCount = promptModes.reduce(
         (total, promptMode) => total + (numberOrNull(
@@ -2619,10 +2692,10 @@ function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, cu
     return `
         <div class="experiment-mode-card experiment-prompt-card">
             <div class="artifact-item__meta">
-                <span class="task-badge">${escapeHtml(label)}</span>
-                <span>${escapeHtml(String(sampledCount))} sampled</span>
+                <span class="task-badge" title="${escapeHtml(label)}">${escapeHtml(displayLabel)}</span>
+                <span>${escapeHtml(String(sampledCount))} 次采样</span>
                 ${currentPromptMode
-                    ? `<span>${escapeHtml(`current ${humanizeToken(currentPromptMode) || currentPromptMode}`)}</span>`
+                    ? `<span>${escapeHtml(`当前 ${humanizeToken(currentPromptMode) || currentPromptMode}`)}</span>`
                     : ""}
             </div>
             <div class="experiment-prompt-list">
@@ -2634,7 +2707,7 @@ function renderExperimentPromptModeComparisonCard(label, promptModeSummaries, cu
                             currentPromptMode
                         ))
                         .join("")
-                    : `<div class="experiment-rollout-block"><p>no prompt sample</p></div>`}
+                    : `<div class="experiment-rollout-block"><p>暂无提示词样本</p></div>`}
             </div>
         </div>
     `;
@@ -2667,24 +2740,24 @@ function renderExperimentPromptModeRow(promptMode, promptModeSummary, currentPro
         promptModeSummary?.averageMountedContextRenderedObjectCount
     );
     const headline = [
-        renderedRate === null ? null : `rendered ${formatRate(renderedRate)}`,
-        renderUsedRate === null ? null : `used ${formatRate(renderUsedRate)}`,
-        injectedRate === null ? null : `injected ${formatRate(injectedRate)}`
+        renderedRate === null ? null : `已渲染 ${formatRate(renderedRate)}`,
+        renderUsedRate === null ? null : `已使用 ${formatRate(renderUsedRate)}`,
+        injectedRate === null ? null : `已注入 ${formatRate(injectedRate)}`
     ].filter(Boolean);
     const detail = [
-        budgetTruncatedRate === null ? null : `budget ${formatRate(budgetTruncatedRate)}`,
-        averagePanelCount === null ? null : `avg panels ${formatDecimal(averagePanelCount)}`,
-        averageRenderedObjectCount === null ? null : `avg objs ${formatDecimal(averageRenderedObjectCount)}`
+        budgetTruncatedRate === null ? null : `预算截断 ${formatRate(budgetTruncatedRate)}`,
+        averagePanelCount === null ? null : `平均面板 ${formatDecimal(averagePanelCount)}`,
+        averageRenderedObjectCount === null ? null : `平均对象 ${formatDecimal(averageRenderedObjectCount)}`
     ].filter(Boolean);
     const isCurrent = promptMode === currentPromptMode ? " is-current" : "";
     return `
         <div class="experiment-rollout-block experiment-prompt-row${isCurrent}">
             <div class="experiment-rollout-block__meta">
                 <span class="task-badge" data-tone="${promptMode === currentPromptMode ? "active" : "default"}">${escapeHtml(humanizeToken(promptMode) || promptMode)}</span>
-                <span>${escapeHtml(String(runCount))} runs</span>
+                <span>${escapeHtml(String(runCount))} 次运行</span>
             </div>
-            <strong>${escapeHtml(headline.length > 0 ? headline.join(" · ") : "no mounted-context telemetry")}</strong>
-            <p>${escapeHtml(detail.length > 0 ? detail.join(" · ") : "no budget or object telemetry")}</p>
+            <strong>${escapeHtml(headline.length > 0 ? headline.join(" · ") : "暂无挂载上下文遥测")}</strong>
+            <p>${escapeHtml(detail.length > 0 ? detail.join(" · ") : "暂无预算或对象遥测")}</p>
         </div>
     `;
 }
@@ -2715,7 +2788,7 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
                 <div class="artifact-item__meta">
                     <span class="task-badge" data-tone="${mode === currentMode ? "active" : "default"}">${escapeHtml(mode)}</span>
                 </div>
-                <strong>missing</strong>
+                <strong>缺失</strong>
                 <p>当前 case 还没有这个 mode 的 run。</p>
             </div>
         `;
@@ -2729,7 +2802,7 @@ function renderExperimentCaseCard(mode, caseComparison, currentMode) {
                 <span>${escapeHtml(humanizeToken(completionStatus) || completionStatus)}</span>
             </div>
             <strong>${escapeHtml(humanizeToken(acceptanceResult) || acceptanceResult)}</strong>
-            <p>${escapeHtml(`steps ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} 路 cost ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
+            <p>${escapeHtml(`步骤 ${String(numberOrNull(run.total_steps, run.totalSteps) ?? 0)} · 成本 ${formatDecimal(numberOrNull(run.total_cost, run.totalCost), 2)}`)}</p>
         </div>
     `;
 }
@@ -2852,8 +2925,8 @@ function executionBoundaryFacts(flow, tools = []) {
         durationMs !== null ? formatDurationMs(durationMs) : null
     ].filter(Boolean);
     const chips = [
-        executionId ? `exec: ${executionId}` : null,
-        workerId ? `worker: ${workerId}` : null
+        executionId ? `执行回合：${executionId}` : null,
+        workerId ? `执行方：${workerId}` : null
     ].filter(Boolean);
     return {
         status,
@@ -2876,18 +2949,18 @@ function summarizeProviderRunFiles(surface) {
         return null;
     }
     const paths = [
-        ["run", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
-        ["last", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
-        ["events", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
-        ["stdout", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
-        ["meta", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
+        ["运行目录", firstNonBlank(surface.provider_run_dir, surface.providerRunDir)],
+        ["最后输出", firstNonBlank(surface.provider_last_message_path, surface.providerLastMessagePath)],
+        ["事件日志", firstNonBlank(surface.provider_event_log_path, surface.providerEventLogPath)],
+        ["标准输出", firstNonBlank(surface.provider_stdout_path, surface.providerStdoutPath)],
+        ["运行元数据", firstNonBlank(surface.provider_run_metadata_path, surface.providerRunMetadataPath)]
     ]
         .filter(([, value]) => value)
         .map(([label, value]) => `${label}: ${preview(value, 140)}`);
     if (paths.length === 0) {
         return null;
     }
-    return { label: "run files", value: paths.join(" · ") };
+    return { label: "运行文件", value: paths.join(" · ") };
 }
 
 function summarizeJudgmentSurface(label, surface) {
@@ -2929,27 +3002,27 @@ function summarizeJudgmentSurface(label, surface) {
     const evidenceRefs = normalizeTextList(surface.evidence_refs, surface.evidenceRefs);
     const unfinishedItems = normalizeTextList(surface.unfinished_items, surface.unfinishedItems);
     const parts = [
-        promptMode ? `prompt ${humanizeToken(promptMode) || promptMode}` : null,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedRendered === false ? "mounted not rendered" : null,
-        mountedRenderUsed === true ? "mounted used" : null,
-        mountedRenderUsed === false ? "mounted unused" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedInjected === false ? "mounted not injected" : null,
-        panelCount ? `${panelCount} panels` : null,
-        nonEmptyPanelCount ? `${nonEmptyPanelCount} non-empty` : null,
+        promptMode ? `提示词 ${humanizeToken(promptMode) || promptMode}` : null,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedRendered === false ? "上下文未渲染" : null,
+        mountedRenderUsed === true ? "上下文已使用" : null,
+        mountedRenderUsed === false ? "上下文未使用" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedInjected === false ? "上下文未注入" : null,
+        panelCount ? `${panelCount} 个面板` : null,
+        nonEmptyPanelCount ? `${nonEmptyPanelCount} 个非空` : null,
         renderedObjectCount !== null || hiddenObjectCount !== null
-            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            ? `对象 ${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0}`
             : null,
         renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
-            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
-        budgetTruncated === true ? "budget truncated" : null,
-        activeCount ? `${activeCount} active` : null,
-        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
-        evidenceCount ? `${evidenceCount} evidence budget` : null,
-        archiveCount ? `${archiveCount} archive` : null,
-        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+        budgetTruncated === true ? "预算已截断" : null,
+        activeCount ? `${activeCount} 条活跃上下文` : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} 条证据` : null,
+        evidenceCount ? `${evidenceCount} 条证据预算` : null,
+        archiveCount ? `${archiveCount} 条归档` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} 项未完成` : null
     ].filter(Boolean);
     if (parts.length === 0) {
         return null;
@@ -2963,18 +3036,18 @@ function summarizeAlignmentSurface(surface) {
     }
     return [
         alignmentChip(
-            "route/execution",
+            "路由/执行",
             booleanValue(surface.route_worker_matches_execution_worker, surface.routeWorkerMatchesExecutionWorker)
         ),
         alignmentChip(
-            "exec/judge prompt",
+            "执行/判断提示词",
             booleanValue(
                 surface.execution_and_execution_judgment_prompt_mode_aligned,
                 surface.executionAndExecutionJudgmentPromptModeAligned
             )
         ),
         alignmentChip(
-            "exec/done prompt",
+            "执行/完成提示词",
             booleanValue(
                 surface.execution_and_completion_judgment_prompt_mode_aligned,
                 surface.executionAndCompletionJudgmentPromptModeAligned
@@ -2985,10 +3058,10 @@ function summarizeAlignmentSurface(surface) {
 
 function alignmentChip(label, aligned) {
     if (aligned === true) {
-        return `${label}: aligned`;
+        return `${label}：一致`;
     }
     if (aligned === false) {
-        return `${label}: diverged`;
+        return `${label}：不一致`;
     }
     return null;
 }
@@ -3084,35 +3157,35 @@ function cognitionTimelineChips(entry) {
     const evidenceRefs = normalizeTextList(entry?.evidence_refs, entry?.evidenceRefs);
     const unfinishedItems = normalizeTextList(entry?.unfinished_items, entry?.unfinishedItems);
     return [
-        workerId ? `worker: ${workerId}` : null,
-        continuityAction ? `action: ${humanizeToken(continuityAction) || continuityAction}` : null,
-        checkpointType ? `checkpoint: ${humanizeToken(checkpointType) || checkpointType}` : null,
-        targetWorker ? `target: ${targetWorker}` : null,
-        routeSource ? `route: ${humanizeToken(routeSource) || routeSource}` : null,
-        promptMode ? `prompt: ${humanizeToken(promptMode) || promptMode}` : null,
-        executionStatus ? `status: ${humanizeToken(executionStatus) || executionStatus}` : null,
-        needsArchiveRetrieval === true ? "archive retrieval requested" : null,
-        needsExternalFactRefresh === true ? "external fact refresh requested" : null,
-        needsContextReopen === true ? "context reopen requested" : null,
-        evidenceGapDetected === true ? "evidence gap detected" : null,
-        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} reopen targets` : null,
-        reopenSummary ? `reopen: ${preview(reopenSummary, 72)}` : null,
-        toolCount === null ? null : `${toolCount} tools`,
-        mountedRendered === true ? "mounted rendered" : null,
-        mountedInjected === true ? "mounted injected" : null,
-        mountedPanelCount === null ? null : `${mountedPanelCount} panels`,
+        workerId ? `worker：${workerId}` : null,
+        continuityAction ? `动作：${humanizeToken(continuityAction) || continuityAction}` : null,
+        checkpointType ? `checkpoint：${humanizeToken(checkpointType) || checkpointType}` : null,
+        targetWorker ? `目标：${targetWorker}` : null,
+        routeSource ? `路由：${humanizeToken(routeSource) || routeSource}` : null,
+        promptMode ? `提示词：${humanizeToken(promptMode) || promptMode}` : null,
+        executionStatus ? `状态：${humanizeToken(executionStatus) || executionStatus}` : null,
+        needsArchiveRetrieval === true ? "需要检索归档" : null,
+        needsExternalFactRefresh === true ? "需要刷新外部事实" : null,
+        needsContextReopen === true ? "需要重开上下文" : null,
+        evidenceGapDetected === true ? "发现证据缺口" : null,
+        reopenCandidatePaths.length > 0 ? `${reopenCandidatePaths.length} 个重开目标` : null,
+        reopenSummary ? `重开：${preview(reopenSummary, 72)}` : null,
+        toolCount === null ? null : `${toolCount} 个工具调用`,
+        mountedRendered === true ? "上下文已渲染" : null,
+        mountedInjected === true ? "上下文已注入" : null,
+        mountedPanelCount === null ? null : `${mountedPanelCount} 个面板`,
         renderedObjectCount !== null || hiddenObjectCount !== null
-            ? `${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0} objects`
+            ? `对象 ${renderedObjectCount ?? 0}/${hiddenObjectCount ?? 0}`
             : null,
         renderedSelectionTraceCount !== null || hiddenSelectionTraceCount !== null
-            ? `${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0} traces`
+            ? `选择轨迹 ${renderedSelectionTraceCount ?? 0}/${hiddenSelectionTraceCount ?? 0}`
             : null,
-        budgetTruncated === true ? "budget truncated" : null,
-        aligned === true ? "prompt aligned" : null,
-        aligned === false ? "prompt diverged" : null,
-        reason ? `reason: ${preview(reason, 48)}` : null,
-        evidenceRefs.length > 0 ? `${evidenceRefs.length} evidence` : null,
-        unfinishedItems.length > 0 ? `${unfinishedItems.length} unfinished` : null
+        budgetTruncated === true ? "预算已截断" : null,
+        aligned === true ? "提示词一致" : null,
+        aligned === false ? "提示词不一致" : null,
+        reason ? `原因：${preview(reason, 48)}` : null,
+        evidenceRefs.length > 0 ? `${evidenceRefs.length} 条证据` : null,
+        unfinishedItems.length > 0 ? `${unfinishedItems.length} 项未完成` : null
     ].filter(Boolean);
 }
 
@@ -3126,13 +3199,13 @@ function summarizeCognitionTimelineEntry(entry) {
         firstNonBlank(entry?.execution_status, entry?.executionStatus),
         firstNonBlank(entry?.route_source, entry?.routeSource),
         booleanValue(entry?.needs_archive_retrieval, entry?.needsArchiveRetrieval) === true
-            ? "archive retrieval requested"
+            ? "需要检索归档"
             : null,
         booleanValue(entry?.needs_external_fact_refresh, entry?.needsExternalFactRefresh) === true
-            ? "external fact refresh requested"
+            ? "需要刷新外部事实"
             : null,
         booleanValue(entry?.needs_context_reopen, entry?.needsContextReopen) === true
-            ? "context reopen requested"
+            ? "需要重开上下文"
             : null,
         firstNonBlank(entry?.reopen_summary, entry?.reopenSummary),
         firstNonBlank(entry?.reason)
@@ -3158,14 +3231,14 @@ function renderToolChainSummaryCard(facts, label, summary) {
 function renderExecutionSummaryCard(facts) {
     const metaParts = [
         facts.label,
-        facts.executionId ? `id ${facts.executionId}` : null,
-        facts.workerId ? `worker ${facts.workerId}` : null
+        facts.executionId ? `执行回合：${facts.executionId}` : null,
+        facts.workerId ? `执行方：${facts.workerId}` : null
     ].filter(Boolean);
-    const body = facts.traceSummary || facts.label || "execution boundary captured";
+    const body = facts.traceSummary || facts.label || "已记录执行边界";
     return `
         <div class="tool-item">
             <div class="tool-item__meta">
-                <span class="task-badge" data-tone="active">execution</span>
+                <span class="task-badge" data-tone="active">执行回合</span>
                 ${metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}
             </div>
             <p>${escapeHtml(preview(body, 220))}</p>
@@ -3412,9 +3485,289 @@ function buildConsoleProviderDeprioritizationPlan(input) {
     };
 }
 
+function buildOperatorSummaryPlan(input) {
+    const task = input?.task || {};
+    const flow = input?.flow || {};
+    const runtimeHealth = input?.runtimeHealth || {};
+    const providerSelection = input?.providerSelection || {};
+    const recoveryJobPlan = input?.recoveryJobPlan || null;
+    const executionFacts = input?.executionFacts || {};
+    const judgmentTrace = flow?.judgment_trace || flow?.judgmentTrace || {};
+    const taskMetadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+    const activeContext = flow?.runtime_context?.active_context || flow?.runtimeContext?.activeContext || {};
+    const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment || {};
+    const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment || {};
+    const runtimeHealthDeprioritization = buildRuntimeHealthDeprioritizationPlan({
+        metadata: runtimeHealth.metadata || {},
+        providerStats: runtimeHealth.provider_stats || runtimeHealth.providerStats || []
+    });
+    const routePreview = flow?.route_preview || flow?.routePreview || {};
+    const cognitionSurface = flow?.runtime_cognition_surface || flow?.runtimeCognitionSurface || {};
+    const providerDeprioritization = buildConsoleProviderDeprioritizationPlan(
+        routePreview.recovery_unpinned_recommendation
+        || routePreview.recoveryUnpinnedRecommendation
+        || routePreview
+    );
+    const freeFirstRoute = buildFreeFirstRoutePlan(routePreview);
+    const legacyControlAudit = buildLegacyControlAuditPlan(
+        cognitionSurface.legacy_control_audit || cognitionSurface.legacyControlAudit || {}
+    );
+    const failureSummary = sanitizeConsoleSummary(
+        firstNonBlank(
+            taskMetadata.failure_summary_readable,
+            taskMetadata.failureSummaryReadable,
+            completionJudgment.failure_summary_readable,
+            completionJudgment.failureSummaryReadable,
+            executionJudgment.failure_summary_readable,
+            executionJudgment.failureSummaryReadable
+        ),
+        providerIdOf(providerSelection) || task.assigned_worker || task.assignedWorker || ""
+    );
+    const recommendedAction = humanizeToken(firstNonBlank(
+        judgmentTrace.recommended_action,
+        judgmentTrace.recommendedAction,
+        executionJudgment.metadata?.action
+    ));
+    const nextStep = firstNonBlank(
+        judgmentTrace.recommended_next_step,
+        judgmentTrace.recommendedNextStep,
+        task.next_step,
+        task.nextStep
+    );
+    const status = String(firstNonBlank(task.status, "active") || "active").toLowerCase();
+    const controlNode = String(firstNonBlank(task.control_node, task.controlNode, "intake") || "intake").toLowerCase();
+    const recoveryWindow = providerDeprioritization.providerDeprioritized
+        ? providerDeprioritization.headline
+        : (freeFirstRoute.visible ? freeFirstRoute.headline : runtimeHealthDeprioritization.headline);
+    const tone = toneForOperatorSummary(status, controlNode, recoveryJobPlan);
+    const statusLabel = operatorStatusLabel(status, controlNode, recoveryJobPlan);
+    const blocker = firstNonBlank(
+        failureSummary,
+        activeContext.open_questions && normalizeTextList(activeContext.open_questions).join(" · "),
+        activeContext.openQuestions && normalizeTextList(activeContext.openQuestions).join(" · "),
+        legacyControlAudit.visible ? legacyControlAudit.headline : null,
+        task.summary,
+        executionFacts.traceSummary
+    );
+    const supportingDetail = firstNonBlank(
+        recoveryJobPlan?.visible ? `恢复任务 ${recoveryJobPlan.summary}` : null,
+        freeFirstRoute.detail,
+        providerDeprioritization.detail,
+        runtimeHealthDeprioritization.detail,
+        firstNonBlank(
+            completionJudgment.summary,
+            executionJudgment.summary,
+            executionFacts.traceSummary
+        )
+    );
+    const chips = [
+        recommendedAction ? `动作：${recommendedAction}` : null,
+        task.assigned_worker || task.assignedWorker ? `执行方：${task.assigned_worker || task.assignedWorker}` : null,
+        controlNode ? `节点：${humanizeToken(controlNode) || controlNode}` : null,
+        executionFacts.label ? `执行：${executionFacts.label}` : null,
+        freeFirstRoute.chip || null,
+        legacyControlAudit.visible ? legacyControlAudit.chip : null
+    ].filter(Boolean);
+    return {
+        visible: Boolean(blocker || nextStep || recommendedAction || recoveryWindow || supportingDetail || legacyControlAudit.visible),
+        tone,
+        statusLabel,
+        blocker: blocker || "当前没有明确阻塞点。",
+        action: recommendedAction || null,
+        nextStep: nextStep ? preview(nextStep, 180) : null,
+        recoveryWindow,
+        legacyControlAlert: legacyControlAudit.visible ? preview(legacyControlAudit.detail, 220) : null,
+        supportingDetail: supportingDetail ? preview(supportingDetail, 220) : null,
+        chips
+    };
+}
+
+function sanitizeConsoleSummary(rawValue, workerHint = "") {
+    const raw = firstNonBlank(rawValue);
+    if (!raw) {
+        return null;
+    }
+    const firstLine = raw
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+    const compact = firstLine || raw;
+    return summarizeConsoleFailureText(compact, workerHint) || compact;
+}
+
+function summarizeConsoleFailureText(rawValue, workerHint = "") {
+    const raw = firstNonBlank(rawValue);
+    if (!raw) {
+        return null;
+    }
+    const worker = firstNonBlank(workerHint);
+    const normalized = raw.toLowerCase();
+    if (normalized.includes("thread not found")) {
+        return `${worker ? `${worker} ` : ""}线程未找到`;
+    }
+    if (normalized.includes("timed out") || normalized.includes("timeout")) {
+        return `${worker ? `${worker} ` : ""}执行超时`;
+    }
+    if (normalized.includes("auth") && normalized.includes("required")) {
+        return `${worker ? `${worker} ` : ""}认证仍未完成`;
+    }
+    return null;
+}
+
+function toneForOperatorSummary(status, controlNode, recoveryJobPlan) {
+    if (recoveryJobPlan?.visible && /running|queued|pending/i.test(recoveryJobPlan.summary || "")) {
+        return "active";
+    }
+    if (status === "failed") {
+        return "failed";
+    }
+    if (status === "waiting_human" || controlNode === "human_gate") {
+        return "paused";
+    }
+    if (status === "active") {
+        return "active";
+    }
+    return "done";
+}
+
+function operatorStatusLabel(status, controlNode, recoveryJobPlan) {
+    if (recoveryJobPlan?.visible && /running|queued|pending/i.test(recoveryJobPlan.summary || "")) {
+        return "恢复处理中";
+    }
+    if (status === "failed") {
+        return "执行失败";
+    }
+    if (status === "waiting_human" || controlNode === "human_gate") {
+        return "等待人工确认";
+    }
+    if (status === "done") {
+        return "已完成";
+    }
+    if (status === "active") {
+        return "执行中";
+    }
+    return humanizeToken(status) || status || "当前状态";
+}
+
 function humanizeToken(value) {
     const text = firstNonBlank(value);
     return text ? text.replace(/_/g, " ") : null;
+}
+
+function humanizeRunStatusLabel(status) {
+    const normalized = String(firstNonBlank(status, "unknown") || "unknown").toLowerCase();
+    switch (normalized) {
+        case "queued":
+            return "排队中";
+        case "starting":
+            return "启动中";
+        case "running":
+        case "active":
+        case "in_progress":
+            return "运行中";
+        case "completed":
+        case "succeeded":
+        case "success":
+        case "done":
+            return "已完成";
+        case "failed":
+        case "error":
+            return "失败";
+        case "crashed":
+            return "崩溃";
+        case "cancelled":
+        case "canceled":
+            return "已取消";
+        case "paused":
+            return "已暂停";
+        case "waiting_human":
+            return "等待人工";
+        case "unknown":
+            return "未知";
+        default:
+            return humanizeToken(normalized) || "未知";
+    }
+}
+
+function humanizeAuthStatusLabel(status) {
+    const normalized = String(firstNonBlank(status, "unknown") || "unknown").toLowerCase();
+    switch (normalized) {
+        case "auth_needed":
+            return "需认证";
+        case "authenticated":
+        case "ready":
+        case "ok":
+            return "已认证";
+        case "missing":
+            return "缺失";
+        case "unknown":
+            return "未知";
+        default:
+            return humanizeToken(normalized) || "未知";
+    }
+}
+
+function humanizeWorkerRoleLabel(role) {
+    const normalized = String(firstNonBlank(role, "executor") || "executor").toLowerCase();
+    switch (normalized) {
+        case "planner":
+            return "规划";
+        case "executor":
+            return "执行";
+        case "judge":
+            return "判断";
+        default:
+            return humanizeToken(normalized) || "未知";
+    }
+}
+
+function humanizeProviderProbeMode(value) {
+    const normalized = String(firstNonBlank(value, "unknown") || "unknown").toLowerCase();
+    switch (normalized) {
+        case "active_probe":
+            return "主动探测";
+        case "passive_fallback":
+            return "被动回退";
+        case "dispatch":
+            return "派发";
+        case "preflight":
+            return "预检";
+        case "startup_protocol_probe":
+            return "启动协议探测";
+        case "unknown":
+            return "未知";
+        default:
+            return humanizeToken(normalized) || "未知";
+    }
+}
+
+function humanizeCliCapabilityLabel(label) {
+    switch (label) {
+        case "yolo":
+            return "YOLO";
+        case "model":
+            return "模型";
+        case "json":
+            return "JSON";
+        case "resume":
+            return "续跑";
+        case "workspace":
+            return "工作区";
+        case "work-dir":
+            return "工作目录";
+        case "output-file":
+            return "输出文件";
+        default:
+            return label;
+    }
+}
+
+function chainRoundLabel(index) {
+    return index === 0 ? "首轮" : `第 ${index + 1} 轮`;
+}
+
+function chainTaskCountLabel(count) {
+    return `${count} 个任务`;
 }
 
 function formatCount(value, noun) {
@@ -3468,11 +3821,17 @@ function applyLocationSelection() {
     const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
     const sessionId = firstNonBlank(params.get("session"), params.get("session_id"));
     const taskId = firstNonBlank(params.get("task"), params.get("task_id"));
+    const surface = normalizeInspectorSurface(params.get("surface"), params.get("inspector_surface"));
     if (sessionId) {
         state.selectedSessionId = sessionId;
     }
     if (taskId) {
         state.selectedTaskId = taskId;
+    }
+    if (surface) {
+        state.inspectorSurface = surface;
+    } else {
+        state.inspectorSurface = "summary";
     }
 }
 
@@ -3484,11 +3843,80 @@ function syncLocationSelection() {
     if (state.selectedTaskId) {
         params.set("task", state.selectedTaskId);
     }
+    if (state.inspectorSurface && state.inspectorSurface !== "summary") {
+        params.set("surface", state.inspectorSurface);
+    }
     const nextHash = params.toString() ? `#${params.toString()}` : "";
     if (window.location.hash === nextHash) {
         return;
     }
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+}
+
+function onInspectorSurfaceClick(event) {
+    const button = event.target.closest("[data-inspector-surface]");
+    if (!button) {
+        return;
+    }
+    const nextSurface = normalizeInspectorSurface(button.dataset.inspectorSurface);
+    if (!nextSurface || nextSurface === state.inspectorSurface) {
+        return;
+    }
+    setInspectorSurface(nextSurface);
+}
+
+function setInspectorSurface(surface) {
+    const nextSurface = normalizeInspectorSurface(surface) || "summary";
+    state.inspectorSurface = nextSurface;
+    applyInspectorSurface();
+    syncLocationSelection();
+}
+
+function applyInspectorSurface() {
+    const surface = normalizeInspectorSurface(state.inspectorSurface) || "summary";
+    state.inspectorSurface = surface;
+    const buttons = dom.inspectorSurfaceSwitch?.querySelectorAll("[data-inspector-surface]") || [];
+    buttons.forEach((button) => {
+        const pressed = button.dataset.inspectorSurface === surface;
+        button.setAttribute("aria-pressed", pressed ? "true" : "false");
+    });
+    if (dom.inspectorSurfaceCopy) {
+        dom.inspectorSurfaceCopy.textContent = inspectorSurfaceCopy(surface);
+    }
+    document.querySelectorAll("[data-inspector-surfaces]").forEach((element) => {
+        const surfaces = String(element.dataset.inspectorSurfaces || "")
+            .split(/\s+/)
+            .map((value) => value.trim())
+            .filter(Boolean);
+        element.hidden = surfaces.length > 0 && !surfaces.includes(surface);
+    });
+    const rawDetails = document.getElementById("rawJsonDetails");
+    if (rawDetails instanceof HTMLDetailsElement) {
+        rawDetails.open = surface === "raw";
+    }
+}
+
+function normalizeInspectorSurface(...values) {
+    for (const value of values) {
+        if (typeof value !== "string") {
+            continue;
+        }
+        const normalized = value.trim().toLowerCase();
+        if (normalized === "summary" || normalized === "diagnostics" || normalized === "raw") {
+            return normalized;
+        }
+    }
+    return null;
+}
+
+function inspectorSurfaceCopy(surface) {
+    if (surface === "diagnostics") {
+        return "Diagnostics 展开 provider probe、run detail、mounted context 与 tool trace。";
+    }
+    if (surface === "raw") {
+        return "Raw 保留 live_flow JSON，适合对照 API 与落库字段。";
+    }
+    return "Summary 先看当前任务、Provider 健康与路由结果。";
 }
 
 function buildTaskChains(tasks) {
@@ -3533,18 +3961,18 @@ function renderChainContext(task) {
 
     const previousTask = currentIndex > 0 ? chain.tasks[currentIndex - 1] : null;
     const nextTask = currentIndex < chain.tasks.length - 1 ? chain.tasks[currentIndex + 1] : null;
-    const currentRound = currentIndex === 0 ? "root" : `round ${currentIndex + 1}`;
+    const currentRound = chainRoundLabel(currentIndex);
     const latestTask = chain.latestTask || chain.tasks[chain.tasks.length - 1];
 
     return `
         <div class="chain-context">
             <div class="chain-context__meta">
                 <div>
-                    <p class="eyebrow">Chain Snapshot</p>
+                    <p class="eyebrow">迭代链快照</p>
                     <strong>${escapeHtml(chain.rootTask?.title || chain.rootId)}</strong>
                 </div>
                 <div class="chain-context__badges">
-                    <span class="task-badge">${escapeHtml(`${chain.tasks.length} tasks`)}</span>
+                    <span class="task-badge">${escapeHtml(chainTaskCountLabel(chain.tasks.length))}</span>
                     <span class="task-badge">${escapeHtml(currentRound)}</span>
                     <span class="task-badge" data-tone="${toneForStatus(latestTask?.status)}">${escapeHtml(latestTask?.status || "active")}</span>
                 </div>
@@ -3561,7 +3989,7 @@ function renderChainContext(task) {
                 ${chain.tasks.map((item, index) => {
                     const active = item.id === task.id ? "is-active" : "";
                     const startMode = taskStartMode(item);
-                    const roundLabel = index === 0 ? "root" : `round ${index + 1}`;
+                    const roundLabel = chainRoundLabel(index);
                     return `
                         <button class="chain-context__task ${active}" type="button" data-chain-task-id="${escapeHtml(item.id)}">
                             <div class="chain-context__task-head">
@@ -3642,17 +4070,17 @@ function renderMountedObjectCard(object) {
     );
     const nextFollowups = normalizeTextList(metadata.next_followups, metadata.nextFollowups);
     const chips = [
-        retention ? `retention: ${retention}` : null,
-        metadata.rehydrated_from_archive === true ? "rehydrated" : null,
-        metadata.needs_archive_retrieval === true ? "archive retrieval" : null,
-        metadata.needs_external_fact_refresh === true ? "external refresh" : null,
-        metadata.needs_context_reopen === true ? "context reopen" : null,
-        refs.length > 0 ? `refs: ${refs.length}` : null
+        retention ? `保留状态：${humanizeToken(retention) || retention}` : null,
+        booleanValue(metadata.rehydrated_from_archive, metadata.rehydratedFromArchive) === true ? "已从归档恢复" : null,
+        booleanValue(metadata.needs_archive_retrieval, metadata.needsArchiveRetrieval) === true ? "需要检索归档" : null,
+        booleanValue(metadata.needs_external_fact_refresh, metadata.needsExternalFactRefresh) === true ? "需要刷新外部事实" : null,
+        booleanValue(metadata.needs_context_reopen, metadata.needsContextReopen) === true ? "需要重开上下文" : null,
+        refs.length > 0 ? `引用：${refs.length}` : null
     ].filter(Boolean);
     const detailLines = [
         summary,
-        candidatePaths.length > 0 ? `targets: ${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
-        nextFollowups.length > 0 ? `next: ${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
+        candidatePaths.length > 0 ? `候选目标：${candidatePaths.slice(0, 3).map((item) => preview(item, 44)).join(" · ")}` : null,
+        nextFollowups.length > 0 ? `下一步：${nextFollowups.slice(0, 2).map((item) => preview(item, 60)).join(" · ")}` : null
     ].filter(Boolean);
     return `
         <div class="mounted-context__object">
@@ -3753,39 +4181,6 @@ function preview(value, maxLength) {
         return text;
     }
     return `${text.slice(0, maxLength)}...`;
-}
-
-function toneForStatus(status) {
-    switch ((status || "").toLowerCase()) {
-        case "active":
-            return "active";
-        case "paused":
-        case "waiting":
-            return "paused";
-        case "done":
-            return "done";
-        case "failed":
-            return "failed";
-        default:
-            return "default";
-    }
-}
-
-function toneForRunStatus(status) {
-    switch ((status || "").toLowerCase()) {
-        case "completed":
-        case "succeeded":
-        case "success":
-            return "done";
-        case "failed":
-        case "error":
-            return "failed";
-        case "running":
-        case "active":
-            return "active";
-        default:
-            return "default";
-    }
 }
 
 function formatTime(value) {

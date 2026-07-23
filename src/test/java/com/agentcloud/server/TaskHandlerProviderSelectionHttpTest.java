@@ -91,8 +91,46 @@ class TaskHandlerProviderSelectionHttpTest {
             assertEquals("codex", data.path("selected_worker_id").asText());
             assertEquals("strong", data.path("selected_model_tier").asText());
             assertEquals("codex", data.path("candidate_providers").get(0).asText());
+            assertEquals("strong_only", data.path("metadata").path("model_mode").asText());
             assertEquals("capability_match", data.path("metadata").path("route_source").asText());
             assertEquals("coding", data.path("metadata").path("task_type").asText());
+        }
+    }
+
+    @Test
+    void providerSelectionProjectsCodexProfileRoutingMetadata() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("provider-selection-profile.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "provider selection profile",
+                "coding",
+                "user",
+                "high",
+                "verify provider profile routing metadata",
+                "project codex profile routing to provider selection view",
+                null,
+                null,
+                Map.of(
+                    "preferred_provider_profile", "codex_openai_strong",
+                    "workflow_stage", "design"
+                ),
+                false
+            ));
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/provider_selection"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode data = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data");
+            assertEquals(200, response.statusCode());
+            assertEquals("codex", data.path("selected_provider").asText());
+            assertEquals("codex-openai", data.path("selected_worker_id").asText());
+            assertEquals("codex_profile_routing", data.path("metadata").path("route_source").asText());
+            assertEquals("codex_openai_strong", data.path("metadata").path("selected_provider_profile").asText());
+            assertEquals("codex_openai_strong", data.path("metadata").path("preferred_provider_profile").asText());
+            assertEquals("design", data.path("metadata").path("workflow_stage").asText());
         }
     }
 
@@ -174,6 +212,49 @@ class TaskHandlerProviderSelectionHttpTest {
     }
 
     @Test
+    void providerSelectionProjectsManualFollowupInstruction() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("provider-selection-manual-window.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "provider selection manual window",
+                "coding",
+                "user",
+                "high",
+                "verify manual window follow-up projection",
+                "project manual follow-up instruction to provider selection metadata",
+                null,
+                null,
+                Map.of(
+                    "provider_routing_policy", "free_first",
+                    "paid_fallback_allowed", false,
+                    "manual_window_fallback_allowed", true,
+                    "manual_window_candidates", List.of("trae", "zcode"),
+                    "user_reported_quota_state", Map.of(
+                        "deveco", "quota_exhausted",
+                        "codebuddy", "quota_exhausted"
+                    )
+                ),
+                false
+            ));
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/provider_selection"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode metadata = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data").path("metadata");
+            assertEquals(200, response.statusCode());
+            assertEquals(true, metadata.path("manual_window_required").asBoolean());
+            assertEquals("trae", metadata.path("recommended_manual_provider").asText());
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                metadata.path("manual_followup_instruction").asText()
+            );
+        }
+    }
+
+    @Test
     void agentRunReturnsLatestPersistedProviderRun() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run.db"))) {
             Task task = fixture.service.createTask(new TaskCreateRequest(
@@ -229,6 +310,119 @@ class TaskHandlerProviderSelectionHttpTest {
     }
 
     @Test
+    void agentRunProjectsManualWindowFollowupMetadata() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run-manual-window.db"))) {
+            Task task = fixture.service.createTask(new TaskCreateRequest(
+                "agent run manual window",
+                "coding",
+                "user",
+                "high",
+                "verify agent run manual window metadata",
+                "read latest run with manual window follow-up",
+                null,
+                null,
+                Map.of(
+                    "provider_routing_policy", "free_first",
+                    "paid_fallback_allowed", false,
+                    "manual_window_fallback_allowed", true,
+                    "manual_window_candidates", List.of("trae", "zcode"),
+                    "user_reported_quota_state", Map.of(
+                        "deveco", "quota_exhausted",
+                        "codebuddy", "quota_exhausted"
+                    )
+                ),
+                false
+            ));
+            AgentRunService agentRunService = new AgentRunService(fixture.agentRunDao, new AgentProviderRegistry());
+            Worker selectedWorker = new Worker(
+                "deveco",
+                "deveco",
+                List.of("coding"),
+                List.of(),
+                List.of(),
+                Map.of(),
+                Map.of("model_tier", "small", "primary_role", "executor"),
+                false,
+                true
+            );
+            WorkerRouter.RouteResult route = new WorkerRouter.RouteResult(
+                task.id(),
+                "deveco",
+                List.of(),
+                "manual window provider required",
+                "manual_window_required",
+                "coding",
+                null,
+                false,
+                List.of("deveco", "codebuddy"),
+                "deveco",
+                "small",
+                "executor",
+                "candidate",
+                "manual window provider required",
+                null,
+                null,
+                null,
+                null,
+                null,
+                true,
+                List.of("deveco", "codebuddy"),
+                List.of(),
+                "manual_window_recommendation",
+                true,
+                "trae",
+                List.of("trae", "zcode"),
+                null,
+                null,
+                List.of()
+            );
+            WorkerExecutionResult result = new WorkerExecutionResult(
+                "waiting for manual window",
+                "waiting for manual window",
+                false,
+                null,
+                null,
+                "switch to trae window",
+                "medium",
+                "blocked",
+                List.of(),
+                List.of("manual step pending"),
+                0,
+                5_000L,
+                Map.of()
+            );
+            agentRunService.recordCompletedWorkerRun(
+                task,
+                route,
+                selectedWorker,
+                result,
+                Instant.parse("2026-06-30T11:00:00Z"),
+                Instant.parse("2026-06-30T11:00:05Z")
+            );
+
+            HttpResponse<String> response = fixture.client.send(
+                HttpRequest.newBuilder(fixture.uri("/api/v1/tasks/" + task.id() + "/agent_run"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            JsonNode metadata = NioHttpServer.SHARED_MAPPER.readTree(response.body()).path("data").path("metadata");
+            assertEquals(200, response.statusCode());
+            assertEquals(true, metadata.path("free_first_routing").asBoolean());
+            assertEquals("manual_window_recommendation", metadata.path("cost_route_stage").asText());
+            assertEquals(true, metadata.path("manual_window_required").asBoolean());
+            assertEquals("trae", metadata.path("recommended_manual_provider").asText());
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                metadata.path("manual_followup_instruction").asText()
+            );
+            assertEquals("trae", metadata.path("manual_window_candidates").get(0).asText());
+            assertEquals("zcode", metadata.path("manual_window_candidates").get(1).asText());
+        }
+    }
+
+    @Test
     void agentRunEndpointSurfacesProviderErrorDiagnostics() throws Exception {
         try (HttpFixture fixture = new HttpFixture(tempDir.resolve("agent-run-provider-error.db"))) {
             Task task = fixture.service.createTask(new TaskCreateRequest(
@@ -275,6 +469,13 @@ class TaskHandlerProviderSelectionHttpTest {
                 null,
                 null,
                 null,
+                false,
+                List.of(),
+                List.of(),
+                null,
+                false,
+                null,
+                List.of(),
                 null,
                 null,
                 List.of()
@@ -955,6 +1156,13 @@ class TaskHandlerProviderSelectionHttpTest {
             null,
             null,
             null,
+            false,
+            List.of(),
+            List.of(),
+            null,
+            false,
+            null,
+            List.of(),
             null,
             null,
             List.of()

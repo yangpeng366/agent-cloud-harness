@@ -29,7 +29,9 @@ function Write-Success {
     Write-Host "[OK] $Message" -ForegroundColor Green
 }
 
-Write-Info "Configuring Java 21 environment..."
+if (-not $Quiet) {
+    Write-Info "Configuring Java 21 environment..."
+}
 
 if (-not (Test-Path -LiteralPath $JdkHome)) {
     Write-ErrorWithHelp `

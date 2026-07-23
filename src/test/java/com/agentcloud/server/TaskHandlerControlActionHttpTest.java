@@ -266,6 +266,76 @@ class TaskHandlerControlActionHttpTest {
     }
 
     @Test
+    void legacyGetResumeContinueAndEscalateStillMarkAuditMetadata() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-legacy-control-routes.db"))) {
+            Task resumeTask = harness.createManualTask("legacy resume");
+            harness.saveTask(resumeTask.withStatus("paused").withControlNode("packet").withWaitingReason("pause before legacy resume"));
+            Task continueTask = harness.createManualTask("legacy continue");
+            Task escalateTask = harness.createManualTask("legacy escalate");
+
+            HttpResponse<String> resumeResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + resumeTask.id() + "/resume"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            HttpResponse<String> continueResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + continueTask.id() + "/continue"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+            HttpResponse<String> escalateResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + escalateTask.id() + "/escalate"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> resumeData = harness.map(harness.readJson(resumeResponse.body()).get("data"));
+            Map<String, Object> continueData = harness.map(harness.readJson(continueResponse.body()).get("data"));
+            Map<String, Object> escalateData = harness.map(harness.readJson(escalateResponse.body()).get("data"));
+
+            assertEquals(200, resumeResponse.statusCode());
+            assertEquals(200, continueResponse.statusCode());
+            assertEquals(200, escalateResponse.statusCode());
+            assertEquals("true", resumeResponse.headers().firstValue("Deprecation").orElse(null));
+            assertEquals("true", continueResponse.headers().firstValue("Deprecation").orElse(null));
+            assertEquals("true", escalateResponse.headers().firstValue("Deprecation").orElse(null));
+            assertEquals("resume", resumeData.get("decision"));
+            assertEquals("scheduler", continueData.get("decision"));
+            assertEquals("escalate", escalateData.get("decision"));
+
+            SessionMessage resumeAction = harness.messageDao.listBySessionAndTask(resumeTask.sessionId(), resumeTask.id(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "resume".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("GET", resumeAction.metadata().get("request_method"));
+            assertEquals("/api/v1/tasks/" + resumeTask.id() + "/resume", resumeAction.metadata().get("request_path"));
+            assertEquals(Boolean.TRUE, resumeAction.metadata().get("legacy_control_route"));
+
+            SessionMessage continueAction = harness.messageDao.listBySessionAndTask(continueTask.sessionId(), continueTask.id(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "continue".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("GET", continueAction.metadata().get("request_method"));
+            assertEquals("/api/v1/tasks/" + continueTask.id() + "/continue", continueAction.metadata().get("request_path"));
+            assertEquals(Boolean.TRUE, continueAction.metadata().get("legacy_control_route"));
+
+            SessionMessage escalateAction = harness.messageDao.listBySessionAndTask(escalateTask.sessionId(), escalateTask.id(), 20).stream()
+                .filter(message -> "task_action".equals(message.messageType()))
+                .filter(message -> "escalate".equals(message.metadata().get("action")))
+                .findFirst()
+                .orElseThrow();
+            assertEquals("GET", escalateAction.metadata().get("request_method"));
+            assertEquals("/api/v1/tasks/" + escalateTask.id() + "/escalate", escalateAction.metadata().get("request_path"));
+            assertEquals(Boolean.TRUE, escalateAction.metadata().get("legacy_control_route"));
+        }
+    }
+
+    @Test
     void listTasksAcceptsStatusAndLegacyStateQueryParams() throws Exception {
         try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-list-status.db"))) {
             Task paused = harness.createManualTask("paused coding", "coding");
@@ -1074,6 +1144,72 @@ class TaskHandlerControlActionHttpTest {
     }
 
     @Test
+    void selectWorkerProjectsFreeFirstRouteDiagnostics() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-select-worker-free-first.db"))) {
+            Task task = harness.createManualTask("free first coding task", "coding");
+            Task updated = task.withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "provider_routing_policy", "free_first"
+            )));
+            harness.saveTask(updated);
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/select_worker"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals("deveco", data.get("selected_worker"));
+            assertEquals("free_auto", data.get("cost_route_stage"));
+            assertEquals(Boolean.TRUE, data.get("free_first_routing"));
+            assertTrue(harness.list(data.get("free_candidate_workers")).contains("deveco"));
+            assertTrue(harness.list(data.get("paid_candidate_workers")).contains("codex"));
+        }
+    }
+
+    @Test
+    void selectWorkerProjectsManualFollowupInstruction() throws Exception {
+        try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-select-worker-manual-window.db"))) {
+            Task task = harness.createManualTask("manual window task", "coding");
+            Task updated = task.withMetadata(new java.util.LinkedHashMap<>(Map.of(
+                "task_type", "coding",
+                "provider_routing_policy", "free_first",
+                "paid_fallback_allowed", false,
+                "manual_window_fallback_allowed", true,
+                "manual_window_candidates", List.of("trae", "zcode"),
+                "user_reported_quota_state", Map.of(
+                    "deveco", "quota_exhausted",
+                    "codebuddy", "quota_exhausted"
+                )
+            )));
+            harness.saveTask(updated);
+
+            HttpResponse<String> response = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id() + "/select_worker"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> payload = harness.readJson(response.body());
+            Map<String, Object> data = harness.map(payload.get("data"));
+
+            assertEquals(200, response.statusCode());
+            assertEquals(Boolean.TRUE, data.get("manual_window_required"));
+            assertEquals("trae", data.get("recommended_manual_provider"));
+            assertEquals(
+                "请切到 trae 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。",
+                data.get("manual_followup_instruction")
+            );
+        }
+    }
+
+    @Test
     void postCreateTaskRejectsClosedSession() throws Exception {
         try (TestHarness harness = new TestHarness(tempDir.resolve("task-handler-closed-session.db"))) {
             Session closedSession = harness.createClosedSession("closed session");
@@ -1158,6 +1294,65 @@ class TaskHandlerControlActionHttpTest {
     }
 
     @Test
+    void getAndRefreshResumePacketReturnTypedMachineReadableSchema() throws Exception {
+        try (ResumePacketHarness harness = new ResumePacketHarness(tempDir.resolve("task-handler-resume-packet.db"))) {
+            HttpResponse<String> refreshResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/task_resume_packet_http/refresh_packet"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> refreshPayload = harness.readJson(refreshResponse.body());
+            Map<String, Object> refreshPacket = harness.map(refreshPayload.get("data"));
+            Map<String, Object> taskIdentity = harness.map(refreshPacket.get("task_identity"));
+            Map<String, Object> packetPayload = harness.map(refreshPacket.get("payload"));
+            List<Map<String, Object>> recentArtifacts = harness.list(refreshPacket.get("recent_artifacts"));
+            List<Map<String, Object>> recentDecisions = harness.list(refreshPacket.get("recent_decisions"));
+
+            assertEquals(200, refreshResponse.statusCode());
+            assertEquals("1.1", refreshPacket.get("packet_version"));
+            assertEquals(Boolean.TRUE, refreshPacket.get("machine_readable_first"));
+            assertEquals("task_resume_packet_http", taskIdentity.get("task_id"));
+            assertEquals("session_resume_packet_http", taskIdentity.get("session_id"));
+            assertEquals("coding", taskIdentity.get("task_type"));
+            assertEquals("Finalize a stable resume packet contract.", refreshPacket.get("current_objective"));
+            assertEquals("active", refreshPacket.get("current_status"));
+            assertEquals("continue", refreshPacket.get("current_node"));
+            assertEquals("codex", refreshPacket.get("assigned_worker"));
+            assertEquals("Planner summary is ready.", refreshPacket.get("latest_summary"));
+            assertEquals("Continue executor validation.", refreshPacket.get("next_step"));
+            assertEquals(List.of("Need one persisted protocol sample."), refreshPacket.get("blockers"));
+            assertEquals(List.of("Should the packet preserve legacy summaries?"), refreshPacket.get("open_questions"));
+            assertEquals("Continue executor validation.", packetPayload.get("next_step"));
+            assertEquals(Boolean.TRUE, packetPayload.get("machine_readable_first"));
+            assertEquals("mounted_context_primary", packetPayload.get("prompt_rendering_mode"));
+            assertEquals("mounted_context_primary", packetPayload.get("mounted_context_mode"));
+            assertEquals("mounted_context_primary", packetPayload.get("prompt_mode"));
+            assertEquals("Planner protocol brief", recentArtifacts.getFirst().get("title"));
+            assertEquals("execution_judgment", recentDecisions.getFirst().get("decision_type"));
+
+            HttpResponse<String> latestResponse = harness.client.send(
+                HttpRequest.newBuilder(harness.uri("/api/v1/tasks/task_resume_packet_http/packet"))
+                    .GET()
+                    .build(),
+                HttpResponse.BodyHandlers.ofString()
+            );
+
+            Map<String, Object> latestPayload = harness.readJson(latestResponse.body());
+            Map<String, Object> latestPacket = harness.map(latestPayload.get("data"));
+
+            assertEquals(200, latestResponse.statusCode());
+            assertEquals(refreshPacket.get("id"), latestPacket.get("id"));
+            assertEquals(refreshPacket.get("packet_version"), latestPacket.get("packet_version"));
+            assertEquals(refreshPacket.get("task_identity"), latestPacket.get("task_identity"));
+            assertEquals(refreshPacket.get("current_objective"), latestPacket.get("current_objective"));
+            assertEquals(refreshPacket.get("latest_summary"), latestPacket.get("latest_summary"));
+            assertEquals(refreshPacket.get("payload"), latestPacket.get("payload"));
+        }
+    }
+
+    @Test
     void getHandoffPacketReturnsSharedRuntimeFactSurface() throws Exception {
         try (HandoffPacketHarness harness = new HandoffPacketHarness(tempDir.resolve("task-handler-handoff-packet.db"))) {
             HttpResponse<String> response = harness.client.send(
@@ -1190,6 +1385,128 @@ class TaskHandlerControlActionHttpTest {
             assertEquals("codex", routeSurface.get("selected_worker"));
             assertEquals("preassigned", routeSurface.get("route_source"));
             assertEquals("mounted_context_shadow", executionSurface.get("prompt_mode"));
+        }
+    }
+
+    private static final class ResumePacketHarness implements AutoCloseable {
+        private final DatabaseManager db;
+        private final HttpServer server;
+        private final ExecutorService executor;
+        private final HttpClient client;
+        private final int port;
+
+        private ResumePacketHarness(Path dbPath) throws IOException {
+            this.db = new DatabaseManager(dbPath);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+
+            Session session = Session.create("session_resume_packet_http", "resume packet http", "active");
+            sessionDao.insert(session);
+
+            Task task = new Task(
+                "task_resume_packet_http",
+                session.id(),
+                null,
+                "solidify resume packet contract",
+                "active",
+                "high",
+                Instant.parse("2026-06-30T09:00:00Z"),
+                Instant.parse("2026-06-30T09:00:00Z"),
+                Instant.parse("2026-06-30T09:00:00Z"),
+                null,
+                null,
+                "Planner summary is ready.",
+                "Finalize a stable resume packet contract.",
+                "Continue executor validation.",
+                "codex",
+                "continue",
+                "Need one persisted protocol sample.",
+                Map.of(
+                    "task_type", "coding",
+                    "prompt_mode", "mounted_context_primary",
+                    "open_questions", List.of("Should the packet preserve legacy summaries?"),
+                    "blockers", List.of("Need one persisted protocol sample.")
+                )
+            );
+            taskDao.insert(task);
+            decisionDao.insert(new Decision(
+                "dec_resume_packet_http",
+                session.id(),
+                task.id(),
+                Instant.parse("2026-06-30T09:04:00Z"),
+                "execution_judgment",
+                "Planner kept the protocol machine-readable first.",
+                "Should the packet preserve legacy summaries?",
+                "medium",
+                null,
+                Map.of("open_question", "Should the packet preserve legacy summaries?")
+            ));
+            artifactDao.insert(new Artifact(
+                "art_resume_packet_http",
+                session.id(),
+                task.id(),
+                Instant.parse("2026-06-30T09:05:00Z"),
+                "worker_output",
+                "Planner protocol brief",
+                null,
+                null,
+                "Typed packet fields are now aligned.",
+                Map.of("selected_model_tier", "strong")
+            ));
+
+            TaskService service = new TaskService(
+                taskDao,
+                sessionDao,
+                eventDao,
+                packetDao,
+                new WorkerRouter(new WorkerRegistry()),
+                new PacketBuilder(decisionDao, artifactDao, taskDao),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            );
+
+            this.server = HttpServer.create(new InetSocketAddress(0), 0);
+            this.executor = Executors.newCachedThreadPool();
+            this.server.setExecutor(executor);
+            this.server.createContext("/api/v1/tasks", new TaskHandler(service, NioHttpServer.SHARED_MAPPER));
+            this.server.start();
+            this.port = server.getAddress().getPort();
+            this.client = HttpClient.newHttpClient();
+        }
+
+        private URI uri(String path) {
+            return URI.create("http://127.0.0.1:" + port + path);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> readJson(String body) throws IOException {
+            return NioHttpServer.SHARED_MAPPER.readValue(body, Map.class);
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> map(Object value) {
+            return (Map<String, Object>) value;
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> list(Object value) {
+            return (List<Map<String, Object>>) value;
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+            executor.shutdownNow();
+            db.close();
         }
     }
 
@@ -1262,6 +1579,15 @@ class TaskHandlerControlActionHttpTest {
             Task updated = task.withStatus("active")
                 .withControlNode("scheduler")
                 .withWaitingReason(null);
+            taskDao.updateState(updated);
+            return updated;
+        }
+
+        @Override
+        public Task triggerEscalate(Task task, String reason) {
+            Task updated = task.withStatus("waiting_human")
+                .withControlNode("human_gate")
+                .withWaitingReason(reason);
             taskDao.updateState(updated);
             return updated;
         }

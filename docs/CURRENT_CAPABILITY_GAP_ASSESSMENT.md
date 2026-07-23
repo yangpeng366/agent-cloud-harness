@@ -1,3 +1,34 @@
+## 方向调整 (2026-07-21)
+
+Codex 不同 provider 的协议差异已经由本机 CCX 网关统一收敛，harness 不再负责 provider 差异收敛。下一阶段工程重点调整为四条线，下列 P1–P5 排序口径以 `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` 为准；本文件下方原有的 P1–P5 描述保留作为上下文，但优先级排序已被本段取代。
+
+新排序：
+
+| 新序 | 能力项 | 说明 |
+|---|---|---|
+| P1 | Loop 主闭环 + 执行中状态判断 | `goal -> plan -> execute -> judge -> decide`；HTTP 超时不污染 task 级状态 |
+| P2 | Goal 目标合同 | `goal / subgoals / subgoal_status / acceptance_criteria / progress_summary` |
+| P3 | 上下交接文档 / handoff packet | Resume / Handoff packet 最小字段集写进 `API_CONTRACTS.md` / `SPEC.md` |
+| P4 | UI 页面展示结果 / 返回 + 执行中状态判断 | `active / running / waiting_human / failed / partial / done` 状态语义与页面展示 |
+| P5 | Provider 专项（降级） | codex profile lane、codebuddy/deveco CLI 接入只在接入新协议或读面诊断时推进；provider 差异由 CCX 收敛 |
+
+详见 `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md`。下方 P2 baseline matrix 的真实 worker smoke 证据继续有效，但“补全 3+3+3”不再是唯一主路径，应作为 loop 验证的真实执行证据来源。
+
+### 完成状态 (2026-07-22)
+
+上述 P1-P5 新排序方向已全部落地并验证：
+
+| 方向 | 状态 | 验证证据 |
+|------|------|---------|
+| P1 Loop 主闭环 | done | ControlNodeGraphOrchestrationFlowTest + ControlNodeGraphDecideGoalProgressPriorityTest + LoopContinueTimeoutInvariantTest + P2 e2e smoke |
+| P2 Goal 目标合同 | done | TaskServiceGoalContractTest + RuntimeJudgmentServiceTest + GoalProgressAutoUpdateTest + e2e: 1/1 subgoals done |
+| P3 交接 packet | done | API_CONTRACTS.md / SPEC.md 字段集 + TaskServicePacketContractTest |
+| P4 UI 状态展示 | done | task-status-tone-plan.js + console-status-tone-plan.js + task-subgoal-progress-plan.js + loop-activity-detector-plan.js + recovery-action-hint-plan.js（含 partial 独立 tone） |
+| P5 Provider 专项 | done | CCX 网关收敛 + CCX_INTEGRATION_PRECHECK_EXECUTION_RECORD_2026-07-22.md |
+
+后续推进方向见 NEXT_EVOLUTION_PLAN.md。
+
+---
 # CURRENT_CAPABILITY_GAP_ASSESSMENT
 
 ## 1. 目的
@@ -54,8 +85,8 @@
 
 | Priority | 能力项 | 当前状态 | 估计完成度 | 最大缺口 | 下一步最具体动作 |
 |---|---|---:|---:|---|---|
-| P1 | 强模型调小模型最小闭环 | runtime trace 已有最小 strong->small->strong 闭环 | 45%-55% | 单元级闭环已有，仍缺 provider-backed 真实复跑和质量/成本对比证据 | 把 orchestration trace 接入 baseline_matrix_v1 的真实 worker 冒烟 |
-| P2 | Baseline experiment matrix | 已有三模式 run skeleton、3+3+3 case catalog、HTTP gate 探针与指标落盘 | 60%-70% | case/HTTP gate 已可复跑，仍缺真实 worker run 结果、成本口径和自动 acceptance gate | 跑一轮带真实 worker 的 baseline_matrix_v1，并把质量/成本结果纳入 release gate |
+| P1 | 强模型调小模型最小闭环 | runtime trace 已有最小 strong->small->strong 闭环；P1 验收标准 1-4 全部有 contract test 证据 | 55%-65% | 单元级闭环已有，仍缺 provider-backed 真实复跑和质量/成本对比证据 | 把 orchestration trace 接入 baseline_matrix_v1 的真实 worker 冒烟 |
+| P2 | Baseline experiment matrix | 已有三模式 run skeleton、3+3+3 case catalog、HTTP gate 探针、指标落盘与最小 acceptance/quality/cost gate 聚合字段，并已拿到 `short-001` 三模式 provider-backed real worker smoke 证据；首轮 initialize 超时已定位为 Codex app-server 参数兼容问题并完成代码修复 | 75%-85% | 仍缺修复后复跑的 accepted/completed 样本、完整 3+3+3 结果、成本阈值标定和 release gate 提升 | 重新 build 后复跑 `short-001` real worker smoke，再扩到 `medium-001 / long-001` 与完整 3+3+3 |
 | P3 | Checkpoint / handoff packet spec | 概念成熟，协议测试已覆盖核心字段 | 55%-70% | 最小字段集已有测试保护，但 packet spec 文档和 runtime 输出仍需最终冻结 | 把 resume/handoff packet 最小 schema 正式写成 API/contract，并补跨 worker path 验证 |
 | P4 | Tool-aware / provider execution 与 recovery | 已有多步工具链、provider 续跑、failure recovery 和 UI 验收 | 65%-75% | 长任务最终收口、质量判定和 human gate 边界仍需继续硬化 | 继续强化 long-task closure contract：done/waiting_human/auto-continue 的可证明边界 |
 | P5 | 状态变更接口 + 消息投影 | POST 控制动作与核心 lifecycle projection 已基本收口 | 60%-70% | 旧 GET 兼容入口仍在，长尾 runtime subtype 与浏览器级 lifecycle gate 仍需治理 | 制定 GET 兼容下线策略，并扩浏览器级 lifecycle acceptance |
@@ -81,7 +112,7 @@
 
 ### 估计完成度
 
-**45% - 55%**
+**55% - 65%**
 
 ### 为什么不是更高
 
@@ -95,10 +126,10 @@
 
 但仍不能评为更高，因为：
 
-- 这些证据主要由 runtime 单元测试和可构造 run 证明，还不是一轮真实 provider-backed baseline 结果
-- 还没有把 `short-001 / medium-001 / long-001` 三模式真实 worker 冒烟接到 P2 gate
-- 质量 acceptance 与成本对比还没有进入自动 gate
-- fallback / escalation 原因链已有字段，但仍缺一轮真实失败样本复盘来证明 operator 可用
+- `short-001` 已有 provider-backed baseline 失败样本，但还不是一轮可证明收益的成功对比结果
+- 真实 worker smoke 目前只覆盖 `short-001`，还缺 `medium-001 / long-001` 与完整 strong-small-strong 成功闭环
+- 质量 acceptance / 成本 gate 聚合字段已落盘到 run metadata 与 mode summary，也已接到 `short-001` 失败样本，但尚未形成真实 artifact acceptance 与 release gate
+- fallback / escalation 原因链已有字段和真实失败样本，但还需要把 `initialize` 超时复盘沉淀成 operator 可用的 runbook
 
 ### 最大缺口
 
@@ -138,9 +169,9 @@
 
 ### 估计完成度
 
-**60% - 70%**
+**75% - 85%**
 
-### 为什么偏低
+### 为什么还没有更高
 
 因为当前已经具备：
 
@@ -151,21 +182,23 @@
 - 内置 `baseline_matrix_v1` 的 3 short + 3 medium + 3 long case catalog
 - 每个 case 已有 `workspace_preconditions / acceptance_criteria / expected_artifacts / recovery_policy`
 - 创建 run 时会把 case 合同同步到 task metadata，避免只靠 title / goal 解释验收口径
-- `scripts/Run-BaselineMatrixGateProbe.ps1` 已提供最小 HTTP release-gate 探针
+- `scripts/Run-BaselineMatrixGateProbe.ps1` 已提供最小 HTTP release-gate 探针，并会检查 `acceptance_gate_result_counts / artifact_quality_gate_status_counts / cost_gate_status_counts / runs_with_failure_reason`
 - 2026-05-19 已在隔离端口 `18084` 跑通探针：9 个 catalog case、9 个冒烟 run、summary 9 runs
+- 2026-07-21 已在隔离端口 `18081` 复跑升级后的 probe，report 写入 `.tmp\\baseline-matrix-gate-20260721.json`；当前 `mode_gate_rollup` 已能证明三种 mode 的 `not_evaluated=3`、`within_threshold=3`、`runs_with_failure_reason=0`，且重复 `experiment_name` 会在创建前直接失败。
+- 2026-07-21 后续复盘 `.tmp\provider-runs\codex\...\events.jsonl`，确认 `initialize` 超时根因是 app-server 启动命令带了 Codex CLI `0.144.4` 不接受的 `--no-alt-screen`；当前代码已把 app-server plan 改成 `codex app-server --listen stdio://`，exec-json 仍保留 `--no-alt-screen`。
 
 但还没有到更高成熟度，因为：
 
-- 真实 worker 执行的 3+3+3 基准任务还没有跑出一轮正式结果
+- 已有 `short-001` 的三模式真实 worker smoke 和启动参数根因修复，但还没有修复后复跑结果，`medium-001 / long-001` 与完整 3+3+3 也还没有正式结果
 - 成本口径仍偏占位，不能支撑严肃 cost comparison
-- acceptance 标准还没有和自动 artifact quality gate 绑定
-- 当前 gate 只证明 HTTP 合同、case 合同和 summary 骨架可复跑，还不能证明 orchestration 优于 baseline
+- acceptance / artifact quality / cost 三类 gate 已在 run metadata 与 mode summary 落盘，但尚未和真实 artifact 内容与 release gate 绑定
+- 当前 gate 已证明 HTTP 合同和 `short-001` 真实失败样本可回收，还不能证明 orchestration 优于 baseline
 
 ### 最大缺口
 
 当前缺的不是“更多评估理念”，而是：
 
-> 把已经冻结合同且具备 HTTP gate 的 baseline_matrix_v1 跑成真实 worker 质量与成本证据。
+> 把已经拿到首轮 `short-001` smoke 的 baseline_matrix_v1 扩成可比较的真实 worker 质量与成本证据。
 
 ### 下一步最具体动作
 
@@ -173,7 +206,7 @@
 
 - 复用 `scripts/Run-BaselineMatrixGateProbe.ps1` 做 HTTP 合同前置检查
 - 用 `POST /api/v1/experiment_matrix/runs` 创建真实 `baseline_matrix_v1`
-- 先跑 `short-001 / medium-001 / long-001` 的三模式真实 worker 冒烟
+- 重新 build 后复跑 `short-001`，确认 `codex app-server --listen stdio://` 不再卡在 initialize，再把 smoke 扩到 `medium-001 / long-001`
 - 再跑完整 3+3+3
 - 把 `experiment_summary` 与失败 case 的 `live_flow / judgment_trace / tool_trace` 作为验收证据
 - 在 gate 中加入真实 artifact acceptance 与 cost threshold

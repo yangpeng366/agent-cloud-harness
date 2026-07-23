@@ -312,7 +312,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 ### 4.1 未覆盖项
 
 - [ ] token-level streaming 仍未验收
-- [ ] 完整 `/v1/responses` item/tool-call surface 仍未验收
+- [ ] 完整 `/v1/responses` tool-call surface 仍未验收（最小 message item lifecycle 已有回归覆盖）
 - [ ] 其余：
 
 ### 4.2 最终判断

@@ -14,12 +14,16 @@ public record RuntimeCognitionSurfaceView(
     ExecutionSurface execution,
     JudgmentSurface executionJudgment,
     JudgmentSurface completionJudgment,
-    AlignmentSurface alignment
+    AlignmentSurface alignment,
+    LegacyControlAuditSurface legacyControlAudit
 ) {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record RouteSurface(
         String selectedWorker,
         String routeSource,
+        String selectedProviderProfile,
+        String preferredProviderProfile,
+        String workflowStage,
         String selectedModelTier,
         String selectedExecutionRole,
         String selectionScope,
@@ -27,6 +31,14 @@ public record RuntimeCognitionSurfaceView(
         String preferredWorkerHint,
         Boolean learningHintApplied,
         String fallbackReason,
+        Boolean freeFirstRouting,
+        List<String> freeCandidateWorkers,
+        List<String> paidCandidateWorkers,
+        String costRouteStage,
+        Boolean manualWindowRequired,
+        String recommendedManualProvider,
+        String manualFollowupInstruction,
+        List<String> manualWindowCandidates,
         List<Map<String, Object>> dispatchSkippedWorkers
     ) {}
 
@@ -137,5 +149,16 @@ public record RuntimeCognitionSurfaceView(
         Boolean routeWorkerMatchesExecutionWorker,
         Boolean executionAndExecutionJudgmentPromptModeAligned,
         Boolean executionAndCompletionJudgmentPromptModeAligned
+    ) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record LegacyControlAuditSurface(
+        Boolean legacyControlRouteObserved,
+        String requestMethod,
+        String requestPath,
+        String replacementMethod,
+        String latestAction,
+        String observedAt,
+        String summary
     ) {}
 }

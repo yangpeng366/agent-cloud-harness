@@ -6,10 +6,14 @@ import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.model.Worker;
 import com.agentcloud.tool.HostToolAvailability;
 import com.agentcloud.worker.ProviderExecutionSupport;
+import com.agentcloud.worker.ProviderFailureClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -23,19 +27,31 @@ public class WorkerRegistry {
     private static final long DEFAULT_TEMPORARY_UNAVAILABLE_MS = 10 * 60 * 1000L;
     private static final long DEFAULT_DISPATCH_PREFLIGHT_CACHE_MS = 2 * 60 * 1000L;
     private static final long DEFAULT_DISPATCH_PREFLIGHT_UNAVAILABLE_MS = 10 * 60 * 1000L;
+    private static final String WORKER_PRIORITY_CONFIG_ENABLED_PROPERTY =
+        "agentcloud.worker.priority.config.enabled";
     private final Map<String, Worker> workers = Collections.synchronizedMap(new LinkedHashMap<>());
     private final Map<String, TemporaryUnavailability> temporarilyUnavailableWorkers =
         Collections.synchronizedMap(new LinkedHashMap<>());
     private final Map<String, DispatchPreflightStatus> dispatchPreflightCache =
         Collections.synchronizedMap(new LinkedHashMap<>());
     private final AgentProviderRegistry agentProviderRegistry;
+    private final Map<String, Integer> workerPriorityOverrides = Collections.synchronizedMap(new LinkedHashMap<>());
 
     public WorkerRegistry() {
         this(null);
     }
 
     public WorkerRegistry(AgentProviderRegistry agentProviderRegistry) {
+        this(agentProviderRegistry, null);
+    }
+
+    public WorkerRegistry(AgentProviderRegistry agentProviderRegistry, List<Path> workerPriorityConfigPaths) {
         this.agentProviderRegistry = agentProviderRegistry;
+        if (workerPriorityConfigPaths != null) {
+            loadWorkerPriorityConfig(workerPriorityConfigPaths);
+        } else if (workerPriorityConfigEnabled()) {
+            loadWorkerPriorityConfig(defaultWorkerPriorityConfigSearchPaths());
+        }
         String defaultToolScope = Path.of(System.getProperty("user.dir", "."))
             .toAbsolutePath()
             .normalize()
@@ -47,7 +63,7 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("config_present", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "tool",
                 "primary_role", "tool_executor",
                 "selection_priority", 120,
@@ -61,10 +77,14 @@ public class WorkerRegistry {
             defaultCodexToolCapabilities(),
             List.of(defaultToolScope),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 100,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "default_tool_scope", defaultToolScope,
                 "local_workspace_access", true,
                 "workspace_access_mode", "codex_app_server_cwd",
@@ -72,15 +92,104 @@ public class WorkerRegistry {
                 "execution_backend", "provider_app_server",
                 "auto_route_task_types", List.of("coding", "reading", "ops")
             ), false, true));
+        // codex profile lanes: 同一个 codex provider，不同 API / 账户通道
+        register(new Worker("codex-openai", "codex",
+            List.of("coding", "reading", "ops"),
+            defaultCodexToolCapabilities(),
+            List.of(defaultToolScope),
+            Map.of("api_key", true, "backend_reachable", true),
+            metadata(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 99,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
+                "default_tool_scope", defaultToolScope,
+                "local_workspace_access", true,
+                "workspace_access_mode", "codex_app_server_cwd",
+                "tool_command_mode", "guarded",
+                "execution_backend", "provider_app_server",
+                "auto_route_task_types", List.of("coding", "reading", "ops"),
+                "provider_profile_id", "codex_openai_strong",
+                "provider_profile_role", "strong_design",
+                "provider_model_provider", "OpenAI",
+                "provider_model", "gpt-5.4",
+                "provider_cli_profile", "",
+                "provider_billing_class", "premium_usage",
+                "codex_profile_family", "codex",
+                "workflow_stage_affinity", List.of("design", "verify")
+            ), false, true));
+        register(new Worker("codex-xfyun", "codex",
+            List.of("coding", "reading", "ops"),
+            defaultCodexToolCapabilities(),
+            List.of(defaultToolScope),
+            Map.of("api_key", true, "backend_reachable", true),
+            metadata(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 98,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
+                "default_tool_scope", defaultToolScope,
+                "local_workspace_access", true,
+                "workspace_access_mode", "codex_app_server_cwd",
+                "tool_command_mode", "guarded",
+                "execution_backend", "provider_app_server",
+                "auto_route_task_types", List.of("coding", "reading", "ops"),
+                "provider_profile_id", "codex_xfyun_execute",
+                "provider_profile_role", "monthly_prepaid",
+                "provider_model_provider", "xfyun",
+                "provider_model", "xopglm51",
+                "provider_cli_profile", "",
+                "provider_billing_class", "monthly_prepaid",
+                "codex_profile_family", "codex",
+                "workflow_stage_affinity", List.of("implement")
+            ), false, true));
+        register(new Worker("codex-deepseek", "codex",
+            List.of("coding", "reading", "ops"),
+            defaultCodexToolCapabilities(),
+            List.of(defaultToolScope),
+            Map.of("api_key", true, "backend_reachable", true),
+            metadata(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 97,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
+                "default_tool_scope", defaultToolScope,
+                "local_workspace_access", true,
+                "workspace_access_mode", "codex_app_server_cwd",
+                "tool_command_mode", "guarded",
+                "execution_backend", "provider_app_server",
+                "auto_route_task_types", List.of("coding", "reading", "ops"),
+                "provider_profile_id", "codex_deepseek_fallback",
+                "provider_profile_role", "usage_metered",
+                "provider_model_provider", "deepseek",
+                "provider_model", "deepseek-v4-pro",
+                "provider_cli_profile", "",
+                "provider_billing_class", "usage_metered",
+                "codex_profile_family", "codex",
+                "workflow_stage_affinity", List.of("fallback")
+            ), false, true));
         register(new Worker("claude", "claude",
             List.of("coding", "reading", "writing"),
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 92,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -92,10 +201,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 91,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_workspace_arg",
                 "execution_backend", "provider_native_cli",
@@ -107,10 +220,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 90,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -122,10 +239,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 89,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -137,10 +258,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 88,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -152,10 +277,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 87,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -167,10 +296,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 88,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_cwd",
                 "execution_backend", "provider_native_cli",
@@ -182,10 +315,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "small",
                 "primary_role", "executor",
                 "selection_priority", 80,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", true,
                 "workspace_access_mode", "native_cli_work_dir_arg",
                 "execution_backend", "provider_native_cli",
@@ -196,10 +333,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "small",
                 "primary_role", "executor",
                 "selection_priority", 72,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("research", "writing")
             ),
@@ -209,10 +350,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "small",
                 "primary_role", "assistant",
                 "selection_priority", 70,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("research", "writing", "message")
             ),
@@ -222,10 +367,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "small",
                 "primary_role", "executor",
                 "selection_priority", 69,
+                "provider_cost_class", "paid_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "none",
                 "local_workspace_access", false,
                 "workspace_access_mode", "unknown",
                 "execution_backend", "provider_native_cli",
@@ -237,10 +386,14 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 86,
+                "provider_cost_class", "free_auto_guarded",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "guarded",
+                "quota_signal_source", "provider_detectable",
                 "local_workspace_access", false,
                 "workspace_access_mode", "executor_not_supported",
                 "execution_backend", "provider_native_cli",
@@ -252,25 +405,216 @@ public class WorkerRegistry {
             List.of(),
             List.of(),
             Map.of("api_key", true, "backend_reachable", true),
-            Map.of(
+            metadata(
                 "model_tier", "strong",
                 "primary_role", "planner_executor",
                 "selection_priority", 85,
+                "provider_cost_class", "manual_window",
+                "provider_execution_mode", "manual_window",
+                "auto_route_policy", "manual_only",
+                "quota_signal_source", "user_reported",
                 "local_workspace_access", false,
                 "workspace_access_mode", "executor_not_supported",
                 "execution_backend", "provider_native_cli",
                 "auto_route_task_types", List.of("coding", "reading", "session")
             ),
             false, true));
+        register(new Worker("deveco", "deveco",
+            List.of("coding", "reading", "session"),
+            List.of(),
+            List.of(),
+            Map.of("api_key", true, "backend_reachable", true),
+            metadata(
+                "model_tier", "strong",
+                "primary_role", "planner_executor",
+                "selection_priority", 84,
+                "provider_cost_class", "free_auto",
+                "provider_execution_mode", "auto",
+                "auto_route_policy", "eligible",
+                "quota_signal_source", "provider_detectable",
+                "local_workspace_access", true,
+                "workspace_access_mode", "native_cli_cwd",
+                "execution_backend", "provider_native_cli",
+                "auto_route_task_types", List.of("coding", "reading", "session")
+            ),
+            false, true));
+    }
+
+    private Map<String, Object> metadata(Object... kvPairs) {
+        if (kvPairs == null || kvPairs.length == 0) {
+            return Map.of();
+        }
+        if (kvPairs.length % 2 != 0) {
+            throw new IllegalArgumentException("metadata kvPairs must be even");
+        }
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        for (int i = 0; i < kvPairs.length; i += 2) {
+            Object key = kvPairs[i];
+            if (key == null) {
+                throw new IllegalArgumentException("metadata key must not be null");
+            }
+            metadata.put(key.toString(), kvPairs[i + 1]);
+        }
+        return Map.copyOf(metadata);
     }
 
     public Worker register(Worker worker) {
         Worker enriched = enrich(worker);
-        workers.put(enriched.workerId(), enriched);
+        Worker stored = applyPriorityOverride(enriched);
+        workers.put(stored.workerId(), stored);
         log.info("Worker registered: {} (type={}, caps={}, tools={}, suggestOnly={})",
-            enriched.workerId(), enriched.workerType(), enriched.capabilities(),
-            enriched.toolCapabilities(), enriched.suggestOnly());
-        return enriched;
+            stored.workerId(), stored.workerType(), stored.capabilities(),
+            stored.toolCapabilities(), stored.suggestOnly());
+        return stored;
+    }
+
+    private Worker applyPriorityOverride(Worker worker) {
+        Integer overridePriority = workerPriorityOverrides.get(worker.workerId());
+        if (overridePriority != null) {
+            LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(
+                worker.metadata() == null ? Map.of() : worker.metadata()
+            );
+            Object originalPriority = metadata.get("selection_priority");
+            metadata.put("selection_priority", overridePriority);
+            metadata.put("selection_priority_original", originalPriority);
+            metadata.put("selection_priority_overridden", true);
+            Worker overridden = new Worker(
+                worker.workerId(),
+                worker.workerType(),
+                worker.capabilities(),
+                worker.toolCapabilities(),
+                worker.toolScope(),
+                worker.dependencies(),
+                Map.copyOf(metadata),
+                worker.suggestOnly(),
+                worker.ready()
+            );
+            log.info("Worker priority overridden: worker={} original={} override={}",
+                worker.workerId(), originalPriority, overridePriority);
+            return overridden;
+        }
+        return worker;
+    }
+
+    private List<Path> defaultWorkerPriorityConfigSearchPaths() {
+        return List.of(
+            Paths.get("workers.yaml"),
+            Paths.get("workers.yml"),
+            Paths.get("config", "workers.yaml"),
+            Paths.get("config", "workers.yml"),
+            Paths.get(System.getProperty("user.home"), ".agentcloud", "workers.yaml"),
+            Paths.get(System.getProperty("user.home"), ".agentcloud", "workers.yml")
+        );
+    }
+
+    private void loadWorkerPriorityConfig(List<Path> searchPaths) {
+        if (searchPaths == null || searchPaths.isEmpty()) {
+            return;
+        }
+        for (Path path : searchPaths) {
+            if (Files.exists(path)) {
+                try {
+                    parseWorkerPriorityConfig(path);
+                    log.info("Worker priority config loaded from: {}", path);
+                    break;
+                } catch (IOException e) {
+                    log.warn("Worker priority config ignored. path={} reason={}", path, e.getMessage());
+                }
+            }
+        }
+    }
+
+    private boolean workerPriorityConfigEnabled() {
+        String raw = System.getProperty(WORKER_PRIORITY_CONFIG_ENABLED_PROPERTY);
+        return raw == null || raw.isBlank() || Boolean.parseBoolean(raw);
+    }
+
+    private void parseWorkerPriorityConfig(Path path) throws IOException {
+        String content = Files.readString(path);
+        String section = "";
+        for (String rawLine : content.split("\\R")) {
+            String line = stripYamlComment(rawLine).trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            if ("workers:".equals(line)) {
+                section = "workers";
+                continue;
+            }
+            if ("workers".equals(section) && line.startsWith("- ")) {
+                String workerConfig = line.substring(2).trim();
+                parseWorkerEntry(workerConfig);
+            } else if ("workers".equals(section) && line.contains(":")) {
+                int colon = line.indexOf(':');
+                String key = line.substring(0, colon).trim();
+                String value = line.substring(colon + 1).trim();
+                if ("selection_priority".equals(key)) {
+                    Integer priority = parseInteger(value);
+                    if (priority != null) {
+                        workerPriorityOverrides.put(section, priority);
+                    }
+                }
+            }
+        }
+    }
+
+    private void parseWorkerEntry(String entry) {
+        String[] parts = entry.split(":");
+        if (parts.length < 2) {
+            return;
+        }
+        String workerId = parts[0].trim();
+        String rest = entry.substring(parts[0].length() + 1).trim();
+        
+        if (rest.startsWith("{")) {
+            parseWorkerInlineConfig(workerId, rest);
+        } else {
+            Integer priority = parseInteger(rest);
+            if (priority != null) {
+                workerPriorityOverrides.put(workerId, priority);
+            }
+        }
+    }
+
+    private void parseWorkerInlineConfig(String workerId, String configStr) {
+        String trimmed = configStr.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+            return;
+        }
+        String content = trimmed.substring(1, trimmed.length() - 1).trim();
+        for (String pair : content.split(",")) {
+            String[] kv = pair.split(":", 2);
+            if (kv.length != 2) {
+                continue;
+            }
+            String key = kv[0].trim();
+            String value = kv[1].trim();
+            if ("selection_priority".equals(key)) {
+                Integer priority = parseInteger(value);
+                if (priority != null) {
+                    workerPriorityOverrides.put(workerId, priority);
+                }
+            }
+        }
+    }
+
+    private String stripYamlComment(String line) {
+        if (line == null) {
+            return "";
+        }
+        int index = line.indexOf('#');
+        return index >= 0 ? line.substring(0, index) : line;
+    }
+
+    private Integer parseInteger(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     public Worker registerProviderNativeWorker(String providerId,
@@ -407,7 +751,7 @@ public class WorkerRegistry {
         String normalizedMode = "dispatch".equalsIgnoreCase(mode) ? "dispatch" : "passive";
         Worker w = workers.get(workerId);
         if (w == null) return new ReadinessCheck(workerId, false, Map.of(), "worker not found",
-            normalizedMode, null, null, null, null, null, Map.of(), Map.of(), null, null, null);
+            normalizedMode, null, null, null, null, null, Map.of(), Map.of(), null, null, null, null, null, null);
         Map<String, Boolean> checks = new LinkedHashMap<>();
         if (w.dependencies() != null) {
             w.dependencies().forEach((k, v) -> checks.put(k, v));
@@ -450,8 +794,47 @@ public class WorkerRegistry {
             cliProfileMetadata(providerStatus, dispatchPreflight),
             providerFailureValue("provider_failure_class", providerStatus, dispatchPreflight),
             providerFailureValue("provider_failure_reason", providerStatus, dispatchPreflight),
-            providerFailureRetryable(providerStatus, dispatchPreflight)
+            providerFailureRetryable(providerStatus, dispatchPreflight),
+            profileFailureClass(providerStatus, dispatchPreflight),
+            profileFailureReason(providerStatus, dispatchPreflight),
+            profileFailureRetryable(providerStatus, dispatchPreflight)
         );
+    }
+
+    private static String profileFailureClass(AgentProviderStatus providerStatus, DispatchPreflightStatus dispatchPreflight) {
+        if (dispatchPreflight != null && dispatchPreflight.metadata() != null) {
+            Object value = dispatchPreflight.metadata().get("provider_profile_failure_class");
+            if (value != null) return value.toString();
+        }
+        if (providerStatus != null && providerStatus.metadata() != null) {
+            Object value = providerStatus.metadata().get("provider_profile_failure_class");
+            if (value != null) return value.toString();
+        }
+        return null;
+    }
+
+    private static String profileFailureReason(AgentProviderStatus providerStatus, DispatchPreflightStatus dispatchPreflight) {
+        if (dispatchPreflight != null && dispatchPreflight.metadata() != null) {
+            Object value = dispatchPreflight.metadata().get("provider_profile_failure_reason");
+            if (value != null) return value.toString();
+        }
+        if (providerStatus != null && providerStatus.metadata() != null) {
+            Object value = providerStatus.metadata().get("provider_profile_failure_reason");
+            if (value != null) return value.toString();
+        }
+        return null;
+    }
+
+    private static Boolean profileFailureRetryable(AgentProviderStatus providerStatus, DispatchPreflightStatus dispatchPreflight) {
+        if (dispatchPreflight != null && dispatchPreflight.metadata() != null) {
+            Object value = dispatchPreflight.metadata().get("provider_profile_failure_retryable");
+            if (value != null) return Boolean.parseBoolean(value.toString());
+        }
+        if (providerStatus != null && providerStatus.metadata() != null) {
+            Object value = providerStatus.metadata().get("provider_profile_failure_retryable");
+            if (value != null) return Boolean.parseBoolean(value.toString());
+        }
+        return null;
     }
 
     private static List<String> defaultHarnessToolCapabilities() {
@@ -619,13 +1002,14 @@ public class WorkerRegistry {
             case "deepseek" -> "reasonix run --no-config --no-proxy --model deepseek-v4-flash <prompt>";
             case "reasonix" -> "reasonix run --no-config --no-proxy <prompt>";
             case "trae" -> "trae chat --mode agent <prompt>";
-            case "codebuddy" -> "codebuddy <prompt>";
+            case "codebuddy" -> "codebuddy -y --print --output-format stream-json --permission-mode bypassPermissions --subagent-permission-mode bypassPermissions --tools default <prompt>";
             case "hermes" -> "hermes <prompt>";
             case "pi" -> "pi <prompt>";
             case "kiro" -> "kiro-cli <prompt>";
             case "kimi" -> "kimi --print --output-format stream-json --work-dir <cwd> --prompt <prompt>";
             case "copilot" -> "copilot -p <prompt> --output-format json";
             case "opencode" -> "opencode run --format json <prompt>";
+            case "deveco" -> "deveco run --skip-agreement --format json <message>";
             default -> "provider native cli";
         };
     }
@@ -636,7 +1020,8 @@ public class WorkerRegistry {
 
     private String providerNativeOutputMode(String providerId) {
         return switch (providerId == null ? "" : providerId) {
-            case "copilot", "opencode" -> "json";
+            case "copilot", "opencode", "deveco" -> "json";
+            case "codebuddy" -> "stream_json";
             default -> "stream_json";
         };
     }
@@ -651,7 +1036,7 @@ public class WorkerRegistry {
 
     private String providerNativeRecoveryResumePolicy(String providerId) {
         return switch (providerId == null ? "" : providerId) {
-            case "cursor", "gemini", "kimi", "copilot", "opencode" -> "resume_if_session_id";
+            case "cursor", "gemini", "kimi", "copilot", "opencode", "codebuddy", "deveco" -> "resume_if_session_id";
             case "openclaw" -> "resume_if_session_id_required";
             case "claude" -> "resume_if_session_id";
             default -> "fresh_only";
@@ -660,7 +1045,7 @@ public class WorkerRegistry {
 
     private boolean providerNativeSupportsResume(String providerId) {
         return switch (providerId == null ? "" : providerId) {
-            case "cursor", "openclaw", "claude", "gemini", "kimi", "copilot", "opencode" -> true;
+            case "cursor", "openclaw", "claude", "gemini", "kimi", "copilot", "opencode", "codebuddy", "deveco" -> true;
             default -> false;
         };
     }
@@ -976,10 +1361,15 @@ public class WorkerRegistry {
                                  Map<String, Object> cliProfile,
                                  String providerFailureClass,
                                  String providerFailureReason,
-                                 Boolean providerRetryable) {
+                                 Boolean providerRetryable,
+                                 String providerProfileFailureClass,
+                                 String providerProfileFailureReason,
+                                 Boolean providerProfileRetryable) {
         public ReadinessCheck {
             if (dispatchPreflightMetadata == null) dispatchPreflightMetadata = Map.of();
             if (cliProfile == null) cliProfile = Map.of();
+            if (providerProfileFailureClass == null) providerProfileFailureClass = "";
+            if (providerProfileFailureReason == null) providerProfileFailureReason = "";
         }
     }
 

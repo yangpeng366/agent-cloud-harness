@@ -50,7 +50,7 @@ Assert-True -Condition ($content.Contains("### H. #facade=responses + task_requi
 Assert-True -Condition ($content.Contains("## 4. Gaps And Conclusion")) -Message "record draft missing conclusion section"
 Assert-True -Condition ($content.Contains("manual browser acceptance is complete")) -Message "record draft missing final gate line"
 Assert-True -Condition ($content.Contains("- [ ] token-level streaming is still not accepted")) -Message "record draft should keep token-level streaming gap unchecked"
-Assert-True -Condition (($contentLines | Where-Object { $_ -match '^- \[ \] full .*responses.* item/tool-call surface is still not accepted$' }).Count -eq 1) -Message "record draft should keep responses item/tool-call gap unchecked"
+Assert-True -Condition (($contentLines | Where-Object { $_ -match '^- \[ \] full .*responses.* tool-call surface is still not accepted; minimal message item lifecycle has regression coverage$' }).Count -eq 1) -Message "record draft should keep responses tool-call gap unchecked while noting item lifecycle coverage"
 Assert-True -Condition (-not $content.Contains("- [x] token-level streaming not yet accepted")) -Message "record draft must not mark token-level streaming gap as checked"
 if (($manual.PSObject.Properties.Name -contains 'record_seed_probe') -and ($null -ne $manual.record_seed_probe)) {
     Assert-True -Condition ($content.Contains("record_seed_probe:")) -Message "record draft missing embedded record seed probe summary"

@@ -145,6 +145,18 @@ class TaskHandlerExperimentSummaryHttpTest {
             assertTrue(body.path("success").asBoolean());
             assertEquals("baseline-console", data.path("experiment_name").asText());
             assertEquals(3, data.path("mode_summaries").size());
+            assertEquals(1, strongOnly.path("acceptance_gate_result_counts").path("accepted").asInt());
+            assertEquals(1, strongOnly.path("artifact_quality_gate_status_counts").path("passed").asInt());
+            assertEquals(1, strongOnly.path("cost_gate_status_counts").path("within_threshold").asInt());
+            assertEquals(0, strongOnly.path("runs_with_failure_reason").asInt());
+            assertEquals(1, smallOnly.path("acceptance_gate_result_counts").path("rejected").asInt());
+            assertEquals(1, smallOnly.path("artifact_quality_gate_status_counts").path("failed").asInt());
+            assertEquals(1, smallOnly.path("cost_gate_status_counts").path("within_threshold").asInt());
+            assertEquals(1, smallOnly.path("runs_with_failure_reason").asInt());
+            assertEquals(1, orchestrated.path("acceptance_gate_result_counts").path("needs_followup").asInt());
+            assertEquals(1, orchestrated.path("artifact_quality_gate_status_counts").path("needs_followup").asInt());
+            assertEquals(1, orchestrated.path("cost_gate_status_counts").path("within_threshold").asInt());
+            assertEquals(1, orchestrated.path("runs_with_failure_reason").asInt());
             assertEquals(0, strongOnly.path("runs_with_mounted_render_used").asInt());
             assertEquals(0.0, strongOnly.path("mounted_render_used_rate").asDouble());
             assertEquals(1, smallOnly.path("runs_with_mounted_render_used").asInt());
@@ -334,7 +346,9 @@ class TaskHandlerExperimentSummaryHttpTest {
                     "task_case_key", "case-001",
                     "task_length_bucket", "short",
                     "model_mode", modelMode,
-                    "task_type", "coding"
+                    "task_type", "coding",
+                    "baseline_cost_threshold_units", 1.0,
+                    "cost_gate_basis", "http_contract_fixture"
                 ),
                 false
             ));

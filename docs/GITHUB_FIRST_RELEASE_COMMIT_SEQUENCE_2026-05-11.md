@@ -1,6 +1,8 @@
 # GitHub First Release Commit Sequence
 
 > 本文档当前更准确的定位是：保留 2026-05-11 这轮首发三段主提交的建议顺序、建议 commit 文案和 replay/复核命令。它不再假设这三段提交当前仍未落地。
+>
+> 历史材料说明：本文主要服务“回看当时建议的 commit narrative”。当前如需执行或复核 release slice，优先看 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`。
 
 ## 1. 建议执行顺序
 

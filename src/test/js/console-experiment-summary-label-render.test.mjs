@@ -1,0 +1,43 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const appJs = readFileSync(new URL("../../main/resources/web/console/app.js", import.meta.url), "utf8");
+
+test("console experiment summary copy uses operator Chinese labels", () => {
+    assert.match(appJs, /模式：\$\{humanizeToken\(currentMode\) \|\| currentMode\}/);
+    assert.match(appJs, /用例：\$\{taskCaseKey\}/);
+    assert.match(appJs, /验收：\$\{humanizeToken\(acceptanceResult\) \|\| acceptanceResult\}/);
+    assert.match(appJs, /长度桶：\$\{humanizeToken\(taskLengthBucket\) \|\| taskLengthBucket\}/);
+    assert.match(appJs, /次运行/);
+    assert.match(appJs, /验收通过/);
+    assert.match(appJs, /学习偏好已应用/);
+    assert.match(appJs, /平均工具步数/);
+    assert.match(appJs, /title="\$\{escapeHtml\(label\)\}">\$\{escapeHtml\(displayLabel\)\}/);
+    assert.match(appJs, /已渲染 \$\{formatRate\(renderedRate\)\}/);
+    assert.match(appJs, /已注入 \$\{formatRate\(injectedRate\)\}/);
+    assert.match(appJs, /平均面板 \$\{formatDecimal\(averagePanelCount\)\}/);
+    assert.match(appJs, /提示词 rollout/);
+    assert.match(appJs, /挂载上下文提示词模式对比/);
+    assert.match(appJs, /预算截断 \$\{formatRate\(budgetTruncatedRate\)\}/);
+    assert.match(appJs, /平均对象 \$\{formatDecimal\(averageRenderedObjectCount\)\}/);
+    assert.match(appJs, />缺失</);
+    assert.match(appJs, /步骤 \$\{String/);
+    assert.match(appJs, /成本 \$\{formatDecimal/);
+    assert.doesNotMatch(appJs, /`mode: \$\{humanizeToken\(currentMode\) \|\| currentMode\}`/);
+    assert.doesNotMatch(appJs, /`case: \$\{taskCaseKey\}`/);
+    assert.doesNotMatch(appJs, /`acceptance: \$\{humanizeToken\(acceptanceResult\) \|\| acceptanceResult\}`/);
+    assert.doesNotMatch(appJs, /`bucket: \$\{humanizeToken\(taskLengthBucket\) \|\| taskLengthBucket\}`/);
+    assert.doesNotMatch(appJs, /`runs: \$\{String\(numberOrNull\(summary\.total_runs, summary\.totalRuns\) \?\? 0\)\}`/);
+    assert.doesNotMatch(appJs, /\)\)\} runs<\/span>/);
+    assert.doesNotMatch(appJs, /done ·/);
+    assert.doesNotMatch(appJs, /learned hint applied/);
+    assert.doesNotMatch(appJs, /avg tool steps/);
+    assert.doesNotMatch(appJs, /no prompt sample/);
+    assert.doesNotMatch(appJs, /no mounted-context telemetry/);
+    assert.doesNotMatch(appJs, /avg panels/);
+    assert.doesNotMatch(appJs, /avg objs/);
+    assert.doesNotMatch(appJs, />missing</);
+    assert.doesNotMatch(appJs, /steps \$\{String/);
+    assert.doesNotMatch(appJs, /cost \$\{formatDecimal/);
+});

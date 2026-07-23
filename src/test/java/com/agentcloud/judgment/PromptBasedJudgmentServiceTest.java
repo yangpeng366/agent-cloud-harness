@@ -709,6 +709,13 @@ class PromptBasedJudgmentServiceTest {
                 null,
                 null,
                 null,
+                false,
+                List.of(),
+                List.of(),
+                null,
+                false,
+                null,
+                List.of(),
                 null,
                 null,
                 List.of()

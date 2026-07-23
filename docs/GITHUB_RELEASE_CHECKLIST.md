@@ -1,6 +1,8 @@
 # GitHub Release Checklist
 
 > 本清单用于把当前仓库从“本地研发态”收成“可公开首发态”。
+>
+> 当前入口说明：如果你只想知道“现在离公开首发还差什么”，先看本文；如果要实际 replay 三段首发主提交和 stage 边界，再看 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`；如果要看最新一轮本地预检证据，优先看 `docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md`。
 
 ## 1. 仓库基线
 

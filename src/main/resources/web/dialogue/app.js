@@ -43,7 +43,11 @@ import {
     facadeSurfaceSummaryLabel,
     writeFacadeSurfaceToParams
 } from "./facade-surface-plan.js";
+import { cardHeightVars } from "./message-measure.js";
+import { toneForStatus, toneForPinnedTaskOutcome } from "./task-status-tone-plan.js";
+import { buildTaskSubgoalProgressPlan } from "./task-subgoal-progress-plan.js";
 
+import { recoveryActionHint } from "./recovery-action-hint-plan.js";
 const state = {
     sessions: [],
     tasks: [],
@@ -58,7 +62,7 @@ const state = {
     taskStatusFilter: "all",
     composerMode: "auto",
     sidebarOpen: true,
-    detailsOpen: true,
+    detailsOpen: false,
     workers: [],
     selectedSessionId: null,
     selectedTaskId: null,
@@ -66,6 +70,7 @@ const state = {
     followupParentTaskId: null,
     pendingAutoTaskTracker: null,
     lastFacadeReply: null,
+    health: null,
     liveFlow: null,
     recoveryJobs: [],
     agentActions: [],
@@ -76,7 +81,7 @@ const state = {
     taskEventRefreshTimer: null,
     providerRunFileEventSource: null,
     facadeSurface: "chat_completions",
-    selectedTaskLoading: false
+    selectedTaskLoading: false,
 };
 
 const dom = {
@@ -96,10 +101,13 @@ const dom = {
     heroSubtitle: document.getElementById("heroSubtitle"),
     workspaceSurfaceTitle: document.getElementById("workspaceSurfaceTitle"),
     messagePanelHint: document.getElementById("messagePanelHint"),
+    readinessBanner: document.getElementById("readinessBanner"),
+    readinessBannerText: document.getElementById("readinessBannerText"),
     messageRoleFilters: document.getElementById("messageRoleFilters"),
     messageScopeFilters: document.getElementById("messageScopeFilters"),
     messageSummary: document.getElementById("messageSummary"),
     messageList: document.getElementById("messageList"),
+    artifactTranscript: document.getElementById("artifactTranscript"),
     threadDrawer: document.getElementById("threadDrawer"),
     threadDrawerMeta: document.getElementById("threadDrawerMeta"),
     embeddedThreadPanel: document.getElementById("embeddedThreadPanel"),
@@ -300,8 +308,12 @@ async function refreshAll(loud) {
 
 async function loadHealth() {
     const health = await api("/api/v1/health");
+    state.health = health;
     dom.healthBadge.dataset.state = health.status === "up" ? "up" : "down";
     dom.healthBadge.textContent = health.status === "up" ? `healthy · v${health.version}` : "down";
+    renderReadinessBanner();
+    renderComposerContext();
+    renderMessageComposerContext();
 }
 
 async function loadWorkers() {
@@ -494,7 +506,7 @@ async function loadSelectedTask(taskId, loud) {
     if (task?.id) {
         state.tasks = state.tasks.map((item) => item?.id === task.id ? task : item);
     }
-    state.recoveryJobs = Array.isArray(recoveryJobs) ? recoveryJobs : [];
+    state.recoveryJobs = mergeRecoveryJobs(recoveryJobs, taskId);
     state.agentActions = Array.isArray(agentActions) ? agentActions : [];
     state.experimentSummary = await loadTaskExperimentSummary(taskId, liveFlow);
     if (state.selectedTaskId !== taskId) {
@@ -525,6 +537,7 @@ async function selectTask(taskId, loud = false) {
     state.selectedTaskId = taskId;
     state.selectedTaskStickyUntil = Date.now() + 15000;
     ensureTaskEventStream(taskId);
+    setDetailsOpen(true);
     syncLocationSelection();
     await loadSelectedTask(taskId, loud);
 }
@@ -614,6 +627,9 @@ async function onCreateTask(event) {
     }
 
     const submissionPlan = composerSubmissionPlan();
+    if (state.health?.llm?.available === false && (submissionPlan.resolvedMode === "message" || dom.taskAutoStart.checked)) {
+        showToast("当前模型未就绪，已切到 manual-start，避免误报自动推进", true);
+    }
     const explicitSelectedTask = state.tasks.find((task) => task.id === state.selectedTaskId) || null;
     const submitContext = buildComposerSubmitContext({
         planResolvedMode: submissionPlan.resolvedMode,
@@ -727,12 +743,44 @@ async function onMessageActionClick(event) {
         const card = button.closest(".message-card");
         const messageId = firstNonBlank(card?.dataset?.messageId, button.dataset.messageId);
         if (card && messageId) {
-            const expanded = !card.classList.contains("message-card--expanded");
-            setMessageExpanded(messageId, expanded);
-            card.classList.toggle("message-card--expanded", expanded);
+            const isExpanded = card.classList.contains("message-card--expanded");
+            const fullLines = parseInt(card.dataset.cardFullLines) || 0;
+            
+            if (!isExpanded) {
+                // 展开：临时移除 content-visibility 让浏览器计算真实高度
+                card.style.contentVisibility = 'visible';
+                const fullContent = card.querySelector('.message-card__full-content');
+                if (fullContent) {
+                    fullContent.hidden = false;
+                    fullContent.style.contentVisibility = 'visible';
+                }
+                card.classList.add('message-card--expanded');
+                
+                // 渲染完成后更新 contain-intrinsic-size
+                requestAnimationFrame(() => {
+                    const actualH = card.offsetHeight;
+                    card.style.containIntrinsicSize = 'auto ' + actualH + 'px';
+                    card.style.contentVisibility = 'auto';
+                });
+            } else {
+                // 收起
+                card.classList.remove('message-card--expanded');
+                const fullContent = card.querySelector('.message-card__full-content');
+                if (fullContent) {
+                    fullContent.hidden = true;
+                    fullContent.style.contentVisibility = 'hidden';
+                }
+                // 恢复折叠态预估高度（3行）
+                const previewH = parseInt(card.style.getPropertyValue('--preview-h'), 10)
+                    || (Math.min(fullLines, 3) * 21 + 40)
+                    || 80;
+                card.style.containIntrinsicSize = 'auto ' + previewH + 'px';
+            }
+            
+            setMessageExpanded(messageId, !isExpanded);
             const indicator = card.querySelector(".message-card__expand-label");
             if (indicator) {
-                indicator.textContent = messageExpansionToggleLabel(messageById(messageId), expanded);
+                indicator.textContent = messageExpansionToggleLabel(messageById(messageId), !isExpanded);
             }
         }
         return;
@@ -814,20 +862,75 @@ async function onTaskActionClick(event) {
 
     state.selectedTaskId = targetTaskId;
     const action = button.dataset.taskAction;
-    const body = action === "recover"
-        ? JSON.stringify({ mode: "auto", reason: "manual recovery from dialogue" })
-        : "{}";
+    const requestBody = action === "recover"
+        ? { mode: "auto", reason: "manual recovery from dialogue" }
+        : {};
+    const body = JSON.stringify(requestBody);
     const actionPath = action === "recover" ? "recover?async=true" : action;
     const result = await api(`/api/v1/tasks/${encodeURIComponent(targetTaskId)}/${actionPath}`, {
         method: "POST",
         body
     });
+    if (action === "recover") {
+        applyOptimisticRecoveryReceipt(targetTaskId, result, requestBody);
+    }
     await loadTasks();
     state.selectedTaskId = targetTaskId;
     await loadSelectedTask(targetTaskId, false);
     await loadMessages(taskSessionId(selectedTask()) || state.selectedSessionId);
     const requestId = result?.request_id || result?.requestId;
     showToast(requestId ? `已触发 ${action}: ${requestId}` : `已执行 ${action}`);
+}
+
+function applyOptimisticRecoveryReceipt(taskId, result, requestBody) {
+    const requestId = firstNonBlank(result?.request_id, result?.requestId);
+    if (!requestId) {
+        return;
+    }
+    const plan = result?.plan || {};
+    const acceptedAt = new Date().toISOString();
+    const receipt = {
+        id: requestId,
+        task_id: taskId,
+        session_id: state.selectedSessionId,
+        status: "running",
+        mode: firstNonBlank(requestBody?.mode, "auto"),
+        recommended_action: firstNonBlank(plan.recommended_action, plan.recommendedAction, "resume"),
+        target_worker: firstNonBlank(plan.target_worker, plan.targetWorker),
+        recovery_execution_mode: firstNonBlank(plan.recovery_execution_mode, plan.recoveryExecutionMode, "fresh_session"),
+        provider_failure_class: firstNonBlank(plan.provider_failure_class, plan.providerFailureClass, "provider_runtime_transient"),
+        status_url: firstNonBlank(result?.status_url, result?.statusUrl, `/api/v1/tasks/${taskId}/live_flow`),
+        accepted_at: acceptedAt,
+        started_at: acceptedAt,
+        metadata: {
+            recovery_action: firstNonBlank(plan.recommended_action, plan.recommendedAction, "resume")
+        }
+    };
+    state.recoveryJobs = mergeRecoveryJobs([receipt], taskId);
+    renderDetails();
+}
+
+function mergeRecoveryJobs(jobs, taskId = state.selectedTaskId) {
+    const incoming = Array.isArray(jobs) ? jobs.filter(Boolean) : [];
+    const preserved = (state.recoveryJobs || [])
+        .filter(Boolean)
+        .filter((job) => {
+            const jobTaskId = firstNonBlank(job.task_id, job.taskId);
+            return !jobTaskId || !taskId || jobTaskId === taskId;
+        });
+    const merged = [];
+    const seen = new Set();
+    for (const job of [...incoming, ...preserved]) {
+        const key = firstNonBlank(job.id, job.request_id, job.requestId);
+        if (key && seen.has(key)) {
+            continue;
+        }
+        if (key) {
+            seen.add(key);
+        }
+        merged.push(job);
+    }
+    return merged;
 }
 
 function activeThreadTaskId() {
@@ -1010,9 +1113,98 @@ function renderMessages() {
         ? `当前 thread 共 ${state.messages.length} 条消息，当前筛出 ${filteredMessages.length} 条${describeMessageFilterSummary()}。`
         : "当前 thread 还没有消息，可以先继续对话。";
     dom.messageList.innerHTML = filteredMessages.length > 0
-        ? filteredMessages.map((message) => renderMessageCard(message, { facadeReplyHighlight })).join("")
+        ? filteredMessages.map(m => renderMessageCard(m, { facadeReplyHighlight, standaloneArtifacts: true })).join("")
         : emptyState(emptyMessageFilterText());
+
     queueWorkerRoundArtifactLoads(filteredMessages);
+    
+    // 渲染独立的 artifact transcript
+    renderArtifactTranscript(filteredMessages);
+}
+
+function renderArtifactTranscript(messages) {
+    const workerRoundMessages = messages.filter(m => 
+        normalizeMessageType(m.message_type || m.messageType) === "worker_round"
+    );
+    
+    if (workerRoundMessages.length === 0) {
+        dom.artifactTranscript.innerHTML = "";
+        return;
+    }
+    
+    const artifactCards = [];
+    for (const message of workerRoundMessages) {
+        const taskId = messageTaskId(message);
+        if (!taskId) continue;
+        
+        const artifacts = state.taskArtifactsById.get(taskId) || [];
+        for (const artifact of artifacts) {
+            artifactCards.push(renderArtifactCell(artifact, message));
+        }
+    }
+    
+    dom.artifactTranscript.innerHTML = artifactCards.length > 0 
+        ? artifactCards.join("") 
+        : "";
+}
+
+function renderArtifactCell(artifact, message) {
+    const metadata = artifactMetadata(artifact);
+    const type = artifact.artifact_type || artifact.artifactType || "artifact";
+    const title = artifact.title || "untitled artifact";
+    const createdAt = formatTime(artifact.created_at || artifact.createdAt);
+    const worker = firstNonBlank(metadata.worker_id, metadata.workerId, metadata.selected_worker, metadata.selectedWorker);
+    const status = firstNonBlank(metadata.execution_status, metadata.executionStatus, metadata.agent_run_status, metadata.agentRunStatus);
+    const durationMs = metadata.duration_ms ?? metadata.durationMs;
+    const outputText = stripAnsi(artifactOutputText(artifact, metadata));
+    const summary = stripAnsi(firstNonBlank(outputText, artifact.summary, artifact.uri, "") || "");
+    
+    // 检测代码块
+    const codeBlocks = extractCodeBlocks(summary);
+    const hasCode = codeBlocks.length > 0;
+    
+    return `
+        <div class="artifact-cell" data-task-id="${escapeHtml(messageTaskId(message))}" data-message-id="${escapeHtml(message.id)}">
+            <div class="artifact-cell__header">
+                <span class="artifact-cell__type">${escapeHtml(type)}</span>
+                <span class="artifact-cell__title">${escapeHtml(title)}</span>
+                <span class="artifact-cell__time">${escapeHtml(createdAt)}</span>
+            </div>
+            <div class="artifact-cell__meta">
+                ${worker ? `<span class="artifact-cell__chip">${escapeHtml(worker)}</span>` : ""}
+                ${status ? `<span class="artifact-cell__chip">${escapeHtml(status)}</span>` : ""}
+                ${durationMs != null ? `<span class="artifact-cell__chip">${escapeHtml(formatDurationMs(durationMs))}</span>` : ""}
+            </div>
+            ${hasCode ? `
+                <div class="artifact-cell__content">
+                    ${codeBlocks.map((block, idx) => `
+                        <div class="artifact-cell__code-block" data-code-block="${idx}">
+                            <div class="artifact-cell__code-header">
+                                <span>${escapeHtml(block.lang || "code")}</span>
+                                <button class="artifact-cell__copy-btn" data-copy-target="${idx}">复制</button>
+                            </div>
+                            <pre class="artifact-cell__code"><code${block.lang ? ` class="language-${escapeHtml(block.lang)}"` : ""}>${escapeHtml(block.code)}</code></pre>
+                        </div>
+                    `).join("")}
+                </div>
+            ` : summary ? `
+                <div class="artifact-cell__summary">${escapeHtml(preview(summary, 200))}${summary.length > 200 ? "..." : ""}</div>
+            ` : ""}
+        </div>
+    `;
+}
+
+function extractCodeBlocks(text) {
+    const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+    const blocks = [];
+    let match;
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+        blocks.push({
+            lang: match[1],
+            code: match[2]
+        });
+    }
+    return blocks;
 }
 
 function renderThread() {
@@ -1262,7 +1454,7 @@ function renderDetails() {
     dom.taskActions.hidden = false;
     dom.taskDetailsScroll.hidden = false;
     dom.taskOverview.innerHTML = headerRender.overviewHtml + renderRecoveryJobPanel(recoveryJobPlan);
-    dom.taskActions.innerHTML = taskActionRender.primaryHtml;
+    dom.taskActions.innerHTML = taskActionRender.noteHtml + taskActionRender.primaryHtml;
     dom.taskSecondaryActions.innerHTML = taskActionRender.secondaryHtml;
     dom.taskActionDrawer.hidden = headerRender.secondaryHidden;
     if (taskActionPlan.primary == null) {
@@ -1395,9 +1587,30 @@ function renderMessageCard(message, options = {}) {
     
     const isProcessMessage = isProcessType(type);
     const expansionPlan = buildMessageExpansionPlan(messageView, body, { maxCollapsedLength: compact ? 180 : 300 });
-    const needsExpand = expansionPlan.needsExpand;
+    
+    const fullContent = firstNonBlank(expansionPlan.fullContent, body);
+    const previewContent = expansionPlan.needsExpand ? body : fullContent;
+
+    // Pretext height prediction for the exact text that this card renders.
+    const cv = cardHeightVars(message, {
+        cardWidth: dom.messageList?.clientWidth || 780,
+        text: fullContent,
+        previewText: previewContent
+    });
+    const needsExpand = cv.needsExpand || expansionPlan.needsExpand;
+    const hasLongContent = cv.needsExpand && cv.fullLines > 10;
     const isExpanded = needsExpand && isMessageExpanded(messageId);
-    const previewBody = body;
+    
+    // CSS variables for content-visibility
+    const cardStyle = [
+        '--preview-h:' + Math.ceil(cv.collapsedH + 40) + 'px',
+        'content-visibility:auto',
+        'contain-intrinsic-size:auto ' + Math.ceil(cv.collapsedH + 40) + 'px',
+        'contain:layout style paint'
+    ].join(';');
+    
+    // collapsed body max-height (3 lines)
+    const previewStyle = 'max-height:' + Math.ceil(cv.collapsedH + 4) + 'px;overflow:hidden';
     
     const actions = [];
     if (canUseMessageAsDraft(message)) {
@@ -1427,7 +1640,10 @@ function renderMessageCard(message, options = {}) {
     ].filter(Boolean).join(" ");
 
     return `
-        <article class="${classes}" data-message-id="${escapeHtml(message.id)}">
+        <article class="${classes}" 
+                 style="${cardStyle}"
+                 data-message-id="${escapeHtml(message.id)}"
+                 data-card-full-lines="${cv.fullLines}">
             <div class="message-card__meta">
                 <span class="task-badge" data-tone="${messageRoleTone(role)}">${escapeHtml(formatMessageRole(role))}</span>
                 <span class="task-badge">${escapeHtml(formatMessageType(type))}</span>
@@ -1458,23 +1674,53 @@ function renderMessageCard(message, options = {}) {
                 </div>
             ` : ""}
             ${needsExpand ? `
-                <div class="message-card__body message-card__collapsed-body">${escapeHtml(previewBody)}</div>
-                <div class="message-card__body message-card__full-content">${escapeHtml(expansionPlan.fullContent)}</div>
+                <div class="message-card__body message-card__collapsed-body" style="${previewStyle}">${escapeHtml(previewContent)}</div>
+                <div class="message-card__body message-card__full-content" hidden style="content-visibility:hidden">
+                    ${hasLongContent ? renderChunkedContent(fullContent, cv) : escapeHtml(fullContent)}
+                </div>
             ` : `
                 <div class="message-card__body">${escapeHtml(body)}</div>
             `}
             ${detail ? `<div class="message-card__hint">${escapeHtml(detail)}</div>` : ""}
-            ${renderWorkerRoundArtifacts(messageView)}
+            ${options.standaloneArtifacts !== true ? renderWorkerRoundArtifacts(messageView) : ""}
             ${options.relatedOnly && taskId ? `<div class="message-card__hint mono">${escapeHtml(taskId)}</div>` : ""}
             ${needsExpand ? `
                 <div class="message-card__expand-indicator" data-message-action="toggle-expand">
                     <span class="message-card__expand-chevron">&gt;</span>
-                    <span class="message-card__expand-label">${escapeHtml(messageExpansionToggleLabel(message, isExpanded))}</span>
+                    <span class="message-card__expand-label">${escapeHtml(messageExpansionToggleLabel(message, isExpanded))}${hasLongContent ? ` · ${cv.fullLines} 行` : ""}</span>
                 </div>
             ` : ""}
             ${actions.length > 0 ? `<div class="message-card__actions">${actions.join("")}</div>` : ""}
         </article>
     `;
+}
+
+const CHUNK_LINES = 500;
+const CHUNK_CHARS = 24000;
+
+function renderChunkedContent(text, cv) {
+    const chunks = chunkTextForLazyRender(text);
+    return chunks.map((chunkText, i) => {
+        const lazy = i > 0 ? ' style="content-visibility:auto;contain-intrinsic-size:auto 300px"' : '';
+        return `<div class="msg-chunk" data-chunk="${i}"${lazy}>${escapeHtml(chunkText)}</div>`;
+    }).join('');
+}
+
+function chunkTextForLazyRender(text) {
+    const lines = String(text || '').split('\n');
+    const chunks = [];
+    for (let start = 0; start < lines.length; start += CHUNK_LINES) {
+        const end = Math.min(start + CHUNK_LINES, lines.length);
+        const chunkText = lines.slice(start, end).join('\n');
+        if (chunkText.length <= CHUNK_CHARS) {
+            chunks.push(chunkText);
+            continue;
+        }
+        for (let offset = 0; offset < chunkText.length; offset += CHUNK_CHARS) {
+            chunks.push(chunkText.slice(offset, offset + CHUNK_CHARS));
+        }
+    }
+    return chunks.length > 0 ? chunks : [""];
 }
 
 function renderWorkerRoundArtifacts(message) {
@@ -1592,7 +1838,7 @@ function syncComposerSecondaryActions(task, followupParent, sessionClosed, messa
     const showAttach = false;
     const showFollowup = Boolean(task) && !sessionClosed;
     const showClearFollowup = Boolean(followupParent) && !sessionClosed;
-    const showContextBlock = sessionClosed || Boolean(task) || Boolean(followupParent);
+    const showContextBlock = sessionClosed || Boolean(task) || Boolean(followupParent) || Boolean(state.selectedTaskId);
 
     if (dom.messageAttachTaskWrap) {
         dom.messageAttachTaskWrap.hidden = !showAttach;
@@ -1606,6 +1852,23 @@ function syncComposerSecondaryActions(task, followupParent, sessionClosed, messa
     if (dom.composerContextBlock) {
         dom.composerContextBlock.hidden = !showContextBlock;
     }
+}
+
+function renderReadinessBanner() {
+    if (!dom.readinessBanner || !dom.readinessBannerText) {
+        return;
+    }
+    const llm = state.health?.llm || {};
+    const unavailable = llm.available === false;
+    dom.readinessBanner.hidden = !unavailable;
+    if (!unavailable) {
+        return;
+    }
+    const model = firstNonBlank(llm.model, llm.review_model, llm.reviewModel, "未配置模型");
+    const baseUrl = firstNonBlank(llm.base_url, llm.baseUrl);
+    dom.readinessBannerText.textContent = baseUrl
+        ? `LLM 不可用（${model} · ${baseUrl}），仅支持 manual-start。`
+        : `LLM 不可用（${model}），仅支持 manual-start。`;
 }
 
 function renderMessageSummary(messages, task = null, flow = null) {
@@ -1676,16 +1939,16 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
     }
     const workerLabel = activeWorkerLabel(task, flow);
     const executionStrip = buildThreadExecutionStrip(task, flow, workerLabel);
-    const outcomeStrip = buildThreadOutcomeStrip(task, flow, 260);
+    const outcomeCard = buildPinnedTaskOutcomeCard(task, flow, workerLabel);
     const outputPreview = pinnedTaskOutcomePreview(task, flow, 240);
-    if (!executionStrip && !outcomeStrip && !outputPreview) {
+    if (!executionStrip && !outcomeCard && !outputPreview) {
         return "";
     }
     const taskMetadata = (flowTaskId === taskId ? flow?.task?.metadata : null) || task?.metadata || {};
     const detail = messageCardRecoveryDetail(taskMetadata, true);
     const failureClass = humanizeFailureClass(firstNonBlank(taskMetadata.failure_class, taskMetadata.failureClass));
     const liveBadge = buildLiveExecutionBadge(task, flow, executionStrip);
-    const showBody = Boolean(outputPreview) && !outcomeStrip;
+    const showBody = Boolean(outputPreview) && !outcomeCard;
     return `
         <section class="message-summary-card message-summary-card--pinned" data-role="active-task" data-testid="pinned-latest-round-output">
             <div class="message-summary-card__meta">
@@ -1705,19 +1968,180 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
                     </div>
                 </div>
             ` : ""}
-            ${outcomeStrip ? `
-                <div class="message-summary-card__outcome-strip">
-                    <span class="message-summary-card__outcome-label">${escapeHtml(outcomeStrip.label)}</span>
-                    <div class="message-summary-card__outcome-content">
-                        ${outcomeStrip.title ? `<strong class="message-summary-card__outcome-headline">${escapeHtml(outcomeStrip.title)}</strong>` : ""}
-                        ${outcomeStrip.detail ? `<span class="message-summary-card__outcome-detail">${escapeHtml(outcomeStrip.detail)}</span>` : ""}
+            ${outcomeCard ? `
+                <div class="message-summary-card__result-card" data-tone="${escapeHtml(outcomeCard.tone || "default")}">
+                    <div class="message-summary-card__result-row">
+                        <span class="message-summary-card__result-label">${escapeHtml(outcomeCard.label)}</span>
+                        <div class="message-summary-card__result-content">
+                            ${outcomeCard.title ? `<strong class="message-summary-card__result-headline">${escapeHtml(outcomeCard.title)}</strong>` : ""}
+                            ${outcomeCard.detail ? `<span class="message-summary-card__result-detail">${escapeHtml(outcomeCard.detail)}</span>` : ""}
+                        </div>
                     </div>
+                    ${outcomeCard.reason ? `
+                        <div class="message-summary-card__result-row">
+                            <span class="message-summary-card__result-label">原因</span>
+                            <div class="message-summary-card__result-content">
+                                <strong class="message-summary-card__result-headline">${escapeHtml(outcomeCard.reason)}</strong>
+                            </div>
+                        </div>
+                    ` : ""}
+                    ${outcomeCard.nextStep ? `
+                        <div class="message-summary-card__result-row">
+                            <span class="message-summary-card__result-label">下一步</span>
+                            <div class="message-summary-card__result-content">
+                                <strong class="message-summary-card__result-headline">${escapeHtml(outcomeCard.nextStep)}</strong>
+                            </div>
+                        </div>
+                    ` : ""}
+                    ${(outcomeCard.subgoalRows || []).map((row) => `
+                        <div class="message-summary-card__result-row">
+                            <span class="message-summary-card__result-label">${escapeHtml(row.label)}</span>
+                            <div class="message-summary-card__result-content">
+                                ${row.title ? `<strong class="message-summary-card__result-headline">${escapeHtml(row.title)}</strong>` : ""}
+                                ${row.detail ? `<span class="message-summary-card__result-detail">${escapeHtml(row.detail)}</span>` : ""}
+                            </div>
+                        </div>
+                    `).join("")}
+                    ${outcomeCard.preview ? `
+                        <div class="message-summary-card__result-row">
+                            <span class="message-summary-card__result-label">补充</span>
+                            <div class="message-summary-card__result-content">
+                                <span class="message-summary-card__result-detail">${escapeHtml(outcomeCard.preview)}</span>
+                            </div>
+                        </div>
+                    ` : ""}
+                    ${outcomeCard.foot ? `
+                        <div class="message-summary-card__result-foot">${escapeHtml(outcomeCard.foot)}</div>
+                    ` : ""}
                 </div>
             ` : ""}
             ${showBody ? `<div class="message-summary-card__body">${escapeHtml(outputPreview)}</div>` : ""}
-            ${detail ? `<div class="message-summary-card__foot">${escapeHtml(detail)}</div>` : ""}
+            ${detail && !outcomeCard?.foot ? `<div class="message-summary-card__foot">${escapeHtml(detail)}</div>` : ""}
         </section>
     `;
+}
+
+function buildPinnedTaskOutcomeCard(task, flow, workerLabel = "") {
+    const taskMetadata = (flow?.task?.metadata && firstNonBlank(flow?.task?.id) === firstNonBlank(task?.id))
+        ? flow.task.metadata
+        : (task?.metadata || {});
+    const latestOutcome = latestTaskOutcomeMessage(task, flow);
+    const outcomeMetadata = latestOutcome?.metadata || {};
+    const taskStatus = firstNonBlank(task?.status, flow?.task?.status, "active");
+    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, flow?.task?.control_node, flow?.task?.controlNode, "intake");
+    const failureClass = humanizeFailureClass(firstNonBlank(
+        outcomeMetadata.failure_class,
+        outcomeMetadata.failureClass,
+        taskMetadata.failure_class,
+        taskMetadata.failureClass
+    ));
+    const recoveryStage = humanizeRecoveryStage(firstNonBlank(
+        outcomeMetadata.recovery_stage,
+        outcomeMetadata.recoveryStage,
+        taskMetadata.recovery_stage,
+        taskMetadata.recoveryStage
+    ));
+    const statusTitle = humanizePinnedTaskStatus(taskStatus, controlNode, failureClass, recoveryStage);
+    const reason = buildPinnedTaskOutcomeReason(task, flow, taskMetadata, outcomeMetadata, workerLabel);
+    const nextStep = preview(firstNonBlank(
+        taskOutcomeNextStep(task, outcomeMetadata),
+        taskOutcomeNextStep(task, taskMetadata)
+    ), 200);
+    const previewText = pinnedTaskOutcomePreview(task, flow, 220);
+    const reasonForCompare = compressWhitespace(reason);
+    const previewForCompare = compressWhitespace(previewText);
+    const compactPreview = previewForCompare && previewForCompare !== reasonForCompare ? previewText : "";
+    const detail = [
+        workerLabel ? `执行方 · ${workerLabel}` : "",
+        `${taskStatus} / ${controlNode}`
+    ].filter(Boolean).join(" · ");
+    const foot = messageCardRecoveryDetail(taskMetadata, true);
+    const subgoalPlan = buildTaskSubgoalProgressPlan(taskMetadata, outcomeMetadata);
+    if (!statusTitle && !reason && !nextStep && !compactPreview && !detail && !foot && !(subgoalPlan?.rows?.length)) {
+        return null;
+    }
+    return {
+        label: "当前结果",
+        title: statusTitle || "最近输出",
+        detail,
+        reason,
+        nextStep,
+        preview: compactPreview,
+        foot,
+        subgoalRows: subgoalPlan?.rows || [],
+        tone: toneForPinnedTaskOutcome(taskStatus, controlNode)
+    };
+}
+
+function humanizePinnedTaskStatus(status, controlNode, failureClass = "", recoveryStage = "") {
+    const statusLower = firstNonBlank(status).toLowerCase();
+    const controlLower = firstNonBlank(controlNode).toLowerCase();
+    if (statusLower === "done") {
+        return "已完成";
+    }
+    if (statusLower === "failed") {
+        return "执行失败";
+    }
+    if (statusLower === "waiting_human" || controlLower === "human_gate") {
+        return recoveryStage || (failureClass ? `${failureClass}，等待人工确认` : "等待人工确认");
+    }
+    if (statusLower === "paused") {
+        return "已暂停";
+    }
+    if (statusLower === "active" && controlLower === "scheduler") {
+        return "待继续";
+    }
+    if (["active", "running"].includes(statusLower)) {
+        return "执行中";
+    }
+    return humanizeToken(status) || "最近输出";
+}
+
+function buildPinnedTaskOutcomeReason(task, flow, taskMetadata, outcomeMetadata, workerLabel = "") {
+    const directFailure = sanitizeFailureSummaryForDisplay(
+        firstNonBlank(
+            outcomeMetadata.failure_summary_readable,
+            outcomeMetadata.failureSummaryReadable,
+            taskMetadata.failure_summary_readable,
+            taskMetadata.failureSummaryReadable
+        ),
+        firstNonBlank(
+            outcomeMetadata.selected_worker,
+            outcomeMetadata.selectedWorker,
+            outcomeMetadata.assigned_worker,
+            outcomeMetadata.assignedWorker,
+            taskMetadata.previous_worker,
+            taskMetadata.previousWorker,
+            taskMetadata.assigned_worker,
+            taskMetadata.assignedWorker,
+            workerLabel
+        )
+    );
+    if (directFailure) {
+        return directFailure;
+    }
+    const narrative = latestTaskOutcomeNarrative(task, flow, 220);
+    if (narrative && !looksLikeTerseOutcomeNarrative(narrative)) {
+        return narrative;
+    }
+    return preview(assistantOutputPreview(task, flow, 220), 220);
+}
+
+// toneForPinnedTaskOutcome imported from ./task-status-tone-plan.js
+
+function buildThreadOutcomeStrip(task, flow, max = 220) {
+    const outputPreview = assistantOutputPreview(task, flow, max);
+    const taskStatus = firstNonBlank(task?.status, "active");
+    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
+    const detail = [taskStatus, controlNode].filter(Boolean).join(" / ");
+    if (!outputPreview && !detail) {
+        return null;
+    }
+    return {
+        label: "最近输出",
+        title: outputPreview,
+        detail
+    };
 }
 
 function pinnedTaskOutcomePreview(task, flow, max = 240) {
@@ -2374,7 +2798,7 @@ function messageCardRecoveryDetail(metadata, compact = false) {
     if (recoveryStage) {
         recoveryParts.push(`恢复 · ${recoveryStage}`);
     }
-    const actionHint = recoveryActionHint(failureClass, recoveryStage);
+    const actionHint = recoveryActionHint(failureClass, recoveryStage, metadata.waiting_reason || metadata.waitingReason);
     if (actionHint) {
         recoveryParts.push(`建议 · ${actionHint}`);
     }
@@ -2636,7 +3060,7 @@ function renderArtifactCard(artifact, opts = {}) {
     const threadId = firstNonBlank(metadata.provider_thread_id, metadata.providerThreadId, metadata.provider_session_id, metadata.providerSessionId);
     const agentRunId = firstNonBlank(metadata.agent_run_id, metadata.agentRunId);
     const outputText = stripAnsi(artifactOutputText(artifact, metadata));
-    const summary = stripAnsi(firstNonBlank(artifact.summary, outputText, artifact.uri, "") || "");
+    const summary = stripAnsi(firstNonBlank(outputText, artifact.summary, artifact.uri, "") || "");
     const chips = [
         worker ? `worker ${worker}` : null,
         status ? `status ${status}` : null,
@@ -3081,21 +3505,6 @@ function formatElapsedSince(value) {
     return `${hours}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-function buildThreadOutcomeStrip(task, flow, max = 220) {
-    const outputPreview = assistantOutputPreview(task, flow, max);
-    const taskStatus = firstNonBlank(task?.status, "active");
-    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
-    const detail = [taskStatus, controlNode].filter(Boolean).join(" / ");
-    if (!outputPreview && !detail) {
-        return null;
-    }
-    return {
-        label: "最近输出",
-        title: outputPreview,
-        detail
-    };
-}
-
 function latestTaskOutcomeMessage(task, flow) {
     const taskId = firstNonBlank(task?.id);
     if (!taskId) {
@@ -3460,7 +3869,9 @@ function renderComposerContext() {
         if (dom.composerInlineState) {
             dom.composerInlineState.innerHTML = sessionClosed
                 ? `<span class="signal signal--warn">closed session 不接受新消息或新任务。先新建一个 session，再继续。</span>`
-                : composerInlineSignals(null, null, false, plan);
+                : state.health?.llm?.available === false
+                    ? `<span class="signal signal--warn">模型未就绪：发送后只创建 manual-start 任务，不会自动推进。</span>`
+                    : composerInlineSignals(null, null, false, plan);
         }
         if (dom.followupButton) {
             dom.followupButton.disabled = true;
@@ -3501,7 +3912,9 @@ function renderComposerContext() {
         );
     }
     if (dom.composerInlineState) {
-        dom.composerInlineState.innerHTML = composerInlineSignals(task, followupParent, sessionClosed, plan);
+        dom.composerInlineState.innerHTML = state.health?.llm?.available === false && !sessionClosed
+            ? `<span class="signal signal--warn">模型未就绪：本轮会降级为 manual-start，需配置模型后再继续。</span>`
+            : composerInlineSignals(task, followupParent, sessionClosed, plan);
     }
     if (dom.followupButton) {
         dom.followupButton.disabled = !task || sessionClosed;
@@ -3585,7 +3998,11 @@ async function submitComposerThroughChatFacade(intent, plan = composerSubmission
     const title = dom.taskTitle.value.trim() || null;
     const assignedWorker = dom.taskAssignedWorker.value.trim() || null;
     const modelMode = dom.taskModelMode.value.trim() || null;
-    const autoStart = dom.taskAutoStart.checked;
+    const llmUnavailable = state.health?.llm?.available === false;
+    const autoStart = llmUnavailable ? false : dom.taskAutoStart.checked;
+    const taskMode = llmUnavailable && context.taskMode === "task_auto"
+        ? "task_required"
+        : context.taskMode;
     const autoMultiRound = dom.taskAutoMultiRound?.checked || false;
     const localPaths = splitComposerLines(dom.taskLocalPaths?.value);
     const validationCommands = splitComposerLines(dom.taskValidationCommands?.value);
@@ -3598,7 +4015,7 @@ async function submitComposerThroughChatFacade(intent, plan = composerSubmission
         sessionId: session.id,
         facadeModel: facadeModelForComposer(),
         facadeSurface: state.facadeSurface,
-        taskMode: context.taskMode,
+        taskMode,
         title,
         derivedTitle: deriveTitle(intent),
         goal,
@@ -3873,6 +4290,7 @@ function renderRouteBox(flow, task) {
     const cognitionSurface = flow?.runtime_cognition_surface || flow?.runtimeCognitionSurface || {};
     const cognitionTimeline = flow?.runtime_cognition_timeline || flow?.runtimeCognitionTimeline || [];
     const routeSurface = cognitionSurface.route || {};
+    const legacyControlAudit = cognitionSurface.legacy_control_audit || cognitionSurface.legacyControlAudit || {};
     const experimentRun = experimentRunView(flow);
     const metadata = experimentRunMetadata(flow);
     const selectedWorker = firstNonBlank(
@@ -3978,7 +4396,45 @@ function renderRouteBox(flow, task) {
         taskType,
         candidateWorkers,
         routeChips,
+        manualWindowRequired: booleanValue(
+            routeSurface.manual_window_required,
+            routeSurface.manualWindowRequired,
+            routePreview.manual_window_required,
+            routePreview.manualWindowRequired
+        ),
+        recommendedManualProvider: firstNonBlank(
+            routeSurface.recommended_manual_provider,
+            routeSurface.recommendedManualProvider,
+            routePreview.recommended_manual_provider,
+            routePreview.recommendedManualProvider
+        ),
+        manualWindowCandidates: normalizeTextList(
+            routeSurface.manual_window_candidates,
+            routeSurface.manualWindowCandidates,
+            routePreview.manual_window_candidates,
+            routePreview.manualWindowCandidates
+        ),
+        freeCandidateWorkers: normalizeTextList(
+            routeSurface.free_candidate_workers,
+            routeSurface.freeCandidateWorkers,
+            routePreview.free_candidate_workers,
+            routePreview.freeCandidateWorkers
+        ),
+        paidCandidateWorkers: normalizeTextList(
+            routeSurface.paid_candidate_workers,
+            routeSurface.paidCandidateWorkers,
+            routePreview.paid_candidate_workers,
+            routePreview.paidCandidateWorkers
+        ),
+        costRouteStage: firstNonBlank(
+            routeSurface.cost_route_stage,
+            routeSurface.costRouteStage,
+            routePreview.cost_route_stage,
+            routePreview.costRouteStage
+        ),
+        fallbackReason,
         providerDeprioritization,
+        legacyControlAudit,
         cognitionTimeline
     });
     return `
@@ -3993,6 +4449,12 @@ function renderRouteBox(flow, task) {
                 <p class="route-box__recovery-note">
                     <strong>${escapeHtml(routePlan.primaryRecoveryNote.headline)}</strong>
                     ${routePlan.primaryRecoveryNote.detail ? `<span>${escapeHtml(routePlan.primaryRecoveryNote.detail)}</span>` : ""}
+                </p>
+            ` : ""}
+            ${routePlan.legacyControlNote ? `
+                <p class="route-box__recovery-note">
+                    <strong>${escapeHtml(routePlan.legacyControlNote.headline)}</strong>
+                    ${routePlan.legacyControlNote.detail ? `<span>${escapeHtml(routePlan.legacyControlNote.detail)}</span>` : ""}
                 </p>
             ` : ""}
             ${routePlan.hasDrawer ? `
@@ -4087,15 +4549,15 @@ function renderExperimentSummary(flow, summary) {
         ? caseComparisons.find((item) => firstNonBlank(item.task_case_key, item.taskCaseKey) === taskCaseKey)
         : null;
     const summaryChips = [
-        `mode: ${humanizeToken(currentMode) || currentMode}`,
-        taskCaseKey ? `case: ${taskCaseKey}` : null,
-        `acceptance: ${humanizeToken(acceptanceResult) || acceptanceResult}`,
-        `bucket: ${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
-        summary ? `runs: ${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)}` : null
+        `模式：${humanizeToken(currentMode) || currentMode}`,
+        taskCaseKey ? `用例：${taskCaseKey}` : null,
+        `验收：${humanizeToken(acceptanceResult) || acceptanceResult}`,
+        `长度桶：${humanizeToken(taskLengthBucket) || taskLengthBucket}`,
+        summary ? `${String(numberOrNull(summary.total_runs, summary.totalRuns) ?? 0)} 次运行` : null
     ].filter(Boolean);
     const experimentPlan = buildExperimentSummaryPlan({
         experimentName,
-        taskLabel: firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "current task"),
+        taskLabel: firstNonBlank(experimentRun.task_title, experimentRun.taskTitle, taskCaseKey, "当前任务"),
         summaryChips,
         modeSummaries,
         currentMode,
@@ -4830,19 +5292,6 @@ function humanizeRecoveryStage(value) {
     }
 }
 
-function recoveryActionHint(failureClass, recoveryStage) {
-    if (firstNonBlank(recoveryStage) !== "等待人工确认") {
-        return "";
-    }
-    switch (firstNonBlank(failureClass)) {
-        case "环境阻塞":
-            return "先修环境后继续";
-        case "部分结果待确认":
-            return "先复核已有结果";
-        default:
-            return "";
-    }
-}
 
 function formatRate(value) {
     const number = numberOrNull(value);
@@ -4945,6 +5394,10 @@ function applyLocationSelection() {
         state.detailsOpen = false;
     } else if (details !== null) {
         state.detailsOpen = true;
+    } else if (taskId) {
+        state.detailsOpen = true;
+    } else {
+        state.detailsOpen = false;
     }
     state.facadeSurface = readFacadeSurfaceFromHash(window.location.hash, { firstNonBlank });
 }
@@ -5333,21 +5786,7 @@ function preview(value, maxLength) {
     return `${text.slice(0, maxLength)}...`;
 }
 
-function toneForStatus(status) {
-    switch ((status || "").toLowerCase()) {
-        case "active":
-            return "active";
-        case "paused":
-        case "waiting":
-            return "paused";
-        case "done":
-            return "done";
-        case "failed":
-            return "failed";
-        default:
-            return "default";
-    }
-}
+// toneForStatus imported from ./task-status-tone-plan.js
 
 function formatTime(value) {
     if (!value) {

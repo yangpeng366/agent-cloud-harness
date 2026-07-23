@@ -77,4 +77,56 @@ class LocalCliAgentProviderTest {
         assertTrue(String.valueOf(status.metadata().get("dispatch_preflight_command_shape")).contains("exec"));
         assertTrue(status.readinessReason().contains("binary not found: definitely-missing-deepseek-cli"));
     }
+
+    @Test
+    void cliConfigExposesExtendedProfileAwareProviderConfig() {
+        LocalCliAgentProvider provider = new LocalCliAgentProvider(
+            "codex",
+            "Codex",
+            "local_cli",
+            "pty",
+            List.of("coding"),
+            Map.of(),
+            "codex",
+            "MULTICA_CODEX_PATH",
+            "MULTICA_CODEX_MODEL",
+            "MULTICA_CODEX_MODEL_PROVIDER",
+            "MULTICA_CODEX_PROFILE",
+            "MULTICA_CODEX_CONFIG_JSON"
+        );
+
+        LocalCliProviderConfig config = provider.cliConfig();
+        Map<String, Object> metadata = config.resolve().metadata();
+
+        assertEquals("codex", config.resolve().providerId());
+        assertEquals("codex", metadata.get("configured_binary"));
+        assertEquals("agentcloud.providers.codex.path", metadata.get("path_property"));
+        assertEquals("agentcloud.providers.codex.model", metadata.get("model_property"));
+    }
+
+    @Test
+    void resolveDefaultProfileReturnsConfiguredDefaultsWithoutEnvironmentDependency() {
+        LocalCliAgentProvider provider = new LocalCliAgentProvider(
+            "codex",
+            "Codex",
+            "local_cli",
+            "pty",
+            List.of("coding"),
+            Map.of(),
+            "codex",
+            null,
+            null,
+            null,
+            null,
+            null
+        );
+
+        ProviderDefaultProfile profile = provider.resolveDefaultProfile();
+
+        assertEquals("", profile.modelProvider());
+        assertEquals("", profile.model());
+        assertEquals("", profile.cliProfile());
+        assertTrue(profile.configOverrides().isEmpty());
+        assertFalse(profile.hasSubstantiveConfig());
+    }
 }

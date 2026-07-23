@@ -86,6 +86,25 @@
 - **Provider Layer**：解决怎么发现、怎么启动、怎么执行、怎么看状态
 - **Worker Layer**：解决任务应该交给谁、哪个角色、为什么这么选
 
+### 2.3.1 OpenAI-compatible 本地网关先归 LLM 上游层，不直接算 provider lane
+
+当前仓库已经有两条不同层级的“接入”：
+
+- `Worker / Agent Provider`：进入 `WorkerRegistry`、`AgentProviderRegistry`、`select_worker`、`live_flow`、`agent_run` 这些控制面读面。
+- `OpenAI-compatible LLM endpoint`：只通过启动时环境变量 `OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_REVIEW_MODEL / OPENAI_WIRE_API` 进入 `llm/` 客户端，用来支撑 judgment、chat façade 和基于 LLM 的执行链。
+
+像 OmniRoute 这类本地 OpenAI-compatible 网关，当前更适合归到第二层：
+
+- 它可以作为 `OPENAI_BASE_URL=http://localhost:20128/v1` 的上游入口。
+- 它可以提供自动回退、免费/低价组合、统一本地 API。
+- 但在没有专属 executor / protocol / inventory contract 之前，它不应被误写成一个已经进入 `WorkerRegistry` 的原生 provider lane。
+
+当前稳定口径因此是：
+
+- **OmniRoute 可以推荐接入 Harness**
+- **但推荐方式是启动脚本和 LLM env 包装**
+- **不是把它直接注册成 `worker_id` / `provider_id=omniroute`**
+
 ### 2.4 machine-readable first
 所有新对象、新 API、新 trace 字段，保持当前项目已有风格：
 - 结构化优先
@@ -1054,9 +1073,9 @@ Codex 的问题暴露的是 provider worker 的共性问题：当前 harness 已
 | 类型 | 当前代表 | 执行入口 | 主要风险 |
 |------|----------|----------|----------|
 | app-server provider | `codex` | `provider_app_server` | runtime thread 与持久化 session 容易混淆，长输出超时后 UI 易误读 |
-| native CLI provider | `cursor`、`openclaw`、`claude`、`gemini`、`deepseek`、`kimi`、`copilot`、`opencode` | `provider_native_cli` | 命令参数漂移、输出 parser 不稳定、stdin/arg/cwd 差异大 |
+| native CLI provider | `cursor`、`openclaw`、`claude`、`gemini`、`deepseek`、`kimi`、`copilot`、`opencode`、`codebuddy`、`deveco` | `provider_native_cli` | 命令参数漂移、输出 parser 不稳定、stdin/arg/cwd 差异大 |
 | tool-aware 本地 worker | `openclaw-native` | `tool_aware` | 适合 search/read/patch，但不应接需要真实代码 agent 推理的任务 |
-| 已注册但未完全接通 worker | `hermes`、`pi`、`kiro`、`codebuddy`、`trae` | 当前标注 `provider_native_cli`，但支持矩阵未覆盖或能力未知 | readiness 可能误导，容易被路由选中后 fail fast |
+| 已注册但未完全接通 worker | `hermes`、`pi`、`kiro`、`trae` | 当前标注 `provider_native_cli`，但支持矩阵未覆盖或能力未知 | readiness 可能误导，容易被路由选中后 fail fast |
 
 优化目标：
 
@@ -1137,6 +1156,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 | `gemini` | 固定 JSON/stream 输出 parser；无结构化输出时降级成 text parser，但要显式标注 | 中 |
 | `copilot` | 锁定 JSONL event parser；失败时保留 `exit_code`、event error 和 last message | 中 |
 | `opencode` | Windows binary 自动发现要和 dispatch preflight 同步；输出 parser 保存原始 JSON path | 中 |
+| `codebuddy` | 已接通专属 `CodeBuddyProtocol`；固定 `-y/--print/--output-format stream-json/--permission-mode bypassPermissions/--subagent-permission-mode bypassPermissions/--tools default`，复用 Claude stream-json parser | 已完成 |
+| `deveco` | 已接通专属 `DevecoProtocol`；固定 `run --skip-agreement --format json`，复用 opencode 事件流 parser | 已完成 |
+
+#### Provider 固定默认参数（固化记录）
+
+以下参数已在对应 executor / protocol 中硬编码，属于 provider 稳定默认行为，后续重构不应误删：
+
+| provider | 固定参数 | 位置 | 说明 |
+|----------|----------|------|------|
+| `codex` | `--no-alt-screen` | `CodexAppServerWorkerExecutor.CODEX_EXEC_NO_ALT_SCREEN_FLAG`，仅 exec-json plan 携带；app-server plan 使用 `codex app-server --listen stdio://` | 2026-07-21 real worker smoke 证明 Codex CLI 0.144.4 的 `app-server` 不接受该参数；不要再把它加回 app-server 启动命令 |
+| `codebuddy` | `-y --print --output-format stream-json --permission-mode bypassPermissions --subagent-permission-mode bypassPermissions --tools default` | `CodeBuddyProtocol.buildPlan` | `--print` 必须（否则进交互 TUI 卡死）；`--output-format stream-json` 必须（否则拿不到 session/usage） |
+| `deveco` | `run --skip-agreement --format json` | `DevecoProtocol.buildPlan` | `--format json` 必须（否则是格式化人类文本）；`--skip-agreement` 跳过协议确认 |
 
 每个 native CLI worker 的 `WorkerExecutionResult.metadata` 至少应包含：
 
@@ -1329,7 +1360,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 阶段 C 剩余动作：
 
-- 对 `codebuddy / trae / kiro / hermes / pi` 继续做真实 CLI 支持矩阵核验；在未补 command plan、dispatch preflight、output parser 前，即使 capability 包含 coding，也不应提高其自动执行优先级。
+- 对 `trae / kiro / hermes / pi` 继续做真实 CLI 支持矩阵核验；在未补 command plan、dispatch preflight、output parser 前，即使 capability 包含 coding，也不应提高其自动执行优先级。`codebuddy` 已通过 `CodeBuddyProtocol` 接通，不再在此列表。
 - 如后续需要让 `openclaw-native` 承接 tool-only coding patch，应通过明确 task metadata 增加一个 tool-only 路由开关，而不是放宽默认 coding 自动路由。
 
 **阶段 D：统一 worker 输出落盘策略**
@@ -1438,7 +1469,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Test-WithJava21.ps1 -QuietMav
 
 **阶段 E：unsupported / suggest-only worker 降级为推荐面**
 
-对 `hermes`、`pi`、`kiro`、`codebuddy`、`trae` 这类当前支持矩阵未完整覆盖的 worker，先不要假装可执行。
+对 `hermes`、`pi`、`kiro`、`trae` 这类当前支持矩阵未完整覆盖的 worker，先不要假装可执行。`codebuddy` 与 `deveco` 已通过专属 protocol 接通，不再属于此范畴。
 
 计划：
 

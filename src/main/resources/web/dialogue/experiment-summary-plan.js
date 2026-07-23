@@ -25,17 +25,17 @@ export function buildExperimentSummaryPlan({
     const hasCaseComparison = caseModes.length > 0;
     const secondaryParts = [];
     if (comparisonModeCards.length > 0) {
-        secondaryParts.push(`${comparisonModeCards.length} mode 对比`);
+        secondaryParts.push(`${comparisonModeCards.length} 个模式对比`);
     }
     if (hasPromptRollout) {
-        secondaryParts.push("prompt rollout");
+        secondaryParts.push("提示词 rollout");
     }
     if (hasCaseComparison) {
-        secondaryParts.push(`${caseModes.length} case 对照`);
+        secondaryParts.push(`${caseModes.length} 个用例对照`);
     }
     return {
-        experimentName: firstNonBlank(experimentName, "experiment"),
-        taskLabel: firstNonBlank(taskLabel, "current task"),
+        experimentName: firstNonBlank(experimentName, "实验"),
+        taskLabel: firstNonBlank(taskLabel, "当前任务"),
         summaryChips: Array.isArray(summaryChips) ? summaryChips.filter(Boolean) : [],
         currentModeCard,
         comparisonModeCards,
@@ -43,7 +43,7 @@ export function buildExperimentSummaryPlan({
         hasCaseComparison,
         caseModes,
         hasDrawer: secondaryParts.length > 0,
-        drawerSummary: secondaryParts.length > 0 ? `展开 experiment 对比 · ${secondaryParts.join(" / ")}` : ""
+        drawerSummary: secondaryParts.length > 0 ? `展开实验对比 · ${secondaryParts.join(" / ")}` : ""
     };
 }
 

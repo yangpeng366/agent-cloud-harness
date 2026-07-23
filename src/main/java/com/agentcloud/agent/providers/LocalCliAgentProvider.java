@@ -28,7 +28,10 @@ public class LocalCliAgentProvider implements AgentProvider {
     private final String defaultBinary;
     private final String pathEnvVar;
     private final String modelEnvVar;
-    private final LocalCliProviderConfig cliConfig;
+    private final LocalCliProviderConfig providerConfig;
+    private final String modelProviderEnvVar;
+    private final String profileEnvVar;
+    private final String configJsonEnvVar;
     private final List<String> configuredDispatchProbeArgs;
 
     public LocalCliAgentProvider(String providerId,
@@ -39,7 +42,7 @@ public class LocalCliAgentProvider implements AgentProvider {
                                  String pathEnvVar,
                                  String modelEnvVar) {
         this(providerId, displayName, "local_cli", "pty", capabilities, metadata,
-            defaultBinary, pathEnvVar, modelEnvVar);
+            defaultBinary, pathEnvVar, modelEnvVar, null, null, null);
     }
 
     public LocalCliAgentProvider(String providerId,
@@ -51,11 +54,32 @@ public class LocalCliAgentProvider implements AgentProvider {
                                  String defaultBinary,
                                  String pathEnvVar,
                                  String modelEnvVar) {
+        this(providerId, displayName, providerType, transport, capabilities, metadata,
+            defaultBinary, pathEnvVar, modelEnvVar, null, null, null);
+    }
+
+    public LocalCliAgentProvider(String providerId,
+                                 String displayName,
+                                 String providerType,
+                                 String transport,
+                                 List<String> capabilities,
+                                 Map<String, Object> metadata,
+                                 String defaultBinary,
+                                 String pathEnvVar,
+                                 String modelEnvVar,
+                                 String modelProviderEnvVar,
+                                 String profileEnvVar,
+                                 String configJsonEnvVar) {
         this.providerId = providerId == null ? "" : providerId;
         this.defaultBinary = defaultBinary == null || defaultBinary.isBlank() ? this.providerId : defaultBinary;
         this.pathEnvVar = blankToNull(pathEnvVar);
         this.modelEnvVar = blankToNull(modelEnvVar);
-        this.cliConfig = new LocalCliProviderConfig(this.providerId, this.defaultBinary, this.pathEnvVar, this.modelEnvVar);
+        this.modelProviderEnvVar = blankToNull(modelProviderEnvVar);
+        this.profileEnvVar = blankToNull(profileEnvVar);
+        this.configJsonEnvVar = blankToNull(configJsonEnvVar);
+        this.providerConfig = new LocalCliProviderConfig(
+            this.providerId, this.defaultBinary, this.pathEnvVar, this.modelEnvVar,
+            this.modelProviderEnvVar, this.profileEnvVar, this.configJsonEnvVar);
         this.configuredDispatchProbeArgs = configuredDispatchProbeArgs(metadata);
         this.descriptor = new AgentProviderDescriptor(
             this.providerId,
@@ -67,6 +91,10 @@ public class LocalCliAgentProvider implements AgentProvider {
         );
     }
 
+    public ProviderDefaultProfile resolveDefaultProfile() {
+        return providerConfig.resolveDefaultProfile();
+    }
+
     @Override
     public AgentProviderDescriptor descriptor() {
         return descriptor;
@@ -74,7 +102,7 @@ public class LocalCliAgentProvider implements AgentProvider {
 
     @Override
     public AgentProviderStatus detect() {
-        LocalCliProviderConfig.ResolvedConfig resolved = cliConfig.resolve();
+        LocalCliProviderConfig.ResolvedConfig resolved = providerConfig.resolve();
         LocalCliProviderConfig.LaunchSpec launchSpec = resolved.launchSpec();
         LocalCliProviderConfig.ConfigValue binary = resolved.binary();
         boolean installed = launchSpec.available();
@@ -99,7 +127,7 @@ public class LocalCliAgentProvider implements AgentProvider {
 
     @Override
     public AgentProviderStatus dispatchPreflight() {
-        LocalCliProviderConfig.ResolvedConfig resolved = cliConfig.resolve();
+        LocalCliProviderConfig.ResolvedConfig resolved = providerConfig.resolve();
         LocalCliProviderConfig.LaunchSpec launchSpec = resolved.launchSpec();
         LocalCliProviderConfig.ConfigValue binary = resolved.binary();
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(resolved.metadata());
@@ -158,13 +186,13 @@ public class LocalCliAgentProvider implements AgentProvider {
         if (metadata != null) {
             merged.putAll(metadata);
         }
-        merged.putAll(cliConfig.resolve().metadata());
+        merged.putAll(providerConfig.resolve().metadata());
         merged.put("probe_mode", "local_cli");
         return Map.copyOf(merged);
     }
 
     public LocalCliProviderConfig cliConfig() {
-        return cliConfig;
+        return providerConfig;
     }
 
     private String probeVersion(LocalCliProviderConfig.LaunchSpec launchSpec) {
@@ -255,6 +283,7 @@ public class LocalCliAgentProvider implements AgentProvider {
             case "reasonix" -> List.of("run", "--help");
             case "trae" -> List.of("chat", "--help");
             case "codebuddy" -> List.of("--help");
+            case "deveco" -> List.of("run", "--help");
             case "hermes" -> List.of("--help");
             case "pi" -> List.of("--help");
             case "kiro" -> List.of("--help");

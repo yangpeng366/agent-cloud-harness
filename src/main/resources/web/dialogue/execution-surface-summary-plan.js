@@ -48,7 +48,7 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
         surface.mountedContextBudgetTruncated
     );
     const parts = [
-        worker ? `worker ${worker}` : null,
+        worker ? `执行方 ${worker}` : null,
         status ? humanizeExecutionStatus(status) : null,
         timeoutKind ? humanizeTimeoutKind(timeoutKind) : null,
         activityTimeoutMs !== null ? `活动超时 ${formatDuration(activityTimeoutMs)}` : null,
@@ -75,7 +75,7 @@ export function buildExecutionSurfaceSummaryPlan(surface = {}) {
         evidenceCount ? `${evidenceCount} 条证据` : null,
         archiveCount ? `${archiveCount} 条归档` : null
     ].filter(Boolean);
-    return parts.length > 0 ? { label: "execution", value: parts.join(" · ") } : null;
+    return parts.length > 0 ? { label: "执行回合", value: parts.join(" · ") } : null;
 }
 
 function firstNonBlank(...values) {

@@ -84,6 +84,9 @@ public class RuntimeFactSurfaceExporter {
         Map<String, Object> payload = new LinkedHashMap<>();
         putIfPresent(payload, "selected_worker", blankToNull(route.selectedWorker()));
         putIfPresent(payload, "route_source", blankToNull(route.routeSource()));
+        putIfPresent(payload, "selected_provider_profile", blankToNull(route.selectedProviderProfile()));
+        putIfPresent(payload, "preferred_provider_profile", blankToNull(route.preferredProviderProfile()));
+        putIfPresent(payload, "workflow_stage", blankToNull(route.workflowStage()));
         putIfPresent(payload, "selected_model_tier", blankToNull(route.selectedModelTier()));
         putIfPresent(payload, "selected_execution_role", blankToNull(route.selectedExecutionRole()));
         putIfPresent(payload, "selection_scope", blankToNull(route.selectionScope()));
@@ -91,6 +94,14 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "free_first_routing", route.freeFirstRouting());
+        putIfPresent(payload, "free_candidate_workers", copyList(route.freeCandidateWorkers()));
+        putIfPresent(payload, "paid_candidate_workers", copyList(route.paidCandidateWorkers()));
+        putIfPresent(payload, "cost_route_stage", blankToNull(route.costRouteStage()));
+        putIfPresent(payload, "manual_window_required", route.manualWindowRequired());
+        putIfPresent(payload, "recommended_manual_provider", blankToNull(route.recommendedManualProvider()));
+        putIfPresent(payload, "manual_followup_instruction", blankToNull(route.manualFollowupInstruction()));
+        putIfPresent(payload, "manual_window_candidates", copyList(route.manualWindowCandidates()));
         putIfPresent(payload, "dispatch_skipped_workers", exportRouteSkippedWorkers(route.dispatchSkippedWorkers()));
         putIfPresent(payload, "current_pinned_route", exportRouteDiagnostic(route.currentPinnedRoute()));
         putIfPresent(payload, "recovery_unpinned_recommendation", exportRouteDiagnostic(route.recoveryUnpinnedRecommendation()));
@@ -104,6 +115,9 @@ public class RuntimeFactSurfaceExporter {
         Map<String, Object> payload = new LinkedHashMap<>();
         putIfPresent(payload, "selected_worker", blankToNull(route.selectedWorker()));
         putIfPresent(payload, "route_source", blankToNull(route.routeSource()));
+        putIfPresent(payload, "selected_provider_profile", blankToNull(route.selectedProviderProfile()));
+        putIfPresent(payload, "preferred_provider_profile", blankToNull(route.preferredProviderProfile()));
+        putIfPresent(payload, "workflow_stage", blankToNull(route.workflowStage()));
         putIfPresent(payload, "selected_model_tier", blankToNull(route.selectedModelTier()));
         putIfPresent(payload, "selected_execution_role", blankToNull(route.selectedExecutionRole()));
         putIfPresent(payload, "selection_scope", blankToNull(route.selectionScope()));
@@ -111,6 +125,14 @@ public class RuntimeFactSurfaceExporter {
         putIfPresent(payload, "preferred_worker_hint", blankToNull(route.preferredWorkerHint()));
         putIfPresent(payload, "learning_hint_applied", route.learningHintApplied());
         putIfPresent(payload, "fallback_reason", blankToNull(route.fallbackReason()));
+        putIfPresent(payload, "free_first_routing", route.freeFirstRouting());
+        putIfPresent(payload, "free_candidate_workers", copyList(route.freeCandidateWorkers()));
+        putIfPresent(payload, "paid_candidate_workers", copyList(route.paidCandidateWorkers()));
+        putIfPresent(payload, "cost_route_stage", blankToNull(route.costRouteStage()));
+        putIfPresent(payload, "manual_window_required", route.manualWindowRequired());
+        putIfPresent(payload, "recommended_manual_provider", blankToNull(route.recommendedManualProvider()));
+        putIfPresent(payload, "manual_followup_instruction", blankToNull(route.manualFollowupInstruction()));
+        putIfPresent(payload, "manual_window_candidates", copyList(route.manualWindowCandidates()));
         putIfPresent(payload, "dispatch_skipped_workers", copyMapList(route.dispatchSkippedWorkers()));
         return payload;
     }

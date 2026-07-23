@@ -1,5 +1,7 @@
 # Hardness Phase-1 与当前代码对齐说明
 
+> 历史材料说明：本文保留 2026-05-03 这轮 hardness 对齐判断，主要用于回看当时如何把 blueprint 压回代码现实。当前不作为直接开工入口；如需查看现状，优先看 `docs/ARCHITECTURE.md`，如需看当前执行/验证链路，优先看 `docs/LIVE_FLOW_RUNBOOK.md` 与 `docs/TROUBLESHOOT.md`。
+
 更新时间：2026-05-03
 
 ## 1. 目的

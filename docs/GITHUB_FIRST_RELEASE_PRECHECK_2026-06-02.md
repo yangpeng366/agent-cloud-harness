@@ -1,6 +1,8 @@
 ﻿# GitHub First Release Precheck 2026-06-02
 
 > Purpose: capture one real local precheck run for the current first-release slice.
+>
+> Current role: this is the preferred dated evidence entry for the latest local first-release precheck. Older precheck, dry-run, stage-preview, and commit-dry-run files remain useful as historical working logs, but this file should be treated as the primary current evidence snapshot.
 
 ## Executed Commands
 

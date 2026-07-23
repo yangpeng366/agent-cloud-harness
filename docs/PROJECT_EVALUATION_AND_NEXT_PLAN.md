@@ -292,3 +292,267 @@ node .\scripts\provider-discovery-smoke.js --port 18432 --report .\.tmp\provider
 ```
 
 结果：`passed=true`。临时 `providers.yaml` 中的 `smoke_agent` 同时出现在 `/api/v1/agents` 和 `/api/v1/workers`；缺失 binary 时 worker list 与 readiness endpoint 均返回 `ready=false`，reason 为 `binary not found: smoke-agent-missing-binary`。
+
+## 附录 D：2026-06-17 产品 / 用户视角浏览器复核
+
+### 复核方式
+
+- fresh 隔离实例：`http://localhost:18480`
+- 隔离 DB：`.tmp/product-eval-18480.db`
+- 启动方式：`Run-HarnessWithJava21.ps1 -Background -DisableDispatchPreflightWarmup`
+- 浏览器验证链：
+  - `node .\scripts\screenshot.js --base-url http://localhost:18480 --out-dir .tmp\product-eval-18480\shell --report .tmp\product-eval-18480\shell-report.json`
+  - `node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18480 --report .tmp\product-eval-18480\dialogue-business-smoke-report.json`
+  - `node .\scripts\console-provider-window-probe.js --base-url http://localhost:18480 --report .tmp\product-eval-18480\console-provider-window-probe.json --screenshot .tmp\product-eval-18480\console-provider-window-probe.png`
+  - `node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:18480 --report .tmp\product-eval-18480\recovery-job-ui-probe.json --screenshot .tmp\product-eval-18480\recovery-job-ui-probe.png`
+- 额外对照：
+  - `GET /api/v1/health` 返回 `llm.available=false`
+  - `GET /api/v1/tasks/task_e4441ab0b6ff4aa7` / `live_flow` / `messages` 用于核对页面回执和真实运行状态
+
+### 一句话结论
+
+当前项目已经能跑通基本会话/任务交互，也有很强的 operator 诊断面；但从第一次上手的普通用户视角看，它更像“控制平面工作台”而不是“可直接信任的任务产品”。最大问题不是功能缺失，而是默认信息层次、环境就绪提示、失败恢复反馈三件事还没有产品化。
+
+### 已验证的正向能力
+
+- `dialogue-business-smoke` 通过，说明创建 session、提交默认 `task_auto`、手动创建任务、追加 `continue-current note` 这些主链路没有坏。
+- `console-provider-window-probe` 通过，说明 `/console/` 已经能把 provider recovery window、preflight、startup probe、dispatch probe 这些 operator 诊断面真正渲染出来。
+- 因此当前项目不是“页面空壳”或“完全不可用”，而是“有控制面能力，但默认体验还不适合非操作员”。
+
+### 我建议立即做的减法
+
+#### 1. 先把 `/dialogue/` 默认空态收轻，不要把 operator 面板长期摊开
+
+证据：
+
+- `shell-report.json` 三个 profile 全部失败，失败点集中在两件事：
+  - `default shell keeps details folded or lightweight` 失败
+  - `session-scoped shell keeps composer context hidden` 失败
+- 对应截图 `dialogue-shell-desktop.png`、`dialogue-shell-narrow.png` 可以看到：
+  - 没有选中 task 时，右侧 details 仍然常驻且内容很重
+  - 空白 transcript + 大 details + 大 composer 同时出现
+  - 窄屏下 details 直接堆到 composer 下方，第一屏密度过高
+
+决策：
+
+- 没有选中 task 时，details 默认彻底收起，只保留一个轻量入口。
+- 没有 task 上下文时，composer 只保留输入框、发送按钮、最少模式切换；task-only context、follow-up、route/judgment 入口继续下沉。
+- 窄屏下不要把完整 details 当正文第二屏默认展开；应改成抽屉或单独入口。
+
+#### 2. 从主对话面移除一批 operator 术语，避免把用户首屏做成诊断台
+
+证据：
+
+- `/dialogue/` 默认空态和任务态仍直接露出 `Mounted Context`、`Agent Actions`、`worker proposed / accepted / rejected`、`event / tool / artifact` 这类 operator 术语。
+- 顶部也仍有 `idle / focus / threads / tasks / chains` 这类控制平面标签。
+
+决策：
+
+- `/dialogue/` 首屏只保留用户关心的四类信息：当前状态、最近输出、下一步、可执行动作。
+- route / judgment / tool trace / mounted context / provider preflight 一律视作 advanced/operator 信息，下沉到折叠层。
+- `/console/` 保留强诊断定位，但 `/dialogue/` 不再承担“培训用户理解内部控制平面”的责任。
+
+### 我建议立即做的加法
+
+#### 3. 加一个真正的环境 readiness gate，不要让用户在未就绪环境里“看起来已经开始”
+
+证据：
+
+- `GET /api/v1/health` 明确返回 `llm.available=false`。
+- 但默认 `task_auto` 仍能在 UI 上得到“已提交任务，正在推进”的回执。
+- 真实任务 `task_e4441ab0b6ff4aa7` 最终状态却是：
+  - `status=waiting_human`
+  - `control_node=human_gate`
+  - `failure_summary_readable=empty planning response`
+  - `next_step=Inspect failure trace and decide whether to retry or handoff manually.`
+
+这说明当前产品层把“请求已被接收”和“系统已具备执行条件”混在了一起。
+
+决策：
+
+- 如果 `llm.available=false`，`/dialogue/` 首屏要有明确 banner：模型未配置，自动推进不可用。
+- 在未就绪状态下，默认发送不应继续伪装成“正在推进”；更合理的是：
+  - 降级成保存任务草稿 / manual-start
+  - 或直接阻止 `task_auto`，并告诉用户缺少什么配置
+- readiness gate 必须给出精确缺项：模型、认证、可执行 worker，而不是只给一个 generic failed。
+
+#### 4. 给所有异步控制动作补可见反馈，尤其是恢复任务
+
+证据：
+
+- `recovery-job-ui-probe` 已确认页面会发出 `POST /api/v1/tasks/{id}/recover?async=true`。
+- 但 30 秒内没有看到 recovery job、request id、运行状态：
+  - `recovery_job_visible=false`
+  - `request_id_visible=false`
+  - `running_status_visible=false`
+- 这意味着用户点击“自动恢复”后，不知道请求是否真的被系统接受、是否排队、是否还在跑。
+
+决策：
+
+- 所有 async task action 执行后，都要立即在 task header 或 transcript 中生成一条可见 job receipt。
+- receipt 至少包含：`request_id`、当前状态、触发时间、最近更新时间、下一步入口。
+- 这条反馈要先 optimistic 渲染，再由轮询或 SSE 更新，而不是等后端长链条全部结束后才回写。
+
+#### 5. 把“最近输出”改成真正的人话结果卡，而不是状态广播
+
+证据：
+
+- `dialogue-business-smoke` 虽然通过了 pinned surface 检查，但 pinned 内容在默认任务上主要还是 `active / scheduler`、`最近输出`、`待继续` 这类状态性文字。
+- 同一任务的真实 message / live_flow 已经给出了更关键的信息：`waiting_human`、`empty planning response`、`Inspect failure trace and decide whether to retry or handoff manually.`
+
+决策：
+
+- pinned `最近输出` 第一优先级应展示：
+  - 这轮到底成功了、失败了、还是卡在等待人工
+  - 原因是什么
+  - 用户接下来应该点什么
+- “已完成一轮推进”这类模板句，在没有实质输出时不应占据首屏主叙述。
+
+### 我建议保留但重新分层的能力
+
+#### 6. `/console/` 的 operator 价值是真实存在的，但需要更强分层
+
+证据：
+
+- `console-provider-window-probe` 全绿，说明 provider recovery window、preflight、protocol probe、dispatch readiness 这条 operator 诊断链已经有实际价值。
+- 但截图 `console-provider-window-probe.png` 也说明：右侧诊断列极长，中间主画布较空，信息组织更像“原始排障台”而不是“先摘要、再深钻”的控制台。
+
+决策：
+
+- `/console/` 继续保留 operator 视角，不需要像 `/dialogue/` 那样做成聊天产品。
+- 但布局上建议分成 `Summary / Diagnostics / Raw` 三层，而不是把 probe、provider detail、runtime health、run search 全堆一列。
+- 对 operator 最重要的“当前阻塞点 / 当前恢复窗口 / 当前建议动作”应固定在首屏摘要，不要埋在长列表中。
+
+### 现阶段我明确不建议再加的东西
+
+- 不要再往 `/dialogue/` 首屏继续加 worker、experiment、route、context 相关控件。
+- 不要在 readiness / 恢复反馈 / 空态减法没收口前，继续扩更多 task action。
+- 不要把“控制面信息更多”误当成“产品更强”；当前真正缺的是可理解、可确认、可恢复。
+
+### 我认为最值得立刻排进本周优先级的 5 件事
+
+1. `/dialogue/` 空态默认收起 details，并进一步压薄 composer。
+2. 在 `/dialogue/` 增加 readiness banner，并在 `llm.available=false` 时阻止或降级 `task_auto`。
+3. 为 `recover / resume / continue` 补统一 async receipt：`request_id + status + next step`。
+4. 把 pinned `最近输出` 改成短结果卡，优先展示失败原因和下一步。
+5. 把 `/dialogue/` 与 `/console/` 的信息边界彻底拉开：前者偏用户，后者偏 operator。
+
+### 2026-06-17 落地回写：Dialogue 首批产品减法 / 加法已收口
+
+本轮先落地了上面优先级中的前三项核心交互，范围集中在 `/dialogue/` 和浏览器探针：
+
+- 空态减法：`/dialogue/` 默认不再打开 details rail；没有 task hash 时首屏保持 session transcript + composer，task-only composer context / follow-up / attach 入口继续隐藏；显式点击任务或带 `#task=` 深链时再自动打开 details。
+- Readiness gate：`GET /api/v1/health` 返回 `llm.available=false` 时，Dialogue 头部显示模型未就绪提示；提交链路把原本的 `task_auto` 降级为 `task_required + auto_start=false`，避免继续出现“看似正在自动推进、实际停在 human_gate”的误导。
+- 异步恢复反馈：`POST /recover?async=true` 成功返回后，前端立即生成本地 optimistic recovery receipt，并复用 recovery job panel 展示 `request_id`、`运行中`、动作和失败类型；后端真实 `/recovery_jobs` 结果到达后再自然覆盖/合并。
+- 验收规则同步：`scripts/screenshot.js` 的 shell 验收现在接受“桌面 details 完全折叠”作为合格状态；此前脚本仍隐含要求桌面显示轻量 details rail，和本轮产品决策不一致。
+
+验证证据：
+
+- `node --test src/test/js/dialogue-product-readiness-plan.test.mjs src/test/js/dialogue-shell-markup-plan.test.mjs src/test/js/dialogue-recovery-job-plan.test.mjs src/test/js/dialogue-recovery-label-render.test.mjs src/test/js/dialogue-composer-submit-context-plan.test.mjs src/test/js/dialogue-transcript-layout-plan.test.mjs`：27/27 通过。
+- `powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven`：构建通过。
+- fresh 实例 `http://localhost:18483`，隔离库 `.tmp/product-eval-18483.db`。
+- `node .\scripts\screenshot.js --base-url http://localhost:18483 --out-dir .tmp\product-eval-18483\shell --report .tmp\product-eval-18483\shell-report.json`：desktop / narrow / responses 全部通过。
+- `node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18483 --report .tmp\product-eval-18483\dialogue-business-smoke-report.json`：业务 smoke 通过，且报告确认默认提交在 LLM 未就绪时降级为 manual-start receipt。
+- `node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:18483 --report .tmp\product-eval-18483\recovery-job-ui-probe.json --screenshot .tmp\product-eval-18483\recovery-job-ui-probe.png`：`async_recover_request`、`request_id_visible`、`running_status_visible` 全部为 true。
+
+仍未落地：
+
+- pinned `最近输出` 已从状态/结果混合条改成更明确的“当前结果 / 原因 / 下一步”人话卡；剩余问题是 `/console/` 的 `Summary / Diagnostics / Raw` 分层尚未处理。
+
+### 2026-06-17 落地回写：pinned `最近输出` 已收口为短结果卡
+
+本轮继续沿着上面的第 4 项优先级，把 `/dialogue/` 顶部 pinned `最近输出` 从“状态条 + 预览”改成更明确的结果卡，目标是让用户在不打开 details 的情况下，也能先看到本轮到底发生了什么、为什么卡住、下一步该做什么。
+
+本轮改动：
+
+- 顶部 pinned 卡保留原有执行信号（`执行中 / 最近执行 / 待继续`）作为第一层状态面，避免丢失当前 round/worker 的运行语义。
+- 原来的 `最近输出` outcome strip 改成新的 `当前结果` 卡，固定按 `当前结果 / 原因 / 下一步 / 补充` 的顺序组织内容：
+  - `当前结果`：把 `waiting_human / human_gate / done / failed / active` 等内部状态翻成人话，如 `等待人工确认`、`已完成`、`执行失败`、`执行中`、`待继续`。
+  - `原因`：优先使用脱噪后的 `failure_summary_readable`；没有失败摘要时再回退到最新 task outcome narrative / assistant output preview，避免继续把 `failed`、`done` 这类 terse token 直接展示给用户。
+  - `下一步`：优先显示 `task_progress` / `task_result` 里的 `next_step`，没有时再回退到 task 自身的 `next_step`。
+  - `补充`：仅在 preview 和原因不重复时显示，避免重复堆字。
+- 恢复/失败细节（失败类型、恢复阶段、重试/移交次数）保留在结果卡底部 foot，而不是和主结果混在同一行里。
+- CSS 为 pinned 结果卡新增单独的 row-based 视觉层，并按 `active / paused / failed / done` 做轻量 tone 区分；不改动 message history 内普通 transcript card。
+
+验证证据：
+
+- focused 契约测试：
+  - `node --test src/test/js/dialogue-transcript-layout-plan.test.mjs src/test/js/dialogue-task-thread-preview-regression.test.mjs src/test/js/dialogue-product-readiness-plan.test.mjs`
+  - 26/26 通过。
+- 构建：
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven`
+  - 通过。
+- fresh 实例：
+  - `http://localhost:18484`
+  - 隔离库 `.tmp/product-eval-18484.db`
+  - 启动方式按 `STARTUP_GUIDE.md` 推荐链路：`Use-Java21.ps1` + `Run-HarnessWithJava21.ps1 -Background -Port 18484 -DisableDispatchPreflightWarmup -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\product-eval-18484.db")`
+- 浏览器验证：
+  - `node .\scripts\screenshot.js --base-url http://localhost:18484 --out-dir .tmp\product-eval-18484\shell --report .tmp\product-eval-18484\shell-report.json`
+    - `desktop / narrow / responses` 全部通过。
+  - `node .\scripts\dialogue-business-smoke.js --base-url http://localhost:18484 --report .tmp\product-eval-18484\dialogue-business-smoke-report.json`
+    - 通过；报告中的 pinned 输出已变成 `当前结果` 卡，并保留上层 `执行中` 状态面。
+  - `node .\scripts\recovery-job-ui-probe.js --base-url http://localhost:18484 --report .tmp\product-eval-18484\recovery-job-ui-probe.json --screenshot .tmp\product-eval-18484\recovery-job-ui-probe.png`
+    - 通过；说明这轮结果卡改造没有打坏 recovery job 可见性。
+
+剩余未落地：
+
+- `/console/` 仍需要按 `Summary / Diagnostics / Raw` 做更彻底的分层；这是当前产品优先级中的最后一项未收口内容。
+
+### 2026-06-17 落地回写：`/console/` 已拆成 `Summary / Diagnostics / Raw`
+
+本轮继续收口上面最后一项未落地内容，把 `/console/` 右侧 inspector 从“长诊断列”改成三层 surface，目标不是削弱 operator 能力，而是把最关键的恢复窗口、当前任务和路由判断固定留在首屏，把深诊断和原始 JSON 往后收。
+
+本轮改动：
+
+- inspector header 下新增 `Summary / Diagnostics / Raw` surface switch，并把当前 surface 同步进 hash：
+  - 默认 `Summary` 不写 hash 参数，保持 `/console/#session=...&task=...` 的短链接形态。
+  - 切到 `Diagnostics / Raw` 时，hash 会附带 `surface=diagnostics|raw`，便于深链回到具体诊断层。
+- `Summary` 默认只保留 operator 首屏最需要的块：
+  - `Agent Inventory`
+  - `Provider Detail`
+  - `Runtime Health`
+  - `Agent Execution`
+  - `路由与判断`
+- `Diagnostics` 展开长链路诊断：
+  - `Run Search`
+  - `Agent Run Detail`
+  - `迭代链上下文`
+  - `连续性摘要`
+  - `Mounted Context`
+  - `实验对比`
+  - `最近产物`
+  - `Agent Actions`
+  - `工具轨迹`
+- `Raw` 只保留 `live_flow` 原始 JSON，并自动展开 `details`，避免操作员还要再点一次才能看到 payload。
+- 兼容性上没有移动现有 operator probe 依赖的 DOM id：
+  - `#runtimeHealth`
+  - `#routeBox`
+  - `#agentDetail`
+  这些节点继续保留在 `Summary`，因此 provider recovery window / preflight / startup protocol probe / dispatch readiness 现有链路无需改脚本就能继续跑通。
+
+验证证据：
+
+- focused JS 契约测试：
+  - `node --test src/test/js/console-provider-window-plan.test.mjs src/test/js/console-time-normalization.test.mjs src/test/js/console-surface-layering-plan.test.mjs`
+  - 12/12 通过。
+- 构建：
+  - `powershell -ExecutionPolicy Bypass -File .\scripts\Build-WithJava21.ps1 -SkipTests -QuietMaven`
+  - 通过。
+- fresh 实例：
+  - `http://localhost:18486`
+  - 隔离库 `.tmp/console-surface-18486.db`
+  - 启动方式按 `STARTUP_GUIDE.md` 推荐链路：`Use-Java21.ps1` + `Run-HarnessWithJava21.ps1 -Background -Port 18486 -DisableDispatchPreflightWarmup -JavaArgs @("-Ddb.path=d:\gitAll\agent-cloud-harness\.tmp\console-surface-18486.db")`
+- 浏览器验收：
+  - `node .\scripts\console-provider-window-probe.js --base-url http://127.0.0.1:18486 --report .tmp\console-surface-probe-18486.json --screenshot .tmp\console-surface-probe-18486.png`
+    - 继续全绿：`runtime_health_window`、`route_box_hint`、`provider_preflight_post`、`provider_preflight_rendered`、`startup_protocol_probe_rendered`、`worker_dispatch_probe_rendered` 全为 true。
+  - 额外 DOM / surface 验收：
+    - `.tmp/console-surface-dom-18486.json`
+    - `.tmp/console-surface-summary-18486.png`
+    - `.tmp/console-surface-diagnostics-18486.png`
+    - `.tmp/console-surface-raw-18486.png`
+    - 结果确认：
+      - `Summary` 默认隐藏 `Run Search` 与 `Raw`，保留 `Runtime Health`
+      - `Diagnostics` 会把 `Run Search` 与 `Mounted Context` 展开，并把 hash 改成 `&surface=diagnostics`
+      - `Raw` 会显示 `live_flow` JSON、自动展开 `details`，同时隐藏 `Runtime Health`，并把 hash 改成 `&surface=raw`
+
+当前产品评估计划中的 5 个优先级项已全部落地；接下来更适合转向新的用户任务或下一批 operator 收口，而不是继续往 `/dialogue/` 和 `/console/` 首屏加信息。

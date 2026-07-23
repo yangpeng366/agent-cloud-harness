@@ -1,6 +1,8 @@
 # GitHub First Release Commit Plan
 
 > 基于 `docs/GITHUB_FIRST_RELEASE_FILESET.md`、`docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md` 和当前 dry-run 快照，建议把首发范围拆成更清晰的提交批次。
+>
+> 历史材料说明：本文保留首发阶段对提交批次的拆分方案，当前更适合作为历史工作记录。若要实际 replay 或复核当前三段主提交边界，优先看 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`。
 
 ## Commit 1: Repository Baseline
 

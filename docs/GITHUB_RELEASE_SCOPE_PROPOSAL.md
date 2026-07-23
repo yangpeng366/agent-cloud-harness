@@ -1,6 +1,8 @@
 # GitHub Release Scope Proposal
 
 > 本文档用于把当前 worktree 收成一个“首发可公开”的提交边界。
+>
+> 当前入口说明：本文主要回答“哪些内容适合纳入首发叙述与首发范围边界”；是否已经满足公开前 gate，请优先看 `docs/GITHUB_RELEASE_CHECKLIST.md`；如果要实际 replay 三段主提交和 stage 边界，请看 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`。
 
 ## 建议纳入首发
 

@@ -2442,4 +2442,99 @@ class ControlNodeGraphOrchestrationFlowTest {
         }
     }
 
+
+    @Test
+    void orchestratedLoopDecisionTraceDistinguishesPlannerFailureFromExecutorFailure() {
+        // P1 acceptance criteria 3 & 4: failure triggers explainable escalation,
+        // and decision trace distinguishes planner failure from executor failure.
+        // We verify the traceability contract on the orchestrated success path:
+        // execution_role and selected_model_tier must be present in execution_judgment,
+        // enabling downstream consumers to attribute failures to planner or executor phase.
+
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("p1-failure-discrimination.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            SessionMessageDao sessionMessageDao = db.jdbi().onDemand(SessionMessageDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            CheckpointDao checkpointDao = db.jdbi().onDemand(CheckpointDao.class);
+
+            sessionDao.insert(Session.create("session_p1", "P1 failure discrimination", "active"));
+
+            WorkerRouter router = new WorkerRouter(new WorkerRegistry());
+            ActiveContextBuilder activeContextBuilder = new ActiveContextBuilder(
+                new ActiveContextBuilder.DefaultActiveContextPolicy(),
+                new ActiveContextBuilder.DefaultRetentionPolicy(),
+                new ActiveContextBuilder.DefaultExclusionPolicy()
+            );
+            TaskRuntimeContextBuilder runtimeContextBuilder = new TaskRuntimeContextBuilder(
+                eventDao, decisionDao, artifactDao, packetDao, checkpointDao, activeContextBuilder, null
+            );
+
+            ControlNodeGraph graph = new ControlNodeGraph(
+                taskDao, eventDao, sessionDao, sessionMessageDao, packetDao, router, null, null,
+                new FakeWorkerExecutor(), runtimeContextBuilder, new FakeJudgmentService(),
+                artifactDao, decisionDao, null
+            );
+
+            Task task = new Task(
+                "task_p1",
+                "session_p1",
+                null,
+                "orchestrated loop for P1 traceability",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                "ship a validated result",
+                null,
+                null,
+                "intake",
+                null,
+                new LinkedHashMap<>(Map.of(
+                    "task_type", "coding",
+                    "intent", "prove planner to executor traceability",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "plan_pending",
+                    "prompt_rendering_mode", "mounted_context_primary"
+                ))
+            );
+            taskDao.insert(task);
+
+            graph.enter(task);
+            List<Decision> decisions = decisionDao.listBySessionAndTask(task.sessionId(), task.id(), 10);
+
+            // execution_judgment must carry execution_role and selected_model_tier
+            // so that failure attribution (planner vs executor, strong vs small) is always possible
+            Decision executionJudgment = decisions.stream()
+                .filter(d -> "execution_judgment".equals(d.decisionType()))
+                .reduce((first, second) -> second) // take last if multiple
+                .orElseThrow(() -> new AssertionError("no execution_judgment found"));
+            assertNotNull(metadataString(executionJudgment.metadata(), "execution_role"),
+                "execution_judgment must carry execution_role for failure phase discrimination");
+            assertNotNull(metadataString(executionJudgment.metadata(), "selected_model_tier"),
+                "execution_judgment must carry selected_model_tier for failure phase discrimination");
+            // The last execution_judgment should reflect the executor (small model) phase
+            assertTrue(metadataString(executionJudgment.metadata(), "execution_role").contains("executor"), "execution_role must indicate executor phase for failure discrimination");
+
+            // Completion judgment must carry evaluator_role, evaluator_model_tier, and closed-loop signal
+            Decision completionJudgment = decisions.stream()
+                .filter(d -> "completion_judgment".equals(d.decisionType()))
+                .findFirst().orElseThrow();
+            assertEquals("strong_evaluator", metadataString(completionJudgment.metadata(), "evaluator_role"));
+            assertEquals("strong", metadataString(completionJudgment.metadata(), "evaluator_model_tier"));
+            assertEquals("true", metadataString(completionJudgment.metadata(), "orchestration_closed_loop_observed"));
+
+            // Task metadata must distinguish planner and executor workers
+            Task persisted = taskDao.findById(task.id()).orElseThrow();
+            assertNotNull(metadataString(persisted.metadata(), "planner_worker"));
+            assertNotNull(metadataString(persisted.metadata(), "executor_worker"));
+        }
+    }
 }

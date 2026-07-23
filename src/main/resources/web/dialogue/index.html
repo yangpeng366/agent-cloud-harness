@@ -85,6 +85,13 @@
                 <h3 id="workspaceSurfaceTitle">Session Transcript</h3>
                 <p id="messagePanelHint">辅助层按需展开。</p>
             </div>
+            <div class="readiness-banner" id="readinessBanner" hidden>
+                <div>
+                    <strong>模型未就绪</strong>
+                    <span id="readinessBannerText">当前可以记录对话和创建 manual-start 任务；配置模型后再自动推进。</span>
+                </div>
+                <span class="readiness-banner__mode">manual-start</span>
+            </div>
         </header>
 
         <section class="message-panel">
@@ -110,12 +117,7 @@
                     </div>
                 </div>
             </details>
-            <div class="message-panel__body message-panel__body--stream-only">
-                <div class="message-stream">
-                    <div class="message-summary" id="messageSummary"></div>
-                    <div class="message-list" id="messageList"></div>
-                </div>
-                <details class="thread-drawer" id="threadDrawer" hidden>
+            <details class="thread-drawer" id="threadDrawer" hidden>
                     <summary class="thread-drawer__summary">
                         <div>
                             <strong>任务轨迹</strong>
@@ -143,6 +145,12 @@
                         <div class="thread-list" id="taskThread"></div>
                     </div>
                 </details>
+            <div class="message-panel__body message-panel__body--stream-only">
+                <div class="message-stream">
+                    <div class="message-summary" id="messageSummary"></div>
+                    <div class="message-list" id="messageList"></div>
+                    <div class="artifact-transcript" id="artifactTranscript"></div>
+                </div>
             </div>
         </section>
 

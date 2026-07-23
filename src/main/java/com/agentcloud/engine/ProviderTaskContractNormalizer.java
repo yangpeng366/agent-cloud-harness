@@ -115,6 +115,38 @@ final class ProviderTaskContractNormalizer {
             metadata.putIfAbsent("target_paths", localPaths);
         }
     }
+    static void initializeGoalContract(Map<String, Object> metadata, String effectiveGoal) {
+        if (metadata == null) {
+            return;
+        }
+        String goal = firstNonBlank(metadataString(metadata, "goal"), effectiveGoal);
+        if (goal != null) {
+            metadata.putIfAbsent("goal", goal);
+        }
+
+        Object rawSubgoals = metadata.get("subgoals");
+        if (rawSubgoals == null && goal != null) {
+            List<String> subgoals = List.of(goal);
+            metadata.put("subgoals", subgoals);
+            rawSubgoals = subgoals;
+        }
+
+        Object rawSubgoalStatus = metadata.get("subgoal_status");
+        if (rawSubgoalStatus == null) {
+            List<Map<String, Object>> defaults = defaultSubgoalStatus(rawSubgoals);
+            if (!defaults.isEmpty()) {
+                metadata.put("subgoal_status", defaults);
+                rawSubgoalStatus = defaults;
+            }
+        }
+
+        if (blankToNull(metadataString(metadata, "progress_summary")) == null) {
+            String summary = buildProgressSummary(rawSubgoalStatus);
+            if (summary != null) {
+                metadata.put("progress_summary", summary);
+            }
+        }
+    }
 
     static List<String> workspaceRoots(Map<String, Object> metadata) {
         LinkedHashSet<String> roots = new LinkedHashSet<>();
@@ -303,6 +335,103 @@ final class ProviderTaskContractNormalizer {
         return normalized;
     }
 
+    private static List<Map<String, Object>> defaultSubgoalStatus(Object rawSubgoals) {
+        List<String> titles = extractSubgoalTitles(rawSubgoals);
+        if (titles.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<Map<String, Object>> statusEntries = new ArrayList<>();
+        for (String title : titles) {
+            LinkedHashMap<String, Object> entry = new LinkedHashMap<>();
+            entry.put("title", title);
+            entry.put("status", "pending");
+            statusEntries.add(Map.copyOf(entry));
+        }
+        return List.copyOf(statusEntries);
+    }
+
+    private static List<String> extractSubgoalTitles(Object rawSubgoals) {
+        ArrayList<String> titles = new ArrayList<>();
+        addSubgoalTitles(titles, rawSubgoals);
+        return List.copyOf(titles);
+    }
+
+    private static void addSubgoalTitles(List<String> titles, Object value) {
+        if (titles == null || value == null) {
+            return;
+        }
+        if (value instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                addSubgoalTitles(titles, item);
+            }
+            return;
+        }
+        if (value.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(value);
+            for (int i = 0; i < length; i++) {
+                addSubgoalTitles(titles, java.lang.reflect.Array.get(value, i));
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            String title = firstNonBlank(
+                mapString(map, "title"),
+                mapString(map, "goal"),
+                mapString(map, "name"),
+                mapString(map, "summary")
+            );
+            addIfNotBlank(titles, title);
+            return;
+        }
+        addIfNotBlank(titles, stringValue(value));
+    }
+
+    private static String buildProgressSummary(Object rawSubgoalStatus) {
+        List<String> statuses = new ArrayList<>();
+        addSubgoalStatuses(statuses, rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            return null;
+        }
+        int total = statuses.size();
+        int done = 0;
+        int blocked = 0;
+        for (String status : statuses) {
+            if (List.of("done", "complete", "completed", "accepted").contains(status)) {
+                done++;
+            }
+            if (List.of("blocked", "waiting_human", "human_gate").contains(status)) {
+                blocked++;
+            }
+        }
+        return blocked > 0
+            ? done + "/" + total + " subgoals done; " + blocked + " blocked"
+            : done + "/" + total + " subgoals done";
+    }
+
+    private static void addSubgoalStatuses(List<String> statuses, Object value) {
+        if (statuses == null || value == null) {
+            return;
+        }
+        if (value instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                addSubgoalStatuses(statuses, item);
+            }
+            return;
+        }
+        if (value.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(value);
+            for (int i = 0; i < length; i++) {
+                addSubgoalStatuses(statuses, java.lang.reflect.Array.get(value, i));
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            String status = firstNonBlank(mapString(map, "status"), mapString(map, "state"));
+            addIfNotBlank(statuses, status);
+            return;
+        }
+        addIfNotBlank(statuses, stringValue(value));
+    }
     private static void addIfNotBlank(List<String> values, String value) {
         String normalized = blankToNull(value);
         if (values != null && normalized != null) {
@@ -317,10 +446,29 @@ final class ProviderTaskContractNormalizer {
         return stringValue(metadata.get(key));
     }
 
+    private static String mapString(Map<?, ?> value, String key) {
+        if (value == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object direct = value.get(key);
+        return direct == null ? null : direct.toString();
+    }
     private static String stringValue(Object value) {
         return value == null ? null : value.toString();
     }
 
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            String normalized = blankToNull(value);
+            if (normalized != null) {
+                return normalized;
+            }
+        }
+        return null;
+    }
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
     }

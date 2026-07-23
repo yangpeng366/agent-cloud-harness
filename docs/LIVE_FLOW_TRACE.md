@@ -1,5 +1,7 @@
 # Live Flow Trace
 
+> 历史材料说明：本文保留 2026-04-23 这轮 live validation 的原始留痕，主要用于回看当时的兼容问题链和参数基线。当前不作为直接执行入口；如需复跑或续写验证，请优先使用 `docs/LIVE_FLOW_RUNBOOK.md`，如需查看当前排障口径，请看 `docs/TROUBLESHOOT.md`。
+
 ## 2026-04-23
 
 ### 目标

@@ -1,6 +1,8 @@
 # GitHub First Release Execution Guide
 
 > 本文档把 `docs/GITHUB_FIRST_RELEASE_STAGING_PLAN.md` 和 `docs/GITHUB_FIRST_RELEASE_COMMIT_PLAN.md` 收成一套可直接执行的首发收口步骤。当前它更准确的定位是：给出 replay / 复核三段主提交边界的执行顺序、`git add` 边界和核对方法，而不是假设三段主提交还未落地。
+>
+> 当前入口说明：本文是 release replay / stage 边界的执行入口。若只想看 gate 是否已满足，先看 `docs/GITHUB_RELEASE_CHECKLIST.md`；若只想看最新一轮本地预检证据，优先看 `docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md`。
 
 ## 0. 前提
 

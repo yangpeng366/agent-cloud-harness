@@ -1,3 +1,28 @@
+## 方向调整 (2026-07-21)
+
+Codex 不同 provider 的协议差异已经由本机 CCX 网关统一收敛，harness 不再负责 provider 差异收敛。下一阶段 5 个工程优先级调整为：
+
+1. **Loop 主闭环 + 执行中状态判断**：`goal -> plan -> execute -> judge -> decide`；HTTP `/continue` 超时不把 active 任务判成 `failed`。
+2. **Goal 目标合同**：`goal / subgoals / subgoal_status / acceptance_criteria / progress_summary` 最小可度量合同。
+3. **上下交接文档 / handoff packet**：Resume / Handoff packet 最小字段集正式写进 `API_CONTRACTS.md` / `SPEC.md`。
+4. **UI 页面展示结果 / 返回 + 执行中状态判断**：`active / running / waiting_human / failed / partial / done` 状态语义与 `/dialogue/` `/console/` 展示。
+5. **Provider 专项（降级）**：codex profile lane、codebuddy/deveco CLI 接入只在接入新协议或读面诊断时推进；provider 差异由 CCX 收敛。
+
+下方原 P1–P5 描述保留作为上下文，但排序口径已被本段取代，以 `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` 为准。原 P2 baseline matrix 的真实 worker smoke 证据继续有效，作为 loop 验证的真实执行证据来源。
+
+### 完成状态 (2026-07-22)
+
+上述 5 个方向已全部完成 P1/P2/P3 落地并验证：
+
+1. Loop 主闭环：验收标准 #1/#2/#3 全部 done（`ControlNodeGraphOrchestrationFlowTest` / `ControlNodeGraphDecideGoalProgressPriorityTest` / `LoopContinueTimeoutInvariantTest` + P2 e2e smoke）
+2. Goal 目标合同：`autoUpdateSubgoalStatus` + `resolveAction` goal progress priority 优先judgment done
+3. 交接 packet：`API_CONTRACTS.md` / `SPEC.md` 字段集写入 + `TaskServicePacketContractTest` done
+4. UI 状态展示：`partial` 独立 tone + `waiting_human` 显示人工动作入口 + `active` 不渲染为 `failed` + loop activity detector done
+5. Provider 专项：由 CCX 网关收敛，harness 侧降级确认 done
+
+详细推进记录见 `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` 验收标准段标注和 `NEXT_EVOLUTION_PLAN.md`。
+
+---
 # NEXT_5_ENGINEERING_PRIORITIES
 
 ## 1. 目的
@@ -142,10 +167,11 @@
 
 当前缺少：
 
-- 真实 worker 执行后的 matrix 结果
-- 自动 artifact acceptance gate
-- 成本 threshold / cost gate
+- 完整 `3+3+3` 的真实 worker matrix 结果（当前仅有 `short-001` 三模式 smoke）
+- 真实 worker artifact quality gate 的内容级标定
+- 成本 threshold 的真实 worker 标定与 release gate 接入
 - 把 baseline matrix HTTP gate 提升为 release gate
+- 复跑已修复 app-server 参数后的 `short-001`，把当前 `waiting_human` 失败样本推进成可比较的成功/失败基线
 
 ## 开发目标
 
@@ -173,9 +199,11 @@
 
 当前还应继续补：
 
-- 用 `scripts/Run-BaselineMatrixGateProbe.ps1` 做 HTTP 合同 gate
-- 跑一轮真实 worker 的 `short-001 / medium-001 / long-001`
+- 用 `scripts/Run-BaselineMatrixGateProbe.ps1` 做 HTTP 合同 gate，并检查 `acceptanceGateResultCounts` / `artifactQualityGateStatusCounts` / `costGateStatusCounts`
+- 重新 build 后复跑 `short-001` real worker smoke；确认不再卡在 initialize 后，再扩到 `medium-001 / long-001` 和完整 `3+3+3`
 - 把 `experiment_summary`、失败 case 的 `live_flow / judgment_trace / tool_trace` 纳入 release gate 证据
+
+2026-07-21 最新进展：`Run-BaselineMatrixRealWorkerSmoke.ps1` 已在 `http://localhost:18082` 跑出 `short-001 x 3 mode` 的 provider-backed smoke，`terminal_run_count=3`、`evaluated_run_count=3`；随后已从 `.tmp\provider-runs\codex\...\events.jsonl` 定位到失败根因是 `codex app-server --no-alt-screen --listen stdio://` 被 Codex CLI `0.144.4` 拒绝，并已完成 app-server 参数兼容修复。P2 的阻塞点已从“没有真实 worker evidence”收敛为“修复后复跑与 release gate 标定”。
 
 ## 验收标准
 
@@ -190,7 +218,7 @@
 
 - 任务集过大，导致实验框架迟迟不落地
 - 指标定义不稳定，后续结果不可比
-- 没有 acceptance 标准，只有“完成了没”的粗糙判断
+- acceptance / artifact quality / cost gate 已有最小字段，但还缺真实 worker artifact 内容级验收和 release gate 标定
 
 ## 推荐策略
 

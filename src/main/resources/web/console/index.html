@@ -157,11 +157,13 @@
             <div>
                 <p class="eyebrow">Live Flow</p>
                 <h2 id="inspectorTitle">选择一个任务</h2>
+                <p class="task-focus-line" id="taskFocusLine">状态 / 控制节点</p>
             </div>
             <button class="link-button" id="refreshTaskButton" type="button">刷新当前任务</button>
         </div>
 
         <div class="task-overview" id="taskOverview"></div>
+        <div class="task-recovery-panel" id="taskRecoveryPanel"></div>
 
         <div class="action-bar" id="taskActions">
             <button class="button button--ghost" data-task-action="continue" type="button">继续</button>
@@ -179,8 +181,23 @@
             <button class="button button--ghost" id="handoffButton" type="button">执行 handoff</button>
         </div>
 
+        <div class="inspector-surface-switch" id="inspectorSurfaceSwitch" aria-label="Inspector Surface">
+            <button class="surface-pill" data-inspector-surface="summary" type="button" aria-pressed="true">Summary</button>
+            <button class="surface-pill" data-inspector-surface="diagnostics" type="button" aria-pressed="false">Diagnostics</button>
+            <button class="surface-pill" data-inspector-surface="raw" type="button" aria-pressed="false">Raw</button>
+        </div>
+
+        <p class="inspector-surface-copy" id="inspectorSurfaceCopy">Summary 先看当前任务、Provider 健康与路由结果。</p>
+
         <div class="inspector-scroll">
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="summary">
+                <div class="section-title">
+                    <span>Operator Summary</span>
+                </div>
+                <div class="operator-summary" id="operatorSummary"></div>
+            </section>
+
+            <section class="inspector-card" data-inspector-surfaces="summary diagnostics">
                 <div class="section-title">
                     <span>Agent Inventory</span>
                     <button class="link-button" id="refreshAgentsButton" type="button">刷新</button>
@@ -188,14 +205,14 @@
                 <div class="agent-inventory" id="agentInventory"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="summary diagnostics">
                 <div class="section-title">
                     <span>Provider Detail</span>
                 </div>
                 <div class="agent-detail" id="agentDetail"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="summary diagnostics">
                 <div class="section-title">
                     <span>Runtime Health</span>
                     <button class="link-button" id="refreshRuntimeButton" type="button">刷新</button>
@@ -203,7 +220,7 @@
                 <div class="runtime-health" id="runtimeHealth"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>Run Search</span>
                     <button class="link-button" id="refreshRunSearchButton" type="button">刷新</button>
@@ -211,28 +228,28 @@
                 <div class="agent-run-search" id="agentRunSearch"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="summary diagnostics">
                 <div class="section-title">
                     <span>Agent Execution</span>
                 </div>
                 <div class="agent-execution" id="agentExecution"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>Agent Run Detail</span>
                 </div>
                 <div class="agent-run-detail" id="agentRunDetail"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>迭代链上下文</span>
                 </div>
                 <div id="chainContext"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>连续性摘要</span>
                 </div>
@@ -240,14 +257,14 @@
                 <div class="chip-group" id="continuityChips"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>Mounted Context</span>
                 </div>
                 <div id="mountedContext"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="summary diagnostics">
                 <div class="section-title">
                     <span>路由与判断</span>
                 </div>
@@ -255,39 +272,39 @@
                 <div class="decision-list" id="decisionList"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>实验对比</span>
                 </div>
                 <div id="experimentSummary"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>最近产物</span>
                 </div>
                 <div class="artifact-list" id="artifactList"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>Agent Actions</span>
                 </div>
                 <div class="artifact-list" id="agentActionList"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="diagnostics">
                 <div class="section-title">
                     <span>工具轨迹</span>
                 </div>
                 <div class="tool-list" id="toolList"></div>
             </section>
 
-            <section class="inspector-card">
+            <section class="inspector-card" data-inspector-surfaces="raw">
                 <div class="section-title">
                     <span>原始 JSON</span>
                 </div>
-                <details class="raw-box">
+                <details class="raw-box" id="rawJsonDetails">
                     <summary>展开 live_flow</summary>
                     <pre id="rawJson"></pre>
                 </details>

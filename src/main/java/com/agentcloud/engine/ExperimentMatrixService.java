@@ -610,6 +610,14 @@ public class ExperimentMatrixService {
                     && hasStrongEvaluatorEvidence(metadata))
                 .count();
             Map<String, Integer> evaluatorModelTierCounts = countMetadataValues(runsByMode, "evaluator_model_tier");
+            // O03 acceptance gate: 让 matrix summary 不只统计 created run，还能按 acceptance gate / artifact quality gate / cost gate 分别聚合，并保留可读失败原因。
+            Map<String, Integer> acceptanceGateResultCounts = countMetadataValues(runsByMode, "acceptance_gate_result");
+            Map<String, Integer> artifactQualityGateStatusCounts = countMetadataValues(runsByMode, "artifact_quality_gate_status");
+            Map<String, Integer> costGateStatusCounts = countMetadataValues(runsByMode, "cost_gate_status");
+            int runsWithFailureReason = (int) runsByMode.stream()
+                .filter(run -> run.failureReason() != null && !run.failureReason().isBlank())
+                .count();
+            Map<String, Integer> failureReasonCounts = countRunStringValues(runsByMode, ExperimentRunRecord::failureReason);
             modeSummaries.add(new ExperimentMatrixSummary.ModeSummary(
                 mode,
                 runCount,
@@ -701,7 +709,12 @@ public class ExperimentMatrixService {
                 averageToolChainStepCount,
                 maxToolChainStepCount,
                 toolExecutionModeCounts,
-                toolChainTerminationReasonCounts
+                toolChainTerminationReasonCounts,
+                acceptanceGateResultCounts,
+                artifactQualityGateStatusCounts,
+                costGateStatusCounts,
+                runsWithFailureReason,
+                failureReasonCounts
             ));
         }
 
@@ -861,11 +874,21 @@ public class ExperimentMatrixService {
             recoveryPolicy,
             Map.of(
                 "task_pack", "baseline_matrix_v1",
-                "length_bucket", lengthBucket
+                "length_bucket", lengthBucket,
+                "baseline_cost_threshold_units", baselineCostThresholdUnits(lengthBucket),
+                "cost_gate_basis", "heuristic_worker_round_threshold_v1"
             )
         );
     }
 
+    private static double baselineCostThresholdUnits(String lengthBucket) {
+        return switch (lengthBucket) {
+            case "short" -> 1.0;
+            case "medium" -> 2.0;
+            case "long" -> 4.0;
+            default -> 1.0;
+        };
+    }
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -928,6 +951,29 @@ public class ExperimentMatrixService {
         return null;
     }
 
+    private Map<String, Integer> countRunStringValues(List<ExperimentRunRecord> runs,
+                                                     java.util.function.Function<ExperimentRunRecord, String> extractor) {
+        if (runs == null || runs.isEmpty() || extractor == null) {
+            return Map.of();
+        }
+        return runs.stream()
+            .map(extractor)
+            .filter(value -> value != null && !value.isBlank())
+            .collect(Collectors.groupingBy(
+                value -> value,
+                LinkedHashMap::new,
+                Collectors.summingInt(value -> 1)
+            ))
+            .entrySet()
+            .stream()
+            .sorted(Map.Entry.comparingByKey(Comparator.naturalOrder()))
+            .collect(Collectors.toMap(
+                Map.Entry::getKey,
+                Map.Entry::getValue,
+                (left, right) -> left,
+                LinkedHashMap::new
+            ));
+    }
     private Map<String, Integer> countMetadataValues(List<ExperimentRunRecord> runs, String key) {
         if (runs == null || runs.isEmpty() || key == null || key.isBlank()) {
             return Map.of();

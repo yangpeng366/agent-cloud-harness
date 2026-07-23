@@ -491,6 +491,33 @@ public class RuntimeFactSetAssembler {
                 metadataString(latestWorkerMetadata, "fallback_reason"),
                 routerPreview != null ? routerPreview.fallbackReason() : null
             );
+        String selectedProviderProfile = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.selectedProviderProfile() : null,
+                metadataString(latestWorkerMetadata, "selected_provider_profile")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "selected_provider_profile"),
+                routerPreview != null ? routerPreview.selectedProviderProfile() : null
+            );
+        String preferredProviderProfile = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.preferredProviderProfile() : null,
+                metadataString(latestWorkerMetadata, "preferred_provider_profile")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "preferred_provider_profile"),
+                routerPreview != null ? routerPreview.preferredProviderProfile() : null
+            );
+        String workflowStage = currentRouteWins
+            ? firstNonBlank(
+                routerPreview != null ? routerPreview.workflowStage() : null,
+                metadataString(latestWorkerMetadata, "workflow_stage")
+            )
+            : firstNonBlank(
+                metadataString(latestWorkerMetadata, "workflow_stage"),
+                routerPreview != null ? routerPreview.workflowStage() : null
+            );
         List<String> candidateWorkers = currentRouteWins
             ? (routerPreview != null && routerPreview.candidateWorkers() != null ? routerPreview.candidateWorkers() : List.of())
             : metadataStringList(latestWorkerMetadata, "candidate_workers");
@@ -541,10 +568,20 @@ public class RuntimeFactSetAssembler {
                     null,
                     null,
                     null,
-                    null,
-                    null,
-                    dispatchSkippedWorkers
-                );
+                    routerPreview != null && routerPreview.freeFirstRouting(),
+                    routerPreview != null ? routerPreview.freeCandidateWorkers() : List.of(),
+                    routerPreview != null ? routerPreview.paidCandidateWorkers() : List.of(),
+                    routerPreview != null ? routerPreview.costRouteStage() : null,
+                     routerPreview != null && routerPreview.manualWindowRequired(),
+                     routerPreview != null ? routerPreview.recommendedManualProvider() : null,
+                     routerPreview != null ? routerPreview.manualWindowCandidates() : List.of(),
+                     selectedProviderProfile,
+                     preferredProviderProfile,
+                     workflowStage,
+                     null,
+                     null,
+                     dispatchSkippedWorkers
+                 );
             }
             return routerPreview;
         }
@@ -568,10 +605,20 @@ public class RuntimeFactSetAssembler {
             null,
             null,
             null,
-            null,
-            null,
-            dispatchSkippedWorkers
-        );
+            routerPreview != null && routerPreview.freeFirstRouting(),
+            routerPreview != null ? routerPreview.freeCandidateWorkers() : List.of(),
+            routerPreview != null ? routerPreview.paidCandidateWorkers() : List.of(),
+            routerPreview != null ? routerPreview.costRouteStage() : null,
+             routerPreview != null && routerPreview.manualWindowRequired(),
+             routerPreview != null ? routerPreview.recommendedManualProvider() : null,
+             routerPreview != null ? routerPreview.manualWindowCandidates() : List.of(),
+             selectedProviderProfile,
+             preferredProviderProfile,
+             workflowStage,
+             null,
+             null,
+             dispatchSkippedWorkers
+         );
     }
 
     private RuntimeFactSet.ExecutionBoundary buildExecutionBoundary(Map<String, Object> latestWorkerMetadata,

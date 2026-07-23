@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * 本地 CLI provider 的共享配置解析，避免探测和执行链路使用不同配置来源。
@@ -23,8 +25,14 @@ public final class LocalCliProviderConfig {
     private final String defaultBinary;
     private final String pathEnvVar;
     private final String modelEnvVar;
+    private final String modelProviderEnvVar;
+    private final String profileEnvVar;
+    private final String configJsonEnvVar;
     private final String pathProperty;
     private final String modelProperty;
+    private final String modelProviderProperty;
+    private final String profileProperty;
+    private final String configJsonProperty;
 
     public LocalCliProviderConfig(String providerId,
                                   String defaultBinary,
@@ -34,8 +42,35 @@ public final class LocalCliProviderConfig {
         this.defaultBinary = defaultBinary == null || defaultBinary.isBlank() ? this.providerId : defaultBinary;
         this.pathEnvVar = blankToNull(pathEnvVar);
         this.modelEnvVar = blankToNull(modelEnvVar);
+        this.modelProviderEnvVar = null;
+        this.profileEnvVar = null;
+        this.configJsonEnvVar = null;
         this.pathProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".path";
         this.modelProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".model";
+        this.modelProviderProperty = null;
+        this.profileProperty = null;
+        this.configJsonProperty = null;
+    }
+
+    public LocalCliProviderConfig(String providerId,
+                                  String defaultBinary,
+                                  String pathEnvVar,
+                                  String modelEnvVar,
+                                  String modelProviderEnvVar,
+                                  String profileEnvVar,
+                                  String configJsonEnvVar) {
+        this.providerId = providerId == null ? "" : providerId;
+        this.defaultBinary = defaultBinary == null || defaultBinary.isBlank() ? this.providerId : defaultBinary;
+        this.pathEnvVar = blankToNull(pathEnvVar);
+        this.modelEnvVar = blankToNull(modelEnvVar);
+        this.modelProviderEnvVar = blankToNull(modelProviderEnvVar);
+        this.profileEnvVar = blankToNull(profileEnvVar);
+        this.configJsonEnvVar = blankToNull(configJsonEnvVar);
+        this.pathProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".path";
+        this.modelProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".model";
+        this.modelProviderProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".model_provider";
+        this.profileProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".profile";
+        this.configJsonProperty = this.providerId.isBlank() ? null : "agentcloud.providers." + this.providerId + ".config_json";
     }
 
     public ResolvedConfig resolve() {
@@ -51,6 +86,40 @@ public final class LocalCliProviderConfig {
             binary,
             model
         );
+    }
+
+    /**
+     * 解析 provider 级默认 profile 配置（model_provider / profile / config_json）。
+     */
+    public ProviderDefaultProfile resolveDefaultProfile() {
+        ConfigValue modelProvider = resolveConfig(modelProviderProperty, modelProviderEnvVar, null);
+        ConfigValue profile = resolveConfig(profileProperty, profileEnvVar, null);
+        ConfigValue configJson = resolveConfig(configJsonProperty, configJsonEnvVar, null);
+        return new ProviderDefaultProfile(
+            modelProvider != null ? modelProvider.value() : "",
+            "",
+            profile != null ? profile.value() : "",
+            parseConfigOverrides(configJson != null ? configJson.value() : null)
+        );
+    }
+
+    private static Map<String, String> parseConfigOverrides(String configJson) {
+        if (configJson == null || configJson.isBlank()) {
+            return Map.of();
+        }
+        try {
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode node = mapper.readTree(configJson);
+            LinkedHashMap<String, String> overrides = new LinkedHashMap<>();
+            if (node.isObject()) {
+                node.fields().forEachRemaining(entry -> {
+                    overrides.put(entry.getKey(), entry.getValue().asText(""));
+                });
+            }
+            return Map.copyOf(overrides);
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 
     private ConfigValue resolveConfig(String propertyKey, String envKey, String fallbackValue) {

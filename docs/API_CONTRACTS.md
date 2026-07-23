@@ -20,6 +20,180 @@
 - 但尚未显式暴露统一的 `WorkerExecutionEnvelope`、`RuntimeFactSet`、`ContinuationAction` 作为一等 API 对象
 
 也就是说：**观测能力已经存在，但 contract 仍主要散落在多个 view / trace 接口中。**
+### Runtime Judgment / Goal Contract (P1/P2 最小合同)
+
+当前 `RuntimeJudgmentService` 已把 `ContinuationAction` 作为最小 runtime decision 对象使用。它不是 HTTP 独立资源，但会影响 control action、judgment trace 与后续 loop 决策口径。
+
+Task 级 goal 合同当前落在 `Task.goal` 与 `Task.metadata`：
+
+| 字段 | 位置 | 类型 | 说明 |
+|------|------|------|------|
+| `goal` | `Task.goal` | string | 用户原始目标或当前任务目标 |
+| `subgoals` | `Task.metadata.subgoals` | string[] / object[] | 拆解后的子目标列表，当前作为展示与后续扩展字段 |
+| `subgoal_status` | `Task.metadata.subgoal_status` | string[] / object[] / object | 最小可判定进度；支持 `pending / in_progress / done / blocked` |
+| `acceptance_criteria` | `Task.metadata.acceptance_criteria` | string[] / object[] | 验收口径；baseline matrix 会写入 `baseline_acceptance_criteria` |
+| `progress_summary` | `Task.metadata.progress_summary` | string | 当前完成度摘要，供 UI / packet / judgment trace 展示 |
+
+`TaskService.createTask(...)` 当前会先执行 `ProviderTaskContractNormalizer.normalize(...)`，再执行 `ProviderTaskContractNormalizer.initializeGoalContract(...)`，把最小 goal contract 固化在任务创建入口，而不是依赖后续 worker 或人工回填。初始化规则如下：
+
+- `effectiveGoal = firstNonBlank(req.goal(), req.intent())`
+- 若 `metadata.goal` 为空且 `effectiveGoal` 非空，则补 `metadata.goal`
+- 若 `metadata.subgoals` 缺失，则默认写成 `[goal]`
+- 若 `metadata.subgoal_status` 缺失，则按每个 subgoal 生成 `{ title, status: pending }`
+- 若 `metadata.progress_summary` 缺失，则根据当前 `subgoal_status` 生成摘要，例如 `0/1 subgoals done`
+- 显式提供的 `subgoals / subgoal_status / progress_summary / acceptance_criteria` 保持原值，不被默认逻辑覆盖
+`subgoal_status` 驱动的最小 `ContinuationAction` 规则：
+
+| 条件 | action | 说明 |
+|------|------|------|
+| task 为 `null` | `halt` | 任务缺失，不继续推进 |
+| task status 为 `paused` | `pause` | 保持暂停 |
+| task status 为 `waiting_human` | `escalate` | 维持 human gate 语义 |
+| `metadata.auto_halt=true` | `halt` | 显式停止信号优先 |
+| `metadata.pause_requested=true` | `pause` | 显式暂停信号优先 |
+| `metadata.requires_human_confirmation=true` | `escalate` | 显式人工确认优先 |
+| `subgoal_status` 任一项为 `blocked / waiting_human / human_gate` | `escalate` | 进入 human gate，不继续自动推进 |
+| `subgoal_status` 全部为 `done / complete / completed / accepted` | `halt` | goal 已达成，可进入收口 |
+| `subgoal_status` 仍有 `pending / in_progress` | `continue` | 继续 loop |
+| 无 goal 进度但 `target_worker` 与当前 worker 不同 | `handoff` | 跨 worker 交接 |
+| 无任何特殊信号 | `continue` | 默认继续 |
+
+`ContinuationDecision.metadata` 当前会写入 `subgoal_total / subgoal_done_count / subgoal_blocked_count`，用于后续 UI 状态判断与 judgment trace 展示。注意：`escalate` 在控制图/页面语义上对应 `waiting_human / human_gate`，不是任务失败。
+
+### Advisory Handoff 合同 (P2)
+
+当 
+esolveAction 输出 `escalate 且当前 worker 为 small tier 时，控制图优先尝试 advisory handoff 而非直接进入 human_gate：
+
+| 条件 | 动作 | 说明 |
+|------|------|------|
+| `escalate + 当前 worker model_tier=small + 存在 ready strong-tier worker | advisory handoff | handoff 给 strong-tier advisory worker，metadata.handoff_reason=advisory_consult |
+| `escalate + 当前 worker model_tier=small + 无 ready strong-tier worker | human_gate | 保持现有行为，写入 waitingReason |
+| `escalate + 当前 worker model_tier=strong | human_gate | strong-tier 已是最高可用，无需再升级 |
+
+Advisory handoff 产生的 HandoffPacket：
+- why_handoff = advisory_consult
+- metadata.handoff_reason = advisory_consult
+- metadata.advisory_source_worker = <当前 small-tier worker>
+- metadata.advisory_target_worker = <strong-tier worker>
+- metadata.advisory_trigger = escalate_from_small_tier
+
+Advisory handoff 完成后（strong-tier worker 执行一轮），控制图自动 resume 原任务路径；不需要人工介入。如果 advisory round 也判断 `escalate，则进入 human_gate。
+
+### Loop Continue 不变量
+
+POST /api/v1/tasks/{id}/continue 的 HTTP 层超时或 controlGraph.enter() 异常不会污染 task 级状态：
+
+| 条件 | task 级行为 | 说明 |
+|------|------------|------|
+| controlGraph.enter() 抛出 RuntimeException | task 保持 `active，不变成 `failed | HTTP 层返回 500，但 task 状态不变 |
+| worker 执行超时 | task 保持 `active，recovery 路径处理 | 不直接标记 `failed |
+| HTTP 连接超时断开 | task 保持 `active | 服务端不知道客户端已断开，task 状态由服务端控制 |
+
+回归保护：LoopContinueTimeoutInvariantTest 3 个场景（异常不标 failed、状态不变、不写 failed event）。
+
+### Worker Execution 超时保护
+
+`schedulerNode` 中的 `executeOneRoundWithTimeout` 使用 `CompletableFuture` + `get(timeout)` 给 worker 执行设置超时保护：
+
+| 条件 | 行为 | 说明 |
+|------|------|------|
+| worker 执行在 120s 内完成 | 正常返回结果 | 进入 judgment/decide 路径 |
+| worker 执行超过 120s | 抛出 RuntimeException | 被 catch 块捕获，进入 failure recovery 路径 |
+| worker 抛出 RuntimeException | 包装为 ExecutionException -> 解包重新抛出 | 不丢失原始异常 |
+| worker 执行被中断 | 设置中断标志并抛出 RuntimeException | 进入 failure recovery |
+
+这防止单个 worker（如 codex app-server）hang 时控制图线程被无限阻塞。
+
+回归保护：WorkerExecutionTimeoutTest 3 个场景。
+
+### Loop 验收 #1: plan -> execute -> judge -> decide 四段证据
+
+一条完整的 continue 链在 decisions 表中至少留下以下证据：
+
+| 阶段 | evidence 位置 | 类型 |
+|------|--------------|------|
+| plan | `artifacts + decisions | orchestration_stage=plan_pending，selection_scope=planner |
+| execute | `artifacts + session_messages | orchestration_stage=execution_pending，worker_round message |
+| judge | decisions | `execution_judgment + completion_judgment 两条 Decision |
+| decide | `task.status / controlNode | 
+esolveAction 输出决定 task 状态迁移方向 |
+
+回归保护：ControlNodeGraphOrchestrationFlowTest.orchestratedTaskRunsPlannerThenExecutorInSingleEnter() 验证 4 条 decisions 含 `execution_judgment + completion_judgment，2 条 artifacts 含 plan_pending + `execution_pending，2 条 worker_round messages。
+
+### UI 验收 #2: waiting_human 显示人工动作入口
+
+当 task 状态为 waiting_human 或 control node 为 human_gate 时，页面展示人工动作入口，而不是只显示一个错误：
+
+| failure_class | recovery_stage | 页面展示 |
+|---------------|---------------|---------|
+| 环境阻塞 | 等待人工确认 | "先修环境后继续" |
+| 部分结果待确认 | 等待人工确认 | "先复核已有结果" |
+| 其他 | 等待人工确认 | 仅显示"等待人工确认"（无额外动作提示） |
+| 任意 | 非 等待人工确认 | 不显示动作提示 |
+
+回归保护：dialogue-recovery-action-hint-plan.test.mjs 5 个场景。
+
+控制图层现在也会在 `continueNode` 的 `resolveAction` 阶段消费同一个 `subgoal_status`。当 `subgoal_status` 存在时，goal progress 判断优先于单轮 execution result 判断（验收标准 #2）：
+
+| 条件 | resolveAction 输出 | 说明 |
+|------|-------------------|------|
+| subgoal_status 有 blocked | `human_gate` | 无论 execution 说 done/continue/checkpoint |
+| subgoal_status 全部 done | `done` | 无论 execution 说什么 |
+| subgoal_status 有 open + execution done | `checkpoint` | 保存进度但不标记完成 |
+| subgoal_status 有 open + execution continue | `continue` | 继续走原逻辑 |
+| 无 subgoal_status | 保持原有行为 | 不改变已有逻辑 |
+
+回归保护：ControlNodeGraphDecideGoalProgressPriorityTest 10 个场景。
+
+### Task 终态 partial 合同
+
+`finalizeCompletedTask` 在 task 到达终态时检查 `subgoal_status`：
+
+| 条件 | task.status | 说明 |
+|------|------------|------|
+| subgoal_status 全部 done | `done` | 全部达成 |
+| subgoal_status 部分完成（有 done 但不是全部） | `partial` | 部分达成 |
+| 无 subgoal_status 或为空 | `done` | 不检查 goal 进度时默认 done |
+
+`partial` 状态的 UI 展示：`toneForStatus` / `toneForPinnedTaskOutcome` / `toneForConsoleTaskStatus` 均映射为 `partial`（独立于 done/failed/active）。
+
+回归保护：TaskPartialStatusTest 6 个场景。
+
+### Goal Progress Auto-Update 合同
+
+`continueNode` 在 `enrichTaskFromJudgment` 后自动调用 `autoUpdateSubgoalStatus(task, executionResult)`：
+
+| worker executionStatus | 当前 in_progress/pending subgoal 迁移 | 说明 |
+|------------------------|--------------------------------------|------|
+| `completed` | -> `done` | 成功完成时推进 subgoal |
+| `failed` | -> `blocked` | 失败时标记 subgoal 被阻塞 |
+| 其他 | 不更新 | running/unknown 不触发迁移 |
+
+迁移后自动更新 `metadata.progress_summary` 为 `{done_count}/{total} subgoals done`。
+
+回归保护：GoalProgressAutoUpdateTest 7 个场景。
+
+### Loop Activity 合同
+
+每次 `continueNode` 完成后写入 `task.metadata.last_loop_tick`（ISO 8601 timestamp）。前端基于 `last_loop_tick` 与当前时间差值判断 loop 活跃度：
+
+| 差值 | activity | UI 展示 |
+|------|----------|---------|
+| <= 10s | `active` | "loop 正在执行" |
+| <= 30s | `stall` | "loop 可能卡住，请检查" |
+| > 30s | `stale` | "loop 已停止运转" |
+| 无 tick | `unknown` | 无判断依据 |
+
+`waiting_human` / `human_gate` 状态优先于 loop activity 展示为 "paused"。
+
+回归保护：dialogue-loop-activity-detector-plan.test.mjs 16 个场景。
+
+### UI 验收 #2 扩展: goal_progress_blocked 场景
+
+当 `waiting_reason` 包含 "subgoal blocked" 时，`recoveryActionHint` 返回 "子目标被阻塞，请解除阻塞或调整子目标"，优先于 failure_class 匹配。
+
+回归保护：dialogue-recovery-action-hint-plan.test.mjs 新增 4 个场景。
 
 ### 1.1 SessionHandler
 
@@ -376,11 +550,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `execution.partial_output_chars / execution.partial_timeout_min_output_chars`
 - `execution.provider_run_dir / execution.provider_*_path`
 
+另外，`live_flow.runtime_cognition_surface` 当前还会在最近一次控制动作命中过兼容 `GET` 写路径时，补一段只读审计摘要 `legacy_control_audit`：
+
+- `legacy_control_route_observed`
+- `request_method`
+- `request_path`
+- `replacement_method`
+- `latest_action`
+- `observed_at`
+- `summary`
+
+这段摘要当前只在 `GET /api/v1/tasks/{id}/live_flow` 的 `runtime_cognition_surface` 中上浮，不会额外扩散成独立写接口。其数据源是最近一条带 `legacy_control_route=true` 的 `task_control_action` event，目的不是替代原始 event/message metadata，而是让 operator 能直接看出“这个任务最近是否仍被旧 `GET /pause|resume|continue|escalate` 调用过，以及调用方应迁到 `POST`”。
+
 它的目的不是替代 `judgment_trace.runtime_facts`，而是把 shared runtime cognition seam 在单任务观测面里做成可直接阅读的 timeline，便于定位 route、execution、execution judgment、completion judgment 之间的认知漂移。
 
 `GET /api/v1/tasks/{id}/experiment_summary` 会先根据该任务最新 `experiment_run.experiment_name` 自动定位实验，再返回：
 
-- `mode_summaries`：`strong_only / small_only / orchestrated` 三种模式的完成率、接受率、route source 分布、learning hint 应用率、tool chain 指标
+- `mode_summaries`：`strong_only / small_only / orchestrated` 三种模式的完成率、接受率、route source 分布、learning hint 应用率、tool chain 指标，以及 `acceptance_gate_result_counts / artifact_quality_gate_status_counts / cost_gate_status_counts / runs_with_failure_reason / failure_reason_counts` 这组 O03 gate 汇总字段
 - `case_comparisons`：按 `task_case_key` 收口的并排对比，便于在 console 中直接看当前 case 三种模式的差异
 
 如果任务不属于任何 experiment batch，该接口当前返回 `404 not found`。
@@ -777,14 +963,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - `baseline_acceptance_criteria`
 - `baseline_expected_artifacts`
 - `baseline_recovery_policy`
+- `baseline_cost_threshold_units`
+- `cost_gate_basis`
 
-`ExperimentMatrixSummary.mode_summaries[*]` 现在额外聚合以下 tool 观测字段：
+`ExperimentMatrixSummary.mode_summaries[*]` 现在额外聚合以下 tool 与 acceptance gate 观测字段：
 
 - `runs_with_tool_chain_data`
 - `average_tool_chain_step_count`
 - `max_tool_chain_step_count`
 - `tool_execution_mode_counts`
 - `tool_chain_termination_reason_counts`
+- `acceptance_gate_result_counts`
+- `artifact_quality_gate_status_counts`
+- `cost_gate_status_counts`
+- `runs_with_failure_reason`
+- `failure_reason_counts`
+
+其中 O03 gate 字段的口径当前固定为：
+
+- `acceptance_gate_result_counts`：按 `accepted / rejected / needs_followup / not_evaluated` 聚合 run
+- `artifact_quality_gate_status_counts`：按 `passed / failed / needs_followup / not_evaluated` 聚合 artifact quality gate
+- `cost_gate_status_counts`：按 `within_threshold / over_threshold / not_configured` 聚合成本 gate
+- `runs_with_failure_reason / failure_reason_counts`：保留“多少 run 带失败原因”以及可读失败原因分布
 
 同一结构也会暴露 strong-to-small orchestration 的最小闭环证据，用于判断
 `orchestrated` 是否真的形成“强规划 / 小执行 / 强验收”路径，而不只是普通单 worker 执行：

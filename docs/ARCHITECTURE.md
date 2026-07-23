@@ -357,6 +357,13 @@ create task
 - worker round 可和 tool trace 关联
 - 后续 experiment/live flow/harness evolution 才有稳定证据面
 
+从当前代码与历史落地记录对照看，这条线已经有几个可以当成现状的稳定判断：
+
+- `WorkerExecutionResult` 仍是当前单轮执行结果的最近邻对象，不需要推翻重做。
+- 单轮执行边界信息已经通过 metadata 形式显式投影，核心字段包括 `execution_id`、执行时间边界、`execution_status` 与 `tool_invocation_ids`。
+- `ToolInvocationRecord` 已经不是 blueprint，而是现有可持久化 trace contract；后续重点是增强字段和消费面，而不是重新发明同义对象。
+- 更准确的后续方向是“继续把 result / tool trace / runtime facts 收紧成统一 contract chain”，而不是再回到只有自由文本输出的执行面。
+
 ### 6.5 Judgment
 
 `PromptBasedJudgmentService` 当前承担两类判断：

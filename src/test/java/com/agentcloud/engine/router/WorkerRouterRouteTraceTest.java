@@ -182,9 +182,14 @@ class WorkerRouterRouteTraceTest {
         assertTrue(route.fallbackReason().contains("dispatch readiness skipped worker(s): codex skipped"));
         assertTrue(route.fallbackReason().contains("thread not found during dispatch preflight"));
         assertTrue(route.fallbackReason().contains("no dispatch-ready worker matched preferred model tier=strong"));
-        assertEquals(1, route.dispatchSkippedWorkers().size());
-        WorkerRouter.RouteSkippedWorker skipped = route.dispatchSkippedWorkers().get(0);
-        assertEquals("codex", skipped.workerId());
+        // codex profile workers (codex-openai, codex-xfyun, codex-deepseek) also share
+        // providerId=codex, so they are also skipped when codex dispatch preflight fails
+        assertTrue(route.dispatchSkippedWorkers().size() >= 1, "at least codex should be skipped");
+        WorkerRouter.RouteSkippedWorker skipped = route.dispatchSkippedWorkers().stream()
+            .filter(s -> "codex".equals(s.workerId()))
+            .findFirst()
+            .orElse(null);
+        assertNotNull(skipped, "codex should be in skipped workers");
         assertEquals("provider_runtime_transient", skipped.providerFailureClass());
         assertEquals("thread not found during dispatch preflight", skipped.providerFailureReason());
         assertEquals(Boolean.TRUE, skipped.providerRetryable());
@@ -356,19 +361,25 @@ class WorkerRouterRouteTraceTest {
     @Test
     void localWorkspaceCodingTaskCanUseDeepseekWhenLearningHintHasWorkspaceAccess() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("worker-router-local-workspace-hint.db"))) {
-            WorkerRouter router = new WorkerRouter(new WorkerRegistry(), learningMemoryService(db, "routing:coding:deepseek"));
+            String previous = System.getProperty("agentcloud.worker.priority.config.enabled");
+            System.setProperty("agentcloud.worker.priority.config.enabled", "false");
+            try {
+                WorkerRouter router = new WorkerRouter(new WorkerRegistry(), learningMemoryService(db, "routing:coding:deepseek"));
 
-            WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
-                "task_type", "coding",
-                "goal", "按文档计划 D:\\gitAll\\articleeditor\\docs\\XINHUA_CNML_ADAPTER_IMPLEMENTATION_PLAN_2026-05-15.md 修改代码。",
-                "workspace_root", "D:\\gitAll\\articleeditor"
-            )));
+                WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+                    "task_type", "coding",
+                    "goal", "按文档计划 D:\\gitAll\\articleeditor\\docs\\XINHUA_CNML_ADAPTER_IMPLEMENTATION_PLAN_2026-05-15.md 修改代码。",
+                    "workspace_root", "D:\\gitAll\\articleeditor"
+                )));
 
-            assertEquals("deepseek", route.selectedWorker());
-            assertEquals("learning_memory", route.routeSource());
-            assertEquals("deepseek", route.preferredWorkerHint());
-            assertTrue(route.learningHintApplied());
-            assertNull(route.fallbackReason());
+                assertEquals("deepseek", route.selectedWorker());
+                assertEquals("learning_memory", route.routeSource());
+                assertEquals("deepseek", route.preferredWorkerHint());
+                assertTrue(route.learningHintApplied());
+                assertNull(route.fallbackReason());
+            } finally {
+                restoreProperty("agentcloud.worker.priority.config.enabled", previous);
+            }
         }
     }
 
@@ -528,6 +539,61 @@ class WorkerRouterRouteTraceTest {
     }
 
     @Test
+    void codexProfileRoutingCarriesSelectedAndRequestedProfileContext() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "preferred_provider_profile", "codex_openai_strong"
+        )));
+
+        assertEquals("codex-openai", route.selectedWorker());
+        assertEquals("codex_profile_routing", route.routeSource());
+        assertEquals("codex_openai_strong", route.selectedProviderProfile());
+        assertEquals("codex_openai_strong", route.preferredProviderProfile());
+        assertNull(route.workflowStage());
+        assertTrue(route.whySelected().contains("preferred_provider_profile"));
+    }
+
+    @Test
+    void codexProfileRoutingCarriesWorkflowStageContext() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "workflow_stage", "implement"
+        )));
+
+        assertEquals("codex-xfyun", route.selectedWorker());
+        assertEquals("codex_profile_routing", route.routeSource());
+        assertEquals("codex_xfyun_execute", route.selectedProviderProfile());
+        assertNull(route.preferredProviderProfile());
+        assertEquals("implement", route.workflowStage());
+        assertTrue(route.whySelected().contains("workflow_stage=implement"));
+    }
+
+    @Test
+    void pinnedCodexRouteStillCarriesProfileRoutingContext() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        Task pinnedCodexTask = task("coding", Map.of(
+            "task_type", "coding",
+            "preferred_provider_profile", "codex_openai_strong"
+        )).withAssignedWorker("codex");
+
+        WorkerRouter.RouteResult route = router.selectWorker(pinnedCodexTask);
+
+        assertEquals("codex-openai", route.selectedWorker());
+        assertEquals("codex_profile_routing", route.routeSource());
+        assertEquals("codex_openai_strong", route.selectedProviderProfile());
+        assertEquals("codex_openai_strong", route.preferredProviderProfile());
+        assertNull(route.workflowStage());
+    }
+
+    @Test
     void explicitPreferredWorkerFallsBackWithReasonWhenWorkerMissing() {
         WorkerRegistry registry = new WorkerRegistry();
         WorkerRouter router = new WorkerRouter(registry);
@@ -559,31 +625,118 @@ class WorkerRouterRouteTraceTest {
         assertEquals("capability_match", route.routeSource());
     }
 
+    @Test
+    void freeFirstRoutingPrefersDevecoBeforePaidAutoWorkers() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "provider_routing_policy", "free_first"
+        )));
+
+        assertEquals("deveco", route.selectedWorker());
+        assertTrue(route.freeFirstRouting());
+        assertEquals("free_auto", route.costRouteStage());
+        assertTrue(route.freeCandidateWorkers().contains("deveco"));
+        assertTrue(route.paidCandidateWorkers().contains("codex"));
+    }
+
+    @Test
+    void freeFirstRoutingFallsBackToPaidAutoWhenFreeQuotaExhausted() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "provider_routing_policy", "free_first",
+            "user_reported_quota_state", Map.of(
+                "deveco", "quota_exhausted",
+                "codebuddy", "quota_exhausted"
+            )
+        )));
+
+        assertEquals("codex", route.selectedWorker());
+        assertTrue(route.freeFirstRouting());
+        assertEquals("paid_auto", route.costRouteStage());
+        assertTrue(route.fallbackReason().contains("free provider quota exhausted"));
+    }
+
+    @Test
+    void freeFirstRoutingRequiresManualWindowWhenAutoProvidersUnavailableAndPaidFallbackDisabled() {
+        AgentProviderRegistry providers = new AgentProviderRegistry()
+            .register(preflightProvider("codex", true, false, "codex unavailable"))
+            .register(preflightProvider("claude", true, false, "claude unavailable"))
+            .register(preflightProvider("cursor", true, false, "cursor unavailable"))
+            .register(preflightProvider("copilot", true, false, "copilot unavailable"))
+            .register(preflightProvider("opencode", true, false, "opencode unavailable"))
+            .register(preflightProvider("deepseek", true, false, "deepseek unavailable"))
+            .register(preflightProvider("kimi", true, false, "kimi unavailable"))
+            .register(preflightProvider("gemini", true, false, "gemini unavailable"))
+            .register(preflightProvider("reasonix", true, false, "reasonix unavailable"))
+            .register(preflightProvider("codebuddy", true, false, "codebuddy unavailable"))
+            .register(preflightProvider("deveco", true, false, "deveco unavailable"))
+            .register(preflightProvider("trae", true, true, "ready"));
+        WorkerRegistry registry = new WorkerRegistry(providers);
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "provider_routing_policy", "free_first",
+            "paid_fallback_allowed", false,
+            "manual_window_fallback_allowed", true,
+            "manual_window_candidates", List.of("trae", "zcode")
+        )));
+
+        assertNull(route.selectedWorker());
+        assertTrue(route.manualWindowRequired());
+        assertEquals("manual_window_recommendation", route.costRouteStage());
+        assertEquals("trae", route.recommendedManualProvider());
+        assertEquals(List.of("trae", "zcode"), route.manualWindowCandidates());
+        assertFalse(route.candidateWorkers().contains("trae"));
+    }
+
+    @Test
+    void freeFirstRoutingSkipsExhaustedManualWindowCandidates() {
+        AgentProviderRegistry providers = new AgentProviderRegistry()
+            .register(preflightProvider("codex", true, false, "codex unavailable"))
+            .register(preflightProvider("claude", true, false, "claude unavailable"))
+            .register(preflightProvider("cursor", true, false, "cursor unavailable"))
+            .register(preflightProvider("copilot", true, false, "copilot unavailable"))
+            .register(preflightProvider("opencode", true, false, "opencode unavailable"))
+            .register(preflightProvider("deepseek", true, false, "deepseek unavailable"))
+            .register(preflightProvider("kimi", true, false, "kimi unavailable"))
+            .register(preflightProvider("gemini", true, false, "gemini unavailable"))
+            .register(preflightProvider("reasonix", true, false, "reasonix unavailable"))
+            .register(preflightProvider("codebuddy", true, false, "codebuddy unavailable"))
+            .register(preflightProvider("deveco", true, false, "deveco unavailable"))
+            .register(preflightProvider("trae", true, true, "ready"));
+        WorkerRegistry registry = new WorkerRegistry(providers);
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+            "task_type", "coding",
+            "provider_routing_policy", "free_first",
+            "paid_fallback_allowed", false,
+            "manual_window_fallback_allowed", true,
+            "manual_window_candidates", List.of("trae", "zcode"),
+            "user_reported_quota_state", Map.of(
+                "trae", "user_reported_exhausted"
+            )
+        )));
+
+        assertNull(route.selectedWorker());
+        assertTrue(route.manualWindowRequired());
+        assertEquals("zcode", route.recommendedManualProvider());
+        assertEquals(List.of("zcode"), route.manualWindowCandidates());
+    }
+
     private Task task(String taskType) {
-        return task(taskType, Map.of("task_type", taskType));
+        return TestTasks.task(taskType);
     }
 
     private Task task(String taskType, Map<String, Object> metadata) {
-        return new Task(
-            "task_1",
-            "session_1",
-            null,
-            "trace test",
-            "active",
-            "high",
-            Instant.now(),
-            Instant.now(),
-            Instant.now(),
-            null,
-            null,
-            null,
-            "verify route trace",
-            null,
-            null,
-            "intake",
-            null,
-            metadata
-        );
+        return TestTasks.task(taskType, metadata);
     }
 
     private LearningMemoryService learningMemoryService(DatabaseManager db, String hintKey) {
@@ -628,6 +781,14 @@ class WorkerRouterRouteTraceTest {
             Map.of("category", "routing_preference")
         ));
         return new LearningMemoryService(learningMemoryDao);
+    }
+
+    private void restoreProperty(String key, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, previousValue);
+        }
     }
 
     private void assertToolPresence(Worker worker, String toolCapability) {

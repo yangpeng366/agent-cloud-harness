@@ -153,6 +153,14 @@ curl http://localhost:8080/api/v1/health
 
 `llm.available=true` 表示启动进程已读取到非空 `OPENAI_API_KEY`；响应只返回 `api_key_configured` 布尔值，不回显密钥内容。
 
+如果你更想用一个本地 OpenAI-compatible 网关承接自动回退和免费/低价组合，而不是直连单一上游，可以直接用仓库脚本：
+
+```powershell
+.\scripts\Run-HarnessWithOmniRoute.ps1 -Port 8081
+```
+
+该脚本会默认把 Harness 指到 `http://localhost:20128/v1`，使用 `OPENAI_MODEL=auto/coding`、`OPENAI_REVIEW_MODEL=auto`，并在本机 `omniroute` 未启动时自动拉起本地网关。它默认还会要求 `/v1/models` 返回非空列表，避免“网关已起来，但 Dashboard 里还没配任何上游模型/Combo”的假绿状态。
+
 ## ⚙️ 可选：配置本地 Agent Provider
 
 启动时会轻量读取 `providers.yaml` / `providers.yml` / `providers.json`，用于给本地 provider 覆盖或补充 CLI protocol 执行计划：
@@ -187,6 +195,7 @@ Provider 输出和 Codex app-server 运行文件默认写入 `.tmp/provider-runs
 agent-cloud-harness/
 ├── src/main/java/com/agentcloud/
 │   ├── cli/           # 启动入口 Main.java
+│   ├── agent/         # Provider discovery / registry / runtime support
 │   ├── server/        # HTTP Handler（Task/Session/Worker/Skill/Checkpoint/Experiment/LearningMemory/WebConsole）
 │   ├── engine/        # 业务核心（TaskService/SessionService/ControlNodeGraph/ConsolidationService/Experiment）
 │   ├── engine/router/ # Worker 注册与路由
@@ -209,25 +218,45 @@ agent-cloud-harness/
 
 ---
 
-## 📖 关键文档
+## 📚 文档导航
 
-| 文档 | 说明 |
-|------|------|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | 系统架构、模块依赖、数据流 |
-| [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md) | HTTP API 契约、数据库设计、字段语义 |
-| [`docs/SPEC.md`](docs/SPEC.md) | 功能规格、状态机、核心算法说明 |
-| [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md) | 已知坑点、常见错误排查、断点建议 |
-| [`AGENTS.md`](AGENTS.md) | 面向 AI Coding Agent 的开发指南（代码风格、陷阱、回归保护） |
-| [`docs/PHASE2_ROADMAP.md`](docs/PHASE2_ROADMAP.md) | Phase 2 路线图 |
-| [`docs/NEXT_5_ENGINEERING_PRIORITIES.md`](docs/NEXT_5_ENGINEERING_PRIORITIES.md) | 接下来 5 项工程优先级 |
-| [`docs/GITHUB_RELEASE_CHECKLIST.md`](docs/GITHUB_RELEASE_CHECKLIST.md) | GitHub 首发前检查清单 |
-| [`docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md`](docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md) | 当前首发建议范围与公开边界 |
-| [`docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md`](docs/GITHUB_FIRST_RELEASE_NEXT_ACTIONS.md) | 当前最值得执行的首发后续动作 |
-| [`docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_STAGE_FILE_LIST_2026-05-11.md) | 当前三段首发提交的真实 staged file list |
-| [`docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_COMMIT_SEQUENCE_2026-05-11.md) | 三段首发提交的建议 commit subject/body 与每步验证点 |
-| [`docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md`](docs/GITHUB_FIRST_RELEASE_STAGED_SLICE_READY_2026-05-11.md) | 当前 worktree 的可执行 staged slice 清单 |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 贡献约定与提交流程 |
-| [`SECURITY.md`](SECURITY.md) | 当前安全边界与漏洞反馈说明 |
+先按你当前要做的事选入口，不要一上来就在 `docs/` 根目录长名单里找：
+
+| 现在要做什么 | 先看哪里 | 说明 |
+|------|------|------|
+| 只想构建、启动、换端口、换数据库路径 | [`STARTUP_GUIDE.md`](STARTUP_GUIDE.md) | 只看运行命令和启动排障，不必先读架构文档 |
+| 继续开发、排查问题、整理文档 | [`docs/README.md`](docs/README.md) | 先按主题分流，再进入具体 plan / runbook / record |
+| 做文档结构治理、索引审计、命名合同整理 | [`docs/meta/README.md`](docs/meta/README.md) | 先看治理专题入口，再下钻 `DOCS_GOVERNANCE.md` 与活跃进度 |
+| AI Agent 接手任务 | [`WAKE.md`](WAKE.md) → [`AGENTS.md`](AGENTS.md) | 先建立上下文，再进入 `docs/README.md` |
+| 看最近进展和固定规则 | [`STATE.md`](STATE.md)、[`DECISIONS.md`](DECISIONS.md) | 一个看短进度，一个看稳定取舍 |
+
+根目录文档职责固定如下：
+
+- `README.md`：对外概览、能力说明、快速开始。
+- `STARTUP_GUIDE.md`：构建、启动、运行验证、启动期排障。
+- `docs/README.md`：开发/排查/文档整理总索引，负责按主题分流。
+- `docs/meta/README.md` + `docs/DOCS_GOVERNANCE.md`：文档治理、结构审计、命名合同、专题工作区规则。
+- `WAKE.md`、`AGENTS.md`：Agent 开工入口与协作规则。
+- `STATE.md`、`DECISIONS.md`：跨主题进度摘要与稳定设计决策。
+
+如果已经确定任务主题，再读对应专题入口：
+
+- 文档治理 / 结构审计：[`docs/meta/README.md`](docs/meta/README.md)
+- 控制面主链 / continuity：[`docs/continuity/README.md`](docs/continuity/README.md)
+- Provider / Worker / Recovery：[`docs/provider/README.md`](docs/provider/README.md)
+- Dialogue / Console / Facade：[`docs/dialogue/README.md`](docs/dialogue/README.md)
+- Evaluation / Priorities / Multi-round：[`docs/evaluation/README.md`](docs/evaluation/README.md)
+- Release / GitHub：[`docs/release/README.md`](docs/release/README.md)
+
+要看稳定事实和长期边界，再回到这些基线文档：
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/API_CONTRACTS.md`](docs/API_CONTRACTS.md)
+- [`docs/SPEC.md`](docs/SPEC.md)
+- [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md)
+- [`docs/WEB_CONSOLE.md`](docs/WEB_CONSOLE.md)
+
+贡献与安全说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`SECURITY.md`](SECURITY.md)。
 
 ---
 

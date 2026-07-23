@@ -105,8 +105,9 @@ class TaskHandler implements HttpHandler {
                     var route = svc.selectWorker(id);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(route));
                 } else if (path.endsWith("/provider_selection")) {
+                    Task task = svc.getTask(id);
                     var route = svc.selectWorker(id);
-                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(providerSelectionView(route)));
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(providerSelectionView(route, task)));
                 } else if (path.endsWith("/agent_run")) {
                     var run = svc.getLatestAgentRun(id);
                     if (run == null) {
@@ -470,15 +471,19 @@ class TaskHandler implements HttpHandler {
         return value == null ? null : value.toString();
     }
 
-    private ProviderSelectionView providerSelectionView(WorkerRouter.RouteResult route) {
+    private ProviderSelectionView providerSelectionView(WorkerRouter.RouteResult route, Task task) {
         String selectedProvider = providerIdForWorker(route.selectedWorker(), route.selectedWorkerType());
         AgentProvider provider = provider(selectedProvider);
         AgentProviderDescriptor descriptor = provider != null ? provider.descriptor() : null;
         AgentProviderStatus status = agentProviderRegistry != null ? agentProviderRegistry.status(selectedProvider) : null;
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        putIfNotBlank(metadata, "model_mode", metadataString(task != null ? task.metadata() : null, "model_mode"));
         putIfNotBlank(metadata, "route_source", route.routeSource());
         putIfNotBlank(metadata, "task_type", route.taskType());
+        putIfNotBlank(metadata, "selected_provider_profile", route.selectedProviderProfile());
+        putIfNotBlank(metadata, "preferred_provider_profile", route.preferredProviderProfile());
+        putIfNotBlank(metadata, "workflow_stage", route.workflowStage());
         putIfNotBlank(metadata, "selected_worker_type", route.selectedWorkerType());
         putIfNotBlank(metadata, "preferred_worker_hint", route.preferredWorkerHint());
         metadata.put("learning_hint_applied", route.learningHintApplied());
@@ -487,6 +492,20 @@ class TaskHandler implements HttpHandler {
         }
         if (route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
             metadata.put("fallback_workers", route.fallbackWorkers());
+        }
+        metadata.put("free_first_routing", route.freeFirstRouting());
+        if (route.freeCandidateWorkers() != null && !route.freeCandidateWorkers().isEmpty()) {
+            metadata.put("free_candidate_workers", route.freeCandidateWorkers());
+        }
+        if (route.paidCandidateWorkers() != null && !route.paidCandidateWorkers().isEmpty()) {
+            metadata.put("paid_candidate_workers", route.paidCandidateWorkers());
+        }
+        putIfNotBlank(metadata, "cost_route_stage", route.costRouteStage());
+        metadata.put("manual_window_required", route.manualWindowRequired());
+        putIfNotBlank(metadata, "recommended_manual_provider", route.recommendedManualProvider());
+        putIfNotBlank(metadata, "manual_followup_instruction", route.manualFollowupInstruction());
+        if (route.manualWindowCandidates() != null && !route.manualWindowCandidates().isEmpty()) {
+            metadata.put("manual_window_candidates", route.manualWindowCandidates());
         }
         if (route.recoveryUnpinnedRecommendation() != null
             && Boolean.TRUE.equals(route.recoveryUnpinnedRecommendation().providerDeprioritized())) {
@@ -526,6 +545,14 @@ class TaskHandler implements HttpHandler {
                 }
             }
         }
+        if (route.manualWindowCandidates() != null) {
+            for (String candidate : route.manualWindowCandidates()) {
+                String providerId = providerIdForWorker(candidate, candidate);
+                if (providerId != null) {
+                    providerIds.add(providerId);
+                }
+            }
+        }
         if (providerIds.isEmpty() && selectedProvider != null) {
             providerIds.add(selectedProvider);
         }
@@ -550,6 +577,14 @@ class TaskHandler implements HttpHandler {
             }
         }
         return null;
+    }
+
+    private String metadataString(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        return value == null ? null : value.toString();
     }
 
     private void putIfNotBlank(Map<String, Object> target, String key, String value) {

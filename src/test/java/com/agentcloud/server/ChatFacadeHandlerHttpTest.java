@@ -801,6 +801,9 @@ class ChatFacadeHandlerHttpTest {
             assertEquals("response", response.body().path("object").asText());
             assertEquals("completed", response.body().path("status").asText());
             assertTrue(response.body().path("id").asText().startsWith("resp_"));
+            assertFalse(response.body().path("output").get(0).path("id").asText().isBlank());
+            assertEquals("message", response.body().path("output").get(0).path("type").asText());
+            assertEquals("completed", response.body().path("output").get(0).path("status").asText());
             assertEquals("assistant", response.body().path("output").get(0).path("role").asText());
             assertEquals("output_text", response.body().path("output").get(0).path("content").get(0).path("type").asText());
             assertFalse(response.body().path("output_text").asText().isBlank());
@@ -834,8 +837,12 @@ class ChatFacadeHandlerHttpTest {
             assertEquals(200, response.statusCode());
             assertTrue(response.contentType().startsWith("text/event-stream"));
             assertTrue(response.bodyText().contains("\"type\":\"response.created\""));
+            assertTrue(response.bodyText().contains("\"type\":\"response.output_item.added\""));
             assertTrue(response.bodyText().contains("\"type\":\"response.output_text.delta\""));
+            assertTrue(response.bodyText().contains("\"type\":\"response.output_text.done\""));
+            assertTrue(response.bodyText().contains("\"type\":\"response.output_item.done\""));
             assertTrue(response.bodyText().contains("\"type\":\"response.completed\""));
+            assertTrue(response.bodyText().contains("\"item_id\":\"msg_"));
             assertTrue(response.bodyText().contains("\"reply_type\":\"task_progress\""));
             assertTrue(response.bodyText().contains("data: [DONE]"));
         }

@@ -6,6 +6,8 @@ import com.agentcloud.agent.AgentProviderResolver;
 import com.agentcloud.agent.AgentProviderStatus;
 import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.agent.providers.LocalCliProviderConfig;
+import com.agentcloud.agent.providers.ProviderDefaultProfile;
+import com.agentcloud.agent.providers.ProviderProfileConfig;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
@@ -40,6 +42,7 @@ import java.util.concurrent.TimeUnit;
 public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final Logger log = LoggerFactory.getLogger(CodexAppServerWorkerExecutor.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String CODEX_EXEC_NO_ALT_SCREEN_FLAG = "--no-alt-screen";
     private static final long PROCESS_TIMEOUT_MS = 180_000L;
     private static final long APP_SERVER_SHUTDOWN_GRACE_MS = 5_000L;
     private static final long HANDSHAKE_TIMEOUT_MS = 30_000L;
@@ -197,7 +200,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             return failureResult("failed", "codex exec_json run files unavailable",
                 providerId, workerId, cwd, initialPlan, providerStatus, 0L, null, null, runFiles);
         }
-        CodexExecutionPlan plan = initialPlan.withCommand(execJsonCommand(config, runFiles));
+        CodexExecutionPlan plan = initialPlan.withCommand(execJsonCommand(config, runFiles, initialPlan));
         long startedAtMs = System.currentTimeMillis();
         Process process = null;
         Integer exitCode = null;
@@ -293,24 +296,30 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         String prompt = ProviderTaskPromptBuilder.build(context);
         String model = configuredModel(config, context);
         String resumeThreadId = resumeThreadId(context);
+        ProviderProfileConfig profile = resolveProfile(config, context);
         LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
-        List<String> command = launchSpec.command(List.of(
+        List<String> baseArgs = new ArrayList<>(List.of(
             "app-server",
             "--listen",
             "stdio://"
         ));
+        List<String> command = launchSpec.command(appendProfileArgs(baseArgs, profile));
         return new CodexExecutionPlan(
             command,
             prompt,
             truncate(prompt, 240),
-            model,
+            profile.model().isBlank() ? model : profile.model(),
             cwd,
             resumeThreadId,
             systemPrompt(context),
             launchSpec.configuredBinary(),
             launchSpec.executableTarget(),
             launchSpec.launchMode(),
-            "provider_app_server"
+            "provider_app_server",
+            profile.providerProfileId(),
+            profile.modelProvider(),
+            profile.cliProfile(),
+            profile.configOverrides()
         );
     }
 
@@ -319,30 +328,38 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                                  String cwd) {
         String prompt = ProviderTaskPromptBuilder.build(context);
         String model = configuredModel(config, context);
+        ProviderProfileConfig profile = resolveProfile(config, context);
         LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
         return new CodexExecutionPlan(
             List.of(),
             prompt,
             truncate(prompt, 240),
-            model,
+            profile.model().isBlank() ? model : profile.model(),
             cwd,
             resumeThreadId(context),
             systemPrompt(context),
             launchSpec.configuredBinary(),
             launchSpec.executableTarget(),
             launchSpec.launchMode(),
-            "provider_native_cli_json"
+            "provider_native_cli_json",
+            profile.providerProfileId(),
+            profile.modelProvider(),
+            profile.cliProfile(),
+            profile.configOverrides()
         );
     }
 
-    private List<String> execJsonCommand(LocalCliProviderConfig.ResolvedConfig config, ProviderRunFiles runFiles) {
+    private List<String> execJsonCommand(LocalCliProviderConfig.ResolvedConfig config,
+                                         ProviderRunFiles runFiles,
+                                         CodexExecutionPlan plan) {
         ArrayList<String> args = new ArrayList<>();
         args.add("exec");
+        args.add(CODEX_EXEC_NO_ALT_SCREEN_FLAG);
         args.add("--json");
         args.add("-o");
         args.add(runFiles.lastMessagePath().toString());
         args.add("--skip-git-repo-check");
-        return config.launchSpec().command(args);
+        return config.launchSpec().command(appendProfileArgs(args, toProfileConfig(plan)));
     }
 
     private boolean shouldUseExecJsonMode() {
@@ -416,12 +433,12 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
         LinkedHashMap<String, Object> params = new LinkedHashMap<>();
         params.put("model", nilIfBlank(plan.model()));
-        params.put("modelProvider", null);
-        params.put("profile", null);
+        params.put("modelProvider", nilIfBlank(plan.modelProvider()));
+        params.put("profile", nilIfBlank(plan.cliProfile()));
         params.put("cwd", plan.cwd());
         params.put("approvalPolicy", null);
         params.put("sandbox", null);
-        params.put("config", null);
+        params.put("config", buildConfigParam(plan));
         params.put("baseInstructions", null);
         params.put("developerInstructions", nilIfBlank(plan.systemPrompt()));
         params.put("compactPrompt", null);
@@ -517,6 +534,133 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             return taskModel;
         }
         return config.model().value();
+    }
+
+    /**
+     * 解析 codex profile 配置，优先级：task metadata > worker metadata > provider 默认值。
+     */
+    private ProviderProfileConfig resolveProfile(LocalCliProviderConfig.ResolvedConfig config, TaskRuntimeContext context) {
+        // 1. Provider 级默认值
+        ProviderProfileConfig providerDefault = resolveProviderDefaultProfile();
+        // 2. Worker metadata profile
+        ProviderProfileConfig workerProfile = resolveWorkerProfile(context);
+        // 3. Task metadata profile
+        ProviderProfileConfig taskProfile = resolveTaskProfile(context);
+        // 合并：task > worker > provider default
+        return providerDefault.merge(workerProfile).merge(taskProfile);
+    }
+
+    private ProviderProfileConfig resolveProviderDefaultProfile() {
+        AgentProvider provider = providerRegistry != null ? providerRegistry.get("codex") : null;
+        if (provider instanceof LocalCliAgentProvider localCliProvider) {
+            ProviderDefaultProfile defaultProfile = localCliProvider.resolveDefaultProfile();
+            return defaultProfile.toProfileConfig();
+        }
+        return new ProviderProfileConfig("", "", "", "", Map.of());
+    }
+
+    private ProviderProfileConfig resolveWorkerProfile(TaskRuntimeContext context) {
+        String workerId = context != null && context.task() != null ? context.task().assignedWorker() : null;
+        if (workerId == null || workerId.isBlank()) {
+            return new ProviderProfileConfig("", "", "", "", Map.of());
+        }
+        Worker worker = workerRegistry != null ? workerRegistry.get(workerId) : null;
+        if (worker == null) {
+            return new ProviderProfileConfig("", "", "", "", Map.of());
+        }
+        return ProviderProfileConfig.fromWorkerMetadata(worker.metadata());
+    }
+
+    private ProviderProfileConfig resolveTaskProfile(TaskRuntimeContext context) {
+        if (context == null || context.task() == null) {
+            return new ProviderProfileConfig("", "", "", "", Map.of());
+        }
+        return ProviderProfileConfig.fromTaskMetadata(context.task().metadata());
+    }
+
+    /**
+     * 将 profile 配置追加到 CLI 启动参数（-c/-m/-p）。
+     */
+    private List<String> appendProfileArgs(List<String> args, ProviderProfileConfig profile) {
+        if (profile == null || !profile.hasSubstantiveConfig()) {
+            return args;
+        }
+        ArrayList<String> result = new ArrayList<>(args);
+        if (!profile.modelProvider().isBlank()) {
+            result.add("-c");
+            result.add("model_provider=" + profile.modelProvider());
+        }
+        if (!profile.model().isBlank()) {
+            result.add("-m");
+            result.add(profile.model());
+        }
+        if (!profile.cliProfile().isBlank()) {
+            result.add("-p");
+            result.add(profile.cliProfile());
+        }
+        if (profile.configOverrides() != null && !profile.configOverrides().isEmpty()) {
+            for (Map.Entry<String, String> entry : profile.configOverrides().entrySet()) {
+                result.add("-c");
+                result.add(entry.getKey() + "=" + entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 将 profile configOverrides 构建 thread/start 的 config 参数。
+     */
+    private Map<String, Object> buildConfigParam(CodexExecutionPlan plan) {
+        if (plan.configOverrides() == null || plan.configOverrides().isEmpty()) {
+            return null;
+        }
+        LinkedHashMap<String, Object> config = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : plan.configOverrides().entrySet()) {
+            config.put(entry.getKey(), entry.getValue());
+        }
+        return Map.copyOf(config);
+    }
+
+    /**
+     * 从 CodexExecutionPlan 提取 profile 配置并追加到 CLI 参数。
+     */
+    private List<String> appendProfileArgs(List<String> args, CodexExecutionPlan plan) {
+        if (plan == null || !plan.hasProfileConfig()) {
+            return args;
+        }
+        ArrayList<String> result = new ArrayList<>(args);
+        if (!plan.modelProvider().isBlank()) {
+            result.add("-c");
+            result.add("model_provider=" + plan.modelProvider());
+        }
+        if (!plan.model().isBlank()) {
+            result.add("-m");
+            result.add(plan.model());
+        }
+        if (!plan.cliProfile().isBlank()) {
+            result.add("-p");
+            result.add(plan.cliProfile());
+        }
+        if (plan.configOverrides() != null && !plan.configOverrides().isEmpty()) {
+            for (Map.Entry<String, String> entry : plan.configOverrides().entrySet()) {
+                result.add("-c");
+                result.add(entry.getKey() + "=" + entry.getValue());
+            }
+        }
+        return result;
+    }
+
+    private ProviderProfileConfig toProfileConfig(CodexExecutionPlan plan) {
+        if (plan == null) {
+            return new ProviderProfileConfig("", "", "", "", Map.of());
+        }
+        return new ProviderProfileConfig(
+            plan.providerProfileId(),
+            plan.modelProvider(),
+            plan.model(),
+            plan.cliProfile(),
+            plan.configOverrides()
+        );
     }
 
     private String systemPrompt(TaskRuntimeContext context) {
@@ -633,6 +777,19 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
         if (plan.resumeThreadId() != null && !plan.resumeThreadId().isBlank()) {
             metadata.put("resume_provider_session_id", plan.resumeThreadId());
+        }
+        // profile trace
+        if (plan.providerProfileId() != null && !plan.providerProfileId().isBlank()) {
+            metadata.put("selected_provider_profile", plan.providerProfileId());
+        }
+        if (plan.modelProvider() != null && !plan.modelProvider().isBlank()) {
+            metadata.put("configured_model_provider", plan.modelProvider());
+        }
+        if (plan.cliProfile() != null && !plan.cliProfile().isBlank()) {
+            metadata.put("configured_cli_profile", plan.cliProfile());
+        }
+        if (plan.configOverrides() != null && !plan.configOverrides().isEmpty()) {
+            metadata.put("configured_config_overrides", Map.copyOf(plan.configOverrides()));
         }
         if (providerStatus != null) {
             metadata.put("provider_ready", providerStatus.ready());
@@ -1514,7 +1671,11 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       String configuredBinary,
                                       String executableTarget,
                                       String launchMode,
-                                      String executionBackend) {
+                                      String executionBackend,
+                                      String providerProfileId,
+                                      String modelProvider,
+                                      String cliProfile,
+                                      Map<String, String> configOverrides) {
         private CodexExecutionPlan {
             if (command == null) command = List.of();
             if (prompt == null) prompt = "";
@@ -1522,6 +1683,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             if (configuredBinary == null) configuredBinary = "";
             if (launchMode == null || launchMode.isBlank()) launchMode = "direct";
             if (executionBackend == null || executionBackend.isBlank()) executionBackend = "provider_app_server";
+            if (providerProfileId == null) providerProfileId = "";
+            if (modelProvider == null) modelProvider = "";
+            if (cliProfile == null) cliProfile = "";
+            if (configOverrides == null) configOverrides = Map.of();
         }
 
         private String commandPreview() {
@@ -1540,8 +1705,18 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 configuredBinary,
                 executableTarget,
                 launchMode,
-                executionBackend
+                executionBackend,
+                providerProfileId,
+                modelProvider,
+                cliProfile,
+                configOverrides
             );
+        }
+
+        private boolean hasProfileConfig() {
+            return !modelProvider.isBlank()
+                || !cliProfile.isBlank()
+                || !configOverrides.isEmpty();
         }
     }
 

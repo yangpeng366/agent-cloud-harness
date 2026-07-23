@@ -5,6 +5,8 @@
 > 1. 建议直接纳入首发
 > 2. 可以保留在仓库中，但不建议当首发核心背书
 > 3. 当前建议暂缓或后续再整理
+>
+> 历史材料说明：本文保留当时对首发文件范围的分层判断。当前仍可作为范围参考，但不再是 release 第一入口；是否已满足公开前 gate 以 `docs/GITHUB_RELEASE_CHECKLIST.md` 为准，实际 replay/stage 边界以 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md` 为准。
 
 ## A. 建议直接纳入首发
 

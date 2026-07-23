@@ -210,6 +210,9 @@ public class AgentRunService {
             route.taskType(),
             task != null ? TaskTypeHeuristics.effectiveTaskType(task, null) : null
         ));
+        putIfNotBlank(metadata, "selected_provider_profile", route.selectedProviderProfile());
+        putIfNotBlank(metadata, "preferred_provider_profile", route.preferredProviderProfile());
+        putIfNotBlank(metadata, "workflow_stage", route.workflowStage());
         putIfNotBlank(metadata, "selected_worker_type", route.selectedWorkerType());
         putIfNotBlank(metadata, "preferred_worker_hint", route.preferredWorkerHint());
         metadata.put("learning_hint_applied", route.learningHintApplied());
@@ -218,6 +221,20 @@ public class AgentRunService {
         }
         if (route.fallbackWorkers() != null && !route.fallbackWorkers().isEmpty()) {
             metadata.put("fallback_workers", route.fallbackWorkers());
+        }
+        metadata.put("free_first_routing", route.freeFirstRouting());
+        if (route.freeCandidateWorkers() != null && !route.freeCandidateWorkers().isEmpty()) {
+            metadata.put("free_candidate_workers", route.freeCandidateWorkers());
+        }
+        if (route.paidCandidateWorkers() != null && !route.paidCandidateWorkers().isEmpty()) {
+            metadata.put("paid_candidate_workers", route.paidCandidateWorkers());
+        }
+        putIfNotBlank(metadata, "cost_route_stage", route.costRouteStage());
+        metadata.put("manual_window_required", route.manualWindowRequired());
+        putIfNotBlank(metadata, "recommended_manual_provider", route.recommendedManualProvider());
+        putIfNotBlank(metadata, "manual_followup_instruction", route.manualFollowupInstruction());
+        if (route.manualWindowCandidates() != null && !route.manualWindowCandidates().isEmpty()) {
+            metadata.put("manual_window_candidates", route.manualWindowCandidates());
         }
         appendProviderDeprioritizationMetadata(route, metadata);
         metadata.put("provider_registered", provider != null);
@@ -363,6 +380,20 @@ public class AgentRunService {
             metadata.put("learning_hint_applied", route.learningHintApplied());
             metadata.put("candidate_workers", route.candidateWorkers());
             metadata.put("fallback_workers", route.fallbackWorkers());
+            metadata.put("free_first_routing", route.freeFirstRouting());
+            if (route.freeCandidateWorkers() != null && !route.freeCandidateWorkers().isEmpty()) {
+                metadata.put("free_candidate_workers", route.freeCandidateWorkers());
+            }
+            if (route.paidCandidateWorkers() != null && !route.paidCandidateWorkers().isEmpty()) {
+                metadata.put("paid_candidate_workers", route.paidCandidateWorkers());
+            }
+            putIfNotBlank(metadata, "cost_route_stage", route.costRouteStage());
+            metadata.put("manual_window_required", route.manualWindowRequired());
+            putIfNotBlank(metadata, "recommended_manual_provider", route.recommendedManualProvider());
+            putIfNotBlank(metadata, "manual_followup_instruction", route.manualFollowupInstruction());
+            if (route.manualWindowCandidates() != null && !route.manualWindowCandidates().isEmpty()) {
+                metadata.put("manual_window_candidates", route.manualWindowCandidates());
+            }
             if (route.dispatchSkippedWorkers() != null && !route.dispatchSkippedWorkers().isEmpty()) {
                 metadata.put("dispatch_skipped_workers", routeSkippedWorkerMetadata(route.dispatchSkippedWorkers()));
             }

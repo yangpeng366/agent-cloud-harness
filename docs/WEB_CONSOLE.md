@@ -17,7 +17,14 @@
   - 保留原来的 control-plane 观察视角
   - 更适合集中看 `live_flow`、raw JSON 和细节排障
 - 当前 `runtime health` 与 `route box` 也会直接显示 provider 恢复降级窗口，不必只靠 raw JSON 判断“恢复时系统会避开谁”
+- 当前 `/dialogue/` 与 `/console/` 的 route box 也会直接消费 `live_flow.runtime_cognition_surface.legacy_control_audit`；一旦发现旧 `GET /pause|resume|continue|escalate` 兼容调用，会显示 `检测到历史 GET 控制调用`，并给出“迁到 POST”的短提示
+- `/console/` 的 operator summary 也会把这条信号上浮成 `兼容路由：...`，不必先展开 raw JSON 或手翻 event metadata
+- 当前 `/console/` 的 route chips、execution boundary、judgment/cognition chips、Mounted Context 对象卡和 `运行文件` 摘要也都已统一成中文 operator 文案；首屏不再主动生成 `mode: / hint: / exec: / worker: / prompt aligned / retention:` 这类 raw English 标签
+- 当前 `/console/` 的 `任务链` 与 inspector `迭代链上下文` 也已继续收口：不再主动渲染 `Iteration Chain / Chain Snapshot / root / round / follow-up of / Next / Tools / Artifacts` 这类英文时间线标签，而是统一显示为 `迭代链 / 迭代链快照 / 首轮 / 第 N 轮 / 跟进 / 下一步 / 工具 / 产物`
+- 当前 `/console/` 与 `/dialogue/` 的 `实验对比` 面板也已继续收口：summary chip、mode card、prompt rollout、case 对照里不再主动生成 `runs / done / learned hint applied / avg tool steps / avg panels / avg objs / missing / steps / cost` 这类英文指标，而是统一显示为 `次运行 / 完成 / 学习偏好已应用 / 平均工具步数 / 平均面板 / 平均对象 / 缺失 / 步骤 / 成本`
 - Provider Detail 现在会额外拉取对应 worker 的 `readiness?mode=dispatch`，直接显示 dispatch preflight 是否 ready、结果是否来自缓存、是否为 active probe，以及本次探测的 CLI 参数/命令形态；排查“provider 看似 ready 但 worker 命令参数不兼容”时不必只看 raw JSON。
+- 当前 `/console/` 的 `Runtime Health / Agent Inventory / Agent Execution / Provider Detail / Agent Run Detail` 首屏也已继续收口：不再主动渲染 `Active / Failed 24h / provider comparison / provider ready / Run ID / startup protocol probe / provider preflight result / worker dispatch probe / runtime diagnostics / recent events / agent artifacts / run timeline / run artifacts` 这类英文标题，而是统一显示为 `运行中 / 24h 失败 / Provider 对比 / 执行通道就绪 / 运行 ID / 启动协议探测 / Provider 预检结果 / 执行方派发探测 / 运行诊断 / 最近事件 / 执行产物 / 运行时间线 / 运行产物`。
+- 这批 provider/operator 首屏卡片里的 `auth/version/checked`, `retryable/manual`, `cached/fresh probe`, `active probe/passive fallback`, `planner/executor/judge` 也都已经同步收成人话：`认证/版本/检查`, `可重试/需人工处理`, `缓存结果/最新探测`, `主动探测/被动回退`, `规划/执行/判断`；首屏不应再默认暴露半英文化运行标签。
 
 当前稳定能力仍然主要建立在 `task/session/live_flow` API 上。关于下一步的真实消息层方案，见：
 
@@ -26,6 +33,51 @@
   - `docs/DIALOGUE_CODEX_UI_ADAPTATION_PLAN.md`
 - 如果当前问题已经切到“task 失败后是否自动切换 worker / 何时进入人工确认”，另见：
   - `docs/WORKER_FAILURE_RECOVERY_POLICY.md`
+
+## 状态与结果展示口径（P4）
+
+`/dialogue/` 与 `/console/` 的任务状态展示统一使用同一套语义口径：`/dialogue/` 通过 `task-status-tone-plan.js` 的 `toneForStatus` / `toneForPinnedTaskOutcome` 渲染 task badge 与 pinned outcome；`/console/` 通过 `console-status-tone-plan.js` 的 `toneForConsoleTaskStatus` / `toneForConsoleRunStatus` 区分 task 级 lifecycle 与 worker/run 级 execution status。状态语义与 `RuntimeJudgmentService` 的 `ContinuationAction` 保持一致，关键约束是“不能把执行中或等待人工确认渲染成失败”。
+
+| 状态 | tone | 含义 | 页面应展示 |
+|------|------|------|------|
+| `active` | `active` | 任务仍在 loop 中 | 当前 node、最新执行摘要、进度 |
+| `running` | `active` | 单轮执行中 | 正在执行的 worker、tool、elapsed |
+| `waiting_human` | `paused` | 等待人工介入 | human_gate 原因、可执行的人工动作 |
+| `paused` | `paused` | 暂停 | 暂停原因、恢复入口 |
+| `done` | `done` | 全部达成 | 验收结果、最终产物、成本 |
+| `failed` | `failed` | 任务已终止且未达成 | 失败原因链、partial artifacts |
+| `partial` | `partial` | 部分达成 | 已完成 subgoals、未完成 subgoals、partial artifacts |
+| 其他 | `default` | 未知 | 默认灰 |
+
+`waiting_human` / `human_gate` 统一收成 `paused` 语气，不是 `failed`；`active` 任务在 `/continue` 超时后仍是 `active`，页面不应把超时渲染成 `failed`。pinned task outcome 与 task badge 共用同一套映射，避免“列表里看着是失败、详情里看着是暂停”的不一致。
+
+对 `partial` / `done` 结果，pinned outcome 卡不应只停留在 `已完成 / 执行失败 / 当前结果` 这类总状态。若 task metadata 已带 `subgoals / subgoal_status / progress_summary`，页面至少要额外展示两组 goal-progress 信息：
+
+- `已完成子目标`：列出 `done / complete / completed / accepted` 的标题，证明哪些目标已真正落地。
+- `未完成子目标`：列出 `pending / in_progress / blocked / waiting_human / human_gate` 的标题，区分“仍在执行”与“等待人工”。
+
+若同一 task 同时存在 artifact transcript，结果卡应允许用户把“哪些子目标已完成”与“当前产物是什么”一起读出来，而不是只看到状态词。
+
+当前实现入口：`task-subgoal-progress-plan.js` 负责把 `subgoal_status / subgoals / progress_summary` 投影成 `目标进度 / 已完成子目标 / 未完成子目标` 三类 row，`app.js` 的 pinned outcome 卡直接渲染这些 row。当前验证入口：`node --check src/main/resources/web/dialogue/app.js` 与 `node --test src/test/js/*.mjs`。
+
+`/console/` operator 读面必须把 task 级状态和 worker/run 级状态分开：task badge 使用 `toneForConsoleTaskStatus`，因此 `active / running` 仍是执行中、`waiting_human / human_gate` 是等待人工、`done / failed` 是任务终态；agent run / provider run badge 使用 `toneForConsoleRunStatus`，因此 `running` 是 worker 运行中、`idle` 是无活跃 run、`failed / timeout / crashed` 是 worker/run 失败。一个 active task 上的最新 worker run 失败只能说明该 run 失败，不能把 task badge 同步染成 failed。
+
+当前验证入口：`node --check src/main/resources/web/console/app.js` 与 `node --test src/test/js/console-status-tone-plan.test.mjs`。
+
+### Loop Activity 检测口径（P3）
+
+每次 `continueNode` 完成后写入 `task.metadata.last_loop_tick`（ISO 8601 timestamp）。前端通过 `loop-activity-detector-plan.js` 的 `detectLoopActivity` 基于此时间戳与当前时间差值判断 loop 活跃度：
+
+| 差值 | activity | 展示建议 |
+|------|----------|---------|
+| <= 10s | active | "loop 正在执行" |
+| <= 30s | stall | "loop 可能卡住，请检查" |
+| > 30s | stale | "loop 已停止运转" |
+| 无 tick | unknown | 无判断依据 |
+
+`loopActivityDisplayHint` 将 loop activity 与 task 级状态叠加：`done` / `failed` 优先展示终态；`waiting_human` / `human_gate` 展示 "paused"；其他状态按 loop activity 结论展示。这解决了"task 还是 active 但前端不知道 loop 是否仍在运转"的问题。
+
+当前验证入口：`node --test src/test/js/dialogue-loop-activity-detector-plan.test.mjs`。
 
 ## 当前功能
 
@@ -52,6 +104,7 @@
 - 中间主视图现在默认就是单一 transcript surface：先看 `session message` 流；`任务链` 被下沉到 transcript 下方的折叠区，需要时再展开
 - 顶部状态区已经从大块 metrics 卡收成轻量 status pills，只保留会话数、任务数、链路数和当前焦点
 - task details 头部现在也只把 `状态 / 控制节点` 保留在焦点线，overview 卡缩成 `任务 ID / 执行方 / 实验模式 / 工具链` 四项；无 experiment metadata 时实验模式显示 `临时任务`，不要露出 `ad hoc`
+- `/console/` inspector 头部现在已显式拆出这条焦点线，不再把 `状态 / 控制节点 / 工作节点 / Tool chain / Execution` 混在 overview 卡里；恢复任务若存在，也单独作为恢复条带追加，不再破坏“四卡概览”合同
 - 在 `聊天流` 视图里，会混合显示 `user / assistant / system` 三种角色，并支持按 `role` 与 `scope(task-only / session-only)` 过滤
 - `聊天流` 前面会额外给出 `assistant / system` 分组摘要卡片，快速显示最近回执、top message types 和最新 trigger/completion/action 信号
 - 这组 `assistant / system` 摘要卡片现在默认只保留一条最强的生命周期信号和更短的最新摘要，避免它本身又变成一块新的诊断面板
@@ -146,12 +199,14 @@
 - `/dialogue/` 右侧现在也会直接显示当前 task 的 experiment 对比卡片，但默认只常驻当前 mode headline；其余 mode 对比、prompt rollout 和 case 对照已下沉到折叠区
 - `/dialogue/` 的 route 卡片也会补 `route_source / preferred_worker_hint / learning_hint_applied / fallback_reason` 等字段，不再只显示一个 selected worker
 - 如果当前恢复链已经把某个 provider 判成热失败窗口，`/console/` 与 `/dialogue/` 的 route box 还会直接显示 `恢复阶段会优先避开 <provider>`；这条说明对应的是 recovery 视角，不是普通 route 永久禁用
+- 如果当前任务最近一次控制动作是兼容 `GET` 路由，`/console/` 与 `/dialogue/` 的 route box 还会直接显示 `检测到历史 GET 控制调用`，并把 `request_path / latest_action / replacement_method` 翻成迁移提示；`/console/` summary 还会额外显示 `兼容路由：...`
 - route 卡片当前默认常驻只保留 `selected worker / route source / route reason`；candidate workers、route chips 和 cognition timeline 已下沉到折叠区，避免 inspector 默认展开时信息过满；折叠 summary 应显示 `展开路由细节 / 展开路由轨迹`，不要回退成 `展开 route 细节 / route timeline`
 - `Related Messages` 和 `连续性摘要` 仍然常驻，但默认只显示小预览；额外消息和 overflow continuity chips 会进内嵌折叠区，避免 details drawer 中段高度过高
 - inspector 的“迭代链上下文”卡片现在默认只常驻当前轮和上一轮/下一轮导航；完整链表会下沉到折叠区，避免右侧默认出现整条历史列表
 - task details 的控制动作现在也按 chat-first 方向收口：默认常驻只保留一个状态感知的主动作（例如 `继续推进` 或 `恢复`），`暂停 / 升级 / Worker 移交` 等次级控制下沉到 `更多操作`
 - 控制动作和恢复任务 chip 里的 worker 相关文案也应统一为 `执行方`：handoff 动作显示 `移交执行方`，恢复 job 目标显示 `执行方 <worker>`，不要再出现 `移交 Worker` 或 `worker <id>`
 - task 详情 modal 的 route / 判断诊断也应沿用同一口径：`Worker / 选中 Worker / 候选 Workers` 显示为 `执行方 / 选中执行方 / 候选执行方`，空值显示 `未分配 / 未知 / 暂无`，不要露出 `unassigned / unknown / none / not specified / no result`
+- `/console/` 当前也已把 execution boundary / decision 子卡里的 `execution / id / worker / execution boundary captured` 收成 `执行回合 / 执行回合：... / 执行方：... / 已记录执行边界`
 - inspector 现在也会显示当前 task 的 `Related Messages`
 - `Related Messages` 不再只看 `task_id=当前任务` 的回执，也会有限度并入同 session 的普通连续聊天消息；这些消息会带 `session continuity` badge，而 task 自己的回执/brief 会带 `task-bound` badge
 - 当前选中的 `session/task` 会同步到 URL hash，刷新页面或分享链接时能直接落到同一轮任务

@@ -204,6 +204,7 @@ public class TaskService {
             meta.put("parent_task_id", parentTaskId);
         }
         ProviderTaskContractNormalizer.normalize(meta, req.intent(), req.goal(), req.title());
+        ProviderTaskContractNormalizer.initializeGoalContract(meta, goal);
 
         Task t = new Task(taskId, sessionId, parentTaskId, req.title(), "active", req.priority(),
             Instant.now(), Instant.now(), Instant.now(), null, null, null, goal, null, null, "intake", null, meta);
@@ -462,6 +463,7 @@ public class TaskService {
         var routePreview = enrichRouteDiagnostics(task, facts.routePreview());
         TaskRuntimeContext runtimeContext = facts.runtimeContext();
         JudgmentTraceView judgmentTrace = buildJudgmentTraceView(task, facts);
+        RuntimeCognitionSurfaceView runtimeCognitionSurface = buildRuntimeCognitionSurface(task, facts);
         List<Checkpoint> checkpoints = consolidationService.listByTask(taskId, boundedLimit);
         List<ResumePacket> resumePackets = packetDao != null
             ? nullToEmpty(packetDao.listByTask(task.sessionId(), task.id(), boundedLimit))
@@ -494,7 +496,7 @@ public class TaskService {
             runtimeContext,
             judgmentTrace,
             facts,
-            buildRuntimeCognitionSurface(facts),
+            runtimeCognitionSurface,
             buildRuntimeCognitionTimeline(task, facts, checkpoints, resumePackets),
             checkpoints,
             learningMemories,
@@ -665,6 +667,16 @@ public class TaskService {
             recoveryDeprioritizedProvider(recoveryUnpinnedRecommendation),
             recoveryDeprioritizationReason(recoveryUnpinnedRecommendation),
             recoveryExecutionMode(task),
+            route.freeFirstRouting(),
+            route.freeCandidateWorkers(),
+            route.paidCandidateWorkers(),
+            route.costRouteStage(),
+            route.manualWindowRequired(),
+            route.recommendedManualProvider(),
+            route.manualWindowCandidates(),
+            route.selectedProviderProfile(),
+            route.preferredProviderProfile(),
+            route.workflowStage(),
             currentPinnedRoute,
             recoveryUnpinnedRecommendation,
             route.dispatchSkippedWorkers()
@@ -717,6 +729,9 @@ public class TaskService {
             route.fallbackReason(),
             route.preferredWorkerHint(),
             route.learningHintApplied(),
+            route.selectedProviderProfile(),
+            route.preferredProviderProfile(),
+            route.workflowStage(),
             recoveryExecutionMode(task),
             null,
             null,
@@ -764,6 +779,9 @@ public class TaskService {
             recoveryRoute.fallbackReason(),
             recoveryRoute.preferredWorkerHint(),
             recoveryRoute.learningHintApplied(),
+            recoveryRoute.selectedProviderProfile(),
+            recoveryRoute.preferredProviderProfile(),
+            recoveryRoute.workflowStage(),
             recoveryExecutionMode(task),
             providerDeprioritized ? Boolean.TRUE : null,
             providerDeprioritized ? currentProvider : null,
@@ -820,12 +838,31 @@ public class TaskService {
         return runtimeCognitionSurfaceAssembler.assemble(facts);
     }
 
+    private RuntimeCognitionSurfaceView buildRuntimeCognitionSurface(Task task, RuntimeFactSet facts) {
+        RuntimeCognitionSurfaceView base = buildRuntimeCognitionSurface(facts);
+        if (task == null) {
+            return base;
+        }
+        RuntimeCognitionSurfaceView.LegacyControlAuditSurface auditSurface = buildLegacyControlAuditSurface(task);
+        if (auditSurface == null) {
+            return base;
+        }
+        return new RuntimeCognitionSurfaceView(
+            base != null ? base.route() : null,
+            base != null ? base.execution() : null,
+            base != null ? base.executionJudgment() : null,
+            base != null ? base.completionJudgment() : null,
+            base != null ? base.alignment() : null,
+            auditSurface
+        );
+    }
+
     private List<RuntimeCognitionTimelineEntryView> buildRuntimeCognitionTimeline(Task task,
                                                                                   RuntimeFactSet facts,
                                                                                   List<Checkpoint> checkpoints,
                                                                                   List<ResumePacket> resumePackets) {
         RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(null);
-        RuntimeCognitionSurfaceView surface = buildRuntimeCognitionSurface(runtimeFacts);
+        RuntimeCognitionSurfaceView surface = buildRuntimeCognitionSurface(task, runtimeFacts);
         List<RuntimeCognitionTimelineEntryView> entries = new ArrayList<>();
 
         entries.addAll(buildContinuityTimelineEntries(task, checkpoints, resumePackets));
@@ -864,6 +901,53 @@ public class TaskService {
             Comparator.nullsLast(String::compareTo)
         ));
         return entries;
+    }
+
+    private RuntimeCognitionSurfaceView.LegacyControlAuditSurface buildLegacyControlAuditSurface(Task task) {
+        if (task == null || eventDao == null) {
+            return null;
+        }
+        List<Event> events = nullToEmpty(eventDao.listBySessionAndTask(task.sessionId(), task.id(), 20));
+        for (Event event : events) {
+            if (!"task_control_action".equals(event.eventType())) {
+                continue;
+            }
+            Map<String, Object> payload = event.payload() == null ? Map.of() : event.payload();
+            if (!Boolean.TRUE.equals(payload.get("legacy_control_route"))) {
+                continue;
+            }
+            String requestMethod = metadataString(payload, "request_method");
+            String requestPath = metadataString(payload, "request_path");
+            String action = metadataString(payload, "action");
+            String summary = summarizeLegacyControlAudit(requestMethod, requestPath, action);
+            return new RuntimeCognitionSurfaceView.LegacyControlAuditSurface(
+                true,
+                requestMethod,
+                requestPath,
+                "POST",
+                action,
+                event.createdAt() != null ? event.createdAt().toString() : null,
+                summary
+            );
+        }
+        return null;
+    }
+
+    private String summarizeLegacyControlAudit(String requestMethod, String requestPath, String action) {
+        String method = firstNonBlank(blankToNull(requestMethod), "GET");
+        String replacement = "POST";
+        String path = blankToNull(requestPath);
+        String normalizedAction = blankToNull(action);
+        StringBuilder summary = new StringBuilder("legacy ");
+        summary.append(method).append(" control route observed");
+        if (normalizedAction != null) {
+            summary.append(": ").append(normalizedAction);
+        }
+        if (path != null) {
+            summary.append(" via ").append(path);
+        }
+        summary.append("; migrate caller to ").append(replacement);
+        return summary.toString();
     }
 
     private RuntimeCognitionTimelineEntryView buildRouteTimelineEntry(RuntimeFactSet facts,
@@ -3054,6 +3138,9 @@ public class TaskService {
             putIfNonBlank(target, "selected_worker", routePreview.selectedWorker());
             putIfNonBlank(target, "selected_worker_type", routePreview.selectedWorkerType());
             putIfNonBlank(target, "route_source", routePreview.routeSource());
+            putIfNonBlank(target, "selected_provider_profile", routePreview.selectedProviderProfile());
+            putIfNonBlank(target, "preferred_provider_profile", routePreview.preferredProviderProfile());
+            putIfNonBlank(target, "workflow_stage", routePreview.workflowStage());
             putIfNonBlank(target, "preferred_worker_hint", routePreview.preferredWorkerHint());
             putIfNonBlank(target, "why_selected", routePreview.whySelected());
             putIfPresent(target, "learning_hint_applied", routePreview.learningHintApplied());

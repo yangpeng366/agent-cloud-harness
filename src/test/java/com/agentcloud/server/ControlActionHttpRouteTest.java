@@ -225,13 +225,111 @@ class ControlActionHttpRouteTest {
 
             assertEquals(200, response.statusCode());
             assertTrue(response.body().path("success").asBoolean());
-            assertEquals("true", response.header("Deprecation"));
-            assertEquals(NioHttpServer.LEGACY_WRITE_ROUTE_SUNSET, response.header("Sunset"));
-            assertEquals("POST", response.header("X-AgentCloud-Replacement-Method"));
-            assertTrue(response.header("Warning").contains("Use POST /api/v1/tasks/" + task.id() + "/pause"));
+            assertEquals("paused", response.body().path("data").path("state").asText());
+            assertEquals("packet", response.body().path("data").path("control_node").asText());
+            assertDeprecatedGetHeaders(response, "/api/v1/tasks/" + task.id() + "/pause");
 
             SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "pause");
-            assertEquals(Boolean.TRUE, actionMessage.metadata().get("legacy_control_route"));
+            assertLegacyHttpMetadata(actionMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/pause", null);
+
+            SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "paused");
+            assertLegacyHttpMetadata(stateMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/pause", null);
+            assertEquals("active", stateMessage.metadata().get("previous_state"));
+            assertEquals("paused", stateMessage.metadata().get("current_state"));
+
+            Event controlEvent = fixture.findControlActionEvent(task.sessionId(), task.id(), "pause");
+            assertLegacyHttpMetadata(controlEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/pause", null);
+
+            Event stateEvent = fixture.findTaskStateEvent(task.sessionId(), task.id(), "paused");
+            assertLegacyHttpMetadata(stateEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/pause", null);
+            assertEquals("active", stateEvent.payload().get("previous_state"));
+            assertEquals("paused", stateEvent.payload().get("current_state"));
+        }
+    }
+
+    @Test
+    void legacyGetResumeStillWorksAndSendsDeprecationHeaders() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("legacy-get-resume.db"))) {
+            Task task = fixture.createManualTask("legacy get resume");
+            fixture.postJson("/api/v1/tasks/" + task.id() + "/pause", Map.of("reason", "pause before legacy resume"));
+
+            ApiCall response = fixture.get("/api/v1/tasks/" + task.id() + "/resume");
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().path("success").asBoolean());
+            assertEquals("active", response.body().path("data").path("state").asText());
+            assertEquals("scheduler", response.body().path("data").path("control_node").asText());
+            assertDeprecatedGetHeaders(response, "/api/v1/tasks/" + task.id() + "/resume");
+
+            SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "resume");
+            assertLegacyHttpMetadata(actionMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/resume", null);
+
+            SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "active");
+            assertLegacyHttpMetadata(stateMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/resume", null);
+            assertEquals("paused", stateMessage.metadata().get("previous_state"));
+            assertEquals("active", stateMessage.metadata().get("current_state"));
+
+            Event controlEvent = fixture.findControlActionEvent(task.sessionId(), task.id(), "resume");
+            assertLegacyHttpMetadata(controlEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/resume", null);
+
+            Event stateEvent = fixture.findTaskStateEvent(task.sessionId(), task.id(), "active");
+            assertLegacyHttpMetadata(stateEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/resume", null);
+            assertEquals("paused", stateEvent.payload().get("previous_state"));
+            assertEquals("active", stateEvent.payload().get("current_state"));
+        }
+    }
+
+    @Test
+    void legacyGetContinueStillWorksAndSendsDeprecationHeaders() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("legacy-get-continue.db"))) {
+            Task task = fixture.createManualTask("legacy get continue");
+
+            ApiCall response = fixture.get("/api/v1/tasks/" + task.id() + "/continue");
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().path("success").asBoolean());
+            assertEquals("active", response.body().path("data").path("state").asText());
+            assertEquals("scheduler", response.body().path("data").path("control_node").asText());
+            assertDeprecatedGetHeaders(response, "/api/v1/tasks/" + task.id() + "/continue");
+
+            SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "continue");
+            assertLegacyHttpMetadata(actionMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/continue", null);
+            assertFalse(fixture.hasTaskStateMessage(task.sessionId(), task.id()));
+
+            Event controlEvent = fixture.findControlActionEvent(task.sessionId(), task.id(), "continue");
+            assertLegacyHttpMetadata(controlEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/continue", null);
+            assertFalse(fixture.hasTaskStateEvent(task.sessionId(), task.id()));
+        }
+    }
+
+    @Test
+    void legacyGetEscalateStillWorksAndSendsDeprecationHeaders() throws Exception {
+        try (HttpFixture fixture = new HttpFixture(tempDir.resolve("legacy-get-escalate.db"))) {
+            Task task = fixture.createManualTask("legacy get escalate");
+
+            ApiCall response = fixture.get("/api/v1/tasks/" + task.id() + "/escalate");
+
+            assertEquals(200, response.statusCode());
+            assertTrue(response.body().path("success").asBoolean());
+            assertEquals("waiting_human", response.body().path("data").path("state").asText());
+            assertEquals("human_gate", response.body().path("data").path("control_node").asText());
+            assertDeprecatedGetHeaders(response, "/api/v1/tasks/" + task.id() + "/escalate");
+
+            SessionMessage actionMessage = fixture.findTaskActionMessage(task.sessionId(), task.id(), "escalate");
+            assertLegacyHttpMetadata(actionMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/escalate", null);
+
+            SessionMessage stateMessage = fixture.findTaskStateMessage(task.sessionId(), task.id(), "waiting_human");
+            assertLegacyHttpMetadata(stateMessage.metadata(), "GET", "/api/v1/tasks/" + task.id() + "/escalate", null);
+            assertEquals("active", stateMessage.metadata().get("previous_state"));
+            assertEquals("waiting_human", stateMessage.metadata().get("current_state"));
+
+            Event controlEvent = fixture.findControlActionEvent(task.sessionId(), task.id(), "escalate");
+            assertLegacyHttpMetadata(controlEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/escalate", null);
+
+            Event stateEvent = fixture.findTaskStateEvent(task.sessionId(), task.id(), "waiting_human");
+            assertLegacyHttpMetadata(stateEvent.payload(), "GET", "/api/v1/tasks/" + task.id() + "/escalate", null);
+            assertEquals("active", stateEvent.payload().get("previous_state"));
+            assertEquals("waiting_human", stateEvent.payload().get("current_state"));
         }
     }
 
@@ -245,9 +343,7 @@ class ControlActionHttpRouteTest {
             assertEquals(200, response.statusCode());
             assertTrue(response.body().path("success").asBoolean());
             assertEquals("closed", response.body().path("data").path("status").asText());
-            assertEquals("true", response.header("Deprecation"));
-            assertEquals(NioHttpServer.LEGACY_WRITE_ROUTE_SUNSET, response.header("Sunset"));
-            assertEquals("POST", response.header("X-AgentCloud-Replacement-Method"));
+            assertDeprecatedGetHeaders(response, "/api/v1/sessions/" + session.id() + "/close");
         }
     }
 
@@ -281,6 +377,25 @@ class ControlActionHttpRouteTest {
         if (reason != null) {
             assertEquals(reason, metadata.get("reason"));
         }
+    }
+
+    private void assertLegacyHttpMetadata(Map<String, Object> metadata, String method, String path, String reason) {
+        assertNotNull(metadata);
+        assertEquals("http_api", metadata.get("requested_via"));
+        assertEquals(method, metadata.get("request_method"));
+        assertEquals(path, metadata.get("request_path"));
+        assertEquals(Boolean.TRUE, metadata.get("legacy_control_route"));
+        if (reason != null) {
+            assertEquals(reason, metadata.get("reason"));
+        }
+    }
+
+    private void assertDeprecatedGetHeaders(ApiCall response, String path) {
+        assertEquals("true", response.header("Deprecation"));
+        assertEquals(NioHttpServer.LEGACY_WRITE_ROUTE_SUNSET, response.header("Sunset"));
+        assertEquals("POST", response.header("X-AgentCloud-Replacement-Method"));
+        assertEquals("<" + path + ">; rel=\"alternate\"; title=\"Use POST\"", response.header("Link"));
+        assertTrue(response.header("Warning").contains("Use POST " + path));
     }
 
     private static final class HttpFixture implements AutoCloseable {

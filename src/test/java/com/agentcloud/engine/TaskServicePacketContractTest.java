@@ -12,6 +12,7 @@ import com.agentcloud.model.Checkpoint;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
 import com.agentcloud.model.HandoffPacketView;
+import com.agentcloud.model.HandoffResult;
 import com.agentcloud.model.ResumePacket;
 import com.agentcloud.model.Session;
 import com.agentcloud.model.Task;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -507,6 +509,162 @@ class TaskServicePacketContractTest {
             assertEquals("codex", routeSurface.get("selected_worker"));
             assertEquals("preassigned", routeSurface.get("route_source"));
             assertEquals("mounted_context_shadow", executionSurface.get("prompt_mode"));
+        }
+    }
+
+    @Test
+    void crossWorkerHandoffToResumePacketPreservesTypedContinuityFields() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("task-service-cross-worker-packet.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            ResumePacketDao packetDao = db.jdbi().onDemand(ResumePacketDao.class);
+            TaskService service = serviceWithControlGraph(db);
+
+            Session session = Session.create("session_cross_worker", "cross worker handoff session", "active");
+            sessionDao.insert(session);
+
+            Task task = new Task(
+                "task_cross_worker",
+                session.id(),
+                null,
+                "prove cross-worker packet stability",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                "Planner phase is complete.",
+                "Ship the task through executor continuation.",
+                "Apply the final executor patch.",
+                "codex",
+                "continue",
+                "Need executor continuation.",
+                Map.of(
+                    "task_type", "coding",
+                    "model_mode", "orchestrated",
+                    "orchestration_stage", "execution_pending",
+                    "prompt_mode", "mounted_context_shadow",
+                    "planner_worker", "codex",
+                    "executor_worker", "kimi",
+                    "open_questions", List.of("Should executor keep the current file layout?"),
+                    "blockers", List.of("Need executor continuation.")
+                )
+            );
+            taskDao.insert(task);
+            taskDao.insert(new Task(
+                "task_cross_worker_done",
+                session.id(),
+                task.id(),
+                "prepare executor brief",
+                "done",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                "Executor brief prepared.",
+                null,
+                null,
+                "codex",
+                "end",
+                null,
+                Map.of()
+            ));
+            taskDao.insert(new Task(
+                "task_cross_worker_pending",
+                session.id(),
+                task.id(),
+                "apply executor patch",
+                "active",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null,
+                null,
+                "Apply the final executor patch.",
+                "kimi",
+                "scheduler",
+                null,
+                Map.of()
+            ));
+            decisionDao.insert(new Decision(
+                "dec_cross_worker",
+                session.id(),
+                task.id(),
+                Instant.now(),
+                "completion_judgment",
+                "Planner output is ready for executor handoff.",
+                "The remaining work is execution-heavy.",
+                "medium",
+                null,
+                Map.of()
+            ));
+            artifactDao.insert(new Artifact(
+                "art_cross_worker",
+                session.id(),
+                task.id(),
+                Instant.now(),
+                "worker_output",
+                "Planner delegation brief",
+                null,
+                null,
+                "Executor can continue from this brief.",
+                Map.of("selected_model_tier", "strong")
+            ));
+
+            // 1. handoff preview carries the typed minimal protocol fields
+            HandoffPacketView preview = service.getHandoffPacket(task.id(), "kimi");
+            assertEquals("task_cross_worker", preview.taskId());
+            assertEquals("codex", preview.fromWorker());
+            assertEquals("kimi", preview.toWorker());
+            assertEquals("1.0", preview.handoffPacket().packetVersion());
+            assertEquals(Boolean.TRUE, preview.handoffPacket().machineReadableFirst());
+            assertEquals("task_cross_worker", preview.handoffPacket().taskIdentity().taskId());
+            assertEquals("kimi", preview.handoffPacket().toWorker());
+            assertTrue(preview.handoffPacket().whyHandoff().contains("delegated execution"));
+            assertTrue(preview.handoffPacket().whatRemaining().stream()
+                .anyMatch(item -> item.contains("Apply the final executor patch")));
+            assertEquals("Apply the final executor patch.", preview.handoffPacket().resumeHint());
+
+            // 2. handoffTask returns a typed handoff packet with the same minimal fields
+            HandoffResult handoff = service.handoffTask(task.id(), "kimi");
+            assertEquals("kimi", handoff.assignedWorker());
+            assertEquals("codex", handoff.previousWorker());
+            assertNotNull(handoff.handoffPacket());
+            assertEquals("task_cross_worker", handoff.handoffPacket().taskIdentity().taskId());
+            assertEquals("codex", handoff.handoffPacket().fromWorker());
+            assertEquals("kimi", handoff.handoffPacket().toWorker());
+            assertTrue(handoff.handoffPacket().whatRemaining().stream()
+                .anyMatch(item -> item.contains("Apply the final executor patch")));
+            assertEquals("Apply the final executor patch.", handoff.handoffPacket().resumeHint());
+
+            // 3. the downstream resume packet (persisted at handoff_before checkpoint) preserves
+            //    cross-worker continuity: the downstream worker assignment and objective survive
+            ResumePacket downstream = service.getLatestPacket(task.id());
+            assertNotNull(downstream, "handoff should persist a transition resume packet for the downstream worker");
+            assertEquals("1.1", downstream.packetVersion());
+            assertEquals(Boolean.TRUE, downstream.machineReadableFirst());
+            assertEquals("task_cross_worker", downstream.taskIdentity().taskId());
+            assertEquals("coding", downstream.taskIdentity().taskType());
+            assertEquals("kimi", downstream.assignedWorker(),
+                "downstream resume packet must carry the receiving worker, not the previous planner");
+            assertEquals("Ship the task through executor continuation.", downstream.currentObjective());
+            assertTrue(downstream.openQuestions().stream()
+                .anyMatch(q -> q.contains("file layout")));
+            assertTrue(downstream.blockers().stream()
+                .anyMatch(b -> b.contains("executor continuation")));
+            assertFalse(downstream.recentArtifacts().isEmpty(),
+                "downstream resume packet must inherit planner artifacts for continuation");
+            assertFalse(downstream.recentDecisions().isEmpty(),
+                "downstream resume packet must inherit planner decisions for continuation");
         }
     }
 

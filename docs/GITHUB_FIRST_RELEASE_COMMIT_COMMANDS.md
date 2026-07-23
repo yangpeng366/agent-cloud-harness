@@ -1,6 +1,8 @@
 # GitHub First Release Commit Commands
 
 > 本文档只回答一个问题：如果现在开始真正收首发提交，三批建议提交各自对应什么 `git add` 命令块，以及当前 worktree 下这些命令块已经被哪一轮真实 `git add -n` / simulated staged diff 证明可用。
+>
+> 历史材料说明：本文保留首发阶段的命令块参考，当前适合在需要 replay 老的 staged slice 时查阅。默认执行入口已经收敛到 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`。
 
 ## 1. Repository Baseline
 

@@ -199,6 +199,17 @@ class ChatFacadeHandler implements HttpHandler {
                 null,
                 response.outputText()
             ));
+            writeSseData(body, new ResponseStreamEvent(
+                "response.output_item.done",
+                null,
+                0,
+                response.output() != null && !response.output().isEmpty() ? response.output().get(0).id() : null,
+                null,
+                response.output() != null && !response.output().isEmpty() ? response.output().get(0) : null,
+                null,
+                null,
+                null
+            ));
             writeSseData(body, new ResponseStreamEvent("response.completed", response, null, null, null, null, null, null, null));
             body.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
             body.flush();

@@ -1,6 +1,8 @@
 # GitHub First Release Next Actions
 
 > 本文档只回答一个问题：在当前仓库状态下，下一步最值得执行的动作是什么，而不是再继续扩展发布辅助脚本。
+>
+> 历史材料说明：本文保留当时首发收口阶段的下一步建议，适合回看当时的发布阻塞项。当前不作为 release 第一入口；如需看当前公开前 gate，请优先看 `docs/GITHUB_RELEASE_CHECKLIST.md`，如需看实际 replay / stage 边界，请看 `docs/GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`。
 
 ## 当前状态摘要
 

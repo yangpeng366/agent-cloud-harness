@@ -4,6 +4,8 @@ import com.agentcloud.model.Task;
 import com.agentcloud.runtime.model.ContinuationAction;
 import com.agentcloud.runtime.model.ContinuationDecision;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -38,12 +40,118 @@ public class RuntimeJudgmentService {
             return ContinuationDecision.of(ContinuationAction.ESCALATE, "metadata.requires_human_confirmation=true", null);
         }
 
+        ContinuationDecision goalDecision = judgeGoalProgress(metadata.get("subgoal_status"));
+        if (goalDecision != null) {
+            return goalDecision;
+        }
+
         String targetWorker = asString(metadata.get("target_worker"));
         if (targetWorker != null && !targetWorker.isBlank() && !targetWorker.equals(task.assignedWorker())) {
             return ContinuationDecision.of(ContinuationAction.HANDOFF, "metadata.target_worker requests reassignment", targetWorker);
         }
 
         return ContinuationDecision.of(ContinuationAction.CONTINUE, "default continue path", null);
+    }
+
+    private ContinuationDecision judgeGoalProgress(Object rawSubgoalStatus) {
+        List<String> statuses = readSubgoalStatuses(rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            return null;
+        }
+
+        int total = statuses.size();
+        int done = 0;
+        int blocked = 0;
+        for (String status : statuses) {
+            if (isDoneSubgoal(status)) {
+                done++;
+            } else if (isBlockedSubgoal(status)) {
+                blocked++;
+            }
+        }
+
+        Map<String, Object> decisionMetadata = Map.of(
+            "subgoal_total", total,
+            "subgoal_done_count", done,
+            "subgoal_blocked_count", blocked
+        );
+        if (blocked > 0) {
+            return new ContinuationDecision(
+                ContinuationAction.ESCALATE,
+                "subgoal blocked requires human gate",
+                null,
+                "goal_progress",
+                decisionMetadata
+            );
+        }
+        if (done == total) {
+            return new ContinuationDecision(
+                ContinuationAction.HALT,
+                "all subgoals done",
+                null,
+                "goal_progress",
+                decisionMetadata
+            );
+        }
+        return new ContinuationDecision(
+            ContinuationAction.CONTINUE,
+            "subgoals still open",
+            null,
+            "goal_progress",
+            decisionMetadata
+        );
+    }
+
+    private List<String> readSubgoalStatuses(Object raw) {
+        List<String> statuses = new ArrayList<>();
+        if (raw instanceof Map<?, ?> map) {
+            for (Object value : map.values()) {
+                String status = readStatusValue(value);
+                if (status != null) {
+                    statuses.add(status);
+                }
+            }
+        } else if (raw instanceof List<?> values) {
+            for (Object value : values) {
+                String status = readStatusValue(value);
+                if (status != null) {
+                    statuses.add(status);
+                }
+            }
+        } else {
+            String status = readStatusValue(raw);
+            if (status != null) {
+                statuses.add(status);
+            }
+        }
+        return statuses;
+    }
+
+    private String readStatusValue(Object raw) {
+        if (raw instanceof Map<?, ?> map) {
+            Object status = map.get("status");
+            if (status == null) {
+                status = map.get("state");
+            }
+            return normalizeStatus(status);
+        }
+        return normalizeStatus(raw);
+    }
+
+    private String normalizeStatus(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString().trim().toLowerCase();
+        return text.isBlank() ? null : text;
+    }
+
+    private boolean isDoneSubgoal(String status) {
+        return List.of("done", "complete", "completed", "accepted").contains(status);
+    }
+
+    private boolean isBlockedSubgoal(String status) {
+        return List.of("blocked", "waiting_human", "human_gate").contains(status);
     }
 
     private boolean isTrue(Object value) {

@@ -68,12 +68,7 @@ function recoveryActionHint(failureClass, recoveryStage) {
 }
 
 function latestTaskOutcomeNarrative(task, flow, max = 320) {
-    const taskId = task?.id;
-    const messages = Array.isArray(flow?.related_messages) ? flow.related_messages : [];
-    const matched = messages
-        .filter((message) => message?.task_id === taskId && ["task_progress", "task_result"].includes((message?.message_type || "").toLowerCase()))
-        .sort((left, right) => Number(left?.created_at || 0) - Number(right?.created_at || 0));
-    const latestOutcome = matched.at(-1) || null;
+    const latestOutcome = latestTaskOutcomeMessage(task, flow);
     const metadata = latestOutcome?.metadata || {};
     const taskMetadata = flow?.task?.metadata || task?.metadata || {};
     const narrative = firstNonBlank(
@@ -86,6 +81,16 @@ function latestTaskOutcomeNarrative(task, flow, max = 320) {
         failureNarrativeFallback(taskMetadata)
     );
     return narrative ? preview(narrative, max) : "";
+}
+
+function latestTaskOutcomeMessage(task, flow) {
+    const taskId = task?.id;
+    const messages = Array.isArray(flow?.related_messages) ? flow.related_messages : [];
+    const outcomeTypes = new Set(["task_progress", "task_result", "worker_round"]);
+    const matched = messages
+        .filter((message) => message?.task_id === taskId && outcomeTypes.has((message?.message_type || "").toLowerCase()))
+        .sort((left, right) => Number(left?.created_at || 0) - Number(right?.created_at || 0));
+    return matched.at(-1) || null;
 }
 
 function activeWorkerLabel(task, flow) {
@@ -417,36 +422,69 @@ function renderPinnedTaskOutcomeSummary(task, flow) {
     }
     const workerLabel = activeWorkerLabel(task, flow);
     const executionStrip = buildThreadExecutionStrip(task, flow, workerLabel);
-    const outcomeStrip = buildThreadOutcomeStrip(task, flow, 260);
+    const outcomeCard = buildPinnedTaskOutcomeCard(task, flow, workerLabel);
     const outputPreview = pinnedTaskOutcomePreview(task, flow, 240);
-    if (!executionStrip && !outcomeStrip && !outputPreview) {
+    if (!executionStrip && !outcomeCard && !outputPreview) {
         return null;
     }
     const taskMetadata = flow?.task?.metadata || task?.metadata || {};
     const detail = messageCardRecoveryDetail(taskMetadata, true);
-    const showBody = Boolean(outputPreview) && !outcomeStrip;
+    const showBody = Boolean(outputPreview) && !outcomeCard;
     return {
         workerLabel,
         executionStrip,
-        outcomeStrip,
+        outcomeCard,
         outputPreview,
         detail,
         showBody
     };
 }
 
-function buildThreadOutcomeStrip(task, flow, max = 220) {
-    const outputPreview = assistantOutputPreview(task, flow, max);
-    const taskStatus = firstNonBlank(task?.status, "active");
-    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, "intake");
-    const detail = [taskStatus, controlNode].filter(Boolean).join(" / ");
-    if (!outputPreview && !detail) {
+function buildPinnedTaskOutcomeCard(task, flow, workerLabel = "") {
+    const taskMetadata = flow?.task?.metadata || task?.metadata || {};
+    const latestOutcome = latestTaskOutcomeMessage(task, flow);
+    const outcomeMetadata = latestOutcome?.metadata || {};
+    const taskStatus = firstNonBlank(task?.status, flow?.task?.status, "active");
+    const controlNode = firstNonBlank(task?.control_node, task?.controlNode, flow?.task?.control_node, flow?.task?.controlNode, "intake");
+    const failureClass = humanizeFailureClass(firstNonBlank(
+        outcomeMetadata.failure_class,
+        outcomeMetadata.failureClass,
+        taskMetadata.failure_class,
+        taskMetadata.failureClass
+    ));
+    const recoveryStage = humanizeRecoveryStage(firstNonBlank(
+        outcomeMetadata.recovery_stage,
+        outcomeMetadata.recoveryStage,
+        taskMetadata.recovery_stage,
+        taskMetadata.recoveryStage
+    ));
+    const statusTitle = humanizePinnedTaskStatus(taskStatus, controlNode, failureClass, recoveryStage);
+    const reason = buildPinnedTaskOutcomeReason(task, flow, taskMetadata, outcomeMetadata, workerLabel);
+    const nextStep = preview(firstNonBlank(
+        taskOutcomeNextStep(task, outcomeMetadata),
+        taskOutcomeNextStep(task, taskMetadata)
+    ), 200);
+    const previewText = pinnedTaskOutcomePreview(task, flow, 220);
+    const reasonForCompare = compressWhitespace(reason);
+    const previewForCompare = compressWhitespace(previewText);
+    const compactPreview = previewForCompare && previewForCompare !== reasonForCompare ? previewText : "";
+    const detail = [
+        workerLabel ? `执行方 · ${workerLabel}` : "",
+        `${taskStatus} / ${controlNode}`
+    ].filter(Boolean).join(" · ");
+    const foot = messageCardRecoveryDetail(taskMetadata, true);
+    if (!statusTitle && !reason && !nextStep && !compactPreview && !detail && !foot) {
         return null;
     }
     return {
-        label: "最近输出",
-        title: outputPreview,
-        detail
+        label: "当前结果",
+        title: statusTitle || "最近输出",
+        detail,
+        reason,
+        nextStep,
+        preview: compactPreview,
+        foot,
+        tone: toneForPinnedTaskOutcome(taskStatus, controlNode)
     };
 }
 
@@ -467,6 +505,78 @@ function looksLikeTerseOutcomeNarrative(value) {
         return true;
     }
     return /进展[:：]\s*(failed|done|ok|success|succeeded|completed?)\b/i.test(text);
+}
+
+function humanizePinnedTaskStatus(status, controlNode, failureClass = "", recoveryStage = "") {
+    const statusLower = firstNonBlank(status).toLowerCase();
+    const controlLower = firstNonBlank(controlNode).toLowerCase();
+    if (statusLower === "done") {
+        return "已完成";
+    }
+    if (statusLower === "failed") {
+        return "执行失败";
+    }
+    if (statusLower === "waiting_human" || controlLower === "human_gate") {
+        return recoveryStage || (failureClass ? `${failureClass}，等待人工确认` : "等待人工确认");
+    }
+    if (statusLower === "paused") {
+        return "已暂停";
+    }
+    if (statusLower === "active" && controlLower === "scheduler") {
+        return "待继续";
+    }
+    if (["active", "running"].includes(statusLower)) {
+        return "执行中";
+    }
+    return humanizeToken(status) || "最近输出";
+}
+
+function buildPinnedTaskOutcomeReason(task, flow, taskMetadata, outcomeMetadata, workerLabel = "") {
+    const directFailure = sanitizeFailureSummaryForDisplay(
+        firstNonBlank(
+            outcomeMetadata.failure_summary_readable,
+            outcomeMetadata.failureSummaryReadable,
+            taskMetadata.failure_summary_readable,
+            taskMetadata.failureSummaryReadable
+        ),
+        firstNonBlank(
+            outcomeMetadata.selected_worker,
+            outcomeMetadata.selectedWorker,
+            outcomeMetadata.assigned_worker,
+            outcomeMetadata.assignedWorker,
+            taskMetadata.previous_worker,
+            taskMetadata.previousWorker,
+            taskMetadata.assigned_worker,
+            taskMetadata.assignedWorker,
+            workerLabel
+        )
+    );
+    if (directFailure) {
+        return directFailure;
+    }
+    const narrative = latestTaskOutcomeNarrative(task, flow, 220);
+    if (narrative && !looksLikeTerseOutcomeNarrative(narrative)) {
+        return narrative;
+    }
+    return preview(assistantOutputPreview(task, flow, 220), 220);
+}
+
+function toneForPinnedTaskOutcome(status, controlNode) {
+    const statusLower = firstNonBlank(status).toLowerCase();
+    const controlLower = firstNonBlank(controlNode).toLowerCase();
+    if (statusLower === "done") {
+        return "done";
+    }
+    if (statusLower === "failed") {
+        return "failed";
+    }
+    if (statusLower === "waiting_human" || controlLower === "human_gate" || statusLower === "paused") {
+        return "paused";
+    }
+    if (["active", "running"].includes(statusLower)) {
+        return "active";
+    }
+    return "default";
 }
 
 function pinnedTaskOutcomePreview(task, flow, max = 240) {
@@ -1014,8 +1124,11 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(pinned.executionStrip.label, "最近执行");
     assert.equal(pinned.executionStrip.title.includes("worker claude"), true);
     assert.equal(pinned.executionStrip.detail.includes("waiting_human / human_gate"), true);
-    assert.equal(pinned.outcomeStrip.label, "最近输出");
-    assert.equal(pinned.outcomeStrip.title.includes("线程未找到 (19120)"), true);
+    assert.equal(pinned.outcomeCard.label, "当前结果");
+    assert.equal(pinned.outcomeCard.title.includes("等待人工确认"), true);
+    assert.equal(pinned.outcomeCard.reason.includes("线程未找到 (19120)"), true);
+    assert.equal(pinned.outcomeCard.nextStep, "");
+    assert.equal(pinned.outcomeCard.foot.includes("等待人工确认"), true);
     assert.equal(pinned.showBody, false);
     assert.equal(flow.task.metadata.failure_class, "worker_runtime_transient");
     const compactPreview = pinnedTaskOutcomePreview(task, flow, 240);
@@ -1031,6 +1144,45 @@ test("selected task gets a pinned latest-round output summary before message lis
     assert.equal(pinned.detail.includes("handoff 1"), false);
     assert.equal(pinned.detail.includes("failure ·"), false);
     assert.equal(pinned.detail.includes("recovery ·"), false);
+});
+
+test("pinned latest-round output promotes next step when available", () => {
+    const task = {
+        id: "task_demo",
+        status: "waiting_human",
+        control_node: "human_gate",
+        assigned_worker: "claude",
+        next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+    };
+    const flow = {
+        task: {
+            id: "task_demo",
+            metadata: {
+                assigned_worker: "claude",
+                previous_worker: "claude",
+                failure_summary_readable: "���: û���ҵ����� \"19120\"��",
+                failure_class: "worker_runtime_transient",
+                recovery_stage: "human_gate_required"
+            }
+        },
+        related_messages: [
+            {
+                id: "msg_progress",
+                task_id: "task_demo",
+                message_type: "task_progress",
+                created_at: 1778680176.4381566,
+                content: "failed",
+                metadata: {
+                    next_step: "Inspect failure trace and decide whether to retry or handoff manually."
+                }
+            }
+        ]
+    };
+
+    const pinned = renderPinnedTaskOutcomeSummary(task, flow);
+    assert.ok(pinned?.outcomeCard);
+    assert.equal(pinned.outcomeCard.nextStep.includes("Inspect failure trace"), true);
+    assert.equal(pinned.outcomeCard.reason.includes("线程未找到 (19120)"), true);
 });
 
 test("active worker label prefers current assigned worker over provider name after auto handoff", () => {

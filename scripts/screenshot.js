@@ -348,16 +348,15 @@ function evaluateProfile(profileName, info) {
     'default shell keeps details folded or lightweight',
     info.taskHashPresent
       || (
-        expectVisibleDetailsRail
-          ? (
-            info.detailsVisible === true
-            && info.detailsRect.width > 0
-            && info.detailsEmptyVisible === true
-            && info.taskOverviewVisible === false
-            && info.taskActionsVisible === false
-            && info.taskDetailsScrollVisible === false
+        info.detailsVisible === false
+          || (
+            expectVisibleDetailsRail
+              && info.detailsRect.width > 0
+              && info.detailsEmptyVisible === true
+              && info.taskOverviewVisible === false
+              && info.taskActionsVisible === false
+              && info.taskDetailsScrollVisible === false
           )
-          : info.detailsVisible === false
       )
       || (
         info.detailsEmptyVisible === true

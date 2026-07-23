@@ -1,9 +1,11 @@
 package com.agentcloud.engine.router;
 
-import com.agentcloud.engine.TaskTypeHeuristics;
+import com.agentcloud.agent.providers.ProviderProfileConfig;
 import com.agentcloud.engine.LearningMemoryService;
+import com.agentcloud.engine.TaskTypeHeuristics;
 import com.agentcloud.model.Task;
 import com.agentcloud.model.Worker;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,6 +36,10 @@ public class WorkerRouter {
         return registry.get(workerId);
     }
 
+    public List<Worker> listReadyWorkers() {
+        return registry.listReady();
+    }
+
     public void markWorkerTemporarilyUnavailable(String workerId, String reason) {
         registry.markTemporarilyUnavailable(workerId, reason);
     }
@@ -55,6 +61,7 @@ public class WorkerRouter {
         String taskType = TaskTypeHeuristics.effectiveTaskType(task, "general");
         String preferredModelTier = resolvePreferredModelTier(task);
         String pinnedWorker = resolvePinnedWorker(task);
+        boolean freeFirstRouting = prefersFreeFirstRouting(task);
 
         if (pinnedWorker != null) {
             Worker pinned = registry.get(pinnedWorker);
@@ -72,8 +79,12 @@ public class WorkerRouter {
                     : capable.stream().map(Worker::workerId).toList();
                 String reason = "selected by task-pinned worker: taskType=" + taskType + ", worker=" + pinned.workerId();
                 log.info(reason);
-                return routeResult(task.id(), pinned, List.of(), reason,
-                    "task_pinned", taskType, pinnedWorker, false, candidateWorkers, null, null, List.of());
+                RouteResult pinnedResult = routeResult(task.id(), pinned, List.of(), reason,
+                    "task_pinned", taskType, pinnedWorker, false, candidateWorkers,
+                    null, null, List.of(), freeFirstRouting, List.of(), List.of(), null,
+                    false, null, List.of());
+                pinnedResult = applyCodexProfileRouting(task, pinnedResult);
+                return attachCodexProfileRouteContext(task, pinnedResult);
             }
             String fallbackReason = pinned == null
                 ? "task-pinned worker '" + pinnedWorker + "' not registered"
@@ -82,8 +93,9 @@ public class WorkerRouter {
                 + firstNonBlank(workspaceRequirement.reason(), "task")
                 : "task-pinned worker '" + pinnedWorker + "' not dispatch ready: "
                 + firstNonBlank(pinnedReadiness != null ? pinnedReadiness.reason() : null, "readiness unknown");
-            RouteResult fallback = selectWorkerWithoutPinned(task, taskType, preferredModelTier);
-            return new RouteResult(
+            RouteResult fallback = selectWorkerWithoutPinned(task, taskType, preferredModelTier, freeFirstRouting);
+            fallback = applyCodexProfileRouting(task, fallback);
+            return attachCodexProfileRouteContext(task, new RouteResult(
                 fallback.taskId(),
                 fallback.selectedWorker(),
                 fallback.fallbackWorkers(),
@@ -103,16 +115,256 @@ public class WorkerRouter {
                 fallback.recoveryDeprioritizedProvider(),
                 fallback.recoveryDeprioritizationReason(),
                 fallback.recoveryExecutionMode(),
+                fallback.freeFirstRouting(),
+                fallback.freeCandidateWorkers(),
+                fallback.paidCandidateWorkers(),
+                fallback.costRouteStage(),
+                fallback.manualWindowRequired(),
+                fallback.recommendedManualProvider(),
+                fallback.manualWindowCandidates(),
                 fallback.currentPinnedRoute(),
                 fallback.recoveryUnpinnedRecommendation(),
                 fallback.dispatchSkippedWorkers()
+            ));
+        }
+
+        RouteResult result = selectWorkerWithoutPinned(task, taskType, preferredModelTier, freeFirstRouting);
+        // codex profile 二层路由：如果选到了 codex，且任务有 workflow_stage 或 preferred_provider_profile，
+        // 则按阶段或显式 pin 切换到对应的 codex profile worker
+        result = applyCodexProfileRouting(task, result);
+        return attachCodexProfileRouteContext(task, result);
+    }
+
+    /**
+     * Codex profile 二层路由。
+     * 规则：
+     * 1. 若 selected worker 已经是 codex profile lane（codex-openai/xfyun/deepseek），直接返回。
+     * 2. 若任务显式指定 preferred_provider_profile，按 profile 选 codex lane。
+     * 3. 否则按 workflow_stage 选 codex lane。
+     * 4. 无阶段且无显式 pin 时保持保守（沿用旧 codex worker）。
+     * 5. codex profile lane 不可用时，回退到旧 codex worker。
+     */
+    private RouteResult applyCodexProfileRouting(Task task, RouteResult result) {
+        if (result == null || !"codex".equals(result.selectedWorker())) {
+            return result;
+        }
+        // 已经是 codex profile lane，不需要二次路由
+        if (isCodexProfileWorker(result.selectedWorker())) {
+            return result;
+        }
+
+        String taskType = result.taskType();
+        String preferredProfile = resolvePreferredProviderProfile(task);
+        String workflowStage = resolveWorkflowStage(task);
+
+        String targetWorkerId = null;
+        String routeReason = null;
+
+        if (preferredProfile != null && !preferredProfile.isBlank()) {
+            targetWorkerId = codexProfileWorkerForProfileId(preferredProfile);
+            routeReason = "codex profile selected by preferred_provider_profile=" + preferredProfile;
+        } else if (workflowStage != null && !workflowStage.isBlank()) {
+            targetWorkerId = codexProfileWorkerForStage(workflowStage);
+            routeReason = "codex profile selected by workflow_stage=" + workflowStage;
+        }
+
+        if (targetWorkerId == null || targetWorkerId.isBlank()) {
+            // 无阶段、无显式 pin：保持保守
+            return result;
+        }
+
+        Worker targetWorker = registry.get(targetWorkerId);
+        WorkerRegistry.ReadinessCheck readiness = targetWorker != null
+            ? registry.checkReadiness(targetWorkerId, "dispatch") : null;
+
+        if (targetWorker != null && readiness != null && readiness.ready()) {
+            log.info("Codex profile routing: task={} from=codex to={} reason={}",
+                task.id(), targetWorkerId, routeReason);
+            return new RouteResult(
+                result.taskId(),
+                targetWorkerId,
+                result.fallbackWorkers(),
+                routeReason,
+                "codex_profile_routing",
+                result.taskType(),
+                result.preferredWorkerHint(),
+                result.learningHintApplied(),
+                result.candidateWorkers(),
+                targetWorker.workerType(),
+                result.selectedModelTier(),
+                result.selectedExecutionRole(),
+                result.selectionScope(),
+                routeReason,
+                result.fallbackReason(),
+                result.recoveryProviderDeprioritized(),
+                result.recoveryDeprioritizedProvider(),
+                result.recoveryDeprioritizationReason(),
+                result.recoveryExecutionMode(),
+                result.freeFirstRouting(),
+                result.freeCandidateWorkers(),
+                result.paidCandidateWorkers(),
+                result.costRouteStage(),
+                result.manualWindowRequired(),
+                result.recommendedManualProvider(),
+                result.manualWindowCandidates(),
+                result.currentPinnedRoute(),
+                result.recoveryUnpinnedRecommendation(),
+                result.dispatchSkippedWorkers()
             );
         }
 
-        return selectWorkerWithoutPinned(task, taskType, preferredModelTier);
+        // codex profile lane 不可用，回退
+        String fallbackReason = "codex profile " + targetWorkerId + " not available; fallback to default codex";
+        log.info(fallbackReason);
+        return new RouteResult(
+            result.taskId(),
+            result.selectedWorker(),
+            result.fallbackWorkers(),
+            result.routeReason(),
+            result.routeSource(),
+            result.taskType(),
+            result.preferredWorkerHint(),
+            result.learningHintApplied(),
+            result.candidateWorkers(),
+            result.selectedWorkerType(),
+            result.selectedModelTier(),
+            result.selectedExecutionRole(),
+            result.selectionScope(),
+            result.whySelected(),
+            mergeReasons(result.fallbackReason(), fallbackReason),
+            result.recoveryProviderDeprioritized(),
+            result.recoveryDeprioritizedProvider(),
+            result.recoveryDeprioritizationReason(),
+            result.recoveryExecutionMode(),
+            result.freeFirstRouting(),
+            result.freeCandidateWorkers(),
+            result.paidCandidateWorkers(),
+            result.costRouteStage(),
+            result.manualWindowRequired(),
+            result.recommendedManualProvider(),
+            result.manualWindowCandidates(),
+            result.currentPinnedRoute(),
+            result.recoveryUnpinnedRecommendation(),
+            result.dispatchSkippedWorkers()
+        );
     }
 
-    private RouteResult selectWorkerWithoutPinned(Task task, String taskType, String preferredModelTier) {
+    private RouteResult attachCodexProfileRouteContext(Task task, RouteResult result) {
+        if (result == null) {
+            return null;
+        }
+        String selectedProviderProfile = resolveSelectedProviderProfile(result.selectedWorker());
+        String preferredProviderProfile = resolvePreferredProviderProfile(task);
+        String workflowStage = resolveWorkflowStage(task);
+        if (java.util.Objects.equals(result.selectedProviderProfile(), selectedProviderProfile)
+            && java.util.Objects.equals(result.preferredProviderProfile(), preferredProviderProfile)
+            && java.util.Objects.equals(result.workflowStage(), workflowStage)) {
+            return result;
+        }
+        return new RouteResult(
+            result.taskId(),
+            result.selectedWorker(),
+            result.fallbackWorkers(),
+            result.routeReason(),
+            result.routeSource(),
+            result.taskType(),
+            result.preferredWorkerHint(),
+            result.learningHintApplied(),
+            result.candidateWorkers(),
+            result.selectedWorkerType(),
+            result.selectedModelTier(),
+            result.selectedExecutionRole(),
+            result.selectionScope(),
+            result.whySelected(),
+            result.fallbackReason(),
+            result.recoveryProviderDeprioritized(),
+            result.recoveryDeprioritizedProvider(),
+            result.recoveryDeprioritizationReason(),
+            result.recoveryExecutionMode(),
+            result.freeFirstRouting(),
+            result.freeCandidateWorkers(),
+            result.paidCandidateWorkers(),
+            result.costRouteStage(),
+            result.manualWindowRequired(),
+            result.recommendedManualProvider(),
+            result.manualWindowCandidates(),
+            selectedProviderProfile,
+            preferredProviderProfile,
+            workflowStage,
+            result.currentPinnedRoute(),
+            result.recoveryUnpinnedRecommendation(),
+            result.dispatchSkippedWorkers()
+        );
+    }
+
+    private boolean isCodexProfileWorker(String workerId) {
+        return "codex-openai".equals(workerId)
+            || "codex-xfyun".equals(workerId)
+            || "codex-deepseek".equals(workerId);
+    }
+
+    private String resolvePreferredProviderProfile(Task task) {
+        if (task == null || task.metadata() == null) {
+            return null;
+        }
+        Object value = task.metadata().get("preferred_provider_profile");
+        return value == null ? null : value.toString();
+    }
+
+    private String resolveWorkflowStage(Task task) {
+        if (task == null || task.metadata() == null) {
+            return null;
+        }
+        Object value = task.metadata().get("workflow_stage");
+        return value == null ? null : value.toString();
+    }
+
+    private String codexProfileWorkerForProfileId(String profileId) {
+        if (profileId == null || profileId.isBlank()) {
+            return null;
+        }
+        String normalized = profileId.toLowerCase();
+        if (normalized.contains("openai") || normalized.contains("strong")) {
+            return "codex-openai";
+        }
+        if (normalized.contains("xfyun") || normalized.contains("execute")) {
+            return "codex-xfyun";
+        }
+        if (normalized.contains("deepseek") || normalized.contains("fallback")) {
+            return "codex-deepseek";
+        }
+        return null;
+    }
+
+    private String codexProfileWorkerForStage(String stage) {
+        if (stage == null || stage.isBlank()) {
+            return null;
+        }
+        return switch (stage.toLowerCase()) {
+            case "design" -> "codex-openai";
+            case "implement" -> "codex-xfyun";
+            case "verify" -> "codex-openai";
+            default -> null;
+        };
+    }
+
+    private String resolveSelectedProviderProfile(String workerId) {
+        String normalizedWorkerId = blankToNull(workerId);
+        if (normalizedWorkerId == null) {
+            return null;
+        }
+        Worker worker = registry.get(normalizedWorkerId);
+        if (worker == null || worker.metadata() == null) {
+            return null;
+        }
+        Object value = worker.metadata().get("provider_profile_id");
+        return value == null ? null : blankToNull(value.toString());
+    }
+
+    private RouteResult selectWorkerWithoutPinned(Task task,
+                                                  String taskType,
+                                                  String preferredModelTier,
+                                                  boolean freeFirstRouting) {
 
         String preferredWorker = learningMemoryService != null
             ? learningMemoryService.selectPreferredWorker(taskType)
@@ -176,8 +428,19 @@ public class WorkerRouter {
             }
             capable = taskContractCapable;
         }
+        List<Worker> autoRouteEligibleCapable = capable.stream()
+            .filter(this::isAutoRouteEligible)
+            .toList();
+        if (autoRouteEligibleCapable.size() != capable.size()) {
+            fallbackReason = mergeReasons(
+                fallbackReason,
+                "auto-route policy skipped manual-only candidate(s)"
+            );
+            capable = autoRouteEligibleCapable;
+        }
         List<String> candidateWorkers = capable.stream().map(Worker::workerId).toList();
-        DispatchReadinessSelection dispatchSelection = selectDispatchReadyWorkers(capable, taskType, true);
+        DispatchReadinessSelection dispatchSelection =
+            selectDispatchReadyWorkers(capable, taskType, !freeFirstRouting, preferredWorker);
         Map<String, WorkerRegistry.ReadinessCheck> dispatchReadinessByWorker = dispatchSelection.readinessByWorker();
         List<Worker> dispatchReadyCapable = dispatchSelection.readyWorkers();
         fallbackReason = mergeReasons(
@@ -188,7 +451,7 @@ public class WorkerRouter {
             dispatchSkippedWorkers(capable, dispatchReadyCapable, dispatchReadinessByWorker);
         if (dispatchReadyCapable.isEmpty() && preferredModelTier != null && tierFallbackCapable != capable) {
             DispatchReadinessSelection tierFallbackDispatchSelection =
-                selectDispatchReadyWorkers(tierFallbackCapable, taskType, true);
+                selectDispatchReadyWorkers(tierFallbackCapable, taskType, !freeFirstRouting, preferredWorker);
             Map<String, WorkerRegistry.ReadinessCheck> tierFallbackDispatchReadinessByWorker =
                 tierFallbackDispatchSelection.readinessByWorker();
             List<Worker> tierFallbackDispatchReady = tierFallbackDispatchSelection.readyWorkers();
@@ -208,6 +471,69 @@ public class WorkerRouter {
             }
         }
 
+        List<String> manualWindowCandidates = availableManualWindowCandidates(task, taskType);
+        List<String> freeCandidateWorkers = freeFirstRouting
+            ? dispatchReadyCapable.stream()
+                .filter(this::isFreeAutoWorker)
+                .map(Worker::workerId)
+                .toList()
+            : List.of();
+        List<String> paidCandidateWorkers = freeFirstRouting
+            ? dispatchReadyCapable.stream()
+                .filter(this::isPaidAutoWorker)
+                .map(Worker::workerId)
+                .toList()
+            : List.of();
+        String costRouteStage = null;
+        String quotaFallbackReason = null;
+        String recommendedManualProvider = null;
+        boolean manualWindowRequired = false;
+
+        if (freeFirstRouting) {
+            List<Worker> freeWorkers = dispatchReadyCapable.stream()
+                .filter(this::isFreeAutoWorker)
+                .toList();
+            List<Worker> paidWorkers = dispatchReadyCapable.stream()
+                .filter(this::isPaidAutoWorker)
+                .toList();
+            List<Worker> quotaBlockedFreeWorkers = dispatchReadyCapable.stream()
+                .filter(this::isFreeAutoWorker)
+                .filter(worker -> isQuotaExhausted(task, worker))
+                .toList();
+            if (!quotaBlockedFreeWorkers.isEmpty()) {
+                quotaFallbackReason = "free provider quota exhausted: " + String.join(", ",
+                    quotaBlockedFreeWorkers.stream().map(Worker::workerId).toList());
+                freeWorkers = freeWorkers.stream()
+                    .filter(worker -> !isQuotaExhausted(task, worker))
+                    .toList();
+            }
+            if (!freeWorkers.isEmpty()) {
+                dispatchReadyCapable = freeWorkers.stream()
+                    .sorted(freeFirstFreeWorkerComparator(taskType).reversed())
+                    .toList();
+                costRouteStage = "free_auto";
+                fallbackReason = mergeReasons(fallbackReason, quotaFallbackReason);
+            } else if (!paidWorkers.isEmpty() && paidFallbackAllowed(task)) {
+                dispatchReadyCapable = paidWorkers;
+                costRouteStage = "paid_auto";
+                fallbackReason = mergeReasons(
+                    fallbackReason,
+                    firstNonBlank(quotaFallbackReason, "free_auto unavailable; fallback to paid_auto")
+                );
+            } else if (manualWindowFallbackAllowed(task) && !manualWindowCandidates.isEmpty()) {
+                dispatchReadyCapable = List.of();
+                manualWindowRequired = true;
+                costRouteStage = "manual_window_recommendation";
+                recommendedManualProvider = manualWindowCandidates.get(0);
+                fallbackReason = mergeReasons(
+                    fallbackReason,
+                    firstNonBlank(quotaFallbackReason, "no automatic provider available; manual window required")
+                );
+            } else {
+                fallbackReason = mergeReasons(fallbackReason, quotaFallbackReason);
+            }
+        }
+
         if (preferredWorker != null && !preferredWorker.isBlank()) {
             Worker hinted = dispatchReadyCapable.stream()
                 .filter(w -> preferredWorker.equals(w.workerId()))
@@ -224,7 +550,8 @@ public class WorkerRouter {
                 return routeResult(task.id(), hinted, fallbacks, reason,
                     "learning_memory", taskType, preferredWorker, true, candidateWorkers,
                     suppressNonBlockingFallbackReason(fallbackReason), null,
-                    dispatchSkippedWorkers);
+                    dispatchSkippedWorkers, freeFirstRouting, freeCandidateWorkers, paidCandidateWorkers,
+                    costRouteStage, false, null, manualWindowCandidates);
             }
             fallbackReason = mergeReasons(
                 fallbackReason,
@@ -236,9 +563,16 @@ public class WorkerRouter {
         Worker selected = dispatchReadyCapable.isEmpty() ? null : dispatchReadyCapable.get(0);
 
         if (selected == null) {
+            if (manualWindowRequired) {
+                return routeResult(task.id(), null, List.of(), "manual window provider required",
+                    "manual_window_required", taskType, preferredWorker, false, candidateWorkers,
+                    fallbackReason, null, dispatchSkippedWorkers, freeFirstRouting, freeCandidateWorkers,
+                    paidCandidateWorkers, costRouteStage, true, recommendedManualProvider, manualWindowCandidates);
+            }
             return routeResult(task.id(), null, List.of(), "no capable worker found",
                 "none", taskType, preferredWorker, false, candidateWorkers, fallbackReason, null,
-                dispatchSkippedWorkers);
+                dispatchSkippedWorkers, freeFirstRouting, freeCandidateWorkers, paidCandidateWorkers,
+                costRouteStage, false, null, manualWindowCandidates);
         }
 
         List<String> fallbacks = dispatchReadyCapable.stream()
@@ -261,7 +595,8 @@ public class WorkerRouter {
         return routeResult(task.id(), selected, fallbacks, reason,
             readyFallback ? "ready_fallback" : "capability_match",
             taskType, preferredWorker, false, candidateWorkers, fallbackReason, null,
-            dispatchSkippedWorkers);
+            dispatchSkippedWorkers, freeFirstRouting, freeCandidateWorkers, paidCandidateWorkers,
+            costRouteStage, false, null, manualWindowCandidates);
     }
 
     private String resolvePreferredModelTier(Task task) {
@@ -306,7 +641,14 @@ public class WorkerRouter {
                                     List<String> candidateWorkers,
                                     String fallbackReason,
                                     String recoveryExecutionMode,
-                                    List<RouteSkippedWorker> dispatchSkippedWorkers) {
+                                    List<RouteSkippedWorker> dispatchSkippedWorkers,
+                                    boolean freeFirstRouting,
+                                    List<String> freeCandidateWorkers,
+                                    List<String> paidCandidateWorkers,
+                                    String costRouteStage,
+                                    boolean manualWindowRequired,
+                                    String recommendedManualProvider,
+                                    List<String> manualWindowCandidates) {
         return new RouteResult(
             taskId,
             selected != null ? selected.workerId() : null,
@@ -327,6 +669,13 @@ public class WorkerRouter {
             null,
             null,
             blankToNull(recoveryExecutionMode),
+            freeFirstRouting,
+            freeCandidateWorkers == null ? List.of() : freeCandidateWorkers,
+            paidCandidateWorkers == null ? List.of() : paidCandidateWorkers,
+            blankToNull(costRouteStage),
+            manualWindowRequired,
+            blankToNull(recommendedManualProvider),
+            manualWindowCandidates == null ? List.of() : manualWindowCandidates,
             null,
             null,
             dispatchSkippedWorkers == null ? List.of() : dispatchSkippedWorkers
@@ -433,6 +782,105 @@ public class WorkerRouter {
             && worker.toolCapabilities() != null && !worker.toolCapabilities().isEmpty();
     }
 
+    private boolean prefersFreeFirstRouting(Task task) {
+        String policy = metadataString(task != null ? task.metadata() : null, "provider_routing_policy");
+        return "free_first".equalsIgnoreCase(blankToNull(policy));
+    }
+
+    private boolean paidFallbackAllowed(Task task) {
+        return metadataBoolean(task != null ? task.metadata() : null, "paid_fallback_allowed", true);
+    }
+
+    private boolean manualWindowFallbackAllowed(Task task) {
+        return metadataBoolean(task != null ? task.metadata() : null, "manual_window_fallback_allowed", true);
+    }
+
+    private boolean metadataBoolean(Map<String, Object> metadata, String key, boolean defaultValue) {
+        String value = metadataString(metadata, key);
+        return value == null ? defaultValue : Boolean.parseBoolean(value);
+    }
+
+    private boolean isAutoRouteEligible(Worker worker) {
+        String policy = metadataString(worker != null ? worker.metadata() : null, "auto_route_policy");
+        return !"manual_only".equalsIgnoreCase(blankToNull(policy));
+    }
+
+    private boolean isFreeAutoWorker(Worker worker) {
+        String costClass = metadataString(worker != null ? worker.metadata() : null, "provider_cost_class");
+        return "free_auto".equalsIgnoreCase(costClass) || "free_auto_guarded".equalsIgnoreCase(costClass);
+    }
+
+    private boolean isPaidAutoWorker(Worker worker) {
+        String costClass = metadataString(worker != null ? worker.metadata() : null, "provider_cost_class");
+        return "paid_auto".equalsIgnoreCase(costClass);
+    }
+
+    private boolean isQuotaExhausted(Task task, Worker worker) {
+        if (worker == null) {
+            return false;
+        }
+        Map<String, Object> taskMetadata = task != null ? task.metadata() : null;
+        if (metadataBoolean(worker.metadata(), "quota_exhausted", false)) {
+            return true;
+        }
+        Map<String, Object> quotaState = metadataMap(taskMetadata, "user_reported_quota_state");
+        if (quotaState == null || quotaState.isEmpty()) {
+            return false;
+        }
+        String state = metadataString(quotaState, worker.workerId());
+        return "quota_exhausted".equalsIgnoreCase(blankToNull(state))
+            || "user_reported_exhausted".equalsIgnoreCase(blankToNull(state));
+    }
+
+    private List<String> manualWindowCandidates(Task task, String taskType) {
+        List<String> declared = metadataStringList(task != null ? task.metadata() : null, "manual_window_candidates");
+        if (!declared.isEmpty()) {
+            return declared;
+        }
+        if ("coding".equalsIgnoreCase(blankToNull(taskType)) || "continuation".equalsIgnoreCase(blankToNull(taskType))) {
+            return List.of("trae", "zcode");
+        }
+        return List.of();
+    }
+
+    private List<String> availableManualWindowCandidates(Task task, String taskType) {
+        List<String> declared = manualWindowCandidates(task, taskType);
+        if (declared.isEmpty()) {
+            return List.of();
+        }
+        Map<String, Object> quotaState = metadataMap(task != null ? task.metadata() : null, "user_reported_quota_state");
+        List<String> available = declared.stream()
+            .filter(candidate -> !manualWindowQuotaExhausted(quotaState, candidate))
+            .toList();
+        if (!available.isEmpty()) {
+            return available;
+        }
+        return List.of();
+    }
+
+    private boolean manualWindowQuotaExhausted(Map<String, Object> quotaState, String candidate) {
+        String state = metadataString(quotaState, candidate);
+        return "quota_exhausted".equalsIgnoreCase(blankToNull(state))
+            || "user_reported_exhausted".equalsIgnoreCase(blankToNull(state));
+    }
+
+    private Map<String, Object> metadataMap(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return Map.of();
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Map<?, ?> map) {
+            LinkedHashMap<String, Object> converted = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() != null) {
+                    converted.put(entry.getKey().toString(), entry.getValue());
+                }
+            }
+            return converted;
+        }
+        return Map.of();
+    }
+
     private String explainLocalWorkspaceAccessFallback(List<Worker> before,
                                                        List<Worker> after,
                                                        String reason) {
@@ -486,13 +934,13 @@ public class WorkerRouter {
     }
 
     private boolean metadataBoolean(Map<String, Object> metadata, String key) {
-        String value = metadataString(metadata, key);
-        return value != null && Boolean.parseBoolean(value);
+        return metadataBoolean(metadata, key, false);
     }
 
     private DispatchReadinessSelection selectDispatchReadyWorkers(List<Worker> workers,
                                                                   String taskType,
-                                                                  boolean stopAfterFirstReady) {
+                                                                  boolean stopAfterFirstReady,
+                                                                  String preferredWorkerId) {
         Map<String, WorkerRegistry.ReadinessCheck> readinessByWorker = new LinkedHashMap<>();
         List<Worker> readyWorkers = new ArrayList<>();
         if (workers == null) {
@@ -502,17 +950,26 @@ public class WorkerRouter {
             .filter(worker -> worker != null && worker.workerId() != null)
             .sorted(routeComparator(taskType).reversed())
             .toList();
+        boolean firstReadyFound = false;
+        boolean preferredEvaluated = preferredWorkerId == null || preferredWorkerId.isBlank();
         for (Worker worker : ordered) {
             if (worker == null || worker.workerId() == null) {
                 continue;
             }
             WorkerRegistry.ReadinessCheck readiness = registry.checkReadiness(worker.workerId(), "dispatch");
             readinessByWorker.put(worker.workerId(), readiness);
+            if (!preferredEvaluated && preferredWorkerId.equals(worker.workerId())) {
+                preferredEvaluated = true;
+            }
             if (readiness != null && readiness.ready()) {
                 readyWorkers.add(worker);
-                if (stopAfterFirstReady) {
+                firstReadyFound = true;
+                if (stopAfterFirstReady && preferredEvaluated) {
                     break;
                 }
+            }
+            if (stopAfterFirstReady && firstReadyFound && preferredEvaluated) {
+                break;
             }
         }
         return new DispatchReadinessSelection(readyWorkers, readinessByWorker);
@@ -609,6 +1066,14 @@ public class WorkerRouter {
             .thenComparing(Worker::workerId);
     }
 
+    private Comparator<Worker> freeFirstFreeWorkerComparator(String taskType) {
+        return Comparator
+            .comparingInt((Worker worker) -> exactCapabilityMatches(worker, taskType))
+            .thenComparingInt(this::freeAutoPreference)
+            .thenComparingInt(this::selectionPriority)
+            .thenComparing(Worker::workerId);
+    }
+
     private int exactCapabilityMatches(Worker worker, String taskType) {
         if (worker == null || worker.capabilities() == null || taskType == null || taskType.isBlank()) {
             return 0;
@@ -628,6 +1093,17 @@ public class WorkerRouter {
         } catch (NumberFormatException ignored) {
             return 0;
         }
+    }
+
+    private int freeAutoPreference(Worker worker) {
+        String costClass = metadataString(worker != null ? worker.metadata() : null, "provider_cost_class");
+        if ("free_auto".equalsIgnoreCase(costClass)) {
+            return 2;
+        }
+        if ("free_auto_guarded".equalsIgnoreCase(costClass)) {
+            return 1;
+        }
+        return 0;
     }
 
     private String resolvePinnedWorker(Task task) {
@@ -670,11 +1146,28 @@ public class WorkerRouter {
         return normalized;
     }
 
+    public static String manualFollowupInstruction(String recommendedManualProvider) {
+        String recommended = firstNonBlankStatic(recommendedManualProvider, "trae");
+        return "请切到 " + recommended + " 窗口手动输入当前任务，完成后将结果回填到当前 task 再继续。";
+    }
+
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
     }
 
     private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String firstNonBlankStatic(String... values) {
         if (values == null) {
             return null;
         }
@@ -708,10 +1201,92 @@ public class WorkerRouter {
         String recoveryDeprioritizedProvider,
         String recoveryDeprioritizationReason,
         String recoveryExecutionMode,
+        boolean freeFirstRouting,
+        List<String> freeCandidateWorkers,
+        List<String> paidCandidateWorkers,
+        String costRouteStage,
+        boolean manualWindowRequired,
+        String recommendedManualProvider,
+        List<String> manualWindowCandidates,
+        String selectedProviderProfile,
+        String preferredProviderProfile,
+        String workflowStage,
         RouteDiagnostic currentPinnedRoute,
         RouteDiagnostic recoveryUnpinnedRecommendation,
         List<RouteSkippedWorker> dispatchSkippedWorkers
-    ) {}
+    ) {
+        @JsonProperty("manual_followup_instruction")
+        public String manualFollowupInstruction() {
+            return manualWindowRequired ? WorkerRouter.manualFollowupInstruction(recommendedManualProvider) : null;
+        }
+
+        public RouteResult(
+            String taskId,
+            String selectedWorker,
+            List<String> fallbackWorkers,
+            String routeReason,
+            String routeSource,
+            String taskType,
+            String preferredWorkerHint,
+            boolean learningHintApplied,
+            List<String> candidateWorkers,
+            String selectedWorkerType,
+            String selectedModelTier,
+            String selectedExecutionRole,
+            String selectionScope,
+            String whySelected,
+            String fallbackReason,
+            Boolean recoveryProviderDeprioritized,
+            String recoveryDeprioritizedProvider,
+            String recoveryDeprioritizationReason,
+            String recoveryExecutionMode,
+            boolean freeFirstRouting,
+            List<String> freeCandidateWorkers,
+            List<String> paidCandidateWorkers,
+            String costRouteStage,
+            boolean manualWindowRequired,
+            String recommendedManualProvider,
+            List<String> manualWindowCandidates,
+            RouteDiagnostic currentPinnedRoute,
+            RouteDiagnostic recoveryUnpinnedRecommendation,
+            List<RouteSkippedWorker> dispatchSkippedWorkers
+        ) {
+            this(
+                taskId,
+                selectedWorker,
+                fallbackWorkers,
+                routeReason,
+                routeSource,
+                taskType,
+                preferredWorkerHint,
+                learningHintApplied,
+                candidateWorkers,
+                selectedWorkerType,
+                selectedModelTier,
+                selectedExecutionRole,
+                selectionScope,
+                whySelected,
+                fallbackReason,
+                recoveryProviderDeprioritized,
+                recoveryDeprioritizedProvider,
+                recoveryDeprioritizationReason,
+                recoveryExecutionMode,
+                freeFirstRouting,
+                freeCandidateWorkers,
+                paidCandidateWorkers,
+                costRouteStage,
+                manualWindowRequired,
+                recommendedManualProvider,
+                manualWindowCandidates,
+                null,
+                null,
+                null,
+                currentPinnedRoute,
+                recoveryUnpinnedRecommendation,
+                dispatchSkippedWorkers
+            );
+        }
+    }
 
     public record RouteSkippedWorker(
         String workerId,
@@ -743,11 +1318,57 @@ public class WorkerRouter {
         String fallbackReason,
         String preferredWorkerHint,
         boolean learningHintApplied,
+        String selectedProviderProfile,
+        String preferredProviderProfile,
+        String workflowStage,
         String recoveryExecutionMode,
         Boolean providerDeprioritized,
         String deprioritizedProvider,
         String deprioritizationReason,
         List<String> candidateWorkers,
         List<String> fallbackWorkers
-    ) {}
+    ) {
+        public RouteDiagnostic(
+            String selectedWorker,
+            String routeSource,
+            String taskType,
+            String selectedWorkerType,
+            String selectedModelTier,
+            String selectedExecutionRole,
+            String selectionScope,
+            String whySelected,
+            String fallbackReason,
+            String preferredWorkerHint,
+            boolean learningHintApplied,
+            String recoveryExecutionMode,
+            Boolean providerDeprioritized,
+            String deprioritizedProvider,
+            String deprioritizationReason,
+            List<String> candidateWorkers,
+            List<String> fallbackWorkers
+        ) {
+            this(
+                selectedWorker,
+                routeSource,
+                taskType,
+                selectedWorkerType,
+                selectedModelTier,
+                selectedExecutionRole,
+                selectionScope,
+                whySelected,
+                fallbackReason,
+                preferredWorkerHint,
+                learningHintApplied,
+                null,
+                null,
+                null,
+                recoveryExecutionMode,
+                providerDeprioritized,
+                deprioritizedProvider,
+                deprioritizationReason,
+                candidateWorkers,
+                fallbackWorkers
+            );
+        }
+    }
 }

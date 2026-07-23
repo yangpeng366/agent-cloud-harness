@@ -1,0 +1,9 @@
+# Worker 优先级配置文件
+# 数值越大优先级越高
+# 如果未配置，则使用代码中的默认值
+
+workers:
+  - codex: 100
+  - reasonix: 90
+  - deepseek: 88
+  - kimi: 85

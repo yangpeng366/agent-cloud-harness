@@ -29,6 +29,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Runtime Control Node Graph
@@ -39,6 +42,7 @@ public class ControlNodeGraph {
     private static final MountedContextPromptRenderer JUDGMENT_PROMPT_RENDERER = new MountedContextPromptRenderer();
     private static final int FAILURE_SUMMARY_LIMIT = 220;
     private static final int PLANNER_DELEGATION_OUTPUT_LIMIT = 12_000;
+    private static final long WORKER_EXECUTION_TIMEOUT_SECONDS = 120;
     private static final Pattern THREAD_NOT_FOUND_EN_WITH_PARENS = Pattern.compile("thread not found\\s*\\(([\\w-]+)\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern THREAD_NOT_FOUND_EN = Pattern.compile("thread not found\\s*[:：]?\\s*([\\w-]+)?", Pattern.CASE_INSENSITIVE);
     private static final Pattern THREAD_NOT_FOUND_ZH = Pattern.compile("(没找到线程|未找到线程)\\s*[\"“]?([\\w-]+)[\"”]?", Pattern.CASE_INSENSITIVE);
@@ -220,6 +224,10 @@ public class ControlNodeGraph {
                 if (route.selectedWorker() != null) {
                     task = syncAssignedWorkerMetadata(task.withAssignedWorker(route.selectedWorker()));
                     log.info("[Scheduler] task={} routed to worker={}", task.id(), route.selectedWorker());
+                } else if (route.manualWindowRequired()) {
+                    Task gated = applyManualWindowGate(task, route);
+                    taskDao.updateState(gated);
+                    return humanGateNode(gated);
                 }
             }
             Task checkedTask = ensureDispatchReadyBeforeExecution(task);
@@ -251,7 +259,7 @@ public class ControlNodeGraph {
             Instant runStartedAt = Instant.now();
             AgentRunRecord agentRun = null;
             try {
-                executionResult = workerExecutor.executeOneRound(ctx, task.assignedWorker());
+                executionResult = executeOneRoundWithTimeout(ctx, task.assignedWorker());
                 executionResult = enrichCurrentRoundWorkerMetadata(
                     task,
                     route,
@@ -369,6 +377,20 @@ public class ControlNodeGraph {
             }
         } else {
             log.warn("[Scheduler] task={} has no assigned worker, skipping execution", task.id());
+            if (route != null && route.manualWindowRequired()) {
+                Task gated = applyManualWindowGate(task, route);
+                taskDao.updateState(gated);
+                emitEvent(gated, "worker_round",
+                    "No automatic worker assigned; manual window provider required",
+                    metadataOf(
+                        "control_node", "worker_round",
+                        "manual_window_required", true,
+                        "recommended_manual_provider", route.recommendedManualProvider(),
+                        "manual_window_candidates", route.manualWindowCandidates(),
+                        "cost_route_stage", route.costRouteStage()
+                    ));
+                return humanGateNode(gated);
+            }
             emitEvent(task, "worker_round", "No worker assigned, execution skipped");
         }
 
@@ -580,19 +602,26 @@ public class ControlNodeGraph {
             execDecision.nextStep(),
             completionDecision.suggestedNextAction()
         );
+        // P1 Goal progress auto-update: 根据 worker 执行结果自动迁移 subgoal_status
+        enrichedTask = autoUpdateSubgoalStatus(enrichedTask, executionResult);
+        // P3 Loop activity: 每次 continueNode 完成后更新 last_loop_tick
+        enrichedTask = withMetadataEntries(enrichedTask, "last_loop_tick", Instant.now().toString());
         if (!sameState(task, enrichedTask)) {
             taskDao.updateState(enrichedTask);
             task = enrichedTask;
         }
 
         // 根据 decision 选择下一状态迁移
+        Object subgoalStatus = task != null && task.metadata() != null ? task.metadata().get("subgoal_status") : null;
+        String goalProgressReason = resolveGoalProgressReason(subgoalStatus);
         String resolvedAction = resolveAction(
             execDecision.action(),
             completionDecision.status(),
             completionDecision.alignmentLevel(),
             execDecision.needsContextReopen(),
             execDecision.needsArchiveRetrieval(),
-            execDecision.needsExternalFactRefresh()
+            execDecision.needsExternalFactRefresh(),
+            subgoalStatus
         );
         if (List.of("done", "checkpoint_then_done").contains(resolvedAction)) {
             Task completedStage = markOrchestrationCompleted(task);
@@ -630,7 +659,29 @@ public class ControlNodeGraph {
                 yield moved;
             }
             case "escalate", "wait", "human_gate" -> {
-                Task moved = task.withStatus("waiting_human").withControlNode("human_gate");
+                // P2 Advisory Handoff: small-tier worker ESCALATE 时优先 handoff 给 strong-tier advisory worker
+                String currentModelTier = metadataString(latestWorkerMetadata, "selected_model_tier");
+                if (currentModelTier == null || currentModelTier.isBlank()) {
+                    currentModelTier = workerMetadata(task.assignedWorker(), "model_tier");
+                }
+                String advisoryWorker = resolveAdvisoryHandoff(task, currentModelTier);
+                if (advisoryWorker != null) {
+                    log.info("[Advisory] task={} small-tier worker={} escalates, advisory handoff to strong-tier worker={}",
+                        task.id(), task.assignedWorker(), advisoryWorker);
+                    Task advisoryTask = withMetadataEntries(
+                        task.withAssignedWorker(advisoryWorker).withControlNode("handoff"),
+                        "handoff_reason", "advisory_consult",
+                        "advisory_source_worker", firstNonBlank(task.assignedWorker(), "unassigned"),
+                        "advisory_target_worker", advisoryWorker,
+                        "advisory_trigger", "escalate_from_small_tier"
+                    );
+                    taskDao.updateState(advisoryTask);
+                    yield handoffNode(advisoryTask, true);
+                }
+                // Fallback: no strong-tier advisory worker available, enter human gate
+                Task moved = task.withStatus("waiting_human")
+                    .withControlNode("human_gate")
+                    .withWaitingReason(firstNonBlank(goalProgressReason, task.waitingReason(), "human gate required"));
                 taskDao.updateState(moved);
                 yield moved;
             }
@@ -662,7 +713,30 @@ public class ControlNodeGraph {
                                  String alignmentLevel,
                                  boolean needsContextReopen,
                                  boolean needsArchiveRetrieval,
-                                 boolean needsExternalFactRefresh) {
+                                 boolean needsExternalFactRefresh,
+                                 Object subgoalStatus) {
+        // Goal progress priority: 如果 subgoal_status 存在，优先于单轮 execution result
+        // 验收标准 #2: decide 必须消费 goal 进度，而非只看单轮执行结果
+        String goalAction = resolveGoalProgressAction(subgoalStatus);
+        if (goalAction != null) {
+            // blocked subgoal -> human_gate, 优先于 done/continue
+            if ("human_gate".equals(goalAction)) {
+                return "human_gate";
+            }
+            // all subgoals done -> done, 优先于单轮 result 说 continue
+            if ("done".equals(goalAction)) {
+                return "done";
+            }
+            // open subgoals -> 不允许直接 done/halt，必须继续
+            // 如果 execution 说 done 但 goal 说 continue -> checkpoint（保存进度但不标记完成）
+            if ("continue".equals(goalAction)) {
+                if ("done".equals(executionAction) || "checkpoint_then_done".equals(executionAction)) {
+                    return "checkpoint";
+                }
+                // 其他 execution action 由下面的 execution result 逻辑细分
+            }
+        }
+
         if ("checkpoint".equals(executionAction)
             && isDoneStatus(completionStatus)
             && !"low".equalsIgnoreCase(alignmentLevel)) {
@@ -707,6 +781,84 @@ public class ControlNodeGraph {
         return List.of("misaligned", "needs_clarification").contains(completionStatus.toLowerCase());
     }
 
+    private String resolveGoalProgressReason(Object rawSubgoalStatus) {
+        List<String> statuses = readSubgoalStatuses(rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            return null;
+        }
+        return statuses.stream().anyMatch(this::isBlockedSubgoalStatus)
+            ? "subgoal blocked requires human gate"
+            : null;
+    }
+
+    private String resolveGoalProgressAction(Object rawSubgoalStatus) {
+        List<String> statuses = readSubgoalStatuses(rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            return null;
+        }
+        boolean anyBlocked = statuses.stream().anyMatch(this::isBlockedSubgoalStatus);
+        if (anyBlocked) {
+            return "human_gate";
+        }
+        boolean allDone = statuses.stream().allMatch(this::isDoneSubgoalStatus);
+        return allDone ? "done" : "continue";
+    }
+
+    private List<String> readSubgoalStatuses(Object raw) {
+        if (raw == null) {
+            return List.of();
+        }
+        List<String> statuses = new ArrayList<>();
+        if (raw instanceof Map<?, ?> map) {
+            for (Object value : map.values()) {
+                String status = readSubgoalStatus(value);
+                if (status != null) {
+                    statuses.add(status);
+                }
+            }
+        } else if (raw instanceof List<?> values) {
+            for (Object value : values) {
+                String status = readSubgoalStatus(value);
+                if (status != null) {
+                    statuses.add(status);
+                }
+            }
+        } else {
+            String status = readSubgoalStatus(raw);
+            if (status != null) {
+                statuses.add(status);
+            }
+        }
+        return statuses;
+    }
+
+    private String readSubgoalStatus(Object raw) {
+        if (raw instanceof Map<?, ?> map) {
+            Object status = map.get("status");
+            if (status == null) {
+                status = map.get("state");
+            }
+            return normalizeSubgoalStatus(status);
+        }
+        return normalizeSubgoalStatus(raw);
+    }
+
+    private String normalizeSubgoalStatus(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        String text = raw.toString().trim().toLowerCase();
+        return text.isBlank() ? null : text;
+    }
+
+    private boolean isDoneSubgoalStatus(String status) {
+        return List.of("done", "complete", "completed", "accepted").contains(status);
+    }
+
+    private boolean isBlockedSubgoalStatus(String status) {
+        return List.of("blocked", "waiting_human", "human_gate").contains(status);
+    }
+
     private Task enrichTaskFromJudgment(Task task, WorkerExecutionResult executionResult, String latestOutput,
                                         String executionNextStep, String completionNextAction) {
         Task updated = task;
@@ -737,6 +889,181 @@ public class ControlNodeGraph {
             updated = updated.withNextStep(nextStep);
         }
         return updated;
+    }
+
+    /**
+     * P1 Goal progress auto-update: 根据 worker 执行结果自动迁移 subgoal_status。
+     * 初版规则：
+     * - execution completed 且无 error -> 当前 in_progress subgoal 标为 done
+     * - execution failed -> 当前 in_progress subgoal 标为 blocked
+     * - execution 无 subgoal_status 或为空 -> 不更新
+     */
+    private Task autoUpdateSubgoalStatus(Task task, WorkerExecutionResult executionResult) {
+        if (task == null || task.metadata() == null) {
+            return task;
+        }
+        Object rawSubgoalStatus = task.metadata().get("subgoal_status");
+        if (rawSubgoalStatus == null) {
+            return task;
+        }
+
+        // 判断 worker 执行结果
+        boolean executionCompleted = executionResult != null
+            && "completed".equals(executionResult.executionStatus());
+        boolean executionFailed = executionResult != null
+            && "failed".equals(executionResult.executionStatus());
+
+        boolean executionRunning = executionResult != null
+            && "running".equals(executionResult.executionStatus());
+
+        if (!executionCompleted && !executionFailed && !executionRunning) {
+            return task;
+        }
+
+        // execution running: mark first pending subgoal as in_progress
+        if (executionRunning) {
+            Map<String, Object> updatedMetadata = new LinkedHashMap<>(task.metadata());
+            Object updatedSubgoalStatus = migrateFirstPendingToInProgress(rawSubgoalStatus);
+            if (updatedSubgoalStatus != null) {
+                updatedMetadata.put("subgoal_status", updatedSubgoalStatus);
+                return task.withMetadata(updatedMetadata);
+            }
+            return task;
+        }
+
+        // 构建 updated subgoal_status: 将第一个 in_progress subgoal 迁移
+        Map<String, Object> updatedMetadata = new LinkedHashMap<>(task.metadata());
+        Object updatedSubgoalStatus = migrateFirstInProgressSubgoal(rawSubgoalStatus,
+            executionCompleted ? "done" : "blocked");
+        if (updatedSubgoalStatus == null) {
+            return task;
+        }
+        updatedMetadata.put("subgoal_status", updatedSubgoalStatus);
+
+        // 更新 progress_summary
+        List<String> newStatuses = readSubgoalStatuses(updatedSubgoalStatus);
+        int total = newStatuses.size();
+        long doneCount = newStatuses.stream().filter(this::isDoneSubgoalStatus).count();
+        updatedMetadata.put("progress_summary", doneCount + "/" + total + " subgoals done");
+
+        return task.withMetadata(updatedMetadata);
+    }
+
+    /**
+     * 将 subgoal_status 中第一个 in_progress 的 subgoal 迁移为 targetStatus。
+     * 返回 null 表示没有找到 in_progress subgoal 或输入格式不支持。
+     */
+    private Object migrateFirstInProgressSubgoal(Object rawSubgoalStatus, String targetStatus) {
+        if (rawSubgoalStatus instanceof List<?> list) {
+            List<Object> updated = new ArrayList<>();
+            boolean migrated = false;
+            for (Object item : list) {
+                if (!migrated && item instanceof Map<?, ?> map) {
+                    String status = readSubgoalStatus(item);
+                    if ("in_progress".equals(status) || "pending".equals(status)) {
+                        Map<String, Object> updatedItem = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> entry : map.entrySet()) {
+                            updatedItem.put(String.valueOf(entry.getKey()), entry.getValue());
+                        }
+                        updatedItem.put("status", targetStatus);
+                        updated.add(updatedItem);
+                        migrated = true;
+                        continue;
+                    }
+                }
+                if (!migrated && item instanceof String statusStr
+                    && ("in_progress".equals(statusStr) || "pending".equals(statusStr))) {
+                    updated.add(Map.of("status", targetStatus));
+                    migrated = true;
+                    continue;
+                }
+                updated.add(item);
+            }
+            return migrated ? updated : null;
+        }
+        if (rawSubgoalStatus instanceof Map<?, ?> map) {
+            // Map 形式的 subgoal_status: key -> {status: ...}
+            Map<String, Object> updated = new LinkedHashMap<>();
+            boolean migrated = false;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object value = entry.getValue();
+                if (!migrated && value instanceof Map<?, ?> valueMap) {
+                    String status = readSubgoalStatus(value);
+                    if ("in_progress".equals(status) || "pending".equals(status)) {
+                        Map<String, Object> updatedValue = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> ve : valueMap.entrySet()) {
+                            updatedValue.put(String.valueOf(ve.getKey()), ve.getValue());
+                        }
+                        updatedValue.put("status", targetStatus);
+                        updated.put(key, updatedValue);
+                        migrated = true;
+                        continue;
+                    }
+                }
+                updated.put(key, value);
+            }
+            return migrated ? updated : null;
+        }
+        return null;
+    }
+
+    /**
+     * 将 subgoal_status 中第一个 pending 的 subgoal 迁移为 in_progress。
+     * 返回 null 表示没有找到 pending subgoal 或输入格式不支持。
+     */
+    private Object migrateFirstPendingToInProgress(Object rawSubgoalStatus) {
+        if (rawSubgoalStatus instanceof List<?> list) {
+            List<Object> updated = new ArrayList<>();
+            boolean migrated = false;
+            for (Object item : list) {
+                if (!migrated && item instanceof Map<?, ?> map) {
+                    String status = readSubgoalStatus(item);
+                    if ("pending".equals(status)) {
+                        Map<String, Object> updatedItem = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> entry : map.entrySet()) {
+                            updatedItem.put(String.valueOf(entry.getKey()), entry.getValue());
+                        }
+                        updatedItem.put("status", "in_progress");
+                        updated.add(updatedItem);
+                        migrated = true;
+                        continue;
+                    }
+                }
+                if (!migrated && item instanceof String statusStr
+                    && "pending".equals(statusStr)) {
+                    updated.add(Map.of("status", "in_progress"));
+                    migrated = true;
+                    continue;
+                }
+                updated.add(item);
+            }
+            return migrated ? updated : null;
+        }
+        if (rawSubgoalStatus instanceof Map<?, ?> map) {
+            Map<String, Object> updated = new LinkedHashMap<>();
+            boolean migrated = false;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object value = entry.getValue();
+                if (!migrated && value instanceof Map<?, ?> valueMap) {
+                    String status = readSubgoalStatus(value);
+                    if ("pending".equals(status)) {
+                        Map<String, Object> updatedValue = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> ve : valueMap.entrySet()) {
+                            updatedValue.put(String.valueOf(ve.getKey()), ve.getValue());
+                        }
+                        updatedValue.put("status", "in_progress");
+                        updated.put(key, updatedValue);
+                        migrated = true;
+                        continue;
+                    }
+                }
+                updated.put(key, value);
+            }
+            return migrated ? updated : null;
+        }
+        return null;
     }
 
     private OrchestrationJudgment applyOrchestrationJudgment(Task task,
@@ -1401,6 +1728,13 @@ public class ControlNodeGraph {
             null,
             null,
             metadataString(latestWorkerMetadata, "recovery_execution_mode"),
+            false,
+            List.of(),
+            List.of(),
+            metadataString(latestWorkerMetadata, "cost_route_stage"),
+            Boolean.parseBoolean(firstNonBlank(metadataString(latestWorkerMetadata, "manual_window_required"), "false")),
+            metadataString(latestWorkerMetadata, "recommended_manual_provider"),
+            metadataStringList(latestWorkerMetadata, "manual_window_candidates"),
             null,
             null,
             routeSkippedWorkers(latestWorkerMetadata.get("dispatch_skipped_workers"))
@@ -1714,7 +2048,45 @@ public class ControlNodeGraph {
         return t;
     }
 
+    /**
+     * Execute one worker round with a timeout. If the worker execution exceeds
+     * WORKER_EXECUTION_TIMEOUT_SECONDS, a RuntimeException is thrown so the
+     * catch block in schedulerNode can handle it through the failure recovery path.
+     */
+    private WorkerExecutionResult executeOneRoundWithTimeout(TaskRuntimeContext ctx, String workerId) {
+        CompletableFuture<WorkerExecutionResult> future = CompletableFuture.supplyAsync(
+            () -> workerExecutor.executeOneRound(ctx, workerId)
+        );
+        try {
+            return future.get(WORKER_EXECUTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new RuntimeException("Worker execution timed out after " + WORKER_EXECUTION_TIMEOUT_SECONDS + "s: worker=" + workerId, e);
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            throw new RuntimeException("Worker execution failed: worker=" + workerId, cause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Worker execution interrupted: worker=" + workerId, e);
+        }
+    }
+
     private Task finalizeCompletedTask(Task task) {
+        // 如果 subgoal_status 存在且部分完成（有 done 但不是全部 done），标记为 partial 而非 done
+        Object subgoalStatus = task.metadata() != null ? task.metadata().get("subgoal_status") : null;
+        List<String> statuses = readSubgoalStatuses(subgoalStatus);
+        if (!statuses.isEmpty()) {
+            long doneCount = statuses.stream().filter(this::isDoneSubgoalStatus).count();
+            if (doneCount > 0 && doneCount < statuses.size()) {
+                return task.withStatus("partial")
+                    .withControlNode("end")
+                    .withCompletedAt(Instant.now())
+                    .withNextStep(null);
+            }
+        }
         return task.withStatus("done")
             .withControlNode("end")
             .withCompletedAt(Instant.now())
@@ -2979,7 +3351,6 @@ public class ControlNodeGraph {
             : new LinkedHashMap<>(updated.metadata());
         updatedMetadata.putAll(metadata);
         if (!directive.autoHandoff()) {
-            updatedMetadata.remove("auto_handoff_count");
             updatedMetadata.remove("auto_handoff_target");
         }
         updated = updated.withMetadata(updatedMetadata);
@@ -3806,7 +4177,6 @@ public class ControlNodeGraph {
         addRecoveryCandidate(ordered, task, "copilot", currentWorker);
         addRecoveryCandidate(ordered, task, "opencode", currentWorker);
         addRecoveryCandidate(ordered, task, "codebuddy", currentWorker);
-        addRecoveryCandidate(ordered, task, "trae", currentWorker);
         addRecoveryCandidate(ordered, task, "deepseek", currentWorker);
         addRecoveryCandidate(ordered, task, "claude", currentWorker);
         for (String candidate : metadataStringList(latestWorkerMetadata, "candidate_workers")) {
@@ -3824,6 +4194,13 @@ public class ControlNodeGraph {
     private void addRecoveryCandidate(List<String> ordered, Task task, String candidate, String currentWorker) {
         String normalized = blankToNull(candidate);
         if (normalized == null || normalized.equals(currentWorker) || ordered.contains(normalized)) {
+            return;
+        }
+        if (workerIsManualOnly(normalized)) {
+            log.info(
+                "[Recovery] skip candidate worker={} because auto_route_policy=manual_only",
+                normalized
+            );
             return;
         }
         if (requiresLocalWorkspaceAccess(task) && !workerHasLocalWorkspaceAccess(normalized)) {
@@ -3880,6 +4257,35 @@ public class ControlNodeGraph {
             && worker.toolCapabilities() != null && !worker.toolCapabilities().isEmpty();
     }
 
+    private boolean workerIsManualOnly(String workerId) {
+        if (blankToNull(workerId) == null || router == null) {
+            return false;
+        }
+        Worker worker = router.getWorker(workerId);
+        String policy = workerMetadata(worker, "auto_route_policy");
+        return "manual_only".equalsIgnoreCase(blankToNull(policy));
+    }
+
+    private Task applyManualWindowGate(Task task, WorkerRouter.RouteResult route) {
+        String recommended = firstNonBlank(route != null ? route.recommendedManualProvider() : null, "trae");
+        String instruction = firstNonBlank(
+            route != null ? route.manualFollowupInstruction() : null,
+            WorkerRouter.manualFollowupInstruction(recommended)
+        );
+        Task gated = withMetadataEntries(
+            task,
+            "manual_window_required", true,
+            "recommended_manual_provider", recommended,
+            "manual_window_candidates", route != null ? route.manualWindowCandidates() : List.of(),
+            "manual_followup_instruction", instruction,
+            "cost_route_stage", route != null ? route.costRouteStage() : "manual_window_recommendation",
+            "provider_routing_wait_reason", firstNonBlank(route != null ? route.fallbackReason() : null, "manual window required")
+        );
+        return gated.withStatus("waiting_human")
+            .withControlNode("human_gate")
+            .withWaitingReason("manual window provider required: " + recommended);
+    }
+
     private boolean isCodingCapableWorker(String workerId) {
         if (blankToNull(workerId) == null || router == null) {
             return false;
@@ -3903,6 +4309,37 @@ public class ControlNodeGraph {
         }
         Object value = worker.metadata().get(key);
         return value == null ? null : value.toString();
+    }
+
+    private String workerMetadata(String workerId, String key) {
+        if (router == null || workerId == null || workerId.isBlank()) {
+            return null;
+        }
+        return workerMetadata(router.getWorker(workerId), key);
+    }
+
+    /**
+     * P2 Advisory Handoff: find available strong-tier advisory worker.
+     * Returns workerId when currentModelTier is small, model_mode is not small_only/strong_only, and a ready strong-tier worker exists; null otherwise.
+     */
+    private String resolveAdvisoryHandoff(Task task, String currentModelTier) {
+        String modelMode = metadataString(task != null ? task.metadata() : null, "model_mode");
+        if ("small_only".equalsIgnoreCase(modelMode) || "strong_only".equalsIgnoreCase(modelMode)) {
+            return null;
+        }
+        if (!"small".equalsIgnoreCase(currentModelTier)) {
+            return null;
+        }
+        if (router == null) {
+            return null;
+        }
+        for (Worker worker : router.listReadyWorkers()) {
+            String tier = workerMetadata(worker, "model_tier");
+            if ("strong".equalsIgnoreCase(tier) && !worker.suggestOnly()) {
+                return worker.workerId();
+            }
+        }
+        return null;
     }
 
     private AgentRunRecord recordCompletedAgentRun(Task task, WorkerRouter.RouteResult route, Worker selectedWorker,

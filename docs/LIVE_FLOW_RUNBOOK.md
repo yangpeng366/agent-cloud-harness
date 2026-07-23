@@ -60,7 +60,16 @@ $env:OPENAI_MODEL='<your-model>'
 验证点：
 
 - `OPENAI_API_KEY` 非空
-- `OPENAI_BASE_URL` 指向兼容 `/chat/completions` 的服务
+- `OPENAI_BASE_URL` 指向兼容 OpenAI 协议的服务
+- 如果网关根路径会返回门户页或非 JSON，优先确认真实可用端点是否是 `/v1/chat/completions`
+
+建议的稳定参数基线：
+
+```powershell
+$env:OPENAI_TIMEOUT_SECONDS='90'
+$env:OPENAI_MAX_RETRIES='2'
+$env:OPENAI_MAX_TOKENS='800'
+```
 
 ### Step 3: 启动服务
 

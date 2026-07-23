@@ -29,6 +29,7 @@ public class ExperimentRunService {
     private static final double SMALL_ROUND_COST = 0.35;
     private static final double TOOL_ROUND_COST = 0.10;
     private static final double UNKNOWN_ROUND_COST = 0.60;
+    private static final double COST_GATE_DEFAULT_THRESHOLD_UNITS = 0.0;
 
     private final ExperimentRunDao experimentRunDao;
     private final DecisionDao decisionDao;
@@ -176,6 +177,14 @@ public class ExperimentRunService {
         metadata.put("tool_worker_cost_units", roundToThree(toolWorkerCost));
         metadata.put("tool_invocation_cost_units", roundToThree(toolInvocationCost));
         metadata.put("unknown_cost_units", roundToThree(unknownCost));
+        // O03 acceptance gate: cost / artifact quality / acceptance 三个 gate 分别落盘，便于 matrix summary 按 gate 维度聚合。
+        double costGateThreshold = resolveCostGateThreshold(task);
+        String costGateBasis = resolveCostGateBasis(task, costGateThreshold);
+        metadata.put("cost_gate_threshold_units", roundToThree(costGateThreshold));
+        metadata.put("cost_gate_basis", costGateBasis);
+        metadata.put("cost_gate_status", deriveCostGateStatus(totalCost, costGateThreshold));
+        metadata.put("artifact_quality_gate_status", deriveArtifactQualityGateStatus(acceptanceResult, qualityNote));
+        metadata.put("acceptance_gate_result", acceptanceResult);
         metadata.put("latest_evaluation_result", metadataString(
             completionJudgment != null ? completionJudgment.metadata() : null,
             "evaluation_result"
@@ -1193,6 +1202,54 @@ public class ExperimentRunService {
         );
     }
 
+    private double resolveCostGateThreshold(Task task) {
+        Double explicitThreshold = metadataDouble(task != null ? task.metadata() : null, "cost_gate_threshold_units");
+        if (explicitThreshold != null && explicitThreshold > COST_GATE_DEFAULT_THRESHOLD_UNITS) {
+            return explicitThreshold;
+        }
+        Double baselineThreshold = metadataDouble(task != null ? task.metadata() : null, "baseline_cost_threshold_units");
+        return baselineThreshold != null && baselineThreshold > COST_GATE_DEFAULT_THRESHOLD_UNITS
+            ? baselineThreshold
+            : COST_GATE_DEFAULT_THRESHOLD_UNITS;
+    }
+
+    private String resolveCostGateBasis(Task task, double costGateThreshold) {
+        String explicitBasis = metadataString(task != null ? task.metadata() : null, "cost_gate_basis");
+        if (explicitBasis != null) {
+            return explicitBasis;
+        }
+        return costGateThreshold > COST_GATE_DEFAULT_THRESHOLD_UNITS
+            ? "heuristic_worker_round_threshold_v1"
+            : "not_configured";
+    }
+
+    private String deriveCostGateStatus(double totalCost, double costGateThreshold) {
+        if (costGateThreshold <= COST_GATE_DEFAULT_THRESHOLD_UNITS) {
+            return "not_configured";
+        }
+        return totalCost <= costGateThreshold ? "within_threshold" : "over_threshold";
+    }
+
+    private String deriveArtifactQualityGateStatus(String acceptanceResult, String qualityNote) {
+        String normalized = blankToNull(acceptanceResult);
+        if (normalized == null) {
+            return "not_evaluated";
+        }
+        if ("accepted".equalsIgnoreCase(normalized)) {
+            return "passed";
+        }
+        if ("rejected".equalsIgnoreCase(normalized)) {
+            return "failed";
+        }
+        if ("needs_followup".equalsIgnoreCase(normalized)) {
+            return "needs_followup";
+        }
+        if (qualityNote != null && !qualityNote.isBlank()) {
+            return "needs_followup";
+        }
+        return "not_evaluated";
+    }
+
     private Boolean deriveOrchestrationClosedLoopObserved(Task task,
                                                           Decision completionJudgment,
                                                           Map<String, Object> latestWorkerMetadata) {
@@ -1851,6 +1908,24 @@ public class ExperimentRunService {
         if (value instanceof String text) {
             try {
                 return Integer.parseInt(text.trim());
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Double metadataDouble(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return null;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        if (value instanceof String text) {
+            try {
+                return Double.parseDouble(text.trim());
             } catch (NumberFormatException ignored) {
                 return null;
             }

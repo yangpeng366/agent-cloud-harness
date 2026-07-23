@@ -272,6 +272,9 @@ class ExperimentRunServiceTest {
             assertEquals(1, service.listRuns("baseline-min", null, null, null, 10).size());
             assertEquals(0, service.listRuns("baseline-min", null, null, "small_only", 10).size());
             assertTrue(run.metadata().containsKey("cost_basis"));
+            assertEquals("accepted", run.metadata().get("acceptance_gate_result"));
+            assertEquals("passed", run.metadata().get("artifact_quality_gate_status"));
+            assertEquals("not_configured", run.metadata().get("cost_gate_status"));
             assertEquals("codex", run.metadata().get("planner_worker"));
             assertEquals("strong", run.metadata().get("planner_model_tier"));
             assertEquals("kimi", run.metadata().get("executor_worker"));

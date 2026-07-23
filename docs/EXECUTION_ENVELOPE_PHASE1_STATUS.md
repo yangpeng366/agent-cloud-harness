@@ -1,5 +1,7 @@
 # Execution Envelope Phase-1 Status
 
+> Historical material note: this file preserves the 2026-05-07 phase status snapshot for the execution-envelope slice. It is no longer the primary entry point for current work. For current architectural stance, read `docs/ARCHITECTURE.md`; for live validation procedure, read `docs/LIVE_FLOW_RUNBOOK.md`; for current failure interpretation, read `docs/TROUBLESHOOT.md`.
+
 <!-- 更新时间：2026-05-07 -->
 
 ## Why this note exists

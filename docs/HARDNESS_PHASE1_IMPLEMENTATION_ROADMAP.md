@@ -1,5 +1,7 @@
 # HARDNESS_PHASE1_IMPLEMENTATION_ROADMAP
 
+> 历史材料说明：本文保留 hardness phase-1 的阶段性路线图，便于回看当时建议的对象链和切入顺序。当前不作为直接开工入口；相关稳定结论已优先回收到 `docs/ARCHITECTURE.md`，真实执行验证请看 `docs/LIVE_FLOW_RUNBOOK.md`，当前排障口径请看 `docs/TROUBLESHOOT.md`。
+
 ## 1. 目的
 
 本文档用于把当前 `agent-cloud-harness` 的 hardness phase-1 主线，从“已经对齐代码的设计判断”继续压到“可直接开工的实现路线图”。

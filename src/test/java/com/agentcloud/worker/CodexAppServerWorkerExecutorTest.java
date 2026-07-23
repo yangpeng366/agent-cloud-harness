@@ -3,6 +3,7 @@ package com.agentcloud.worker;
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.providers.LocalCliProviderConfig;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
+import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.model.Task;
 import com.agentcloud.runtime.ActiveContext;
 import com.agentcloud.runtime.TaskRuntimeContext;
@@ -124,7 +125,8 @@ class CodexAppServerWorkerExecutorTest {
                 .contains("session_exec_json_test"));
             assertEquals("codex exec json result",
                 Files.readString(Path.of(result.metadata().get("provider_last_message_path").toString())).trim());
-            assertTrue(result.metadata().get("cli_command_preview").toString().contains("exec --json -o"));
+            assertTrue(result.metadata().get("cli_command_preview").toString().contains("exec --no-alt-screen --json -o"));
+            assertTrue(result.metadata().get("cli_command_preview").toString().contains("--json -o"));
         } finally {
             if (original == null) {
                 System.clearProperty(propertyKey);
@@ -204,6 +206,9 @@ class CodexAppServerWorkerExecutorTest {
             assertEquals("thread_sticky_app_server", result.metadata().get("provider_thread_id"));
             assertEquals(180_000L, result.metadata().get("provider_activity_timeout_ms"));
             assertEquals(180_000L, result.metadata().get("provider_turn_activity_timeout_ms"));
+            String commandPreview = result.metadata().get("cli_command_preview").toString();
+            assertTrue(commandPreview.contains("app-server --listen stdio://"));
+            assertEquals(false, commandPreview.contains("--no-alt-screen"));
             assertEquals(null, result.metadata().get("provider_error"));
         } catch (Exception e) {
             throw new AssertionError(e);
@@ -696,6 +701,113 @@ class CodexAppServerWorkerExecutorTest {
         assertEquals(cmdShim.toString(), configuredBinaryGetter.invoke(plan));
         assertEquals(cmdShim.toString(), executableTargetGetter.invoke(plan));
         assertEquals("cmd_file", launchModeGetter.invoke(plan));
+    }
+
+    @Test
+    void codexBuildPlanIncludesWorkerProfileArgsAndMetadata() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        WorkerRegistry workerRegistry = new WorkerRegistry(registry);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, workerRegistry);
+        TaskRuntimeContext context = runtimeContext("codex-openai", new LinkedHashMap<>(Map.of(
+            "task_type", "coding",
+            "intent", "Verify worker profile propagation into codex app-server plan.",
+            "workspace", "D:\\gitAll\\agent-cloud-harness"
+        )));
+
+        Object plan = buildPlan(executor, context, "D:\\gitAll\\agent-cloud-harness");
+        Method commandGetter = plan.getClass().getDeclaredMethod("command");
+        Method providerProfileIdGetter = plan.getClass().getDeclaredMethod("providerProfileId");
+        Method modelProviderGetter = plan.getClass().getDeclaredMethod("modelProvider");
+        Method modelGetter = plan.getClass().getDeclaredMethod("model");
+        Method cliProfileGetter = plan.getClass().getDeclaredMethod("cliProfile");
+        commandGetter.setAccessible(true);
+        providerProfileIdGetter.setAccessible(true);
+        modelProviderGetter.setAccessible(true);
+        modelGetter.setAccessible(true);
+        cliProfileGetter.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) commandGetter.invoke(plan);
+        assertEquals("codex_openai_strong", providerProfileIdGetter.invoke(plan));
+        assertEquals("OpenAI", modelProviderGetter.invoke(plan));
+        assertEquals("gpt-5.4", modelGetter.invoke(plan));
+        assertEquals("", cliProfileGetter.invoke(plan));
+        assertTrue(command.contains("-c"));
+        assertTrue(command.contains("model_provider=OpenAI"));
+        assertTrue(command.contains("-m"));
+        assertTrue(command.contains("gpt-5.4"));
+    }
+
+    @Test
+    void execJsonCommandCarriesTaskProfileArgsAndConfigOverrides() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        WorkerRegistry workerRegistry = new WorkerRegistry(registry);
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, workerRegistry);
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("task_type", "coding");
+        metadata.put("intent", "Verify task profile propagation into codex exec_json command.");
+        metadata.put("workspace", "D:\\gitAll\\agent-cloud-harness");
+        metadata.put("preferred_provider_profile", "codex_task_override");
+        metadata.put("provider_model_provider", "xfyun");
+        metadata.put("provider_model", "xopglm51");
+        metadata.put("provider_cli_profile", "monthly");
+        TaskRuntimeContext context = runtimeContext("codex", metadata);
+
+        Method buildExecJsonPlan = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "buildExecJsonPlan",
+            LocalCliProviderConfig.ResolvedConfig.class,
+            TaskRuntimeContext.class,
+            String.class
+        );
+        buildExecJsonPlan.setAccessible(true);
+        Object plan = buildExecJsonPlan.invoke(
+            executor,
+            new LocalCliProviderConfig("codex", "codex", "X", "Y").resolve(),
+            context,
+            "D:\\gitAll\\agent-cloud-harness"
+        );
+
+        Class<?> runFilesClass = Class.forName("com.agentcloud.worker.CodexAppServerWorkerExecutor$ProviderRunFiles");
+        Method createRunFiles = runFilesClass.getDeclaredMethod(
+            "create",
+            String.class,
+            String.class,
+            String.class,
+            plan.getClass()
+        );
+        createRunFiles.setAccessible(true);
+        Object runFiles = createRunFiles.invoke(null, "codex", "task_codex_executor", "codex", plan);
+
+        Method execJsonCommand = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "execJsonCommand",
+            LocalCliProviderConfig.ResolvedConfig.class,
+            runFilesClass,
+            plan.getClass()
+        );
+        execJsonCommand.setAccessible(true);
+
+        @SuppressWarnings("unchecked")
+        List<String> command = (List<String>) execJsonCommand.invoke(
+            executor,
+            new LocalCliProviderConfig("codex", "codex", "X", "Y").resolve(),
+            runFiles,
+            plan
+        );
+
+        Method closeQuietly = runFilesClass.getDeclaredMethod("closeQuietly");
+        closeQuietly.setAccessible(true);
+        closeQuietly.invoke(runFiles);
+
+        assertTrue(command.contains("exec"));
+        assertTrue(command.contains("--json"));
+        assertTrue(command.contains("-c"));
+        assertTrue(command.contains("model_provider=xfyun"));
+        assertTrue(command.contains("-m"));
+        assertTrue(command.contains("xopglm51"));
+        assertTrue(command.contains("-p"));
+        assertTrue(command.contains("monthly"));
     }
 
     private TaskRuntimeContext runtimeContext(String workerId) {

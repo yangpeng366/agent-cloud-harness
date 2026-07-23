@@ -74,6 +74,28 @@ test("route box plan counts recovery provider deprioritization as drawer detail"
     assert.equal(plan.drawerSummary, "展开路由细节 · 1 组补充");
 });
 
+test("route box plan surfaces legacy control audit as a human-readable note", () => {
+    const plan = buildRouteBoxPlan({
+        selectedWorker: "codex",
+        routeSource: "router",
+        routeReason: "route selected",
+        legacyControlAudit: {
+            legacyControlRouteObserved: true,
+            requestMethod: "GET",
+            requestPath: "/api/v1/tasks/task-1/pause",
+            replacementMethod: "POST",
+            latestAction: "pause"
+        }
+    });
+
+    assert.deepEqual(plan.legacyControlNote, {
+        visible: true,
+        headline: "检测到历史 GET 控制调用",
+        detail: "最近一次是 GET /api/v1/tasks/task-1/pause；调用方应迁到 POST；最近动作：pause。",
+        chip: "历史 GET 控制路由"
+    });
+});
+
 test("route box plan keeps recovery fresh-session chip as drawer detail", () => {
     const plan = buildRouteBoxPlan({
         selectedWorker: "codex",
@@ -112,6 +134,20 @@ test("dialogue route chip source does not emit raw English control labels", asyn
     assert.match(appJs, /`偏好：\$\{preferredWorkerHint\}`/);
     assert.match(appJs, /"学习记忆：已应用"/);
     assert.match(appJs, /"路由\/执行：一致"/);
+});
+
+test("dialogue route box reads legacy control audit from live flow cognition surface", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const appJs = await readFile(new URL("../../main/resources/web/dialogue/app.js", import.meta.url), "utf8");
+    const routeBoxPlanJs = await readFile(new URL("../../main/resources/web/dialogue/route-box-plan.js", import.meta.url), "utf8");
+    const legacyAuditPlanJs = await readFile(new URL("../../main/resources/web/dialogue/legacy-control-audit-plan.js", import.meta.url), "utf8");
+
+    assert.match(routeBoxPlanJs, /import \{ buildLegacyControlAuditPlan \} from "\.\/legacy-control-audit-plan\.js";/);
+    assert.match(routeBoxPlanJs, /const legacyControlNote = buildLegacyControlAuditPlan\(source\.legacyControlAudit \|\| source\.legacy_control_audit\);/);
+    assert.match(appJs, /const legacyControlAudit = cognitionSurface\.legacy_control_audit \|\| cognitionSurface\.legacyControlAudit \|\| \{\};/);
+    assert.match(appJs, /legacyControlAudit,/);
+    assert.match(appJs, /routePlan\.legacyControlNote/);
+    assert.match(legacyAuditPlanJs, /检测到历史 GET 控制调用/);
 });
 
 test("dialogue task modal route labels avoid raw worker and empty English fallbacks", async () => {

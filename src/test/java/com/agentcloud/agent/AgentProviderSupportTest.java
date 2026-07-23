@@ -45,6 +45,8 @@ class AgentProviderSupportTest {
         assertTrue(providerIds.contains("gemini"));
         assertTrue(providerIds.contains("kimi"));
         assertTrue(providerIds.contains("kiro"));
+        assertTrue(providerIds.contains("codebuddy"));
+        assertTrue(providerIds.contains("deveco"));
     }
 
     @Test
@@ -103,11 +105,18 @@ class AgentProviderSupportTest {
         assertNotNull(registry.get("hermes"));
         assertNotNull(registry.get("pi"));
         assertNotNull(registry.get("kiro"));
+        assertNotNull(registry.get("codebuddy"));
+        assertNotNull(registry.get("deveco"));
         assertEquals("100", registry.get("codex").metadata().get("selection_priority").toString());
+        assertEquals("84", registry.get("deveco").metadata().get("selection_priority").toString());
         assertEquals("provider_native_cli", registry.get("kimi").metadata().get("execution_backend"));
         assertEquals("provider_native_cli", registry.get("hermes").metadata().get("execution_backend"));
         assertEquals("provider_native_cli", registry.get("pi").metadata().get("execution_backend"));
         assertEquals("provider_native_cli", registry.get("kiro").metadata().get("execution_backend"));
+        assertEquals("provider_native_cli", registry.get("deveco").metadata().get("execution_backend"));
+        assertEquals("native_cli_cwd", registry.get("deveco").metadata().get("workspace_access_mode"));
+        assertEquals("resume_if_session_id", registry.get("deveco").metadata().get("recovery_resume_policy"));
+        assertEquals(Boolean.TRUE, registry.get("deveco").metadata().get("supports_resume"));
     }
 
     @Test
@@ -154,6 +163,36 @@ class AgentProviderSupportTest {
         assertEquals("tool_result", toolAware.get("output_mode"));
         assertEquals("harness_tool_trace", toolAware.get("output_contract"));
         assertEquals(List.of("browser", "doc", "message", "search", "reading"), toolAware.get("auto_route_task_types"));
+    }
+
+    @Test
+    void devecoProviderRegisteredWithCorrectBinaryAndEnvVars() {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+
+        AgentProvider provider = registry.list().stream()
+            .filter(p -> "deveco".equals(p.descriptor().providerId()))
+            .findFirst()
+            .orElse(null);
+        assertNotNull(provider, "deveco provider must be registered");
+
+        Map<String, Object> descriptorMetadata = provider.descriptor().metadata();
+        assertEquals("deveco", descriptorMetadata.get("binary"));
+        assertEquals("MULTICA_DEVECO_PATH", descriptorMetadata.get("path_env_var"));
+        assertEquals("MULTICA_DEVECO_MODEL", descriptorMetadata.get("model_env_var"));
+    }
+
+    @Test
+    void workerRegistryEnrichesCodeBuddyCapabilityMatrixFields() {
+        WorkerRegistry registry = new WorkerRegistry();
+
+        Map<String, Object> codebuddy = registry.get("codebuddy").metadata();
+        assertEquals("provider_native_cli", codebuddy.get("execution_backend"));
+        assertEquals("stream_json", codebuddy.get("output_mode"));
+        assertEquals("resume_if_session_id", codebuddy.get("recovery_resume_policy"));
+        assertEquals(Boolean.TRUE, codebuddy.get("supports_resume"));
+        assertEquals("codebuddy -y --print --output-format stream-json --permission-mode bypassPermissions --subagent-permission-mode bypassPermissions --tools default <prompt>",
+            codebuddy.get("command_shape"));
     }
 
     @Test

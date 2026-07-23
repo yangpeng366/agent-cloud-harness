@@ -300,6 +300,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - Dialogue 主视图已具备运行态徽标：选中 active/running task 后，pinned summary 与 task thread 会显示“执行中 · worker · 已运行 XmYs · 节点 scheduler/continue”，并由 task SSE 事件触发局部刷新；5s 轮询仍作为兜底，避免用户必须展开 details 才知道 Codex/worker 是否仍在跑。
 - Dialogue 对 `partial_timeout` worker_round 已提供操作入口：有 `provider_thread_id / provider_session_id` 时显示“继续 Codex thread”和“手动移交”；没有 provider thread 时只显示“手动移交”，避免把部分结果压成普通失败。
 - Dialogue worker_round action plan 已补回归覆盖：`provider_thread_id`、仅有 `provider_session_id`、以及显式 `resume_provider_session_id` 三种 partial timeout 元数据都会生成正确的继续 thread 请求体；没有 thread/session 时仍只显示“手动移交”。
+- `/v1/responses` 最小 item lifecycle 已补到 JSON 与 SSE：JSON `output[0]` 带稳定 `id/type/status/role/content`，SSE 依次输出 `response.output_item.added`、`response.output_text.delta`、`response.output_text.done`、`response.output_item.done`、`response.completed`；这仍不等于完整 tool-call delta surface。
 - `scripts/Run-CodexPartialTimeoutSmoke.ps1` 已提供最小可重复验收入口：同时跑 Codex app-server 有输出通信失败、ControlNodeGraph partial_timeout 进入 human gate 且写 worker_round、provider thread continue metadata、Dialogue worker_round action plan。
 - Dialogue details 面板已具备静态执行面板能力：选中 task 后可直接看到 event/tool/artifact/decision 聚合时间线，避免 worker 输出只藏在消息摘要或下沉列表里。
 - 真实浏览器验证已覆盖 `/dialogue/` 默认壳层：desktop 截图断言通过，workspace/details 比例为 1080/292，未复现中间大块异常空白。
@@ -335,7 +336,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithJava21.ps1 -Po
 - Browser richer acceptance 的自动化 `Surface both` real lifecycle 已在 2026-06-02 通过隔离端口复核；严格人工 A-H 仍未闭合。历史低内存 OOM 仍是风险，需要继续用隔离 DB、关闭启动 preflight warmup 和明确 JVM/timeout 参数跑 gate。
 - 严格人工 A-H 手点仍未完成；现有 screenshot、business smoke、partial timeout smoke 和 scripted browser seam 不能替代人工 gate。
 - Manual backfill 模板只作为人工逐条复核后的记录载体：默认 `evidence_mode=manual_review_required` 且 `passed=false`；scripted browser bundle 只能提供辅助上下文，不能直接把严格人工 gate 回填为通过。
-- Acceptance record draft 生成器也按同一边界输出：A-H seam evidence 可以预填为上下文，但 strict manual `Passed` 仍必须由人工复核决定；token-level streaming 与完整 `/v1/responses` item/tool-call surface 仍以未勾选 gap 呈现，避免把“未验收”误读成完成项。
+- Acceptance record draft 生成器也按同一边界输出：A-H seam evidence 可以预填为上下文，但 strict manual `Passed` 仍必须由人工复核决定；token-level streaming 与完整 `/v1/responses` tool-call surface 仍以未勾选 gap 呈现，避免把“未验收”误读成完成项。
 
 ---
 

@@ -132,6 +132,15 @@ public final class BuiltinAgentProviders {
                 "reasonix",
                 "MULTICA_REASONIX_PATH",
                 "MULTICA_REASONIX_MODEL"
+            ),
+            new LocalCliAgentProvider(
+                "deveco",
+                "DevEco",
+                List.of("coding", "reading", "session"),
+                Map.of("model_tier", "strong"),
+                "deveco",
+                "MULTICA_DEVECO_PATH",
+                "MULTICA_DEVECO_MODEL"
             )
         );
     }

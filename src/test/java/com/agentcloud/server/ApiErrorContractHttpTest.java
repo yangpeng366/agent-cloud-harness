@@ -36,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -277,16 +278,18 @@ class ApiErrorContractHttpTest {
     }
 
     @Test
-    void workerReadinessIncludesExecutorBackendFailureForUnsupportedBuiltinProviderWorker() throws Exception {
+    void workerReadinessIncludesExecutorBackendFailureForUnsupportedProviderNativeWorker() throws Exception {
+        String providerId = "unsupported-cli-test";
         try (ProviderAwareWorkerHttpFixture fixture = new ProviderAwareWorkerHttpFixture(
             tempDir.resolve("worker-provider-backend-gap.db"),
-            new AgentProviderRegistry().register(new StaticProvider("hermes", true, true, "ready"))
+            new AgentProviderRegistry().register(new StaticProvider(providerId, true, true, "ready")),
+            workerRegistry -> workerRegistry.registerProviderNativeWorker(providerId, List.of("coding"), Map.of())
         )) {
-            ApiCall readiness = fixture.get("/api/v1/workers/hermes/readiness");
+            ApiCall readiness = fixture.get("/api/v1/workers/" + providerId + "/readiness");
 
             assertEquals(200, readiness.statusCode());
             assertFalse(readiness.body().path("data").path("ready").asBoolean(true));
-            assertTrue(readiness.body().path("data").path("checks").path("provider:hermes").asBoolean(false));
+            assertTrue(readiness.body().path("data").path("checks").path("provider:" + providerId).asBoolean(false));
             assertFalse(readiness.body().path("data").path("checks")
                 .path("executor_backend:provider_native_cli").asBoolean(true));
             assertTrue(readiness.body().path("data").path("reason").asText().contains("executor backend not supported"));
@@ -718,14 +721,30 @@ class ApiErrorContractHttpTest {
         private final String baseUrl;
 
         private ProviderAwareWorkerHttpFixture(Path dbPath, AgentProviderRegistry providerRegistry) throws IOException {
-            this(dbPath, providerRegistry, false);
+            this(dbPath, providerRegistry, false, workerRegistry -> {
+            });
+        }
+
+        private ProviderAwareWorkerHttpFixture(Path dbPath,
+                                               AgentProviderRegistry providerRegistry,
+                                               Consumer<WorkerRegistry> workerRegistryCustomizer) throws IOException {
+            this(dbPath, providerRegistry, false, workerRegistryCustomizer);
         }
 
         private ProviderAwareWorkerHttpFixture(Path dbPath,
                                                AgentProviderRegistry providerRegistry,
                                                boolean includeAgentHandler) throws IOException {
+            this(dbPath, providerRegistry, includeAgentHandler, workerRegistry -> {
+            });
+        }
+
+        private ProviderAwareWorkerHttpFixture(Path dbPath,
+                                               AgentProviderRegistry providerRegistry,
+                                               boolean includeAgentHandler,
+                                               Consumer<WorkerRegistry> workerRegistryCustomizer) throws IOException {
             this.db = new DatabaseManager(dbPath);
             WorkerRegistry workerRegistry = new WorkerRegistry(providerRegistry);
+            workerRegistryCustomizer.accept(workerRegistry);
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
             this.executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
             this.server.setExecutor(executor);
