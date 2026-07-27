@@ -218,7 +218,29 @@ false-done guard 只能阻止"误标 done"，不能改善 openclaw-native 对写
 
 仅剩 2 个历史失败（`WorkerExecutorRouterProviderNativeTest.explicitProviderBackendWithoutExecutorSupportFailsFastInsteadOfFallingBackToDefault`、`WorkerPromptHeaderBuilderTest.taskHeaderOmitsDuplicateGoalAndIntent`），STATE 07-23 已标注为非本轮改动引入，未触碰。
 
+### 运行时复跑验证（2026-07-27）
+
+重建 JAR（含路由修复，2026-07-27 08:23）后用真实 CCX 复跑 Case 1 等价场景（`task_type=research` + 写文件意图，不显式 pin）：
+
+- task=`task_e514ffcab3884f5f`，原 `task_type=research`
+- 日志：`Routing taskType promoted: task=... from=research to=coding due to workspace mutation intent`
+- 首轮路由：`selected by model tier preference (strong) on capability match: taskType=coding, worker=codex`（旧 Case 1 是 `ready-worker fallback` 选 openclaw-native）
+- 后续轮次：`selected by task-pinned worker: taskType=coding, worker=codex`（pin 落在 codex，契约通过）
+- judgment：`action=done`，"Worker successfully read docs/ARCHITECTURE.md and wrote a Chinese one-sentence summary to .tmp/rnd-arch-summary3.txt. Execution status is completed with 3 tool invocations recorded. File content and encoding verified (UTF-8 no BOM)."
+- 终态：`status=done`，`assigned_worker=codex`
+- 产物：`.tmp\rnd-arch-summary3.txt`（137 字节，UTF-8 无 BOM），内容「Agent Cloud Harness 是以连续性优先的轻量 runtime harness，聚焦任务的可恢复、可观察、可移交与可再进入。」
+
+三组对比：
+
+| 场景 | task_type | 路由 | 终态 | 产物 |
+|------|-----------|------|------|------|
+| 旧 Case 1（修复前） | research | ready-worker fallback -> openclaw-native | done（伪完成） | 首轮未落地 |
+| guard 复跑（仅 false-done guard） | research | openclaw-native | waiting_human | 后续落地但收口劣化 |
+| **路由优化后（本次）** | research->提升 coding | capability match + strong -> codex | **done（真完成）** | **首轮落地，3 次 tool invocation** |
+
+结论：`normalizeTaskTypeForRouting` 提升 + pinned 契约兜底联后，"带本地写文件意图的 research 任务"不再被 openclaw-native 吸走，稳定路由到 codex 并干净收口，false-done 与 waiting_human 两条劣化路径同时消除。
+
 ### 后续
 
-- 重建 JAR 后用真实 CCX 案例复跑"research + 写文件"，确认 task 不再卡 `waiting_human`、产物落地、`selectedWorker=codex`。
+- ~~重建 JAR 后用真实 CCX 案例复跑"research + 写文件"~~ 已完成（2026-07-27，见上"运行时复跑验证"小节）：task=e514ffcab3884f5f，research->coding 提升，codex 路由，done，产物首轮落地。
 - 评估是否把 pinned 契约兜底推广到更多 taskType（当前与 `shouldApplyAutoRouteTaskTypeContract` 保持一致）。

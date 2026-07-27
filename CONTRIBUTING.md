@@ -89,23 +89,23 @@
 - 上下文入口：`docs/provider/README.md`、`docs/AGENT_PROVIDER_TECHNICAL_DESIGN.md`。
 - 技能：Java、JUnit。预估 ≤ 2h。
 
-**GFI-03 · 新增 `CHANGELOG.md` 并回填首版变更记录**
-- 背景：首版 `CHANGELOG.md` 已于巡检中起草（工作树未提交，Keep a Changelog 风格，含 Unreleased + `0.1.0` 待发布基线），对外发布版本变更可见性缺口已闭合草案；待 maintainer 确认内容并随首次 release 切版维护，后续按 Conventional Commits 持续回填。
+**GFI-03 · 新增 `CHANGELOG.md` 并回填首版变更记录 · 已完成 ✅**
+- 背景：已完成并提交。仓库根 `CHANGELOG.md` 已纳入版本控制并随仓发布（Keep a Changelog 风格，含 `[Unreleased]` + `[0.1.0]` 待发布基线），缺口已闭合；后续按 Conventional Commits 持续回填。
 - 范围：新建仓库根 `CHANGELOG.md`（根目录 markdown 会被 `scripts/Run-DocsIndexAudit.ps1` 纳入索引，新增后须在 `docs/README.md` 或对应主题 README 引用，避免 orphan）。
 - 验收：Keep a Changelog 风格，含 Unreleased + `0.1.0-SNAPSHOT`；内容从 `STATE.md`、`docs/continuity/PROGRESS.md`、`docs/provider/PROGRESS.md` 提炼；docs audit 仍 `passed=true`。
 - 上下文入口：`STATE.md`、`docs/release/GITHUB_RELEASE_CHECKLIST.md`。
 - 技能：Markdown。预估 ≤ 2h。
 
-**GFI-04 · 根目录编译产物收口：`com/` 与 `META-INF/` 纳入 `.gitignore`**
-- 背景：仓库根存在未跟踪的 `com/`、`META-INF/`（疑似编译 class 泄漏），损害公开整洁度。
+**GFI-04 · 根目录编译产物收口：`com/` 与 `META-INF/` 纳入 `.gitignore` · 已完成 ✅**
+- 背景：已完成并提交。`.gitignore` 已含根级 `com/`、`META-INF/`，根级编译产物泄漏已清理（`git status` 不再出现根级 `com/`、`META-INF/`）。
 - 范围：`.gitignore`（追加根级 `com/`、`META-INF/`）；清理已泄漏的根级 `com/`、`META-INF/`（勿动 `src/`）。
 - 验收：`git status` 不再出现根级 `com/`、`META-INF/`；`mvn package` 仍正常。
 - 上下文入口：`.gitignore`、本文件「基本流程」第 4 步。
 - 技能：Git、Maven。预估 ≤ 1h。
 - 注意：`hs_err_pid*.log`、`replay_pid*.log`、`*.stackdump`、`nul` 已在 `.gitignore`，本条不重复处理。
 
-**GFI-05 · 修复 `.gitignore` 误忽略所有 `README.md`（发布阻塞）**
-- 背景：`.gitignore` 含一条裸 `README.md` 规则，会忽略仓库内所有 README.md。根 `README.md` 因已被跟踪而幸存，但 `docs/README.md`、`docs/release/README.md`、`docs/provider/README.md` 等整个 docs 治理索引层均被忽略且未跟踪，公开发布时不会随仓库发布，外部读者无法进入文档体系。
+**GFI-05 · 修复 `.gitignore` 误忽略所有 `README.md`（发布阻塞） · 已完成 ✅**
+- 背景：已完成并提交。裸 `README.md` 规则已从 `.gitignore` 删除，`docs/README.md`、`docs/release/README.md`、`docs/provider/README.md` 等已 tracked 并随仓发布，docs 治理索引层不再被忽略。
 - 范围：`.gitignore`（删除裸 `README.md` 行；如确需忽略某个 README，改用精确路径）。
 - 验收：`git check-ignore docs/README.md docs/release/README.md` 均不再被忽略；`git status` 出现对应 `??` 后由 maintainer 决定 `git add` 范围；`scripts/Run-DocsIndexAudit.ps1` 仍 `passed=true`。
 - 上下文入口：`.gitignore`、`docs/README.md`「根目录文档职责」表。
