@@ -33,12 +33,12 @@ Agent Cloud Harness 是一个**单进程、零外部依赖**的本地/单机控�
 ### 1. 克隆与构建
 
 ```bash
-git clone <your-published-repo-url>
+git clone https://github.com/yangpeng366/agent-cloud-harness.git
 cd agent-cloud-harness
 mvn package
 ```
 
-> 对外发布时，请把 `<your-published-repo-url>` 替换成真实公开仓库地址；在仓库正式公开前，不要把示例写成伪造的 GitHub 占位 URL。
+> 仓库已公开发布（见 [CHANGELOG.md](CHANGELOG.md) 的 `[0.1.0]` 段）。
 
 > Windows 用户如果环境中有多个 JDK，推荐先执行仓库脚本确保使用 Java 21：
 > ```powershell

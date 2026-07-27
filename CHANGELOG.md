@@ -5,8 +5,8 @@ All notable changes to **Agent Cloud Harness** are documented in this file.
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，本项目遵循
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-> 当前版本为 `0.1.0-SNAPSHOT`，尚未发布正式 release。首个正式版本 `0.1.0` 将在
-> `CONTRIBUTING.md` 的发布前清单与 Good First Issues 阻塞项闭合后发布。
+> trunk 开发版本为 `0.1.0-SNAPSHOT`。首个正式版本 `0.1.0` 已于 2026-07-27 发布
+>（见下方 `[0.1.0]` 段），Good First Issues 阻塞项已闭合。
 > 本文件随每次合并到 `main` 的变更更新；正式 release 时，将 `[Unreleased]` 段落
 > 提升为带版本号与日期的段落，并在其上方新建空的 `[Unreleased]`。
 >
@@ -41,12 +41,11 @@ All notable changes to **Agent Cloud Harness** are documented in this file.
   harness-strong / harness-fast 模型名映射、`HarnessConfig` / `HarnessState` 类。
 - Free-model worker lane：`WorkerRegistryConfigRegistration` 测试。
 
-## [0.1.0] - 待发布
+## [0.1.0] - 2026-07-27
 
-首个公开基线，对应 pom 版本 `0.1.0-SNAPSHOT`。发布前需先闭合
-`CONTRIBUTING.md` 中的 Good First Issues 阻塞项（尤其是 GFI-05：`.gitignore`
-误忽略所有 `README.md`，导致 docs 治理索引层不会随仓发布）。
-
+首个公开基线，已发布至 https://github.com/yangpeng366/agent-cloud-harness；
+pom 仍保留 `0.1.0-SNAPSHOT` 作为 trunk 开发版本。Good First Issues 阻塞项
+（含 GFI-05：`.gitignore` 误忽略所有 `README.md`）已闭合。
 ### 核心能力（详见 README）
 - 会话与任务生命周期：create -> schedule -> pause / resume / handoff / escalate -> close。
 - Worker 自动路由：按 capability + readiness + learning memory 匹配，保留 fallback。
