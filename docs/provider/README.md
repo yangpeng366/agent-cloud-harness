@@ -31,6 +31,7 @@
 | OmniRoute 这种本地 OpenAI-compatible 网关怎么自动拉起、验活并接到 Harness | `../OMNIROUTE_OPENAI_COMPATIBLE_GATEWAY_PLAN.md` | `../AGENT_PROVIDER_TECHNICAL_DESIGN.md`、`../STARTUP_GUIDE.md` |
 | tool-aware worker、本地文档试点、provider run/console 读面 | `../TOOL_LAYER_IMPLEMENTATION_PLAN.md` | `../LOCAL_DOC_WORKER_PILOT.md`、`../AGENT_INVENTORY_AND_RUNTIME_HEALTH_CONSOLE_PLAN.md` |
 | 专项接入评估或单 provider 深挖 | 对应专项文档 | 例如 `../REASONIX_AGENT_SUPPORT_AND_IMPROVEMENT_PLAN.md` |
+| task_type / workspace 推断改用 LLM 替代硬编码关键词、codex 跑错仓库 | `../LLM_TASK_UNDERSTANDING_PLAN.md` | `../WORKER_FAILURE_RECOVERY_POLICY.md`、`../AGENT_PROVIDER_TECHNICAL_DESIGN.md` |
 
 ## 最小阅读顺序
 

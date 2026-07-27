@@ -73,12 +73,20 @@ public final class HarnessConfigLoader {
     @SuppressWarnings("unchecked")
     private static HarnessConfig fromMap(Map<String, Object> root) {
         if (root == null) {
-            return new HarnessConfig(null, null, null);
+            return new HarnessConfig(null, null, null, null);
         }
         Map<String, Object> harness = (Map<String, Object>) root.getOrDefault("harness", Map.of());
         Map<String, Object> defaultsMap = (Map<String, Object>) harness.getOrDefault("defaults", Map.of());
         Map<String, Object> ccxMap = (Map<String, Object>) harness.getOrDefault("ccx", Map.of());
         List<Object> workersList = (List<Object>) harness.getOrDefault("workers", List.of());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> workspaceAliasesMap = (Map<String, Object>) harness.getOrDefault("workspace-aliases", Map.of());
+        Map<String, String> workspaceAliases = new LinkedHashMap<>();
+        for (var entry : workspaceAliasesMap.entrySet()) {
+            if (entry.getValue() != null) {
+                workspaceAliases.put(entry.getKey(), entry.getValue().toString());
+            }
+        }
 
         HarnessConfig.HarnessDefaults defaults = new HarnessConfig.HarnessDefaults(
             stringFromMap(defaultsMap, "provider_model_provider"),
@@ -101,7 +109,7 @@ public final class HarnessConfigLoader {
             }
         }
 
-        return new HarnessConfig(defaults, ccx, List.copyOf(workers));
+        return new HarnessConfig(defaults, ccx, List.copyOf(workers), Map.copyOf(workspaceAliases));
     }
 
     @SuppressWarnings("unchecked")

@@ -43,6 +43,26 @@ class HarnessConfigLoaderTest {
     }
 
     @Test
+    void loadParsesWorkspaceAliases() throws Exception {
+        Path config = tempDir.resolve("harness-config.yml");
+        Files.writeString(config, """
+            harness:
+              workspace-aliases:
+                articleeditor: 'D:\\gitAll\\articleeditor'
+                articleeditor-tmp: 'D:\\gitAll\\articleeditor-tmp'
+            """);
+
+        Optional<HarnessConfig> result = HarnessConfigLoader.load(List.of(config));
+        assertTrue(result.isPresent());
+        HarnessConfig cfg = result.get();
+        Map<String, String> aliases = cfg.workspaceAliases();
+        assertNotNull(aliases);
+        assertEquals(2, aliases.size());
+        assertEquals("D:\\gitAll\\articleeditor", aliases.get("articleeditor"));
+        assertEquals("D:\\gitAll\\articleeditor-tmp", aliases.get("articleeditor-tmp"));
+    }
+
+    @Test
     void loadParsesDefaults() throws Exception {
         Path config = tempDir.resolve("harness-config.yml");
         Files.writeString(config, """

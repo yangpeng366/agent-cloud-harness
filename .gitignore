@@ -23,3 +23,5 @@ node_modules/
 nul
 /com/
 /META-INF/
+# 本机 harness 配置覆盖（可含本地路径/API key），提交 harness-config.example.yml
+harness-config.yml

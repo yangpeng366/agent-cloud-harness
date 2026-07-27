@@ -24,6 +24,13 @@ harness:
     health_check_on_startup: true
     channel_sync_on_startup: false
 
+  # 本地工作区别名注册表：provider/codex 可根据任务意图自行定位目标仓库。
+  # key 建议使用项目名或用户常说的别名；value 改成本机真实仓库路径。
+  # 示例：任务提到 /articleeditor/... 时，codex 将 cwd 定位到 D:\gitAll\articleeditor，
+  # 并在 prompt 中看到完整工作区清单和边界提示，避免回退到 harness 自身仓库。
+  workspace-aliases:
+    articleeditor: 'D:\gitAll\articleeditor'
+    articleeditor-tmp: 'D:\gitAll\articleeditor-tmp'
   # 声明式 worker lane
   workers:
     # 主力 coding（走 CCX 付费渠道）

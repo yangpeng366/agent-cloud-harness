@@ -216,8 +216,10 @@ public class Main {
         }
         ProviderCliWorkerExecutor providerCliWorkerExecutor =
             new ProviderCliWorkerExecutor(agentProviderRegistry, workerRegistry, providerProtocolRegistry);
+        java.util.Map<String, String> workspaceAliases =
+            harnessConfig.map(com.agentcloud.agent.providers.HarnessConfig::workspaceAliases).orElse(java.util.Map.of());
         CodexAppServerWorkerExecutor codexAppServerWorkerExecutor =
-            new CodexAppServerWorkerExecutor(agentProviderRegistry, workerRegistry);
+            new CodexAppServerWorkerExecutor(agentProviderRegistry, workerRegistry, workspaceAliases);
         WorkerExecutor workerExecutor = new WorkerExecutorRouter(
             workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor,
             providerCliWorkerExecutor, codexAppServerWorkerExecutor

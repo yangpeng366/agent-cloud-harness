@@ -44,3 +44,48 @@
 - OmniRoute 当前只是本地 LLM 网关包装入口，不会自动替代 Harness 自身的 worker/provider route 语义；如果 `/v1/models` 为空，Harness 即使读到了 `OPENAI_BASE_URL`，真实任务也仍会卡在 OmniRoute 上游未配置阶段。
 
 - 2026-07-24: CCX ↔ Harness 双向对接落地。新增 Run-HarnessWithCcx.ps1 脚本（自动读 codex config.toml 中 CCX bearer token）。CCX Desktop 新增 harness-chat / harness-responses 渠道，使用专属模型名 harness / harness-strong / harness-fast，避免与其他渠道混淆。端到端验证通过。
+---
+
+## 2026-07-27 任务理解改 provider 推动 + 边界守护 - 方案设计
+
+- 触发：session_4b63c81807094751 / task_eee02813bbe74049（articleeditor 导出 Word 标题缺失加开关）卡 human_gate。根因不是超时，而是硬编码关键词推断漏了"添加/导出/下载/开关" -> task_type 未提升 coding -> 无 workspace_root -> codex cwd 静默回退 harness 仓库 -> 跑错仓库烧 2.25M tokens / 906s -> partial_timeout -> RuntimeException -> retry 0ms 崩 -> human_gate。
+- 盘点硬推断点 7 处：TaskTypeHeuristics / WorkerRouter.expectsWorkspaceMutation + normalizeTaskTypeForRouting / ControlNodeGraph(1092,4430,3750) / ToolAwareWorkerExecutor(2095,3555) / ProviderTaskContractNormalizer / CodexAppServerWorkerExecutor.resolveWorkingDirectory。多份关键词表重复且口径漂移，articleeditor 等项目名硬编码不可移植，H7 静默回退 user.dir 无安全边界最危险。
+- 设计方向（详见 ../LLM_TASK_UNDERSTANDING_PLAN.md）：provider 推动 + 边界守护--理解/定位/执行下放给执行 agent（codex 自主从可配 workspace-aliases 清单定位仓库），harness 只提供仓库清单注入 prompt + H7 不静默回退 harness 仓库 + prompt 边界提示；不加前置 LLM 预判层、不重构 task_type（continuation fallback 单独小修）。
+- 落地优先级：P0 alias registry 注入 prompt + H7 不回退 harness 仓库 + prompt 边界提示；P1 continuation 路由 fallback 单独修；可选 token guardrail。
+- 与 DECISIONS 2026-07-22 关系：subgoal 状态迁移仍规则优先；任务理解/定位下放执行 agent，harness 只守边界，待 maintainer 确认新增决策。
+- 状态：方案设计未落代码；本会话因系统页面文件耗尽（codex app-server 残留进程占内存）多次 shell 崩溃，文档已落盘，代码实现留待资源恢复后进行。
+### 验证（2026-07-27）
+
+建等价任务 task_0ce65a30636840af 带 workspace_root=D:\gitAll\articleeditor（auto_start=false）：
+- 任务 metadata 正确接收 workspace_root / workspace_roots。
+- select_worker 确认 selected_worker=codex / task_type=coding / route_source=capability_match（不再是 ready_fallback / task_pinned）。
+- cwd 由 CodexAppServerWorkerExecutor.resolveWorkingDirectory 代码逻辑保证：metadata 有 workspace_root 时直接返回它，无需实跑验证。
+- 结论：设计方向（provider 推动 + 给对 workspace）验证可行。根因确认是 chat facade 创建任务时不带 workspace（API 路径 /articleeditor/ 不被 ProviderTaskContractNormalizer 的 WINDOWS_ABSOLUTE_PATH 正则识别）。验证任务已 pause（control_node=scheduler），可 escalate/close 清理。
+---
+
+## 2026-07-27 P0 落地：provider 推动 + workspace 安全边界（已实现+验证）
+
+按 ../LLM_TASK_UNDERSTANDING_PLAN.md 落地 P0 三件事，端到端验证通过。
+
+### 代码改动
+- `HarnessConfig`/`HarnessConfigLoader`：加 `workspaceAliases` 字段（Map<String,String>），解析 `harness:` 下的 `workspace-aliases` 节。
+- `CodexAppServerWorkerExecutor`：
+  - 构造加 `workspaceAliases` 参数（旧构造委托 `Map.of()`，兼容测试）。
+  - `resolveWorkingDirectory`：metadata 无显式 workspace 时，新增 `inferWorkspaceFromAliases(context)` 按 intent 子串（大小写不敏感）命中别名解析 cwd；无 alias 命中且有 alias registry 时回退到 `neutralWorkspaceDir()`（首个 alias 父目录），不再静默回退 harness 自身 `user.dir` 仓库。
+  - `buildPlan`/`buildExecJsonPlan`：prompt 末尾 append `buildWorkspaceGuidance(cwd)`：注入「Available Workspaces」清单 + 「Workspace Boundary」提示（仅在 target repo 工作、禁读 harness 自身 STATE.md/docs 源码、当前 cwd）。
+- `Main.java`：加载 `harnessConfig` 后取 `workspaceAliases` 注入 `CodexAppServerWorkerExecutor` 构造。
+- `harness-config.yml`（新建）：`harness.workspace-aliases` 注册 `articleeditor` / `articleeditor-tmp`。
+- `HarnessConfigLoaderTest`：新增 `loadParsesWorkspaceAliases` 用例验证 alias 解析。
+
+### 验证
+- 编译通过（mvn -DskipTests compile）。
+- 测试通过：`HarnessConfigLoaderTest`（含新用例）、`WorkerRouterRouteTraceTest` 全绿。
+- 构建新 JAR + 重启 harness（CCX 环境变量从 codex config.toml 恢复：base_url=127.0.0.1:3688, model=codex, available=true）。
+- 端到端验证 task_bbfe36747ce74239：intent 含 `/articleeditor/...`，不带 workspace_root，task_type=continuation。codex run 文件 prompt.txt 确认：
+  - cwd = `D:\gitAll\articleeditor`（alias 推断命中，不再回退 harness 仓库）。
+  - prompt 含「Available Workspaces」清单 + 「Workspace Boundary」提示。
+  - 对比修复前：cwd=harness 仓库、无仓库清单、烧 2.25M tokens/906s，根因（cwd 静默回退 + 无仓库线索）已消除。
+
+### 注意
+- 重启 harness 必须带 CCX 环境变量（OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL），LlmConfig 从环境变量读；环境变量来源是 codex config.toml 的 ccx provider 节（token + base_url）。验证启动脚本逻辑已写入 .tmp/_start.py（从 toml 动态提取，不硬编码 token）。
+- task_eee02813bbe74049（原卡住任务）仍在 human_gate，可在 dialogue escalate/close 清理。

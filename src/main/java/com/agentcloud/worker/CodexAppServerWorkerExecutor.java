@@ -54,11 +54,18 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private final AgentProviderRegistry providerRegistry;
     private final WorkerRegistry workerRegistry;
     private final LocalCliProviderConfig providerConfig;
+    private final Map<String, String> workspaceAliases;
 
     public CodexAppServerWorkerExecutor(AgentProviderRegistry providerRegistry, WorkerRegistry workerRegistry) {
+        this(providerRegistry, workerRegistry, Map.of());
+    }
+
+    public CodexAppServerWorkerExecutor(AgentProviderRegistry providerRegistry, WorkerRegistry workerRegistry,
+                                        Map<String, String> workspaceAliases) {
         this.providerRegistry = providerRegistry;
         this.workerRegistry = workerRegistry;
         this.providerConfig = resolveProviderConfig(providerRegistry);
+        this.workspaceAliases = workspaceAliases == null ? Map.of() : workspaceAliases;
     }
 
     @Override
@@ -293,7 +300,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private CodexExecutionPlan buildPlan(LocalCliProviderConfig.ResolvedConfig config,
                                          TaskRuntimeContext context,
                                          String cwd) {
-        String prompt = ProviderTaskPromptBuilder.build(context);
+        String prompt = ProviderTaskPromptBuilder.build(context) + buildWorkspaceGuidance(cwd);
         String model = configuredModel(config, context);
         String resumeThreadId = resumeThreadId(context);
         ProviderProfileConfig profile = resolveProfile(config, context);
@@ -326,7 +333,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private CodexExecutionPlan buildExecJsonPlan(LocalCliProviderConfig.ResolvedConfig config,
                                                  TaskRuntimeContext context,
                                                  String cwd) {
-        String prompt = ProviderTaskPromptBuilder.build(context);
+        String prompt = ProviderTaskPromptBuilder.build(context) + buildWorkspaceGuidance(cwd);
         String model = configuredModel(config, context);
         ProviderProfileConfig profile = resolveProfile(config, context);
         LocalCliProviderConfig.LaunchSpec launchSpec = config.launchSpec();
@@ -685,13 +692,79 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 return taskPath;
             }
         }
+        if (context != null && context.task() != null) {
+            String inferred = inferWorkspaceFromAliases(context);
+            if (inferred != null && !inferred.isBlank()) {
+                return inferred;
+            }
+        }
         if (worker != null && worker.toolScope() != null && !worker.toolScope().isEmpty()) {
             String scope = worker.toolScope().get(0);
             if (scope != null && !scope.isBlank()) {
                 return scope;
             }
         }
+        if (!workspaceAliases.isEmpty()) {
+            String neutral = neutralWorkspaceDir();
+            if (neutral != null) {
+                return neutral;
+            }
+        }
         return Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString();
+    }
+
+    private String inferWorkspaceFromAliases(TaskRuntimeContext context) {
+        if (context == null || context.task() == null || workspaceAliases.isEmpty()) {
+            return null;
+        }
+        Map<String, Object> metadata = context.task().metadata();
+        String text = firstNonBlank(
+            context.task().goal(),
+            metadataString(metadata, "intent"),
+            metadataString(metadata, "goal"),
+            context.task().title()
+        );
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String lower = text.toLowerCase(Locale.ROOT);
+        for (var entry : workspaceAliases.entrySet()) {
+            String alias = entry.getKey().toLowerCase(Locale.ROOT);
+            if (!alias.isBlank() && lower.contains(alias)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private String neutralWorkspaceDir() {
+        if (workspaceAliases.isEmpty()) {
+            return null;
+        }
+        String first = workspaceAliases.values().iterator().next();
+        if (first == null || first.isBlank()) {
+            return null;
+        }
+        java.nio.file.Path parent = java.nio.file.Path.of(first).getParent();
+        return parent == null ? null : parent.toAbsolutePath().normalize().toString();
+    }
+
+    private String buildWorkspaceGuidance(String cwd) {
+        if (workspaceAliases.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\nAvailable Workspaces:");
+        for (var entry : workspaceAliases.entrySet()) {
+            sb.append("\n- ").append(entry.getKey()).append(" -> ").append(entry.getValue());
+        }
+        sb.append("\n\nWorkspace Boundary:");
+        sb.append("\n- Locate the target repository from the list above based on the task; work only inside that repository.");
+        sb.append("\n- Do NOT read or modify the harness repository own STATE.md / docs / source code.");
+        if (cwd != null && !cwd.isBlank()) {
+            sb.append("\n- Current working directory: ").append(cwd);
+        }
+        return sb.toString();
     }
 
     private String singleWorkspaceRoot(Map<String, Object> metadata) {

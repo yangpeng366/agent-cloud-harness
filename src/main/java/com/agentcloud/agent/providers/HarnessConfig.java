@@ -10,12 +10,14 @@ import java.util.Map;
 public record HarnessConfig(
     HarnessDefaults defaults,
     HarnessCcxConfig ccx,
-    List<WorkerLaneConfig> workers
+    List<WorkerLaneConfig> workers,
+    Map<String, String> workspaceAliases
 ) {
     public HarnessConfig {
         if (defaults == null) defaults = new HarnessDefaults(null, null, null, null);
         if (ccx == null) ccx = new HarnessCcxConfig(null, null, false, false);
         if (workers == null) workers = List.of();
+        if (workspaceAliases == null) workspaceAliases = Map.of();
     }
 
     /**
