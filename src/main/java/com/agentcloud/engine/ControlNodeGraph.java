@@ -43,7 +43,58 @@ public class ControlNodeGraph {
     private static final MountedContextPromptRenderer JUDGMENT_PROMPT_RENDERER = new MountedContextPromptRenderer();
     private static final int FAILURE_SUMMARY_LIMIT = 220;
     private static final int PLANNER_DELEGATION_OUTPUT_LIMIT = 12_000;
-    private static final long WORKER_EXECUTION_TIMEOUT_SECONDS = 120;
+    private static final long DEFAULT_WORKER_EXECUTION_TIMEOUT_SECONDS = 300;
+    /**
+     * strong tier worker（如 codex 经 CCX 网关做复杂多文件编码）的单轮默认超时（秒）。
+     * 本地 agent_runs 历史依据（2026-07-27）：codex n=43，p50=111s / p90=163s / p95=331s / max=761s，
+     * 旧 120s 硬超时砍掉 49% 的 codex 轮次；600s 覆盖 p95+margin，仅约 5% 的超长复杂轮次进入回收。
+     */
+    private static final long STRONG_TIER_WORKER_TIMEOUT_SECONDS = 600;
+    private static final long MIN_WORKER_EXECUTION_TIMEOUT_SECONDS = 30;
+    /**
+     * 单轮 worker 执行超时（秒）。可通过 {@code -Dharness.worker.timeout.seconds} 或环境变量
+     * {@code HARNESS_WORKER_TIMEOUT_SECONDS} 显式覆盖（最小 30s，绝对权威，忽略 tier 校准）；
+     * 未显式覆盖时由 {@link #effectiveWorkerTimeoutSeconds(String)} 按 worker model_tier 取数据校准默认。
+     */
+    static long resolveWorkerExecutionTimeoutSeconds() {
+        long override = explicitWorkerTimeoutOverrideSeconds();
+        return override >= 0 ? override : DEFAULT_WORKER_EXECUTION_TIMEOUT_SECONDS;
+    }
+    /**
+     * @return 显式覆盖值（>= {@value #MIN_WORKER_EXECUTION_TIMEOUT_SECONDS}）；未设置/非法/低于下限时返回 -1，
+     *         由调用方回退到 tier 校准默认。
+     */
+    static long explicitWorkerTimeoutOverrideSeconds() {
+        String raw = System.getProperty("harness.worker.timeout.seconds");
+        if (raw == null || raw.isBlank()) {
+            raw = System.getenv("HARNESS_WORKER_TIMEOUT_SECONDS");
+        }
+        if (raw == null || raw.isBlank()) {
+            return -1;
+        }
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed >= MIN_WORKER_EXECUTION_TIMEOUT_SECONDS ? parsed : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+    /**
+     * 运行时实际生效的单轮超时：显式覆盖绝对优先；否则按 worker model_tier 取数据校准默认
+     * （strong tier=600s，其余=300s）。无 worker 注册信息时回退通用默认。
+     */
+    long effectiveWorkerTimeoutSeconds(String workerId) {
+        long override = explicitWorkerTimeoutOverrideSeconds();
+        if (override >= 0) {
+            return override;
+        }
+        Worker worker = router != null ? router.getWorker(workerId) : null;
+        String tier = worker != null ? metadataString(worker.metadata(), "model_tier") : null;
+        if ("strong".equalsIgnoreCase(tier)) {
+            return STRONG_TIER_WORKER_TIMEOUT_SECONDS;
+        }
+        return DEFAULT_WORKER_EXECUTION_TIMEOUT_SECONDS;
+    }
     private static final int MAX_HANDOFF_DEPTH = 3;
     private static final Pattern THREAD_NOT_FOUND_EN_WITH_PARENS = Pattern.compile("thread not found\\s*\\(([\\w-]+)\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern THREAD_NOT_FOUND_EN = Pattern.compile("thread not found\\s*[:：]?\\s*([\\w-]+)?", Pattern.CASE_INSENSITIVE);
@@ -2176,18 +2227,19 @@ public class ControlNodeGraph {
 
     /**
      * Execute one worker round with a timeout. If the worker execution exceeds
-     * WORKER_EXECUTION_TIMEOUT_SECONDS, a RuntimeException is thrown so the
-     * catch block in schedulerNode can handle it through the failure recovery path.
+     * {@link #effectiveWorkerTimeoutSeconds(String)}（显式覆盖绝对优先，否则按 worker tier 取 300s/600s），
+     * a RuntimeException is thrown so the catch block in schedulerNode can handle it through the failure recovery path.
      */
     private WorkerExecutionResult executeOneRoundWithTimeout(TaskRuntimeContext ctx, String workerId) {
+        long timeoutSeconds = effectiveWorkerTimeoutSeconds(workerId);
         CompletableFuture<WorkerExecutionResult> future = CompletableFuture.supplyAsync(
             () -> workerExecutor.executeOneRound(ctx, workerId)
         );
         try {
-            return future.get(WORKER_EXECUTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            return future.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             future.cancel(true);
-            throw new RuntimeException("Worker execution timed out after " + WORKER_EXECUTION_TIMEOUT_SECONDS + "s: worker=" + workerId, e);
+            throw new RuntimeException("Worker execution timed out after " + timeoutSeconds + "s: worker=" + workerId, e);
         } catch (java.util.concurrent.ExecutionException e) {
             Throwable cause = e.getCause();
             if (cause instanceof RuntimeException) {
@@ -3169,6 +3221,7 @@ public class ControlNodeGraph {
         copyMetadataKey(source, selected, "execution_duration_ms");
         copyMetadataKey(source, selected, "duration_ms");
         copyMetadataKey(source, selected, "execution_status");
+        copyMetadataKey(source, selected, "failure_summary_readable");
         copyMetadataKey(source, selected, "tool_invocation_id");
         copyMetadataKey(source, selected, "tool_invocation_ids");
         copyMetadataKey(source, selected, "provider_session_id");
@@ -3353,6 +3406,63 @@ public class ControlNodeGraph {
             autoHandoffCount,
             failureSummary
         );
+
+        if ("worker_budget_exhausted".equals(failureClass)) {
+            if (sameWorkerRetryCount < 1) {
+                // 一次性兜底：超时可能是 CCX 网关一次性停顿；给同 worker 再一轮预算。
+                log.info(
+                    "[Recovery] task={} action=same_worker_retry(budget) worker={} reason={}",
+                    task != null ? task.id() : null,
+                    previousWorker,
+                    failureSummary
+                );
+                com.agentcloud.judgment.model.ExecutionDecision budgetRetry = new com.agentcloud.judgment.model.ExecutionDecision(
+                    "retry", "same_worker_retry", "", false, false, ""
+                );
+                com.agentcloud.judgment.model.CompletionDecision budgetComp = new com.agentcloud.judgment.model.CompletionDecision(
+                    "incomplete", "low", "Round budget exhausted; one same-worker retry granted before human gate.", ""
+                );
+                return RecoveryDirective.sameWorkerRetry(
+                    failureClass,
+                    failureSummary,
+                    recoveryPolicy,
+                    previousWorker,
+                    sameWorkerRetryCount + 1,
+                    autoHandoffCount,
+                    budgetRetry,
+                    budgetComp
+                );
+            }
+            // 已重试过：不再跨 sibling lane auto_handoff（同 provider/网关会重复同一过度探索），
+            // 直接 human_gate 并给可操作原因，让操作员决定加预算 / 拆分任务 / 重新界定目标。
+            String budgetGateReason = "Round budget exhausted (worker round timeout). If the worker was making "
+                + "progress, raise HARNESS_WORKER_TIMEOUT_SECONDS or decompose the task; otherwise re-scope the goal. "
+                + "Sibling-lane handoff skipped (same provider/gateway would repeat).";
+            log.warn(
+                "[Recovery] task={} action=human_gate(budget) previousWorker={} failureClass={} reason={}",
+                task != null ? task.id() : null,
+                previousWorker,
+                failureClass,
+                budgetGateReason
+            );
+            com.agentcloud.judgment.model.ExecutionDecision budgetGateExec = new com.agentcloud.judgment.model.ExecutionDecision(
+                "human_gate", "escalate", "", false, true, ""
+            );
+            com.agentcloud.judgment.model.CompletionDecision budgetGateComp = new com.agentcloud.judgment.model.CompletionDecision(
+                "incomplete", "low", budgetGateReason, ""
+            );
+            return RecoveryDirective.humanGate(
+                "worker_budget_exhausted",
+                budgetGateReason,
+                recoveryPolicy,
+                previousWorker,
+                sameWorkerRetryCount,
+                autoHandoffCount,
+                null,
+                budgetGateExec,
+                budgetGateComp
+            );
+        }
 
         if ("worker_runtime_transient".equals(failureClass) && sameWorkerRetryCount < 1) {
             log.info(
@@ -3549,6 +3659,12 @@ public class ControlNodeGraph {
             || "provider_not_installed".equals(providerFailureClass)) {
             return "task_environment_blocked";
         }
+        if (looksLikeRoundBudgetTimeout(failureSummary)) {
+            // 单轮预算超时不等于瞬时故障：同 worker/sibling lane 重试通常重复同一过度探索，
+            // 必须在 empty output 检查之前判断，避免 readable 被 selectLatestWorkerMetadata 过滤后
+            // 空输出分支误吞（output_text/failure_summary_readable 可能在白名单外）。
+            return "worker_budget_exhausted";
+        }
         if (looksLikeEmptyOutputFailure(latestWorkerMetadata)) {
             return "worker_runtime_transient";
         }
@@ -3575,6 +3691,21 @@ public class ControlNodeGraph {
         return blankToNull(outputText) == null && blankToNull(artifactContent) == null && blankToNull(toolSummary) == null;
     }
 
+    /**
+     * 识别 executeOneRoundWithTimeout 抛出的单轮预算超时（消息前缀固定为
+     * "Worker execution timed out after <N>s: worker="）。这类超时与 provider 瞬时故障不同，
+     * 不应走 transient 的 sibling-lane auto_handoff。
+     */
+    private boolean looksLikeRoundBudgetTimeout(String failureSummary) {
+        String normalized = blankToNull(failureSummary);
+        if (normalized == null) {
+            return false;
+        }
+        // summarizeKnownFailure compresses "Worker execution timed out after Ns: worker=X" into
+        // "worker X failed: timeout".  Match the canonical form via the TIMEOUT pattern.
+        return TIMEOUT.matcher(normalized).find();
+    }
+
     private boolean looksLikeTransientWorkerRuntimeFailure(String failureSummary) {
         String normalized = blankToNull(failureSummary);
         if (normalized == null) {
@@ -3586,7 +3717,6 @@ public class ControlNodeGraph {
             || text.contains("provider unavailable")
             || text.contains("failed to start")
             || text.contains("connection reset")
-            || text.contains("timeout")
             || text.contains("failed to start codex app-server")
             || text.contains("没找到线程")
             || text.contains("未找到线程");

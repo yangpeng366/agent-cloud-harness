@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 
 public class WorkerRouter {
     private static final Logger log = LoggerFactory.getLogger(WorkerRouter.class);
-    private static final Pattern WINDOWS_ABSOLUTE_PATH = Pattern.compile("(?i)\\b[a-z]:\\\\[^\\r\\n]+");
+    private static final Pattern WINDOWS_ABSOLUTE_PATH = Pattern.compile("(?i)\\b[a-z]:[\\\\/][^\\r\\n]+");
     private final WorkerRegistry registry;
     private final LearningMemoryService learningMemoryService;
 
@@ -736,13 +736,23 @@ public class WorkerRouter {
 
     private String normalizeTaskTypeForRouting(Task task, String baseTaskType) {
         String normalized = blankToNull(baseTaskType);
-        if (!"research".equalsIgnoreCase(normalized)) {
+        if (!isPromotableWorkspaceMutationTaskType(normalized)) {
             return baseTaskType;
         }
         if (expectsWorkspaceMutation(task)) {
             return "coding";
         }
         return baseTaskType;
+    }
+
+    private boolean isPromotableWorkspaceMutationTaskType(String taskType) {
+        if (taskType == null) {
+            return false;
+        }
+        return "research".equalsIgnoreCase(taskType)
+            || "continuation".equalsIgnoreCase(taskType)
+            || "general".equalsIgnoreCase(taskType)
+            || "other".equalsIgnoreCase(taskType);
     }
 
     /**
@@ -773,6 +783,8 @@ public class WorkerRouter {
         boolean action = lower.contains("写入") || lower.contains("写到") || lower.contains("保存到")
             || lower.contains("输出到") || lower.contains("创建") || lower.contains("新建")
             || lower.contains("修改") || lower.contains("更新") || lower.contains("删除")
+            || lower.contains("补全") || lower.contains("补齐") || lower.contains("完善")
+            || lower.contains("接入") || lower.contains("对接") || lower.contains("接口")
             || lower.contains("append") || lower.contains("write") || lower.contains("create")
             || lower.contains("modify") || lower.contains("update") || lower.contains("delete")
             || lower.contains("patch");
@@ -780,7 +792,8 @@ public class WorkerRouter {
             || lower.contains(".tmp") || lower.contains(".md") || lower.contains(".txt")
             || lower.contains(".json") || lower.contains(".yaml") || lower.contains(".yml")
             || lower.contains(".java") || lower.contains(".py") || lower.contains(".xml")
-            || lower.contains("src/") || lower.contains("src\\") || lower.contains("pom.xml")
+            || lower.contains("src/") || lower.contains("src\\") || lower.contains("/src") || lower.contains("\\src")
+            || lower.contains("articleeditor") || lower.contains("boot/front") || lower.contains("pom.xml")
             || lower.contains("package.json") || WINDOWS_ABSOLUTE_PATH.matcher(combined).find();
         return action && fileSignal;
     }

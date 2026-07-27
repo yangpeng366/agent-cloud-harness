@@ -2,6 +2,10 @@
 
 ## 当前状态
 
+- 2026-07-27: worker round 超时从 120s 硬编码改为可配 + tier-aware（ControlNodeGraph.executeOneRoundWithTimeout）。dialogue 真实任务 task_6fe50128734948ba 暴露 codex 被 120s 砍掉；agent_runs 历史显示 codex p95≈331s（49% 轮次 >120s）。新增 effectiveWorkerTimeoutSeconds(workerId)：显式覆盖（-Dharness.worker.timeout.seconds / HARNESS_WORKER_TIMEOUT_SECONDS，>=30s，绝对优先）否则 strong tier=600s / 其余=300s。WorkerExecutionTimeoutConfigTest 8 场景 + 既有 timeout/loop 回归全绿。运行时验证 codex 实拿 600s。
+- 2026-07-27: 单轮预算超时（worker_budget_exhausted）与瞬态故障（worker_runtime_transient）分类分离。codex 600s 预算超时曾被误分类为瞬态故障，触发无意义跨 sibling codex lane auto_handoff。新增 classifyFailureClass 分支：looksLikeRoundBudgetTimeout（匹配 TIMEOUT pattern 规范形 "worker X failed: timeout"）在 transient 检查前返回 worker_budget_exhausted；looksLikeTransientWorkerRuntimeFailure 去掉 timeout 关键词。maybePlanFailureRecovery：worker_budget_exhausted 首次同 worker retry，二次直接 human_gate + 可操作原因（"raise HARNESS_WORKER_TIMEOUT_SECONDS or decompose the task"），不跨 sibling lane handoff。selectLatestWorkerMetadata 只补白名单 failure_summary_readable，不上浮 output_text/artifact_content，避免 planner delegation gate 从 runtime_failure_signal 漂到 oversized_runtime_failure_output。WorkerBudgetExhaustedRecoveryTest 3 场景 + ControlNodeGraphOrchestrationFlowTest 全量 + router/timeout/goal 回归合计 121/0。
+- 2026-07-27: 运行时复核 task_6fe50128734948ba：重启最终 JAR 后 codex 一轮在 600s 内完成调查，没有再触发预算超时；judgment 输出指出核心修复已在 articleeditor-tmp 工作树存在，仍缺 BasicInfo/CustomField 两处 fallback 和部署/浏览器复验。当前 task 保持 waiting_human/execution_pending，是任务自身需要执行补丁/复验，不是 harness 超时分类问题。
+
 - 2026-07-21 方向调整：Codex provider 差异已由本机 CCX 网关收敛，harness 聚焦切换到 Loop 主闭环（goal -> plan -> execute -> judge -> decide，HTTP 超时不污染 task 级状态）与 Goal 目标合同（goal / subgoals / subgoal_status / acceptance_criteria / progress_summary）。新方向主入口为 ../LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md，packet 字段集将正式写进 ../API_CONTRACTS.md / ../SPEC.md。
 - `continuity/` 已正式升级为 `README.md + PROGRESS.md` 的轻量工作区，并已启用 `runs/README.md` 作为 control-plane execution evidence 聚合入口。
 - 当前活跃推进主要集中在四条线：packet schema 固化、legacy GET control route 退役准备、live flow/runtime cognition 读面、multi-round/control graph 回归闭环。

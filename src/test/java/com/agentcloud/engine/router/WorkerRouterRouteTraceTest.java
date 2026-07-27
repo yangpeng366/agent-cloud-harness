@@ -646,6 +646,22 @@ class WorkerRouterRouteTraceTest {
     }
 
     @Test
+    void dialogueContinuationWithArticleEditorCompletionIntentRoutesToCodex() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("continuation", Map.of(
+            "task_type", "continuation",
+            "intent", "d:/gitAll/articleeditor-tmp/ /Editor 编辑页面 从其他页面跳过来的时候，url可能只传了editId= type accountId channelId 可能需要从稿件详情接口返回数据补全"
+        )));
+
+        assertEquals("coding", route.taskType());
+        assertEquals("codex", route.selectedWorker());
+        assertEquals("capability_match", route.routeSource());
+        assertFalse(route.candidateWorkers().contains("openclaw-native"));
+    }
+
+    @Test
     void freeFirstRoutingPrefersDevecoBeforePaidAutoWorkers() {
         WorkerRegistry registry = new WorkerRegistry();
         WorkerRouter router = new WorkerRouter(registry);

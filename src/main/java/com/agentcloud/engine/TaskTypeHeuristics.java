@@ -13,7 +13,7 @@ public final class TaskTypeHeuristics {
     private static final Pattern WINDOWS_REPO_PATH = Pattern.compile("(?i)[a-z]:\\\\[^\\r\\n]*?(gitall|workspace|repo|project)\\\\");
     private static final Pattern SOURCE_TREE_REFERENCE = Pattern.compile("(?i)(^|[\\\\/])src([\\\\/]|\\b)|(^|[\\\\/])test(s)?([\\\\/]|\\b)");
     private static final Pattern CODE_FILE_REFERENCE = Pattern.compile("(?i)\\.(java|kt|js|ts|tsx|jsx|py|go|rs|cpp|c|cs|php|rb|sql|xml|yml|yaml|json|md)\\b");
-    private static final Pattern CODING_ACTION_KEYWORD = Pattern.compile("(?i)(fix|patch|refactor|implement|verify|test|check|debug|修改|改造|改代码|写代码|补丁|修复|实现|重构|新增|调试|定位|代码|仓库|repo|工程|检查|排查|测试|补测试|验证)");
+    private static final Pattern CODING_ACTION_KEYWORD = Pattern.compile("(?i)(fix|patch|refactor|implement|verify|test|check|debug|修改|改造|改代码|写代码|补丁|修复|实现|重构|新增|补全|补齐|完善|接入|对接|联调|接口|调试|定位|代码|仓库|repo|工程|检查|排查|测试|补测试|验证)");
 
     private TaskTypeHeuristics() {
     }
