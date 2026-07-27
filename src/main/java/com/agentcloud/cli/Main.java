@@ -104,6 +104,14 @@ public class Main {
         ProviderProtocolDiscovery.DiscoveryResult providerDiscovery =
             new ProviderProtocolDiscovery().discoverDetailed();
         registerDiscoveredProviders(providerDiscovery, agentProviderRegistry, workerRegistry);
+
+        // Phase 2: Load harness-config.yml and register declarative worker lanes
+        java.util.Optional<com.agentcloud.agent.providers.HarnessConfig> harnessConfig =
+            com.agentcloud.agent.providers.HarnessConfigLoader.load();
+        harnessConfig.ifPresent(cfg -> {
+            workerRegistry.registerFromConfig(cfg);
+            log.info("Harness config worker lanes registered from harness-config.yml");
+        });
         if (dispatchPreflightWarmupEnabled()) {
             Map<String, WorkerRegistry.ReadinessCheck> workerPreflightWarmup = workerRegistry.warmupDispatchPreflight();
             long workerPreflightReadyCount = workerPreflightWarmup.values().stream()
@@ -120,6 +128,17 @@ public class Main {
 
         // Phase 1 新增: LLM Adapter Layer
         LlmConfig llmConfig = new LlmConfig();
+
+        // Phase 2: Auto-discover local environment and write harness-state.json
+        try {
+            com.agentcloud.engine.HarnessState state = com.agentcloud.engine.HarnessStateWriter.discover(llmConfig);
+            com.agentcloud.engine.HarnessStateWriter.write(state,
+                java.nio.file.Paths.get(System.getProperty("user.home"), ".agentcloud", "harness-state.json"));
+            log.info("Harness state auto-discovery completed. ccxReachable={} models={} workerReadyCount={}",
+                state.ccxReachable(), state.ccxModels().size(), state.workerReadyCount());
+        } catch (Exception e) {
+            log.warn("Harness state auto-discovery failed (non-fatal): {}", e.getMessage());
+        }
         LlmClient llmClient = new OpenAiCompatibleClient(llmConfig);
         log.info("LLM adapter initialized. available={} model={} reviewModel={} wireApi={}",
             llmConfig.available(), llmConfig.model(), llmConfig.reviewModel(), llmConfig.wireApi());

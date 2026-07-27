@@ -8,6 +8,10 @@
 - 现阶段仍不启用 `tasks/`、`archive/`；`runs/README.md` 只负责聚合 root-level dated 执行证据入口，不搬动文档本体，`PROGRESS.md` 只负责把当前活跃主线串起来。
 
 ## 已完成
+- 2026-07-23: Phase 2 P3 Loop Handoff Recovery 增强。新增 MAX_HANDOFF_DEPTH=3 + handoffDepth() 方法。advisory handoff 前检查 depth >= 3 时直接 human_gate。triggerHandoff 递增 handoff_depth。HandoffDepthLimitTest 5 场景。
+- 2026-07-23: Phase 2 P2 LLM-assisted Subgoal Update。新增 LlmSubgoalJudgmentService，ambiguous executionStatus 时调用 LLM 判断 subgoal 状态。LlmSubgoalJudgmentServiceTest 11 场景。API_CONTRACTS.md + SPEC.md 已补合同。
+- 2026-07-23: Phase 2 P3 Loop Handoff Recovery 增强。新增 MAX_HANDOFF_DEPTH=3 + handoffDepth() 方法。advisory handoff 前检查 depth >= 3 时直接 human_gate。triggerHandoff 递增 handoff_depth。HandoffDepthLimitTest 5 场景。
+- 2026-07-23: Phase 2 P2 LLM-assisted Subgoal Update。新增 LlmSubgoalJudgmentService，ambiguous executionStatus 时调用 LLM 判断 subgoal 状态。LlmSubgoalJudgmentServiceTest 11 场景。API_CONTRACTS.md + SPEC.md 已补合同。
 - 2026-07-22: Worker execution 超时保护落地。`schedulerNode` 中 `executeOneRoundWithTimeout` 使用 `CompletableFuture.get(120s)` 给 worker 执行设置超时。worker hang 时抛出 RuntimeException 进入 failure recovery 路径，控制图线程不会被无限阻塞。新增 `WorkerExecutionTimeoutTest` 3 场景（fast worker 正常返回、hanging worker 超时抛出、failing worker 传播异常）。
 - 2026-07-22: `partial` task 终态落地。`finalizeCompletedTask` 现在检查 subgoal_status：部分完成 -> `partial`（非 `done`），全部完成才 -> `done`。同时 `autoUpdateSubgoalStatus` 在 worker `running` 时将第一个 `pending` subgoal 标为 `in_progress`，补全 `pending -> in_progress -> done/blocked` 生命周期。新增 `TaskPartialStatusTest` 6 场景 + `GoalProgressAutoUpdateTest` 扩展 2 场景。
 - 2026-07-22: Loop 验收标准 #2 落地。`resolveAction` 现在 goal progress 优先于单轮 execution result：blocked -> human_gate, all done -> done, open + execution done -> checkpoint。新增 `ControlNodeGraphDecideGoalProgressPriorityTest` 10 场景。同时落地 `autoUpdateSubgoalStatus`：completed -> subgoal done, failed -> subgoal blocked；新增 `GoalProgressAutoUpdateTest` 7 场景。`continueNode` 每次完成后写 `last_loop_tick`。

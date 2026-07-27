@@ -275,6 +275,26 @@ class WorkerRouterRouteTraceTest {
     }
 
     @Test
+    void researchTaskWithWorkspaceMutationBypassesPinnedOpenclawAndRoutesToCodex() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+
+        WorkerRouter.RouteResult route = router.selectWorker(task("research", Map.of(
+            "task_type", "research",
+            "preferred_worker", "openclaw-native",
+            "intent", "阅读 docs/ARCHITECTURE.md，并把摘要写入 .tmp/rnd-summary.txt",
+            "workspace_root", "D:\\gitAll\\agent-cloud-harness"
+        )));
+
+        assertEquals("coding", route.taskType());
+        assertEquals("codex", route.selectedWorker());
+        assertEquals("openclaw-native", route.preferredWorkerHint());
+        assertNotNull(route.fallbackReason());
+        assertTrue(route.fallbackReason().contains("openclaw-native"));
+        assertTrue(route.fallbackReason().contains("auto_route_task_types contract"));
+        assertTrue(route.fallbackReason().contains("taskType=coding"));
+    }
+    @Test
     void messageAutoRouteUsesToolAwareWorkerBeforeSuggestOnlyAssistants() {
         WorkerRegistry registry = new WorkerRegistry();
         WorkerRouter router = new WorkerRouter(registry);

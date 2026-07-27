@@ -214,6 +214,52 @@ class GoalProgressAutoUpdateTest {
         assertEquals(task, updated);
     }
 
+    @Test
+    void completedExecutionWithActionGoalButNoProofKeepsSubgoalInProgress() throws Exception {
+        // false-done guardrail: 目标含"写入"期望工具执行，worker 声称 completed 但无 tool/artifact 证据
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withMetadata(Map.of(
+                "goal", "把摘要写入 .tmp/summary.txt",
+                "subgoal_status", List.of(Map.of("title", "write summary", "status", "in_progress")),
+                "progress_summary", "0/1 subgoals done"
+            ));
+
+        WorkerExecutionResult result = new WorkerExecutionResult(
+            "done", "", false, "", "", "", "high", "completed", List.of(), List.of(), 0, 0L, Map.of()
+        );
+
+        Task updated = invokeAutoUpdateSubgoalStatus(task, result);
+        assertNotNull(updated);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> subgoalStatus = (List<Map<String, Object>>) updated.metadata().get("subgoal_status");
+        assertEquals("in_progress", subgoalStatus.get(0).get("status"));
+        assertEquals("evidence_gap_no_tool_proof", updated.metadata().get("subgoal_judgment_source"));
+        assertEquals("0/1 subgoals done", updated.metadata().get("progress_summary"));
+    }
+
+    @Test
+    void completedExecutionWithActionGoalAndProofMarksSubgoalDone() throws Exception {
+        // guard 通过：目标期望工具执行，且 worker 确实产出 artifact -> 标 done
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withMetadata(Map.of(
+                "goal", "把摘要写入 .tmp/summary.txt",
+                "subgoal_status", List.of(Map.of("title", "write summary", "status", "in_progress")),
+                "progress_summary", "0/1 subgoals done"
+            ));
+
+        WorkerExecutionResult result = new WorkerExecutionResult(
+            "done", "", true, "summary.txt", "摘要内容", "", "high", "completed", List.of(), List.of(), 0, 0L, Map.of()
+        );
+
+        Task updated = invokeAutoUpdateSubgoalStatus(task, result);
+        assertNotNull(updated);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> subgoalStatus = (List<Map<String, Object>>) updated.metadata().get("subgoal_status");
+        assertEquals("done", subgoalStatus.get(0).get("status"));
+        assertEquals("1/1 subgoals done", updated.metadata().get("progress_summary"));
+    }
     private Task invokeAutoUpdateSubgoalStatus(Task task, WorkerExecutionResult result) throws Exception {
         ControlNodeGraph graph = new ControlNodeGraph(
             null, null, null, null, null, null, null,

@@ -468,6 +468,35 @@ public class WorkerRegistry {
         return stored;
     }
 
+    /**
+     * 从 HarnessConfig 声明式配置注册 worker lane。
+     * 如果配置中的 id 与已注册 worker 相同，覆盖；否则增量注册。
+     */
+    public void registerFromConfig(com.agentcloud.agent.providers.HarnessConfig config) {
+        if (config == null || config.workers() == null || config.workers().isEmpty()) {
+            return;
+        }
+        for (com.agentcloud.agent.providers.WorkerLaneConfig lane : config.workers()) {
+            if (lane.id() == null || lane.id().isBlank()) {
+                continue;
+            }
+            Worker worker = new Worker(
+                lane.id(),
+                lane.provider(),
+                lane.capabilities(),
+                List.of(),
+                List.of(),
+                Map.of("api_key", true, "backend_reachable", true),
+                lane.metadata(),
+                false,
+                true
+            );
+            register(worker);
+            log.info("Worker lane registered from config: {} (provider={}, tier={}, costClass={})",
+                lane.id(), lane.provider(), lane.modelTier(), lane.costClass());
+        }
+    }
+
     private Worker applyPriorityOverride(Worker worker) {
         Integer overridePriority = workerPriorityOverrides.get(worker.workerId());
         if (overridePriority != null) {

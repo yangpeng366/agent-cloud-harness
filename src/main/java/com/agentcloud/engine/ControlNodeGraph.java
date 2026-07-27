@@ -24,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -43,6 +44,7 @@ public class ControlNodeGraph {
     private static final int FAILURE_SUMMARY_LIMIT = 220;
     private static final int PLANNER_DELEGATION_OUTPUT_LIMIT = 12_000;
     private static final long WORKER_EXECUTION_TIMEOUT_SECONDS = 120;
+    private static final int MAX_HANDOFF_DEPTH = 3;
     private static final Pattern THREAD_NOT_FOUND_EN_WITH_PARENS = Pattern.compile("thread not found\\s*\\(([\\w-]+)\\)", Pattern.CASE_INSENSITIVE);
     private static final Pattern THREAD_NOT_FOUND_EN = Pattern.compile("thread not found\\s*[:：]?\\s*([\\w-]+)?", Pattern.CASE_INSENSITIVE);
     private static final Pattern THREAD_NOT_FOUND_ZH = Pattern.compile("(没找到线程|未找到线程)\\s*[\"“]?([\\w-]+)[\"”]?", Pattern.CASE_INSENSITIVE);
@@ -77,6 +79,7 @@ public class ControlNodeGraph {
     private final LearningMemoryService learningMemoryService;
     private final AgentRunService agentRunService;
     private final AgentActionReconciler agentActionReconciler;
+    private final LlmSubgoalJudgmentService llmSubgoalJudgmentService;
 
     public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
                             ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
@@ -170,6 +173,7 @@ public class ControlNodeGraph {
         this.learningMemoryService = learningMemoryService;
         this.agentRunService = agentRunService;
         this.agentActionReconciler = agentActionReconciler;
+        this.llmSubgoalJudgmentService = null;
     }
 
     public Task enter(Task task) {
@@ -664,6 +668,16 @@ public class ControlNodeGraph {
                 if (currentModelTier == null || currentModelTier.isBlank()) {
                     currentModelTier = workerMetadata(task.assignedWorker(), "model_tier");
                 }
+                int currentHandoffDepth = handoffDepth(task);
+                if (currentHandoffDepth >= MAX_HANDOFF_DEPTH) {
+                    log.info("[Handoff] task={} handoff_depth={} >= max, entering human_gate instead of advisory handoff",
+                        task.id(), currentHandoffDepth);
+                    Task depthMoved = task.withStatus("waiting_human")
+                        .withControlNode("human_gate")
+                        .withWaitingReason("handoff depth limit reached (" + currentHandoffDepth + ")");
+                    taskDao.updateState(depthMoved);
+                    yield depthMoved;
+                }
                 String advisoryWorker = resolveAdvisoryHandoff(task, currentModelTier);
                 if (advisoryWorker != null) {
                     log.info("[Advisory] task={} small-tier worker={} escalates, advisory handoff to strong-tier worker={}",
@@ -671,6 +685,7 @@ public class ControlNodeGraph {
                     Task advisoryTask = withMetadataEntries(
                         task.withAssignedWorker(advisoryWorker).withControlNode("handoff"),
                         "handoff_reason", "advisory_consult",
+                        "handoff_depth", currentHandoffDepth + 1,
                         "advisory_source_worker", firstNonBlank(task.assignedWorker(), "unassigned"),
                         "advisory_target_worker", advisoryWorker,
                         "advisory_trigger", "escalate_from_small_tier"
@@ -832,6 +847,27 @@ public class ControlNodeGraph {
         return statuses;
     }
 
+    private String readFirstInProgressSubgoalDescription(Object rawSubgoalStatus) {
+        if (rawSubgoalStatus instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    String status = readSubgoalStatus(item);
+                    if ("in_progress".equals(status) || "pending".equals(status)) {
+                        Object desc = map.get("description");
+                        if (desc != null) {
+                            return desc.toString();
+                        }
+                        Object title = map.get("title");
+                        if (title != null) {
+                            return title.toString();
+                        }
+                    }
+                }
+            }
+        }
+        return "";
+    }
+
     private String readSubgoalStatus(Object raw) {
         if (raw instanceof Map<?, ?> map) {
             Object status = map.get("status");
@@ -917,6 +953,29 @@ public class ControlNodeGraph {
             && "running".equals(executionResult.executionStatus());
 
         if (!executionCompleted && !executionFailed && !executionRunning) {
+            // Ambiguous execution status: try LLM-assisted subgoal judgment
+            if (llmSubgoalJudgmentService != null && llmSubgoalJudgmentService.isEnabled()
+                && LlmSubgoalJudgmentService.isAmbiguousExecution(
+                    executionResult.executionStatus(), executionResult.outputText())) {
+                String firstInProgressDescription = readFirstInProgressSubgoalDescription(rawSubgoalStatus);
+                String llmStatus = llmSubgoalJudgmentService.judgeSubgoalStatus(
+                    firstInProgressDescription, executionResult.outputText(),
+                    "in_progress", task.metadata());
+                if (llmStatus != null) {
+                    Map<String, Object> updatedMetadata = new LinkedHashMap<>(task.metadata());
+                    Object updatedSubgoalStatus = migrateFirstInProgressSubgoal(rawSubgoalStatus, llmStatus);
+                    if (updatedSubgoalStatus != null) {
+                        updatedMetadata.put("subgoal_status", updatedSubgoalStatus);
+                        updatedMetadata.put("subgoal_judgment_source", "llm_fallback");
+                        List<String> newStatuses = readSubgoalStatuses(updatedSubgoalStatus);
+                        int total = newStatuses.size();
+                        long doneCount = newStatuses.stream().filter(this::isDoneSubgoalStatus).count();
+                        updatedMetadata.put("progress_summary", doneCount + "/" + total + " subgoals done");
+                        log.info("[LLM Subgoal] task={} ambiguous execution, LLM judged subgoal as {}", task.id(), llmStatus);
+                        return task.withMetadata(updatedMetadata);
+                    }
+                }
+            }
             return task;
         }
 
@@ -929,6 +988,17 @@ public class ControlNodeGraph {
                 return task.withMetadata(updatedMetadata);
             }
             return task;
+        }
+
+        // False-done guardrail: 若任务目标期望工具执行（写入/创建/修改/删除/运行命令），
+        // 但 worker 声称 completed 却没有产出任何 tool/artifact 证据，
+        // 则不把 subgoal 标 done，保持 in_progress，交由后续 loop 重试或 handoff。
+        // 修复 openclaw-native 伪完成：只规划不执行却误标 done。
+        if (executionCompleted && expectsToolExecution(task) && !hasExecutionProof(executionResult)) {
+            Map<String, Object> guardedMetadata = new LinkedHashMap<>(task.metadata());
+            guardedMetadata.put("subgoal_judgment_source", "evidence_gap_no_tool_proof");
+            log.warn("[Subgoal Guard] task={} execution completed but no tool/artifact proof for action-expecting goal; kept subgoal in_progress", task.id());
+            return task.withMetadata(guardedMetadata);
         }
 
         // 构建 updated subgoal_status: 将第一个 in_progress subgoal 迁移
@@ -947,6 +1017,62 @@ public class ControlNodeGraph {
         updatedMetadata.put("progress_summary", doneCount + "/" + total + " subgoals done");
 
         return task.withMetadata(updatedMetadata);
+    }
+
+    /**
+     * 判断任务目标是否期望工具执行（文件写入/创建/修改/删除、命令执行等）。
+     * 用于 false-done guardrail：这类任务需要 tool/artifact 证据才能标 done。
+     */
+    private boolean expectsToolExecution(Task task) {
+        if (task == null) {
+            return false;
+        }
+        String goal = task.goal();
+        String metaGoal = task.metadata() != null ? metadataString(task.metadata(), "goal") : null;
+        String intent = task.metadata() != null ? metadataString(task.metadata(), "intent") : null;
+        StringBuilder text = new StringBuilder();
+        if (goal != null && !goal.isBlank()) text.append(goal).append(' ');
+        if (metaGoal != null && !metaGoal.isBlank()) text.append(metaGoal).append(' ');
+        if (intent != null && !intent.isBlank()) text.append(intent).append(' ');
+        String lower = text.toString().toLowerCase(Locale.ROOT);
+        if (lower.isBlank()) {
+            return false;
+        }
+        return lower.contains("写入") || lower.contains("写到") || lower.contains("保存到")
+            || lower.contains("输出到") || lower.contains("创建") || lower.contains("新建")
+            || lower.contains("修改") || lower.contains("删除") || lower.contains("运行")
+            || lower.contains("执行命令") || lower.contains("create file") || lower.contains("write file")
+            || lower.contains("write to") || lower.contains("create a") || lower.contains("modify ")
+            || lower.contains("delete ") || lower.contains("run ") || lower.contains("mkdir");
+    }
+
+    /**
+     * 判断 worker 执行结果是否携带可验证的执行证据（artifact / tool invocation）。
+     * 用于 false-done guardrail：无证据时不允许把期望工具执行的 subgoal 标 done。
+     */
+    private boolean hasExecutionProof(WorkerExecutionResult result) {
+        if (result == null) {
+            return false;
+        }
+        if (result.producedArtifact()) {
+            return true;
+        }
+        if (result.artifactContent() != null && !result.artifactContent().isBlank()) {
+            return true;
+        }
+        if (result.evidenceRefs() != null && !result.evidenceRefs().isEmpty()) {
+            return true;
+        }
+        Map<String, Object> md = result.metadata();
+        if (md != null) {
+            if (!metadataStringList(md, "tool_invocation_ids").isEmpty()) {
+                return true;
+            }
+            if (metadataBoolean(md, "produced_artifact")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -2028,7 +2154,7 @@ public class ControlNodeGraph {
     public Task triggerHandoff(Task task, String targetWorker) {
         log.info("[Trigger] handoff task={} to worker={}", task.id(), targetWorker);
         persistTransitionPacket(task.withAssignedWorker(targetWorker), "handoff_before");
-        Task t = clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff");
+        Task t = withMetadataEntries(clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff"), "handoff_depth", handoffDepth(task) + 1);
         taskDao.updateState(t);
         return handoffNode(t);
     }
@@ -2143,6 +2269,24 @@ public class ControlNodeGraph {
         Map<String, Object> metadata = new LinkedHashMap<>(task.metadata());
         metadata.remove("auto_continue_burst_count");
         return task.withMetadata(metadata);
+    }
+
+    private int handoffDepth(Task task) {
+        if (task == null || task.metadata() == null) {
+            return 0;
+        }
+        Object depth = task.metadata().get("handoff_depth");
+        if (depth instanceof Number) {
+            return ((Number) depth).intValue();
+        }
+        if (depth != null) {
+            try {
+                return Integer.parseInt(depth.toString());
+            } catch (NumberFormatException e) {
+                return 0;
+            }
+        }
+        return 0;
     }
 
     private Task clearProviderContinuationMetadata(Task task) {

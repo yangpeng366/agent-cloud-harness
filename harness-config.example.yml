@@ -1,0 +1,57 @@
+# harness-config.yml — agent-cloud-harness 声明式配置
+# 复制为 harness-config.yml 并按需修改。变更后需重启 harness 生效。
+# 详细说明见 docs/FREE_MODEL_WORKER_LANE_PLAN.md
+#
+# 架构：harness 只用两个 codex CLI lane：
+#   codex-main  -> codex -c model_provider=ccx -c model=codex        (主力，CCX 路由到付费渠道)
+#   codex-free  -> codex -c model_provider=ccx-free -c model=codex-free (免费，CCX 路由到免费渠道)
+#
+# CCX 负责模型路由：codex-free 通过各渠道的 modelMapping 映射到实际免费模型
+# Harness 不关心 CCX 背后是哪个渠道，只关心 codex / codex-free 两个入口
+
+harness:
+  # 全局默认
+  defaults:
+    provider_model_provider: ccx
+    provider_base_url: http://127.0.0.1:3688/v1
+    provider_wire_api: chat_completions
+    provider_bearer_token: ccx-081f9efd9e7203d4
+
+  # CCX 渠道健康检查
+  ccx:
+    base_url: http://127.0.0.1:3688
+    admin_key: ccx-admin-2026
+    health_check_on_startup: true
+    channel_sync_on_startup: false
+
+  # 声明式 worker lane
+  workers:
+    # 主力 coding（走 CCX 付费渠道）
+    - id: codex-main
+      provider: codex
+      model_tier: strong
+      cost_class: paid_auto
+      selection_priority: 100
+      capabilities: [chat, code, patch, session]
+      profile:
+        model: codex
+        model_provider: ccx
+      metadata:
+        primary_role: planner_executor
+        execution_backend: provider_app_server
+        local_workspace_access: true
+
+    # 免费模型（走 CCX 免费渠道，codex-free -> 硅基/智谱/OpenRouter/GitHub）
+    - id: codex-free
+      provider: codex
+      model_tier: small
+      cost_class: free_auto
+      selection_priority: 70
+      capabilities: [chat, code, session]
+      profile:
+        model: codex-free
+        model_provider: ccx-free
+      metadata:
+        primary_role: cannon_fodder
+        execution_backend: provider_app_server
+        local_workspace_access: true

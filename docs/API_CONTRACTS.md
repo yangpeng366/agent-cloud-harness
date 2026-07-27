@@ -80,6 +80,52 @@ Advisory handoff 产生的 HandoffPacket：
 
 Advisory handoff 完成后（strong-tier worker 执行一轮），控制图自动 resume 原任务路径；不需要人工介入。如果 advisory round 也判断 `escalate，则进入 human_gate。
 
+### Handoff Depth 限制
+
+Advisory handoff 和 triggerHandoff 都会递增 `task.metadata.handoff_depth`。当 `handoff_depth >= MAX_HANDOFF_DEPTH(3)` 时，advisory handoff 被跳过，直接进入 `human_gate`，防止无限 handoff 嵌套。
+
+| 条件 | 行为 | 说明 |
+|------|------|------|
+| handoff_depth < 3 + small-tier escalate | advisory handoff | 正常 advisory 路径，递增 handoff_depth |
+| handoff_depth >= 3 | human_gate | 跳过 advisory，waitingReason 记录 depth limit |
+| triggerHandoff 调用 | 递增 handoff_depth | 外部触发的 handoff 也被追踪 |
+
+回归保护：HandoffDepthLimitTest 5 场景。
+
+### LLM-assisted Subgoal Update
+
+当 worker executionStatus 为 `unknown / partial / timeout` 等 ambiguous 状态（非 completed/failed/running）且有 outputText 时，`autoUpdateSubgoalStatus` 会调用 `LlmSubgoalJudgmentService` 通过 CCX 判断 subgoal 状态。
+
+| 条件 | 行为 | 说明 |
+|------|------|------|
+| executionStatus = completed | 规则判断：subgoal -> done | 不调用 LLM |
+| executionStatus = failed | 规则判断：subgoal -> blocked | 不调用 LLM |
+| executionStatus = running | 规则判断：first pending -> in_progress | 不调用 LLM |
+| executionStatus = ambiguous + 有 outputText | LLM fallback | 调用 LLM 判断 done/blocked/in_progress |
+| LLM 返回 null/unrecognized | 保持原状态 | 不修改 subgoal_status |
+
+LLM 判断结果写入 `metadata.subgoal_judgment_source = llm_fallback`，可观测可回放。
+
+回归保护：LlmSubgoalJudgmentServiceTest 11 场景。
+
+### harness-config.yml 声明式配置
+
+Operator 通过 `harness-config.yml` 声明 worker lane，无需改 Java 代码。搜索路径：`./harness-config.yml`, `./config/`, `~/.agentcloud/`, `-Dagentcloud.config.path`。
+
+配置文件中声明的 worker lane 增量注册到 `WorkerRegistry`：与内置 worker id 相同则覆盖，否则新增。配置不存在时回退到内置默认值。
+
+字段：`harness.defaults`（CCX 全局默认）、`harness.ccx`（渠道健康检查配置）、`harness.workers[]`（worker lane 声明：id、provider、model_tier、cost_class、selection_priority、capabilities、profile、metadata）。
+
+回归保护：HarnessConfigLoaderTest 7 场景 + WorkerRegistryConfigRegistrationTest 6 场景。
+
+### harness-state.json 自动发现
+
+Harness 启动时自动探测本机环境，写入 `~/.agentcloud/harness-state.json`：CCX 可达性 + 模型列表 + worker CLI 可用性 + provider 启用状态。
+
+与 `harness-config.yml` 的关系：Sublime 式"自动发现 + 用户覆盖"。`harness-state.json` 由 harness 自动维护，`harness-config.yml` 由用户手动编辑覆盖。合并规则：用户配置覆盖自动发现，未声明的用自动发现结果。
+
+回归保护：HarnessStateWriterTest 6 场景。
+
 ### Loop Continue 不变量
 
 POST /api/v1/tasks/{id}/continue 的 HTTP 层超时或 controlGraph.enter() 异常不会污染 task 级状态：

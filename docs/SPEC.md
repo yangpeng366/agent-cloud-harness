@@ -146,6 +146,19 @@
 
 回归保护：GoalProgressAutoUpdateTest 新增 2 个场景。
 
+
+#### LLM-assisted Subgoal Update
+
+当 worker executionStatus 为 ambiguous（非 completed/failed/running）且有 outputText 时，`autoUpdateSubgoalStatus` 调用 `LlmSubgoalJudgmentService` 通过 CCX 判断 subgoal 应为 `done` / `blocked` / `in_progress`。规则优先，LLM 只在 ambiguous 场景触发。LLM 判断结果写入 `metadata.subgoal_judgment_source = llm_fallback`，可观测可回放。
+
+回归保护：LlmSubgoalJudgmentServiceTest 11 个场景。
+
+#### Handoff Depth 限制
+
+Advisory handoff 和 triggerHandoff 都会递增 `task.metadata.handoff_depth`。当 `handoff_depth >= MAX_HANDOFF_DEPTH(3)` 时，advisory handoff 被跳过，直接进入 `human_gate`，防止无限 handoff 嵌套。
+
+回归保护：HandoffDepthLimitTest 5 个场景。
+
 #### Worker Execution 超时保护
 
 `schedulerNode` 中 worker 执行通过 `executeOneRoundWithTimeout` 使用 `CompletableFuture.get(120s)` 设置超时。worker hang 时抛出 RuntimeException 进入 failure recovery 路径，控制图线程不会被无限阻塞。

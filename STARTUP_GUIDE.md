@@ -260,6 +260,64 @@ Invoke-RestMethod http://localhost:20128/v1/models `
 - `llm.base_url=http://localhost:20128/v1`
 - `/v1/models` 返回非空 `data[]`
 
+
+### Windows + CCX Desktop（推荐：本地多渠道网关）
+
+如果你本机已安装 CCX Desktop（BenedictKing/ccx），它提供了比 OmniRoute 更完整的多渠道路由、负载分流和成本控制。Harness 通过 CCX 走 `codex` / `codex-free` 路由名，CCX 负责选择实际上游（glm-4-flash、DeepSeek、硅基等）。
+
+同时，CCX 已配置 harness 专属渠道，使用 `harness` / `harness-strong` / `harness-fast` 模型名通过 CCX 调用 harness 的 `/v1/chat/completions` 和 `/v1/responses` 端点，不会与其他渠道负载均衡混淆。
+
+```powershell
+# 前台启动（CCX bearer token 自动从 codex config.toml 读取）
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithCcx.ps1 -Port 9090
+```
+
+后台启动示例：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithCcx.ps1 `
+  -Port 9090 `
+  -Background `
+  -StdOutPath .tmp\harness-ccx.out.log `
+  -StdErrPath .tmp\harness-ccx.err.log
+```
+
+显式指定 API Key（不依赖 codex config.toml）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Run-HarnessWithCcx.ps1 `
+  -ApiKey "ccx-xxxxxxxx" `
+  -Port 9090 -Background
+```
+
+启动后验证：
+
+```powershell
+# 确认 Harness 已读到 CCX 配置
+Invoke-RestMethod http://localhost:9090/api/v1/health | ConvertTo-Json -Depth 6
+
+# 通过 CCX 调用 harness（harness 专属模型名）
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:3688/v1/chat/completions" `
+  -ContentType "application/json" `
+  -Headers @{ Authorization = "Bearer ccx-xxxxxxxx" } `
+  -Body '{"model":"harness","messages":[{"role":"user","content":"hello"}]}'
+```
+
+期望：
+
+- `llm.available=true`
+- `llm.base_url=http://127.0.0.1:3688/v1`
+- `llm.model=codex`
+- CCX `harness` 模型名返回 harness 的 `agentcloud-default` 响应
+
+**CCX 渠道模型名对照**：
+
+| CCX 模型名 | harness 内部模型 | 用途 |
+|-----------|-----------------|------|
+| `harness` | `agentcloud-default` | 默认任务执行 |
+| `harness-strong` | `agentcloud-strong` | 强模型任务 |
+| `harness-fast` | `agentcloud-fast` | 快速轻量任务 |
+
 ### Linux/macOS (Bash)
 
 ```bash
@@ -735,6 +793,29 @@ kill -9 $(cat .tmp/harness.pid)
 
 ---
 
+
+### Run-HarnessWithCcx 脚本
+
+该脚本是 `Run-HarnessWithJava21.ps1` 的包装器，专门用于通过 CCX Desktop 本地网关启动 harness。CCX bearer token 优先从 `-ApiKey` 参数读取，其次从 `CCX_BEARER_TOKEN` 环境变量，最后自动从 codex `config.toml` 的 `[model_providers.ccx]` 读取。
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-ApiKey` | CCX bearer token；未传时按优先级自动读取 | `$env:CCX_BEARER_TOKEN` → codex config.toml |
+| `-BaseUrl` | CCX API Base URL | `http://127.0.0.1:3688/v1` |
+| `-Model` | 默认执行模型（CCX 路由名） | `codex` |
+| `-ReviewModel` | judgment / completion review 模型 | `codex` |
+| `-WireApi` | wire 协议 | `chat_completions` |
+| `-JdkHome` | JDK 安装路径 | `C:\Program Files\Java\jdk-21.0.9+10` |
+| `-JarPath` | 指定 JAR 文件路径 | 自动查找 |
+| `-Port` | 服务端口 | `9090` |
+| `-Background` | 是否后台运行 | `false` |
+| `-StdOutPath` | 标准输出日志路径 | `.tmp\harness-ccx.out.log` |
+| `-StdErrPath` | 标准错误日志路径 | `.tmp\harness-ccx.err.log` |
+| `-JavaArgs` | 额外的 Java 参数 | `@()` |
+| `-DisableDispatchPreflightWarmup` | 跳过启动时 worker dispatch preflight 预热 | `false` |
+| `-AutoStop` | Harness 端口已占用时是否自动停止占用进程 | `true` |
+| `-SkipCcxReachabilityCheck` | 跳过启动前 CCX 网关可达性探测 | `false` |
+| `-CcxStartupTimeoutSeconds` | CCX 网关可达性探测超时秒数 | `15` |
 ## 推荐学习路径
 
 1. **初学者**: 从 `Build-WithJava21.*` 和 `Run-HarnessWithJava21.*` 脚本开始

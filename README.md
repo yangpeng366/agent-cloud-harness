@@ -256,7 +256,7 @@ agent-cloud-harness/
 - [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md)
 - [`docs/WEB_CONSOLE.md`](docs/WEB_CONSOLE.md)
 
-贡献与安全说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`SECURITY.md`](SECURITY.md)。
+贡献与安全说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 和 [`SECURITY.md`](SECURITY.md)。版本变更记录见 [`CHANGELOG.md`](CHANGELOG.md)。
 
 ---
 

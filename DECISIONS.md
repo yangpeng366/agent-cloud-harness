@@ -1,4 +1,16 @@
+- 2026-07-23: 下一阶段演进方向固定为 NEXT_EVOLUTION_PLAN.md 的 E1-E5。优先级排序：E2 端到端验证 > E3 UI Loop Activity 集成 > E4 CCX 启动服务 > E1 Loop Decide 深度消费 > E5 配置覆盖闭环。理由：E2 是后续演进的基线，E3 是产品闭环最后一公里，E4 降低启动门槛，E1/E5 是增量优化。
 # DECISIONS
+
+- 2026-07-24: CCX 与 Harness 双向对接使用 harness 专属模型名（harness / harness-strong / harness-fast），不复用 codex / codex-free / gpt-5.4 等公共模型名。理由：公共模型名会在 CCX 多渠道间负载均衡，导致请求被转发到其他上游而非 harness；专属模型名确保 CCX 调用 harness 时只命中 harness-chat / harness-responses 渠道。harness 启动时仍使用 codex 作为 OPENAI_MODEL，这是 harness → CCX → 实际 LLM 的方向，与 CCX → harness 方向互不干扰。harness 默认端口固定为 9090，与 CCX config 中配置的 harness-chat / harness-responses 渠道 baseUrl 保持一致。
+
+- 2026-07-23: CCX 渠道配置不加新渠道，只在现有渠道的 modelMapping 里加 codex-free -> 实际模型 映射。理由：CCX 的设计是输入模型名后各渠道按 modelMapping 路由，新增渠道意味着重复配置 baseUrl/apiKeys/modelCapabilities。chatUpstream 和 responsesUpstream 都要配，因为 codex CLI 走 responses API，harness 直接 LLM 调用走 chat completions API。
+- 2026-07-23: harness 只用两个 codex CLI lane（codex-main + codex-free），不用更多。理由：CCX 负责模型路由，harness 只需要区分"付费"和"免费"两个入口；CCX 背后是哪个渠道由 CCX 自己决定，harness 不关心。
+- 2026-07-23: harness 配置采用 Sublime 式"默认 + 用户覆盖"模式。harness 自动维护 harness-state.json（本机状态），用户通过 harness-config.yml 覆盖（启用/禁用 provider、调整优先级）。合并规则：用户配置覆盖自动发现，未声明的用自动发现结果。
+
+- 2026-07-23: Worker lane 注册采用配置驱动（harness-config.yml），不硬编码在 BuiltinAgentProviders.defaults() 中。理由：CCX 渠道变更频繁（新增/暂停/恢复），硬编码意味着每次改 Java + 重新构建 + 重新部署；配置驱动只需改 yml + 重启。harness-config.yml 是现有 workers.yml 的超集，第一版两者并存，配置不存在时回退到内置默认值。
+- 2026-07-23: harness-config.yml 选 YAML 不选 JSON。理由：harness 已有 workers.yml 的 YAML 解析传统，YAML 支持注释适合人工维护，与 CCX 的 config.json（机器生成）分工明确。
+- 2026-07-23: 免费 worker lane 统一标记 cost_class: free_auto，复用现有 ree_first 路由逻辑，不新写路由代码。免费 lane 仍是 providerId: codex 的 profile lane，不引入新 provider。
+- 2026-07-23: CCX 渠道健康检查第一版只做启动时 precheck + 手动 refresh，不做自动 re-ready / 自动同步。理由：渠道状态变更频率低，自动同步增加复杂度但收益有限。
 
 - 2026-07-22: P2 端到端集成验证已完成并固定决策口径：CCX 网关（`127.0.0.1:3688`）作为 harness 唯一 LLM 接入层，harness 通过 `-DOPENAI_BASE_URL` / `-DOPENAI_API_KEY` 系统属性指向 CCX；codex worker 通过 CCX 路由到实际 LLM（glm-4-flash）；端到端验证证明 `goal -> plan -> execute -> judge -> decide` 闭环在真实 LLM 调用上完整跑通，goal progress auto-update 和 last_loop_tick 在真实执行中生效。后续端到端验证继续使用 `Run-CcxIntegrationPrecheck.ps1` 作前置检查、`Run-HarnessWithJava21.ps1` 作 harness 启动入口、通过 CCX 路由名 `codex` 让 CCX 自动选择最佳上游；不要直接指定未路由的模型名（如 `glm-5.2` 直连 503）。
 
