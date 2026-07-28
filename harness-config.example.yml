@@ -1,5 +1,6 @@
 # harness-config.yml — agent-cloud-harness 声明式配置
 # 复制为 harness-config.yml 并按需修改。变更后需重启 harness 生效。
+# 注意：本文件为脱敏示例，token/密钥/路径均为占位符，请替换为你本机的真实值。
 # 详细说明见 docs/FREE_MODEL_WORKER_LANE_PLAN.md
 #
 # 架构：harness 只用两个 codex CLI lane：
@@ -15,22 +16,22 @@ harness:
     provider_model_provider: ccx
     provider_base_url: http://127.0.0.1:3688/v1
     provider_wire_api: chat_completions
-    provider_bearer_token: ccx-081f9efd9e7203d4
+    provider_bearer_token: ccx-YOUR_BEARER_TOKEN_HERE
 
   # CCX 渠道健康检查
   ccx:
     base_url: http://127.0.0.1:3688
-    admin_key: ccx-admin-2026
+    admin_key: ccx-YOUR_ADMIN_KEY_HERE
     health_check_on_startup: true
     channel_sync_on_startup: false
 
   # 本地工作区别名注册表：provider/codex 可根据任务意图自行定位目标仓库。
-  # key 建议使用项目名或用户常说的别名；value 改成本机真实仓库路径。
-  # 示例：任务提到 /articleeditor/... 时，codex 将 cwd 定位到 D:\gitAll\articleeditor，
+  # key 建议使用项目名或用户常说的别名；value 改为你本机真实仓库路径。
+  # 示例：任务提到 /myproject/... 时，codex 将 cwd 定位到 /path/to/myproject，
   # 并在 prompt 中看到完整工作区清单和边界提示，避免回退到 harness 自身仓库。
   workspace-aliases:
-    articleeditor: 'D:\gitAll\articleeditor'
-    articleeditor-tmp: 'D:\gitAll\articleeditor-tmp'
+    myproject: '/path/to/myproject'
+    myproject-tmp: '/path/to/myproject-tmp'
   # 声明式 worker lane
   workers:
     # 主力 coding（走 CCX 付费渠道）
