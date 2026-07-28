@@ -133,6 +133,7 @@
                     <argLine>--enable-preview -Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
                     <systemPropertyVariables>
                         <agentcloud.worker.priority.config.enabled>false</agentcloud.worker.priority.config.enabled>
+                        <agentcloud.controlgraph.sync_enter>true</agentcloud.controlgraph.sync_enter>
                     </systemPropertyVariables>
                 </configuration>
             </plugin>

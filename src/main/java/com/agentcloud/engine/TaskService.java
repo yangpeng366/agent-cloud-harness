@@ -48,6 +48,7 @@ public class TaskService {
     private final ArtifactDao artifactDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> enterLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
     public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
                        WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
@@ -226,7 +227,7 @@ public class TaskService {
         Task result = t;
         if (autoStart) {
             // 默认仍保持历史行为：创建后立即进入控制节点图
-            result = controlGraph.enter(t);
+            asyncEnterControlGraph(t, "enter");
         } else {
             log.info("Task {} created with autoStart=false, waiting for explicit /continue", taskId);
         }
@@ -239,6 +240,33 @@ public class TaskService {
             recordAssistantProgressMessage(persisted, "auto_start", experimentRun);
         }
         return taskDao.findById(taskId).orElse(persisted);
+    }
+
+    private void asyncEnterControlGraph(Task task, String action) {
+        if (task == null) {
+            return;
+        }
+        if (Boolean.getBoolean("agentcloud.controlgraph.sync_enter")) {
+            try {
+                controlGraph.enter(taskDao.findById(task.id()).orElse(task));
+            } catch (Throwable e) {
+                log.error("Sync control graph {} failed. task={}", action, task.id(), e);
+            }
+            return;
+        }
+        Object lock = enterLocks.computeIfAbsent(task.id(), k -> new Object());
+        Thread.ofVirtual().name("agentcloud-cg-" + action + "-", 0).start(() -> {
+            synchronized (lock) {
+                try {
+                    Task latest = taskDao.findById(task.id()).orElse(task);
+                    controlGraph.enter(latest);
+                } catch (Throwable e) {
+                    log.error("Async control graph {} failed. task={}", action, task.id(), e);
+                } finally {
+                    enterLocks.remove(task.id());
+                }
+            }
+        });
     }
 
     public Task getTask(String taskId) {
@@ -2011,7 +2039,8 @@ public class TaskService {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
         t = applyProviderThreadContinuationMetadata(t, actionMetadata);
         // Phase 1: judgment 已下沉到 ControlNodeGraph.continueNode，直接 enter 让控制图自行判断与迁移
-        Task updated = controlGraph.enter(t);
+        asyncEnterControlGraph(t, "continue");
+        Task updated = taskDao.findById(taskId).orElse(t);
         recordControlActionEvent(updated, "continue", null, actionMetadata);
         recordTaskActionMessage(updated, "continue", null, actionMetadata);
         recordTaskStateProjection(t, updated, null, actionMetadata);

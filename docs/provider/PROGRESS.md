@@ -89,3 +89,26 @@
 ### 注意
 - 重启 harness 必须带 CCX 环境变量（OPENAI_BASE_URL/OPENAI_API_KEY/OPENAI_MODEL），LlmConfig 从环境变量读；环境变量来源是 codex config.toml 的 ccx provider 节（token + base_url）。验证启动脚本逻辑已写入 .tmp/_start.py（从 toml 动态提取，不硬编码 token）。
 - task_eee02813bbe74049（原卡住任务）仍在 human_gate，可在 dialogue escalate/close 清理。
+---
+
+## 2026-07-28 P0 根治：控制图 enter 异步化（worker round 结果不再丢失）
+
+### 根因
+task_150378d838a249ab（分析 articleeditor 撤回日志）卡 scheduler：codex agent_run 已 completed（358s, exit_code=0, 1.4MB 分析），但任务事件只有 task_created/intake/scheduler 三个，无 worker_round 事件，task 停 active/scheduler。
+定位：`TaskService.createTask`/`continueTask` 同步调用 `controlGraph.enter(t)`，在 chat facade 的 HTTP 虚拟线程里阻塞执行整个控制图（含 358s worker round）。NioHttpServer 请求超时后虚拟线程被回收，控制图在 `recordCompletedAgentRun`（写 agent_run）之后、`emit worker_round`（写事件 + 推进 task 状态）之前被终止，结果丢失。即"codex 跑完了但 harness 没记录"。
+
+### 修复
+`ControlNodeGraph.enter` 异步化：
+- 新增 `asyncEnterControlGraph(task, action)`：用虚拟线程（`Thread.ofVirtual`）执行 enter，HTTP 立即返回。
+- per-task 锁（`ConcurrentHashMap<String,Object> enterLocks` + synchronized）：防同一 task 并发 enter（如 create 后立即 continue）重复跑 worker round；enter 前重查最新 task 状态。
+- 异常 catch 记录日志，不静默丢失。
+- `createTask` autoStart + `continueTask` 改调 `asyncEnterControlGraph`，不再同步 `controlGraph.enter(t)`。
+- 同步回退开关 `agentcloud.controlgraph.sync_enter`：测试用同步（保证控制图语义可断言），生产默认异步。pom.xml surefire 设 `sync_enter=true`（仿 `worker.priority.config.enabled` 模式）。
+
+### 验证
+- 编译通过；控制图测试（ControlNodeGraphOrchestrationFlowTest 17/0、ControlNodeGraphActionResolutionTest、GoalProgressAutoUpdateTest）+ TaskService 测试（AutoStart 7/0、ControlActionProjection 6/0、PacketContract 7/0、MessageReceipt 9/0、ParentTask 4/0）全绿。
+- 构建新 JAR 重启 harness（生产异步）。recover task_150378d838a249ab：worker_round 事件落盘（`Worker round completed. worker=codex outputLength=1440887 durationMs=358141`），控制图推进到 `done`（completed_at 写入）。对比修复前卡 scheduler 无 worker_round 事件，根因消除。
+
+### 附带发现（未修，次要）
+- 任务 summary 提取的是 codex 协议日志头部（ERROR ReasoningSummaryPartAdded），非分析结论；codex 结论在 last_message.md。summary 提取逻辑可后续优化。
+- alias 子串匹配对"分析类/日志类"任务会误命中（日志含"articleeditor"把 cwd 拉到仓库），不影响分析但可后续收窄（只读/分析类任务不应改 cwd）。
