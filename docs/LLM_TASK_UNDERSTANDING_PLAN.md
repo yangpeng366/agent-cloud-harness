@@ -1,6 +1,6 @@
 # Provider 推动 + 边界守护 - 任务理解方案
 
-> 状态：方案设计（未落代码）。主题归属：provider。
+> 状态：已决策 + 已落地（P0 alias registry + 边界守护 2026-07-27 落地；provider-driven 精化 2026-07-28 移除 alias 子串推断）。主题归属：provider。
 > 核心理念：理解、定位、执行都下放给执行 agent（codex 本身就能理解任务）；harness 只提供仓库清单 + 安全边界，不再前置预判。
 
 ## 1. 背景与根因
@@ -23,7 +23,7 @@ session_4b63c81807094751 / task_eee02813bbe74049（articleeditor 导出 Word 标
 | H4 | ControlNodeGraph 1092/4430/3750 | 写入意图/coding候选/错误分类 | 与 H1/H2 重复 |
 | H5 | ToolAwareWorkerExecutor 2095/3555 | full-stack/写入意图 | 又一份重复表 |
 | H6 | ProviderTaskContractNormalizer | workspace_root? Windows路径正则+\gitall\ | API 路径 /articleeditor/ 不命中 |
-| H7 | CodexAppServerWorkerExecutor.resolveWorkingDirectory | codex cwd | 无 workspace 时静默回退 harness 仓库，无边界 |
+| H7 | CodexAppServerWorkerExecutor.resolveWorkingDirectory | codex cwd | ~~无 workspace 时静默回退 harness 仓库~~ 已修：中性目录回退 + 边界提示；alias 子串推断已移除（provider-driven） |
 
 本质：语义判断用字面匹配必漏覆盖；项目名硬编码不可移植；多份词表重复漂移；H7 静默回退最危险。
 
@@ -53,6 +53,19 @@ session_4b63c81807094751 / task_eee02813bbe74049（articleeditor 导出 Word 标
 
 - prompt 加一行：`目标仓库: <codex 自行从清单选定>；仅在目标仓库内工作，不要读写 harness 自身仓库的 STATE.md / docs / 源码`。
 - codex 自主决定调研顺序与工具，harness 不干预。
+
+## 3.5 决策结论（2026-07-28 maintainer 确认）
+
+经过 P0 落地验证 + 一轮 articleeditor 分析任务实战，确认最终方向：
+
+**workspace 定位完全 provider-driven，harness 不做任何文本推断。**
+
+- 显式 `workspace_root`（metadata / API 传入）→ 直接用（操作者提供，非推断）。
+- 无显式 workspace → 中性目录（alias 公共父目录）+ prompt 仓库清单 → codex 自主 `cd` 定位。
+- **移除 `inferWorkspaceFromAliases`**：原 alias 子串匹配（task 文本含 "articleeditor" 就拉 cwd）对分析/日志类任务误命中，且本质仍是 harness 替 codex 做决策。codex 收到仓库清单后完全有能力自行 `cd`，无需 harness 猜。
+- 路由关键词表（H1/H2/H4/H5）保留为 worker 选择兜底：它们只影响「选哪个 worker」，不影响 cwd；codex 自主定位后关键词推断对结果无决定性影响，不急于移除。
+
+最佳实践一句话：**harness 只提供事实（仓库清单）+ 守边界（不回退自身仓库），理解和定位都交给执行 agent。**
 
 ## 4. 不做的事（刻意收缩）
 

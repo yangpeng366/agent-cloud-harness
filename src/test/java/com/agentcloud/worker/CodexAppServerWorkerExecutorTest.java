@@ -665,6 +665,72 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    void codexDoesNotInferCwdFromAliasSubstringInTaskText() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        Map<String, String> aliases = Map.of(
+            "articleeditor", tempDir.resolve("articleeditor").toString());
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null, aliases);
+        TaskRuntimeContext context = runtimeContext("codex", new LinkedHashMap<>(Map.of(
+            "task_type", "research",
+            "intent", "分析 articleeditor 的撤回日志"
+        )));
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "resolveWorkingDirectory",
+            TaskRuntimeContext.class,
+            com.agentcloud.model.Worker.class
+        );
+        method.setAccessible(true);
+
+        String resolved = (String) method.invoke(executor, context, null);
+        assertEquals(tempDir.toAbsolutePath().normalize().toString(), resolved);
+    }
+
+    @Test
+    void codexFallsBackToNeutralWorkspaceWhenNoExplicitCwdAndAliasesConfigured() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        Map<String, String> aliases = Map.of(
+            "articleeditor", tempDir.resolve("articleeditor").toString(),
+            "agent-cloud-harness", tempDir.resolve("agent-cloud-harness").toString());
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null, aliases);
+        TaskRuntimeContext context = runtimeContext("codex", new LinkedHashMap<>(Map.of(
+            "task_type", "general",
+            "intent", "general research task with no repo reference"
+        )));
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "resolveWorkingDirectory",
+            TaskRuntimeContext.class,
+            com.agentcloud.model.Worker.class
+        );
+        method.setAccessible(true);
+
+        String resolved = (String) method.invoke(executor, context, null);
+        assertEquals(tempDir.toAbsolutePath().normalize().toString(), resolved);
+    }
+
+    @Test
+    void codexWorkspaceGuidanceTellsAgentToCdIntoTarget() throws Exception {
+        AgentProviderRegistry registry = new AgentProviderRegistry();
+        BuiltinAgentProviders.defaults().forEach(registry::register);
+        Map<String, String> aliases = Map.of(
+            "articleeditor", "D:\\gitAll\\articleeditor");
+        CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null, aliases);
+
+        Method method = CodexAppServerWorkerExecutor.class.getDeclaredMethod(
+            "buildWorkspaceGuidance", String.class);
+        method.setAccessible(true);
+        String guidance = (String) method.invoke(executor, "D:\\gitAll");
+
+        assertTrue(guidance.contains("Available Workspaces:"));
+        assertTrue(guidance.contains("articleeditor -> D:\\gitAll\\articleeditor"));
+        assertTrue(guidance.contains("cd into that directory"));
+        assertTrue(guidance.contains("neutral start"));
+    }
+
+    @Test
     void codexPlanUsesResolvedWindowsLaunchWrapperMetadata() throws Exception {
         AgentProviderRegistry registry = new AgentProviderRegistry();
         BuiltinAgentProviders.defaults().forEach(registry::register);

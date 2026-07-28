@@ -112,3 +112,24 @@ task_150378d838a249ab（分析 articleeditor 撤回日志）卡 scheduler：code
 ### 附带发现（未修，次要）
 - 任务 summary 提取的是 codex 协议日志头部（ERROR ReasoningSummaryPartAdded），非分析结论；codex 结论在 last_message.md。summary 提取逻辑可后续优化。
 - alias 子串匹配对"分析类/日志类"任务会误命中（日志含"articleeditor"把 cwd 拉到仓库），不影响分析但可后续收窄（只读/分析类任务不应改 cwd）。
+---
+
+## 2026-07-28 provider-driven 精化：移除 alias 子串推断
+
+### 决策
+workspace 定位完全 provider-driven。移除 `CodexAppServerWorkerExecutor.inferWorkspaceFromAliases`（alias 子串匹配从 task goal/intent/title 猜 cwd），改为：
+- 显式 `workspace_root`（metadata/API）-> 直用（操作者提供，非推断）。
+- 无显式 workspace -> 中性目录（alias 公共父目录）+ prompt 仓库清单 -> codex 自主 `cd` 定位。
+路由关键词表（H1/H2/H4/H5）保留为 worker 选择兜底，不影响 cwd，不急于移除。
+
+### 代码改动
+- `CodexAppServerWorkerExecutor.resolveWorkingDirectory`：删除 `inferWorkspaceFromAliases` 调用块，流程变为 显式 metadata -> worker.toolScope -> neutralWorkspaceDir -> user.dir。
+- `buildWorkspaceGuidance`：prompt 强化——明确指示 codex「Identify which workspace matches, then cd into that directory before doing any work」，并标注 cwd 为 neutral start。
+
+### 验证
+- 编译通过；CodexAppServerWorkerExecutorTest 23/0（新增 3 用例：codexDoesNotInferCwdFromAliasSubstringInTaskText / codexFallsBackToNeutralWorkspaceWhenNoExplicitCwdAndAliasesConfigured / codexWorkspaceGuidanceTellsAgentToCdIntoTarget）。
+- HarnessConfigLoaderTest 8/0、WorkerRouterRouteTraceTest 34/0 无回归。
+- 新 JAR 构建部署重启（PID 21644），health=up，LLM available。
+
+### 根因回顾
+P0（2026-07-27）落地 alias registry + 边界守护后，`inferWorkspaceFromAliases` 仍用子串匹配从 task 文本猜 cwd。分析类任务（日志含 "articleeditor"）会被误拉到该仓库 cwd。移除后，codex 从 prompt 仓库清单自行 cd，消除误命中类问题，符合「provider 推动 + 边界守护」方向。

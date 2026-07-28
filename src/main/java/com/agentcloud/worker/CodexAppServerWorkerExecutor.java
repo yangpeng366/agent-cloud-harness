@@ -692,12 +692,6 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 return taskPath;
             }
         }
-        if (context != null && context.task() != null) {
-            String inferred = inferWorkspaceFromAliases(context);
-            if (inferred != null && !inferred.isBlank()) {
-                return inferred;
-            }
-        }
         if (worker != null && worker.toolScope() != null && !worker.toolScope().isEmpty()) {
             String scope = worker.toolScope().get(0);
             if (scope != null && !scope.isBlank()) {
@@ -711,30 +705,6 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             }
         }
         return Path.of(System.getProperty("user.dir", ".")).toAbsolutePath().normalize().toString();
-    }
-
-    private String inferWorkspaceFromAliases(TaskRuntimeContext context) {
-        if (context == null || context.task() == null || workspaceAliases.isEmpty()) {
-            return null;
-        }
-        Map<String, Object> metadata = context.task().metadata();
-        String text = firstNonBlank(
-            context.task().goal(),
-            metadataString(metadata, "intent"),
-            metadataString(metadata, "goal"),
-            context.task().title()
-        );
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-        String lower = text.toLowerCase(Locale.ROOT);
-        for (var entry : workspaceAliases.entrySet()) {
-            String alias = entry.getKey().toLowerCase(Locale.ROOT);
-            if (!alias.isBlank() && lower.contains(alias)) {
-                return entry.getValue();
-            }
-        }
-        return null;
     }
 
     private String neutralWorkspaceDir() {
@@ -759,10 +729,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             sb.append("\n- ").append(entry.getKey()).append(" -> ").append(entry.getValue());
         }
         sb.append("\n\nWorkspace Boundary:");
-        sb.append("\n- Locate the target repository from the list above based on the task; work only inside that repository.");
-        sb.append("\n- Do NOT read or modify the harness repository own STATE.md / docs / source code.");
+        sb.append("\n- Identify which workspace above matches this task, then cd into that directory before doing any work.");
+        sb.append("\n- Work only inside the target repository; do NOT read or modify the harness repository's own STATE.md / docs / source code.");
         if (cwd != null && !cwd.isBlank()) {
-            sb.append("\n- Current working directory: ").append(cwd);
+            sb.append("\n- Current working directory: ").append(cwd).append(" (neutral start; cd to the target workspace if not already there).");
         }
         return sb.toString();
     }
