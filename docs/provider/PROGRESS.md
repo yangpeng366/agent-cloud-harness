@@ -133,3 +133,38 @@ workspace 定位完全 provider-driven。移除 `CodexAppServerWorkerExecutor.in
 
 ### 根因回顾
 P0（2026-07-27）落地 alias registry + 边界守护后，`inferWorkspaceFromAliases` 仍用子串匹配从 task 文本猜 cwd。分析类任务（日志含 "articleeditor"）会被误拉到该仓库 cwd。移除后，codex 从 prompt 仓库清单自行 cd，消除误命中类问题，符合「provider 推动 + 边界守护」方向。
+---
+
+## 2026-07-28 瞬态失败三连修复：initialize 超时 / blocked subgoal / ERROR 日志污染
+
+### 背景
+task_1aabd291e2514073（opm-content-writer 数字人配置调研）首次 worker round 因 codex state DB backfill 冷启动超 30s 致 initialize 超时 -> human_gate。手动 recover 后第二次 worker round 成功（888KB 输出，完整数字人配置参数），但 subgoal 仍标 blocked -> 又卡 human_gate。排查发现三个独立根因。
+
+### 根因与修复
+
+**1. initialize 超时太短（30s 硬编码）**
+- 位置：CodexAppServerWorkerExecutor.HANDSHAKE_TIMEOUT_MS=30_000L，用于所有 JSON-RPC request（含 initialize）。
+- codex state DB backfill 冷启动本身就要等 30s+，harness 的 30s 超时必触发。
+- 修复：新增 INITIALIZE_TIMEOUT_MS（可配，默认 90s），initialize 专用；handshake 保持 30s（thread/start、turn/start 足够）。两者均可通过系统属性 `agentcloud.providers.codex.initialize_timeout_ms` / `handshake_timeout_ms` 覆盖。request 方法新增 timeoutMs 重载。
+
+**2. recovery 不重置 blocked subgoal**
+- 位置：TaskService.prepareFreshSessionRecovery。
+- 第一次失败后 subgoal 标 blocked，recovery 不重置 -> autoUpdateSubgoalStatus 只迁移 in_progress/pending，找不到可迁移的 subgoal -> 永远 blocked -> 永远 human_gate。
+- 修复：prepareFreshSessionRecovery 新增 resetBlockedSubgoals（处理 List/Map 两种格式），将 blocked 重置为 pending；同时清除 failure_summary_readable。
+
+**3. 非 JSON ERROR 日志污染 output/summary**
+- 位置：CodexAppServerWorkerExecutor.JsonRpcSession.nextEnvelope。
+- JSON 解析失败的行被 appendOutput 当任务输出，codex 内部 ERROR 日志（ReasoningSummaryDelta without active item）混入 last_message.md 和 summary。
+- 修复：新增 isCodexInternalLog 过滤器（ANSI 转义码 + ERROR/WARN，或时间戳前缀日志行），非 JSON 行先过滤再决定是否 appendOutput。
+
+### 验证
+- 编译通过；CodexAppServerWorkerExecutorTest 23/0、TaskServiceAutoStart 7/0、GoalProgressAutoUpdate 11/0、TaskServiceControlActionProjection 6/0、TaskServicePacketContract 7/0、ControlNodeGraphOrchestrationFlow 17/0、TaskServiceMessageReceipt 9/0、WorkerRouterRouteTrace 34/0（共 114/0）。
+- 新 JAR 部署重启。task_1aabd291e2514073 recover 后 subgoal 正确从 blocked 重置为 pending，任务进入 active/scheduler 跑 fresh worker round。
+
+### 超时配置参考
+| 配置项 | 默认 | 说明 |
+|--------|------|------|
+| `agentcloud.providers.codex.initialize_timeout_ms` | 90000 | codex app-server initialize 超时（含 state DB backfill 冷启动） |
+| `agentcloud.providers.codex.handshake_timeout_ms` | 30000 | thread/start、turn/start 等 JSON-RPC 请求超时 |
+| `agentcloud.providers.codex.turn_activity_timeout_ms` | 180000 | 单轮活动超时（无输出间隔） |
+| `agentcloud.providers.codex.turn_max_duration_ms` | -- | 单轮最大执行时间 |

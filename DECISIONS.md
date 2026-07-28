@@ -1,6 +1,12 @@
 - 2026-07-23: 下一阶段演进方向固定为 NEXT_EVOLUTION_PLAN.md 的 E1-E5。优先级排序：E2 端到端验证 > E3 UI Loop Activity 集成 > E4 CCX 启动服务 > E1 Loop Decide 深度消费 > E5 配置覆盖闭环。理由：E2 是后续演进的基线，E3 是产品闭环最后一公里，E4 降低启动门槛，E1/E5 是增量优化。
 # DECISIONS
 
+- 2026-07-28: codex app-server initialize 超时独立配置（90s），不复用 handshake 30s。理由：codex state DB backfill 冷启动需 30s+，handshake 30s 必超时；initialize 是一次性冷启动握手，thread/start 和 turn/start 是热路径 30s 足够。两者均可通过系统属性覆盖（agentcloud.providers.codex.initialize_timeout_ms / handshake_timeout_ms）。
+
+- 2026-07-28: recovery（prepareFreshSessionRecovery）必须重置 blocked subgoal 为 pending。理由：autoUpdateSubgoalStatus 只迁移 in_progress/pending 的 subgoal，blocked 是终态之一；recovery 不重置则 worker round 成功也无法标 done，任务永远卡 human_gate。同时清除 failure_summary_readable 避免过时错误信息残留。
+
+- 2026-07-28: codex app-server 非 JSON 行不直接当输出，先过滤内部诊断日志。理由：codex 会向 stdout 混入 ANSI 着色的 ERROR/WARN 内部日志（如 ReasoningSummaryDelta without active item），这些不是任务输出但会被 appendOutput 混入 last_message.md 和 summary。isCodexInternalLog 过滤 ANSI+ERROR/WARN 和时间戳前缀日志行，只保留真正的非 JSON 输出。
+
 - 2026-07-28: workspace 定位完全 provider-driven，harness 不做文本推断。codex cwd 解析只接受显式 workspace_root（操作者/API 传入）或中性目录回退（alias 公共父目录），不再用 alias 子串匹配从 task 文本猜仓库。理由：子串匹配对分析/日志类任务误命中（日志含项目名就把 cwd 拉到该仓库），且 codex 收到 prompt 仓库清单后完全能自行 cd 定位；harness 只提供事实（仓库清单）+ 守边界（不静默回退 harness 自身仓库），理解和定位交给执行 agent。路由关键词表（task_type 推断）保留为 worker 选择兜底，不影响 cwd。详见 docs/LLM_TASK_UNDERSTANDING_PLAN.md。
 
 - 2026-07-28: 控制图 enter 异步化。createTask/continueTask 不再在 HTTP 虚拟线程同步执行 controlGraph.enter，改为虚拟线程异步 + per-task 锁防并发重跑；HTTP 立即返回。理由：worker round 长耗时（数百秒）会触发 HTTP 超时 kill 线程，导致 worker_round 事件与 task 状态丢失（codex 跑完但 harness 没记录）。测试通过 sync_enter 开关走同步保证控制图语义可断言，生产默认异步。

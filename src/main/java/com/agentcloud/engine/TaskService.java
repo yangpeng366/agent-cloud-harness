@@ -2336,10 +2336,70 @@ public class TaskService {
         if (plan.providerFailureClass() != null) {
             metadata.put("provider_failure_class", plan.providerFailureClass());
         }
+        // 重置 blocked subgoal 为 pending：recovery 后 worker round 需要重新评估，
+        // 否则 autoUpdateSubgoalStatus 找不到 in_progress subgoal，任务永远卡在 blocked -> human_gate
+        Object subgoalStatus = metadata.get("subgoal_status");
+        if (subgoalStatus != null) {
+            Object reset = resetBlockedSubgoals(subgoalStatus);
+            if (reset != null) {
+                metadata.put("subgoal_status", reset);
+                log.info("[Recovery] task={} reset blocked subgoals to pending for fresh session retry", task.id());
+            }
+        }
+        // 清除过时的失败摘要，避免 dialogue 仍显示旧错误
+        metadata.remove("failure_summary_readable");
         return task.withMetadata(metadata)
             .withStatus("active")
             .withControlNode("scheduler")
             .withWaitingReason(null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object resetBlockedSubgoals(Object rawSubgoalStatus) {
+        if (rawSubgoalStatus instanceof List<?> list) {
+            List<Object> updated = new java.util.ArrayList<>();
+            boolean changed = false;
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> map) {
+                    String status = String.valueOf(map.get("status"));
+                    if ("blocked".equals(status)) {
+                        Map<String, Object> updatedItem = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> entry : map.entrySet()) {
+                            updatedItem.put(String.valueOf(entry.getKey()), entry.getValue());
+                        }
+                        updatedItem.put("status", "pending");
+                        updated.add(updatedItem);
+                        changed = true;
+                        continue;
+                    }
+                }
+                updated.add(item);
+            }
+            return changed ? updated : null;
+        }
+        if (rawSubgoalStatus instanceof Map<?, ?> map) {
+            Map<String, Object> updated = new LinkedHashMap<>();
+            boolean changed = false;
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof Map<?, ?> valueMap) {
+                    String status = String.valueOf(valueMap.get("status"));
+                    if ("blocked".equals(status)) {
+                        Map<String, Object> updatedValue = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> ve : valueMap.entrySet()) {
+                            updatedValue.put(String.valueOf(ve.getKey()), ve.getValue());
+                        }
+                        updatedValue.put("status", "pending");
+                        updated.put(String.valueOf(entry.getKey()), updatedValue);
+                        changed = true;
+                        continue;
+                    }
+                }
+                updated.put(String.valueOf(entry.getKey()), value);
+            }
+            return changed ? updated : null;
+        }
+        return null;
     }
 
     private boolean isEnvironmentBlockedFailure(String providerFailureClass) {

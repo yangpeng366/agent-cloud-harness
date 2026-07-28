@@ -45,7 +45,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static final String CODEX_EXEC_NO_ALT_SCREEN_FLAG = "--no-alt-screen";
     private static final long PROCESS_TIMEOUT_MS = 180_000L;
     private static final long APP_SERVER_SHUTDOWN_GRACE_MS = 5_000L;
-    private static final long HANDSHAKE_TIMEOUT_MS = 30_000L;
+    private static final long HANDSHAKE_TIMEOUT_MS = configurableLong(
+        "agentcloud.providers.codex.handshake_timeout_ms", 30_000L);
+    private static final long INITIALIZE_TIMEOUT_MS = configurableLong(
+        "agentcloud.providers.codex.initialize_timeout_ms", 90_000L);
     private static final long DEFAULT_TURN_ACTIVITY_TIMEOUT_MS = 180_000L;
     private static final long DEFAULT_TURN_MAX_DURATION_MS = 900_000L;
     private static final long DEFAULT_CODING_TURN_MAX_DURATION_MS = 900_000L;
@@ -396,7 +399,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                     "capabilities", Map.of(
                         "experimentalApi", true
                     )
-                ));
+                ), INITIALIZE_TIMEOUT_MS);
                 session.notify("initialized");
                 String threadId = startOrResumeThread(session, plan);
                 String turnStatus = startTurn(session, threadId, plan.prompt());
@@ -1183,7 +1186,20 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             || lower.contains("fix");
     }
 
-    private long longProperty(List<String> systemKeys, List<String> envKeys, long defaultValue) {
+    private static long configurableLong(String key, long defaultValue) {
+        String raw = System.getProperty(key);
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            long parsed = Long.parseLong(raw.trim());
+            return parsed > 0 ? parsed : defaultValue;
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+        private long longProperty(List<String> systemKeys, List<String> envKeys, long defaultValue) {
         String raw = firstNonBlank(
             systemKeys == null ? null : systemKeys.stream()
                 .map(System::getProperty)
@@ -1292,6 +1308,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
 
         private JsonNode request(String method, Map<String, Object> params) throws IOException, InterruptedException {
+            return request(method, params, HANDSHAKE_TIMEOUT_MS);
+        }
+
+        private JsonNode request(String method, Map<String, Object> params, long timeoutMs) throws IOException, InterruptedException {
             int id = ++nextId;
             sendObject(Map.of(
                 "jsonrpc", "2.0",
@@ -1299,7 +1319,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 "method", method,
                 "params", params == null ? Map.of() : params
             ));
-            long deadline = System.currentTimeMillis() + HANDSHAKE_TIMEOUT_MS;
+            long deadline = System.currentTimeMillis() + timeoutMs;
             while (System.currentTimeMillis() < deadline) {
                 JsonNode envelope = nextEnvelope(deadline);
                 if (envelope == null) {
@@ -1357,7 +1377,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 try {
                     return MAPPER.readTree(trimmed);
                 } catch (Exception ignored) {
-                    appendOutput(trimmed);
+                    if (!isCodexInternalLog(trimmed)) {
+                        appendOutput(trimmed);
+                    }
                 }
             }
             return null;
@@ -1614,7 +1636,17 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             }
         }
 
-        private void appendOutput(String text) {
+        private static boolean isCodexInternalLog(String line) {
+            if (line == null || line.isEmpty()) {
+                return false;
+            }
+            // codex 内部诊断日志：ANSI 转义码 + ERROR/WARN，或时间戳前缀的日志行
+            return (line.indexOf('\u001b') >= 0
+                    && (line.contains("ERROR") || line.contains("WARN")))
+                || line.matches("^\\d{4}-\\d{2}-\\d{2}T.*\\b(ERROR|WARN|INFO|DEBUG|TRACE)\\b.*");
+        }
+
+                private void appendOutput(String text) {
             if (text == null || text.isBlank()) {
                 return;
             }
