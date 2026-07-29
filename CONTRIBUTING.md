@@ -75,14 +75,14 @@
 
 ### good first issue
 
-**GFI-01 · 修复 `WorkerPromptHeaderBuilderTest` 失败**
+**GFI-01 · 修复 `WorkerPromptHeaderBuilderTest` 失败 · 已完成 ✅**
 - 背景：pre-existing 失败（非当前活跃开发引入），长期挂在回归基线上。
 - 范围：`src/test/java/com/agentcloud/worker/WorkerPromptHeaderBuilderTest.java` 及被测类。
 - 验收：单独运行通过；不引入新回归；若改生产行为，PR 写清根因。
 - 上下文入口：`docs/SPEC.md`（worker prompt header 合同段）。
 - 技能：Java、JUnit。预估 ≤ 2h。
 
-**GFI-02 · 修复 `WorkerExecutorRouterProviderNativeTest` 失败**
+**GFI-02 · 修复 `WorkerExecutorRouterProviderNativeTest` 失败 · 已完成 ✅**
 - 背景：同为 pre-existing 失败，涉及 worker executor 路由 native 路径。
 - 范围：`src/test/java/com/agentcloud/worker/WorkerExecutorRouterProviderNativeTest.java` 及被测类。
 - 验收：单独运行通过；不引入新回归；根因是 fixture 漂移时优先修 fixture。
