@@ -1,4 +1,4 @@
-﻿# 免费模型 Worker Lane 落地计划
+# 免费模型 Worker Lane 落地计划
 
 > 本文档吸收 Obsidian `harness加免费模型编排方案.md` 的构想，收成可执行的产品决策与工程计划。
 
@@ -65,11 +65,11 @@ harness:
     provider_model_provider: ccx
     provider_base_url: http://127.0.0.1:3688/v1
     provider_wire_api: chat_completions
-    provider_bearer_token: ccx-081f9efd9e7203d4
+    provider_bearer_token: ccx-YOUR_BEARER_TOKEN_HERE
 
   ccx:
     base_url: http://127.0.0.1:3688
-    admin_key: ccx-admin-2026
+    admin_key: ccx-YOUR_ADMIN_KEY_HERE
     health_check_on_startup: true
     channel_sync_on_startup: false
 
@@ -169,14 +169,14 @@ name = "CCX Proxy"
 base_url = "http://127.0.0.1:3688/v1"
 wire_api = "responses"
 requires_openai_auth = true
-experimental_bearer_token = "ccx-081f9efd9e7203d4"
+experimental_bearer_token = "ccx-YOUR_BEARER_TOKEN_HERE"
 
 [model_providers.ccx-free]
 name = "CCX Free Proxy"
 base_url = "http://127.0.0.1:3688/v1"
 wire_api = "responses"
 requires_openai_auth = true
-experimental_bearer_token = "ccx-081f9efd9e7203d4"
+experimental_bearer_token = "ccx-YOUR_BEARER_TOKEN_HERE"
 ```
 
 codex CLI 使用：
@@ -328,7 +328,7 @@ harness 的 harness-config.yml 配置：
       defaults:
         provider_model_provider: ccx
         provider_base_url: http://127.0.0.1:3688/v1
-        provider_bearer_token: ccx-081f9efd9e7203d4
+        provider_bearer_token: ccx-YOUR_BEARER_TOKEN_HERE
 
       workers:
         - id: codex-main

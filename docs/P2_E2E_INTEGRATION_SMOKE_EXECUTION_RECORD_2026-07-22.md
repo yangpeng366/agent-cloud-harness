@@ -22,7 +22,7 @@
 .\scripts\Run-HarnessWithJava21.ps1 -Port 18082 -Background `
     -JavaArgs @(
         '-DOPENAI_BASE_URL=http://127.0.0.1:3688/v1',
-        '-DOPENAI_API_KEY=ccx-081f9efd9e7203d4',
+        '-DOPENAI_API_KEY=ccx-YOUR_BEARER_TOKEN_HERE',
         '-DOPENAI_WIRE_API=chat_completions',
         '-DOPENAI_MODEL=codex',
         '-DOPENAI_REVIEW_MODEL=codex'

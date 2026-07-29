@@ -111,10 +111,10 @@
 - 上下文入口：`.gitignore`、`docs/README.md`「根目录文档职责」表。
 - 技能：Git。预估 ≤ 30min。
 - 注意：本条影响可发布范围，建议 maintainer 确认后再 `git add` 各 README，不要一次性盲加。
-**GFI-06 · 公开发布前清理 tracked 文档/记录中的本地 dev token 与本机路径**
-- 背景：harness-config.example.yml（对外示例配置）已脱敏为占位符（本轮巡检完成）。但同源的本地 CCX dev token（ccx-081f9efd9e7203d4，仅 localhost 127.0.0.1:3688 生效，无外网可利用性）与本机路径仍残留在若干 tracked 内部文档/执行记录/测试 fixture 中，随仓发布会暴露 maintainer 本机布局并让示例显得绑定特定 CCX 实例，影响公开卫生。
+**GFI-06 · 公开发布前清理 tracked 文档/记录中的本地 dev token 与本机路径 · 已完成 ✅**
+- 背景：harness-config.example.yml（对外示例配置）已脱敏为占位符（本轮巡检完成）。但同源的本地 CCX dev token（ccx-YOUR_BEARER_TOKEN_HERE，仅 localhost 127.0.0.1:3688 生效，无外网可利用性）与本机路径仍残留在若干 tracked 内部文档/执行记录/测试 fixture 中，随仓发布会暴露 maintainer 本机布局并让示例显得绑定特定 CCX 实例，影响公开卫生。
 - 范围：docs/FREE_MODEL_WORKER_LANE_PLAN.md（token ×4、admin_key ×1）、docs/P2_E2E_INTEGRATION_SMOKE_EXECUTION_RECORD_2026-07-22.md（token ×1）、STATE.md（token ×1）、src/test/java/com/agentcloud/agent/providers/HarnessConfigLoaderTest.java（admin_key fixture + 断言）。逐处替换为占位符（如 ccx-YOUR_TOKEN_HERE）并同步更新断言。
-- 验收：git grep -n 'ccx-081f9efd9e7203d4\|ccx-admin-2026' 仅剩显式占位符或为空；mvn -q test -Dtest=HarnessConfigLoaderTest 仍通过；docs audit 仍 passed=true。
+- 验收：git grep -n 'ccx-YOUR_BEARER_TOKEN_HERE\|ccx-YOUR_ADMIN_KEY_HERE' 仅剩显式占位符或为空；mvn -q test -Dtest=HarnessConfigLoaderTest 仍通过；docs audit 仍 passed=true。
 - 上下文入口：harness-config.example.yml（已脱敏参照）、docs/release/GITHUB_RELEASE_CHECKLIST.md。
 - 技能：Markdown、Java/JUnit、Git。预估 ≤ 2h。
 - 注意：token 仅 localhost 生效，本条属发布前卫生清理而非密钥轮换；如确需轮换 CCX 凭证，由 maintainer 在本机另行处理，不在本条范围。

@@ -89,7 +89,7 @@ class HarnessConfigLoaderTest {
             harness:
               ccx:
                 base_url: http://127.0.0.1:3688
-                admin_key: ccx-admin-2026
+                admin_key: ccx-YOUR_ADMIN_KEY_HERE
                 health_check_on_startup: true
                 channel_sync_on_startup: false
               workers: []
@@ -97,7 +97,7 @@ class HarnessConfigLoaderTest {
 
         HarnessConfig cfg = HarnessConfigLoader.load(List.of(config)).orElseThrow();
         assertEquals("http://127.0.0.1:3688", cfg.ccx().baseUrl());
-        assertEquals("ccx-admin-2026", cfg.ccx().adminKey());
+        assertEquals("ccx-YOUR_ADMIN_KEY_HERE", cfg.ccx().adminKey());
         assertTrue(cfg.ccx().healthCheckOnStartup());
     }
 
