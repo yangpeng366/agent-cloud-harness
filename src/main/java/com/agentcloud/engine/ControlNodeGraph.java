@@ -1023,6 +1023,88 @@ public class ControlNodeGraph {
         return List.of("blocked", "waiting_human", "human_gate").contains(status);
     }
 
+    /**
+     * E1.2 长任务收口合同：构造语义化 progress_detail（done/blocked/open 计数 + blocked subgoal 标题），
+     * 作为 progress_summary 的补充字段。不修改 progress_summary 以避免破坏既有精确相等断言。
+     * 形如 "1/3 done, 1 blocked, 1 open; blocked: API integration"。
+     */
+    private String buildProgressDetail(Object rawSubgoalStatus) {
+        List<String> statuses = readSubgoalStatuses(rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            return null;
+        }
+        int total = statuses.size();
+        long doneCount = statuses.stream().filter(this::isDoneSubgoalStatus).count();
+        long blockedCount = statuses.stream().filter(this::isBlockedSubgoalStatus).count();
+        long openCount = statuses.stream()
+            .filter(s -> !isDoneSubgoalStatus(s) && !isBlockedSubgoalStatus(s))
+            .count();
+        StringBuilder sb = new StringBuilder();
+        sb.append(doneCount).append("/").append(total).append(" done");
+        if (blockedCount > 0) {
+            sb.append(", ").append(blockedCount).append(" blocked");
+        }
+        if (openCount > 0) {
+            sb.append(", ").append(openCount).append(" open");
+        }
+        List<String> blockedTitles = readSubgoalTitlesByStatus(rawSubgoalStatus, this::isBlockedSubgoalStatus);
+        if (!blockedTitles.isEmpty()) {
+            sb.append("; blocked: ").append(String.join(", ", blockedTitles));
+        }
+        return sb.toString();
+    }
+
+    private List<String> readSubgoalTitlesByStatus(Object raw, java.util.function.Predicate<String> statusMatch) {
+        List<String> titles = new ArrayList<>();
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                collectSubgoalTitleIf(item, statusMatch, titles);
+            }
+        } else if (raw instanceof Map<?, ?> map) {
+            if (map.containsKey("status") || map.containsKey("state")) {
+                collectSubgoalTitleIf(map, statusMatch, titles);
+            } else {
+                for (Object value : map.values()) {
+                    collectSubgoalTitleIf(value, statusMatch, titles);
+                }
+            }
+        } else {
+            collectSubgoalTitleIf(raw, statusMatch, titles);
+        }
+        return titles;
+    }
+
+    private void collectSubgoalTitleIf(Object item, java.util.function.Predicate<String> statusMatch, List<String> titles) {
+        String status = readSubgoalStatus(item);
+        if (status != null && statusMatch.test(status)) {
+            String title = readSubgoalTitle(item);
+            if (title != null && !title.isBlank()) {
+                titles.add(truncateTitle(title));
+            }
+        }
+    }
+
+    private String readSubgoalTitle(Object raw) {
+        if (raw instanceof Map<?, ?> map) {
+            Object title = map.get("title");
+            if (title == null) {
+                title = map.get("description");
+            }
+            if (title == null) {
+                title = map.get("summary");
+            }
+            return title == null ? null : title.toString();
+        }
+        return null;
+    }
+
+    private String truncateTitle(String title) {
+        if (title == null) {
+            return null;
+        }
+        return title.length() <= 50 ? title : title.substring(0, 47) + "...";
+    }
+
     private Task enrichTaskFromJudgment(Task task, WorkerExecutionResult executionResult, String latestOutput,
                                         String executionNextStep, String completionNextAction) {
         Task updated = task;
@@ -1099,6 +1181,7 @@ public class ControlNodeGraph {
                         int total = newStatuses.size();
                         long doneCount = newStatuses.stream().filter(this::isDoneSubgoalStatus).count();
                         updatedMetadata.put("progress_summary", doneCount + "/" + total + " subgoals done");
+                        updatedMetadata.put("progress_detail", buildProgressDetail(updatedSubgoalStatus));
                         log.info("[LLM Subgoal] task={} ambiguous execution, LLM judged subgoal as {}", task.id(), llmStatus);
                         return task.withMetadata(updatedMetadata);
                     }
@@ -1143,6 +1226,7 @@ public class ControlNodeGraph {
         int total = newStatuses.size();
         long doneCount = newStatuses.stream().filter(this::isDoneSubgoalStatus).count();
         updatedMetadata.put("progress_summary", doneCount + "/" + total + " subgoals done");
+        updatedMetadata.put("progress_detail", buildProgressDetail(updatedSubgoalStatus));
 
         return task.withMetadata(updatedMetadata);
     }

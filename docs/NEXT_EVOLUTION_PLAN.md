@@ -28,11 +28,14 @@
 - progress_summary 从计数升级为语义摘要（3/5 subgoals done, 2 blocked on API dependency）
 - LLM-assisted subgoal judgment 在 decide 节点被正式消费，而不是只在 subgoal update 时触发
 
-进度（2026-07-29）：E1.1 已落地--decide 经 buildDecisionRationale 输出显式 decision_rationale metadata（goal progress done/blocked/open + execution action + completion status/alignment -> resolved action），withMetadataEntries + sameState 持久化。验收 #1 done；#2（progress_summary 语义化）/ #3（LLM subgoal judgment 进 decide）deferred。
+进度（2026-07-29）：
+- E1.1 已落地--decide 经 buildDecisionRationale 输出显式 decision_rationale metadata（goal progress done/blocked/open + execution action + completion status/alignment -> resolved action），withMetadataEntries + sameState 持久化。验收 #1 done。
+- E1.2 已落地--新增 additive progress_detail 字段（done/blocked/open 计数 + blocked subgoal 标题，形如 "1/3 done, 1 blocked, 1 open; blocked: API integration"），在 task 创建（ProviderTaskContractNormalizer）与 subgoal 迁移（ControlNodeGraph.autoUpdateSubgoalStatus）两处与 progress_summary 同步生成；不改 progress_summary 以避免破坏既有精确相等断言。验收 #2 done（语义详情落在 progress_detail）。
+- E1.3 deferred--LLM subgoal judgment 在 decide 节点正式消费。
 
 验收标准：
 1. decide 的输出包含 decision_rationale 字段，引用 goal progress [done 2026-07-29]
-2. progress_summary 包含语义描述而非纯计数
+2. progress_summary 包含语义描述而非纯计数 [done 2026-07-29, 落在 additive progress_detail 字段]
 3. 至少一条端到端任务链中能看到 LLM subgoal judgment 影响 decide 输出
 
 ### E2: 端到端验证闭环

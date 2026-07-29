@@ -146,6 +146,12 @@ final class ProviderTaskContractNormalizer {
                 metadata.put("progress_summary", summary);
             }
         }
+        if (blankToNull(metadataString(metadata, "progress_detail")) == null) {
+            String detail = buildProgressDetail(rawSubgoalStatus);
+            if (detail != null) {
+                metadata.put("progress_detail", detail);
+            }
+        }
     }
 
     static List<String> workspaceRoots(Map<String, Object> metadata) {
@@ -406,6 +412,86 @@ final class ProviderTaskContractNormalizer {
         return blocked > 0
             ? done + "/" + total + " subgoals done; " + blocked + " blocked"
             : done + "/" + total + " subgoals done";
+    }
+
+    /**
+     * E1.2 长任务收口合同：构造语义化 progress_detail（done/blocked/open 计数 + blocked subgoal 标题），
+     * 作为 progress_summary 的补充字段。不修改 progress_summary 以避免破坏既有精确相等断言。
+     */
+    private static String buildProgressDetail(Object rawSubgoalStatus) {
+        List<String[]> pairs = new ArrayList<>();
+        addSubgoalStatusTitlePairs(pairs, rawSubgoalStatus);
+        if (pairs.isEmpty()) {
+            return null;
+        }
+        int total = pairs.size();
+        int done = 0, blocked = 0, open = 0;
+        List<String> blockedTitles = new ArrayList<>();
+        for (String[] pair : pairs) {
+            String status = pair[0] == null ? null : pair[0].trim().toLowerCase();
+            boolean isDone = List.of("done", "complete", "completed", "accepted").contains(status);
+            boolean isBlocked = List.of("blocked", "waiting_human", "human_gate").contains(status);
+            if (isDone) {
+                done++;
+            } else if (isBlocked) {
+                blocked++;
+                if (pair[1] != null && !pair[1].isBlank()) {
+                    blockedTitles.add(truncateTitle(pair[1]));
+                }
+            } else {
+                open++;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(done).append("/").append(total).append(" done");
+        if (blocked > 0) {
+            sb.append(", ").append(blocked).append(" blocked");
+        }
+        if (open > 0) {
+            sb.append(", ").append(open).append(" open");
+        }
+        if (!blockedTitles.isEmpty()) {
+            sb.append("; blocked: ").append(String.join(", ", blockedTitles));
+        }
+        return sb.toString();
+    }
+
+    private static void addSubgoalStatusTitlePairs(List<String[]> pairs, Object value) {
+        if (pairs == null || value == null) {
+            return;
+        }
+        if (value instanceof Iterable<?> iterable) {
+            for (Object item : iterable) {
+                addSubgoalStatusTitlePairs(pairs, item);
+            }
+            return;
+        }
+        if (value.getClass().isArray()) {
+            int length = java.lang.reflect.Array.getLength(value);
+            for (int i = 0; i < length; i++) {
+                addSubgoalStatusTitlePairs(pairs, java.lang.reflect.Array.get(value, i));
+            }
+            return;
+        }
+        if (value instanceof Map<?, ?> map) {
+            String status = firstNonBlank(mapString(map, "status"), mapString(map, "state"));
+            String title = firstNonBlank(
+                mapString(map, "title"),
+                mapString(map, "goal"),
+                mapString(map, "name"),
+                mapString(map, "summary")
+            );
+            pairs.add(new String[]{status, title});
+            return;
+        }
+        pairs.add(new String[]{stringValue(value), null});
+    }
+
+    private static String truncateTitle(String title) {
+        if (title == null) {
+            return null;
+        }
+        return title.length() <= 50 ? title : title.substring(0, 47) + "...";
     }
 
     private static void addSubgoalStatuses(List<String> statuses, Object value) {

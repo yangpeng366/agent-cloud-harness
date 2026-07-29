@@ -33,6 +33,7 @@ Task 级 goal 合同当前落在 `Task.goal` 与 `Task.metadata`：
 | `subgoal_status` | `Task.metadata.subgoal_status` | string[] / object[] / object | 最小可判定进度；支持 `pending / in_progress / done / blocked` |
 | `acceptance_criteria` | `Task.metadata.acceptance_criteria` | string[] / object[] | 验收口径；baseline matrix 会写入 `baseline_acceptance_criteria` |
 | `progress_summary` | `Task.metadata.progress_summary` | string | 当前完成度摘要，供 UI / packet / judgment trace 展示 |
+| `progress_detail` | `Task.metadata.progress_detail` | string | 语义化完成度详情，引用 blocked subgoal 标题，作为 progress_summary 的补充 |
 
 `TaskService.createTask(...)` 当前会先执行 `ProviderTaskContractNormalizer.normalize(...)`，再执行 `ProviderTaskContractNormalizer.initializeGoalContract(...)`，把最小 goal contract 固化在任务创建入口，而不是依赖后续 worker 或人工回填。初始化规则如下：
 
@@ -41,6 +42,7 @@ Task 级 goal 合同当前落在 `Task.goal` 与 `Task.metadata`：
 - 若 `metadata.subgoals` 缺失，则默认写成 `[goal]`
 - 若 `metadata.subgoal_status` 缺失，则按每个 subgoal 生成 `{ title, status: pending }`
 - 若 `metadata.progress_summary` 缺失，则根据当前 `subgoal_status` 生成摘要，例如 `0/1 subgoals done`
+- 若 `metadata.progress_detail` 缺失，则根据当前 `subgoal_status` 生成语义详情，例如 `1/2 done, 1 blocked; blocked: API integration`
 - 显式提供的 `subgoals / subgoal_status / progress_summary / acceptance_criteria` 保持原值，不被默认逻辑覆盖
 `subgoal_status` 驱动的最小 `ContinuationAction` 规则：
 
@@ -217,6 +219,7 @@ esolveAction 输出决定 task 状态迁移方向 |
 | 其他 | 不更新 | running/unknown 不触发迁移 |
 
 迁移后自动更新 `metadata.progress_summary` 为 `{done_count}/{total} subgoals done`。
+同时更新 `metadata.progress_detail` 为语义详情（`{done}/{total} done[, {blocked} blocked][, {open} open][; blocked: {titles}]`），引用 blocked subgoal 标题。
 
 回归保护：GoalProgressAutoUpdateTest 7 个场景。
 

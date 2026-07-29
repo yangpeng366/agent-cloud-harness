@@ -130,7 +130,7 @@
 
 #### Goal Progress Auto-Update
 
-`continueNode` 在 `enrichTaskFromJudgment` 后自动调用 `autoUpdateSubgoalStatus(task, executionResult)`：worker `completed` 时将当前 `in_progress`/`pending` subgoal 标为 `done`；worker `failed` 时标为 `blocked`；其他状态不触发迁移。迁移后更新 `metadata.progress_summary`。
+`continueNode` 在 `enrichTaskFromJudgment` 后自动调用 `autoUpdateSubgoalStatus(task, executionResult)`：worker `completed` 时将当前 `in_progress`/`pending` subgoal 标为 `done`；worker `failed` 时标为 `blocked`；其他状态不触发迁移。迁移后更新 `metadata.progress_summary` 与 `metadata.progress_detail`（语义详情，引用 blocked subgoal 标题）。
 
 回归保护：GoalProgressAutoUpdateTest 7 个场景。
 
@@ -181,6 +181,7 @@ Advisory handoff 和 triggerHandoff 都会递增 `task.metadata.handoff_depth`�
 - 若 `metadata.subgoals` 缺失，则默认生成 `[goal]`
 - 若 `metadata.subgoal_status` 缺失，则默认生成 `[{ title: goal, status: pending }]`
 - 若 `metadata.progress_summary` 缺失，则根据当前 `subgoal_status` 生成类似 `0/1 subgoals done` 的摘要
+- 若 `metadata.progress_detail` 缺失，则根据当前 `subgoal_status` 生成语义详情（引用 blocked subgoal 标题）
 - 若请求中已经显式给出 `subgoals / subgoal_status / progress_summary / acceptance_criteria`，则保持原值，不被默认逻辑覆盖
 
 这保证 `RuntimeJudgmentService`、`ControlNodeGraph`、packet/handoff 文档和 UI 状态展示从 task 创建开始就能读取同一套 goal contract，而不必等待 worker 首轮输出后再补齐。
