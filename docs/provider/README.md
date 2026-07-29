@@ -67,6 +67,7 @@
 
 - ../FREE_MODEL_WORKER_LANE_PLAN.md
 - `../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md`：codex-free lane（经本地 CCX + codex app-server）真机 e2e 冒烟 + 长任务收口合同字段验证。
+- `../FREE_FIRST_LLM_JUDGED_ESCALATION_DESIGN.md`：free-first + LLM 判断升级设计 -- 先跑 codex-free，LLM 判 partially_done 时自动升级到 codex（strong tier）。
 
 ### 全局路由与恢复
 
