@@ -172,3 +172,10 @@ task_1aabd291e2514073（opm-content-writer 数字人配置调研）首次 worker
 ## 2026-07-29 E2 Codex-Free Lane 真机 e2e 冒烟
 
 - 2026-07-29：E2 codex-free lane 真机 e2e 冒烟验证完成。codex-free lane（经本地 CCX 3688 + codex app-server，provider_model_provider=ccx-free，model_tier=small，cost_class=free_auto，selection_priority=70，primary_role=cannon_fodder）真机执行确认可用。执行链路：codex-free init 超时（worker_runtime_transient） -> same_worker_retry_then_auto_handoff -> advisory handoff codex-free -> codex（escalate_from_small_tier）-> 产出 README 摘要。free_first_routing 默认关闭是设计决策（codex-free 保持 config-driven 不内置，避免破坏 free_auto -> paid_auto fallback 合同）。关键发现：codex-free 经 CCX 冷路径 init 超时，90s 默认 initialize_timeout_ms 可能不足，后续可调。证据沉淀到 ../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md。
+
+## 2026-07-29 S1+S2 Free-First + LLM-Judged Escalation 落地
+
+- S1：WorkerRouter.prefersFreeFirstRouting 增全局默认。系统属性 harness.routing.free_first / 环境变量 HARNESS_ROUTING_FREE_FIRST；per-task metadata（provider_routing_policy）覆盖优先。WorkerRouterRouteTraceTest +2（全局默认启用 + per-task 覆盖）。
+- S2：ControlNodeGraph.maybeEscalateSmallTierPartiallyDone。small-tier worker 产出 partially_done + 有 ready strong-tier -> escalate -> advisory handoff。strong-tier 不升级，handoff_depth 上限防递归。AdvisoryHandoffTest +4（escalate / done 不升级 / strong 不升级 / done status 不升级）。
+- focused 回归 125/0（AdvisoryHandoffTest 10、ControlNodeGraphActionResolutionTest 43、WorkerRouterRouteTraceTest 36、ControlNodeGraphOrchestrationFlowTest 17、GoalProgressAutoUpdateTest 11、DecisionRationaleCompositionTest 5、WorkerBudgetExhaustedRecoveryTest 3）。
+- S3/S4（真机复跑：codex-free 先跑 -> partially_done -> 升级 codex）待续。

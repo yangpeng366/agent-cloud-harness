@@ -1,6 +1,7 @@
 # Free-First + LLM-Judged Escalation 设计
 
 > 文档类型：技术设计（`*_DESIGN.md`）。
+> 2026-07-29 实现状态：S1 + S2 已落地。S1 采用系统属性 `harness.routing.free_first` / 环境变量 `HARNESS_ROUTING_FREE_FIRST`（与 WORKER_EXECUTION_TIMEOUT 模式一致），per-task metadata 覆盖优先。S2 在 decide node `maybeEscalateSmallTierPartiallyDone` 实现 small-tier + partially_done -> escalate。测试 AdvisoryHandoffTest +4 / WorkerRouterRouteTraceTest +2，focused 回归 125/0。S3/S4（真机复跑）待续。
 > 关联：`FREE_FIRST_PROVIDER_ROUTING_DESIGN.md`（cost-class 路由基线）、`FREE_MODEL_WORKER_LANE_PLAN.md`（codex-free lane）、`E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md`（真机证据）。
 
 ## 1. 问题与结论

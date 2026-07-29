@@ -709,6 +709,8 @@ public class ControlNodeGraph {
             execDecision.needsExternalFactRefresh(),
             subgoalStatus
         );
+        // Free-first + LLM-judged escalation: small-tier worker 产出 partially_done -> 升级到 strong-tier
+        resolvedAction = maybeEscalateSmallTierPartiallyDone(resolvedAction, completionDecision.status(), latestWorkerMetadata, task);
         // E1: decide 输出显式 decision_rationale，引用 goal progress + execution 信号（长任务收口合同深化）
         String decisionRationale = buildDecisionRationale(resolvedAction, subgoalStatus,
             execDecision.action(), completionDecision.status(), completionDecision.alignmentLevel());
@@ -884,6 +886,27 @@ public class ControlNodeGraph {
             return false;
         }
         return List.of("misaligned", "needs_clarification").contains(completionStatus.toLowerCase());
+    }
+
+    private boolean isPartiallyDoneStatus(String completionStatus) {
+        return "partially_done".equalsIgnoreCase(completionStatus);
+    }
+
+    private String maybeEscalateSmallTierPartiallyDone(String resolvedAction, String completionStatus,
+                                                        Map<String, Object> latestWorkerMetadata, Task task) {
+        if (!"continue".equals(resolvedAction) || !isPartiallyDoneStatus(completionStatus)) {
+            return resolvedAction;
+        }
+        String escalateModelTier = metadataString(latestWorkerMetadata, "selected_model_tier");
+        if (escalateModelTier == null || escalateModelTier.isBlank()) {
+            escalateModelTier = workerMetadata(task.assignedWorker(), "model_tier");
+        }
+        if ("small".equalsIgnoreCase(escalateModelTier) && resolveAdvisoryHandoff(task, escalateModelTier) != null) {
+            log.info("[Escalation] task={} small-tier worker={} produced partially_done, escalating to strong-tier",
+                task.id(), task.assignedWorker());
+            return "escalate";
+        }
+        return resolvedAction;
     }
 
     private String resolveGoalProgressReason(Object rawSubgoalStatus) {

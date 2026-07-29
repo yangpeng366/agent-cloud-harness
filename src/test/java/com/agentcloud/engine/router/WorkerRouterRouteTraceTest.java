@@ -995,4 +995,48 @@ class WorkerRouterRouteTraceTest {
             return dispatchCount;
         }
     }
+    @Test
+    void globalFreeFirstDefaultEnablesFreeFirstWhenNoTaskPolicy() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        String previous = System.getProperty("harness.routing.free_first");
+        try {
+            System.setProperty("harness.routing.free_first", "true");
+            WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+                "task_type", "coding"
+            )));
+            assertTrue(route.freeFirstRouting());
+            assertEquals("deveco", route.selectedWorker());
+            assertEquals("free_auto", route.costRouteStage());
+        } finally {
+            if (previous == null) {
+                System.clearProperty("harness.routing.free_first");
+            } else {
+                System.setProperty("harness.routing.free_first", previous);
+            }
+        }
+    }
+
+    @Test
+    void perTaskRoutingPolicyOverridesGlobalDefault() {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        String previous = System.getProperty("harness.routing.free_first");
+        try {
+            System.setProperty("harness.routing.free_first", "true");
+            WorkerRouter.RouteResult route = router.selectWorker(task("coding", Map.of(
+                "task_type", "coding",
+                "provider_routing_policy", "strong_first"
+            )));
+            assertFalse(route.freeFirstRouting());
+            assertEquals("codex", route.selectedWorker());
+        } finally {
+            if (previous == null) {
+                System.clearProperty("harness.routing.free_first");
+            } else {
+                System.setProperty("harness.routing.free_first", previous);
+            }
+        }
+    }
+
 }

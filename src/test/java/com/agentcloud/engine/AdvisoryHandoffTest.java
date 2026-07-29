@@ -130,4 +130,88 @@ class AdvisoryHandoffTest {
 
         assertEquals("advisory_consult", why);
     }
+    @Test
+    void maybeEscalateSmallTierPartiallyDoneEscalatesToStrongTier() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, router, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "maybeEscalateSmallTierPartiallyDone", String.class, String.class, Map.class, Task.class
+        );
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("codex-free");
+        Map<String, Object> latestWorkerMetadata = Map.of("selected_model_tier", "small");
+
+        String result = (String) method.invoke(graph, "continue", "partially_done", latestWorkerMetadata, task);
+        assertEquals("escalate", result);
+    }
+
+    @Test
+    void maybeEscalateDoesNotEscalateWhenActionIsDone() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, router, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "maybeEscalateSmallTierPartiallyDone", String.class, String.class, Map.class, Task.class
+        );
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("codex-free");
+        Map<String, Object> latestWorkerMetadata = Map.of("selected_model_tier", "small");
+
+        String result = (String) method.invoke(graph, "done", "partially_done", latestWorkerMetadata, task);
+        assertEquals("done", result);
+    }
+
+    @Test
+    void maybeEscalateDoesNotEscalateWhenWorkerIsStrongTier() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, router, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "maybeEscalateSmallTierPartiallyDone", String.class, String.class, Map.class, Task.class
+        );
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("codex");
+        Map<String, Object> latestWorkerMetadata = Map.of("selected_model_tier", "strong");
+
+        String result = (String) method.invoke(graph, "continue", "partially_done", latestWorkerMetadata, task);
+        assertEquals("continue", result);
+    }
+
+    @Test
+    void maybeEscalateDoesNotEscalateWhenCompletionIsDone() throws Exception {
+        WorkerRegistry registry = new WorkerRegistry();
+        WorkerRouter router = new WorkerRouter(registry);
+        ControlNodeGraph graph = new ControlNodeGraph(
+            null, null, null, null, null, router, null, null,
+            null, null, null, null, null, null
+        );
+        Method method = ControlNodeGraph.class.getDeclaredMethod(
+            "maybeEscalateSmallTierPartiallyDone", String.class, String.class, Map.class, Task.class
+        );
+        method.setAccessible(true);
+
+        Task task = Task.create("task_1", "session_1", "demo", "active", "high")
+            .withAssignedWorker("codex-free");
+        Map<String, Object> latestWorkerMetadata = Map.of("selected_model_tier", "small");
+
+        String result = (String) method.invoke(graph, "continue", "done", latestWorkerMetadata, task);
+        assertEquals("continue", result);
+    }
+
 }

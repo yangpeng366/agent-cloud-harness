@@ -862,8 +862,21 @@ public class WorkerRouter {
     }
 
     private boolean prefersFreeFirstRouting(Task task) {
+        // Per-task metadata 优先于全局默认
         String policy = metadataString(task != null ? task.metadata() : null, "provider_routing_policy");
-        return "free_first".equalsIgnoreCase(blankToNull(policy));
+        if (policy != null && !policy.isBlank()) {
+            return "free_first".equalsIgnoreCase(policy);
+        }
+        // 全局默认：系统属性 harness.routing.free_first 或环境变量 HARNESS_ROUTING_FREE_FIRST
+        return globalFreeFirstRoutingDefault();
+    }
+
+    private boolean globalFreeFirstRoutingDefault() {
+        String raw = System.getProperty("harness.routing.free_first");
+        if (raw == null || raw.isBlank()) {
+            raw = System.getenv("HARNESS_ROUTING_FREE_FIRST");
+        }
+        return Boolean.parseBoolean(raw);
     }
 
     private boolean paidFallbackAllowed(Task task) {
