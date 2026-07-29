@@ -709,6 +709,14 @@ public class ControlNodeGraph {
             execDecision.needsExternalFactRefresh(),
             subgoalStatus
         );
+        // E1: decide 输出显式 decision_rationale，引用 goal progress + execution 信号（长任务收口合同深化）
+        String decisionRationale = buildDecisionRationale(resolvedAction, subgoalStatus,
+            execDecision.action(), completionDecision.status(), completionDecision.alignmentLevel());
+        Task beforeRationale = task;
+        task = withMetadataEntries(task, "decision_rationale", decisionRationale, "decision_action", resolvedAction);
+        if (!sameState(beforeRationale, task)) {
+            taskDao.updateState(task);
+        }
         if (List.of("done", "checkpoint_then_done").contains(resolvedAction)) {
             Task completedStage = markOrchestrationCompleted(task);
             if (!sameState(task, completedStage)) {
@@ -899,6 +907,44 @@ public class ControlNodeGraph {
         }
         boolean allDone = statuses.stream().allMatch(this::isDoneSubgoalStatus);
         return allDone ? "done" : "continue";
+    }
+
+    /**
+     * E1 长任务收口合同：为 decide 输出构造显式 decision_rationale，引用 goal progress + execution 信号。
+     * 形如 "goal: 2/3 done, 1 open; execution continue (partial, medium alignment) -> checkpoint"。
+     */
+    private String buildDecisionRationale(String resolvedAction, Object rawSubgoalStatus,
+                                          String executionAction, String completionStatus,
+                                          String alignmentLevel) {
+        StringBuilder sb = new StringBuilder();
+        List<String> statuses = readSubgoalStatuses(rawSubgoalStatus);
+        if (statuses.isEmpty()) {
+            sb.append("no subgoals");
+        } else {
+            int total = statuses.size();
+            long doneCount = statuses.stream().filter(this::isDoneSubgoalStatus).count();
+            long blockedCount = statuses.stream().filter(this::isBlockedSubgoalStatus).count();
+            long openCount = statuses.stream()
+                .filter(s -> !isDoneSubgoalStatus(s) && !isBlockedSubgoalStatus(s))
+                .count();
+            sb.append("goal: ").append(doneCount).append("/").append(total).append(" done");
+            if (blockedCount > 0) {
+                sb.append(", ").append(blockedCount).append(" blocked");
+            }
+            if (openCount > 0) {
+                sb.append(", ").append(openCount).append(" open");
+            }
+        }
+        sb.append("; execution ").append(executionAction == null ? "unknown" : executionAction);
+        if (completionStatus != null && !completionStatus.isBlank()) {
+            sb.append(" (").append(completionStatus);
+            if (alignmentLevel != null && !alignmentLevel.isBlank()) {
+                sb.append(", ").append(alignmentLevel).append(" alignment");
+            }
+            sb.append(")");
+        }
+        sb.append(" -> ").append(resolvedAction == null ? "unknown" : resolvedAction);
+        return sb.toString();
     }
 
     private List<String> readSubgoalStatuses(Object raw) {
