@@ -168,3 +168,7 @@ task_1aabd291e2514073（opm-content-writer 数字人配置调研）首次 worker
 | `agentcloud.providers.codex.handshake_timeout_ms` | 30000 | thread/start、turn/start 等 JSON-RPC 请求超时 |
 | `agentcloud.providers.codex.turn_activity_timeout_ms` | 180000 | 单轮活动超时（无输出间隔） |
 | `agentcloud.providers.codex.turn_max_duration_ms` | -- | 单轮最大执行时间 |
+
+## 2026-07-29 E2 Codex-Free Lane 真机 e2e 冒烟
+
+- 2026-07-29：E2 codex-free lane 真机 e2e 冒烟验证完成。codex-free lane（经本地 CCX 3688 + codex app-server，provider_model_provider=ccx-free，model_tier=small，cost_class=free_auto，selection_priority=70，primary_role=cannon_fodder）真机执行确认可用。执行链路：codex-free init 超时（worker_runtime_transient） -> same_worker_retry_then_auto_handoff -> advisory handoff codex-free -> codex（escalate_from_small_tier）-> 产出 README 摘要。free_first_routing 默认关闭是设计决策（codex-free 保持 config-driven 不内置，避免破坏 free_auto -> paid_auto fallback 合同）。关键发现：codex-free 经 CCX 冷路径 init 超时，90s 默认 initialize_timeout_ms 可能不足，后续可调。证据沉淀到 ../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md。

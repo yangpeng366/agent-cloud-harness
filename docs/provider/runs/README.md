@@ -21,6 +21,7 @@
 ### Codex Profile / Routing Evidence
 
 - `../../CODEX_MULTI_API_PROFILE_ROUTING_EXECUTION_RECORD_2026-06-30.md`
+- `../../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md`
 
 ### Worker / Facade / Protocol Boundary Evidence
 

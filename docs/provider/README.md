@@ -66,6 +66,7 @@
 ### 免费模型 Worker Lane
 
 - ../FREE_MODEL_WORKER_LANE_PLAN.md
+- `../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md`：codex-free lane（经本地 CCX + codex app-server）真机 e2e 冒烟 + 长任务收口合同字段验证。
 
 ### 全局路由与恢复
 

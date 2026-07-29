@@ -44,3 +44,7 @@
 ## 2026-07-22 Coding E2E Smoke 执行记录归档
 
 - 2026-07-22：Coding E2E smoke 已拿到一轮端到端闭环证据。`Run-CcxIntegrationPrecheck.ps1` health/models/completion 全 PASS 后，在 harness（`http://localhost:18082`，worker execution timeout 120s）上对真实编码任务跑通 Harness -> CCX -> LLM -> Loop -> Decide 链路。该轮结果已沉淀成 `docs/CODING_E2E_SMOKE_EXECUTION_RECORD_2026-07-22.md`，与 `P2_BASELINE_MATRIX_REAL_WORKER_SMOKE_EXECUTION_RECORD_2026-07-21.md` 同属 evaluation 主题的 real-worker smoke 证据线。
+
+## 2026-07-29 E2 Codex-Free Lane 真机 e2e 冒烟
+
+- 2026-07-29：E2 codex-free lane 真机 e2e 冒烟验证完成。codex-free lane（经本地 CCX 3688 + codex app-server，provider_model_provider=ccx-free）真机执行一轮 reading 任务：codex-free init 超时（worker_runtime_transient） -> same_worker_retry_then_auto_handoff -> advisory handoff codex-free -> codex（strong tier，产出 README 摘要，~27s） -> completion partially_done（planner delegation gate missing_compact_brief）-> human_gate。长任务收口合同字段（decision_rationale / progress_detail / progress_summary）在 task metadata 与 /judgment_trace API 双通道验证 PASS；E1 #1/#2 + 可观测层 + E3 UI 验收 PASS。free_first_routing 默认关闭（codex-free selection_priority=70 < codex 100，config-driven by design）。证据沉淀到 ../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md。

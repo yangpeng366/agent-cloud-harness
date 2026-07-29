@@ -44,6 +44,7 @@
 - `../CCX_INTEGRATION_PRECHECK_EXECUTION_RECORD_2026-07-22.md` — CCX precheck（health + models + completion）全 PASS
 - `../P2_E2E_INTEGRATION_SMOKE_EXECUTION_RECORD_2026-07-22.md` — Harness -> CCX -> LLM -> Loop -> Decide 端到端闭环全 PASS
 - `../CCX_RND_CASE_DEBUG_EXECUTION_RECORD_2026-07-25.md` - CCX+harness 真实研发案例调试（3 案例：openclaw-native 伪完成 vs codex 真成功对比 + 最佳实践）
+- `../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md` - codex-free lane（经本地 CCX + codex app-server）真机 e2e 冒烟 + 长任务收口合同字段验证
 
 ## 稳定基线
 
