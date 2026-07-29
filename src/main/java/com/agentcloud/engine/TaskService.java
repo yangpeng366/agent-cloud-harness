@@ -854,6 +854,7 @@ public class TaskService {
 
     private JudgmentTraceView buildJudgmentTraceView(Task task, RuntimeFactSet facts) {
         RuntimeFactSet runtimeFacts = facts != null ? facts : RuntimeFactSet.empty(task);
+        Map<String, Object> meta = task != null ? task.metadata() : null;
         return new JudgmentTraceView(
             task.id(),
             task.status(),
@@ -867,7 +868,10 @@ public class TaskService {
             runtimeFacts.executionBoundary(),
             runtimeFacts.runtimeContext(),
             runtimeFacts,
-            buildRuntimeCognitionSurface(runtimeFacts)
+            buildRuntimeCognitionSurface(runtimeFacts),
+            metadataString(meta, "decision_rationale"),
+            metadataString(meta, "progress_detail"),
+            metadataString(meta, "progress_summary")
         );
     }
 

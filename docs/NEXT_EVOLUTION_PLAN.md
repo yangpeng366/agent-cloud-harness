@@ -32,6 +32,7 @@
 - E1.1 已落地--decide 经 buildDecisionRationale 输出显式 decision_rationale metadata（goal progress done/blocked/open + execution action + completion status/alignment -> resolved action），withMetadataEntries + sameState 持久化。验收 #1 done。
 - E1.2 已落地--新增 additive progress_detail 字段（done/blocked/open 计数 + blocked subgoal 标题，形如 "1/3 done, 1 blocked, 1 open; blocked: API integration"），在 task 创建（ProviderTaskContractNormalizer）与 subgoal 迁移（ControlNodeGraph.autoUpdateSubgoalStatus）两处与 progress_summary 同步生成；不改 progress_summary 以避免破坏既有精确相等断言。验收 #2 done（语义详情落在 progress_detail）。
 - E1.3 deferred--LLM subgoal judgment 在 decide 节点正式消费。
+- E1 收口合同已进入可观测层：decision_rationale / progress_detail / progress_summary 已作为 JudgmentTraceView 一等字段暴露（GET /tasks/{id}/judgment_trace，live_flow 通过嵌入 judgment_trace 继承），操作员无需深入 metadata 即可看到 why + which subgoal blocked。
 
 验收标准：
 1. decide 的输出包含 decision_rationale 字段，引用 goal progress [done 2026-07-29]

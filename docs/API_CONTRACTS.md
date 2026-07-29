@@ -539,6 +539,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - 最近产出摘要 `latest_output`
 - 当前推荐动作 `recommended_action`
 - 当前推荐下一步 `recommended_next_step`
+- 长任务收口合同字段：`decision_rationale`（decide 终态理由）、`progress_detail`（语义化完成度详情，引用 blocked subgoal 标题）、`progress_summary`（完成度计数摘要）
 - 触发这些判断时可见的 `runtime_context`
 - 同轮执行边界 `execution_boundary`
 - 可直接复用到诊断 UI 的 `runtime_facts`（含 route preview、tool summary、prompt mode、mounted-context rollout 信号、candidate workers、evidence refs、unfinished items）

@@ -1268,6 +1268,30 @@ class TaskServiceLiveFlowViewTest {
         }
     }
 
+    @Test
+    void getJudgmentTraceSurfacesDecisionRationaleAndProgressDetail() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("judgment-trace-rationale-surfacing.db"))) {
+            TaskService service = service(db);
+
+            Map<String, Object> meta = new java.util.HashMap<>();
+            meta.put("decision_rationale", "goal: 0/1 done, 1 open; execution unknown -> continue");
+            meta.put("progress_detail", "0/1 done, 1 open");
+            meta.put("progress_summary", "0/1 subgoals done");
+
+            Task task = service.createTask(new TaskCreateRequest(
+                "judgment trace rationale task", "coding", "user", "high",
+                "verify decision_rationale / progress_detail surfacing", "judgment trace 应携带长任务收口合同字段",
+                null, null, meta, false
+            ));
+
+            var trace = service.getJudgmentTrace(task.id());
+
+            assertEquals("goal: 0/1 done, 1 open; execution unknown -> continue", trace.decisionRationale());
+            assertEquals("0/1 done, 1 open", trace.progressDetail());
+            assertEquals("0/1 subgoals done", trace.progressSummary());
+        }
+    }
+
     TaskService service(DatabaseManager db) {
         TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
         SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
