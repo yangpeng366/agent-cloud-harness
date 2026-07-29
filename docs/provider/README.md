@@ -29,6 +29,7 @@
 | codex 的 OpenAI / xfyun / deepseek profile 怎么路由和透传 | `../CODEX_MULTI_API_PROFILE_ROUTING_DESIGN.md` | `../CODEX_MULTI_API_PROFILE_ROUTING_PLAN.md`、`../CODEX_MULTI_API_PROFILE_ROUTING_EXECUTION_RECORD_2026-06-30.md` |
 | codebuddy / deveco 的命令参数、parser、resume 怎么接 | `../DEVECO_AND_CODEBUDDY_PROVIDER_PARAMS_PLAN.md` | `../AGENT_PROVIDER_TECHNICAL_DESIGN.md` |
 | OmniRoute 这种本地 OpenAI-compatible 网关怎么自动拉起、验活并接到 Harness | `../OMNIROUTE_OPENAI_COMPATIBLE_GATEWAY_PLAN.md` | `../AGENT_PROVIDER_TECHNICAL_DESIGN.md`、`../STARTUP_GUIDE.md` |
+| `/v1/chat/completions` 这类 HTTP 调用 agent provider 支不支持、要不要建 provider_http lane | `../HTTP_PROVIDER_EXECUTION_DIRECTION.md` | `../AGENT_PROVIDER_TECHNICAL_DESIGN.md`、`../OMNIROUTE_OPENAI_COMPATIBLE_GATEWAY_PLAN.md` |
 | tool-aware worker、本地文档试点、provider run/console 读面 | `../TOOL_LAYER_IMPLEMENTATION_PLAN.md` | `../LOCAL_DOC_WORKER_PILOT.md`、`../AGENT_INVENTORY_AND_RUNTIME_HEALTH_CONSOLE_PLAN.md` |
 | 专项接入评估或单 provider 深挖 | 对应专项文档 | 例如 `../REASONIX_AGENT_SUPPORT_AND_IMPROVEMENT_PLAN.md` |
 | task_type / workspace 推断改用 LLM 替代硬编码关键词、codex 跑错仓库 | `../LLM_TASK_UNDERSTANDING_PLAN.md` | `../WORKER_FAILURE_RECOVERY_POLICY.md`、`../AGENT_PROVIDER_TECHNICAL_DESIGN.md` |
@@ -86,6 +87,10 @@
 ### OpenAI-compatible 本地网关
 
 - `../OMNIROUTE_OPENAI_COMPATIBLE_GATEWAY_PLAN.md`
+
+### HTTP Provider 执行方向
+
+- `../HTTP_PROVIDER_EXECUTION_DIRECTION.md`：`/v1/chat/completions` 三层现状（入站 facade / 出站 LLM upstream / provider_http lane）与“暂不建 provider_http、中期按需补设计”的决策。
 
 ### 兼容性与宿主机边界
 
