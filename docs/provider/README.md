@@ -104,6 +104,10 @@
 - `../REASONIX_AGENT_SUPPORT_AND_IMPROVEMENT_PLAN.md`
 - `../WORKER_PROMPT_HEADER_DEDUP_PLAN.md`
 
+## 外部项目调研
+
+- `../AGENTENV_SANDBOX_SUBSTRATE_RESEARCH.md`：kimi3 开源 AgentENV（Firecracker microVM 沙箱执行底座，驱动 Kimi K3 agentic RL）调研；harness 缺的"隔离/可快照/可 fork 执行环境"北极星参照，含 instance identity 事件乱序保护、三层持久化纪律、fork 并行探索等启发点。
+
 ## 写回顺序
 
 - 主题级短进展、当前焦点、未完成/下一步/风险：

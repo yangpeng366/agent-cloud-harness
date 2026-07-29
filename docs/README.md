@@ -1,4 +1,4 @@
-﻿# Docs README
+# Docs README
 
 本文档是 `docs/` 的总索引。它只负责三件事：当前任务属于哪个主题、应该先读哪几份、做完该写回哪里。更细的结构合同、命名规则、审计口径，统一转到 `meta/README.md` 和 `DOCS_GOVERNANCE.md`。
 
@@ -47,6 +47,9 @@
 | `/dialogue/`、`/console/`、chat facade、UI 验证、页面 release gate | `dialogue/README.md` | 当前 UI 计划、runbook 或 acceptance record | `WEB_CONSOLE.md`、`TROUBLESHOOT.md` |
 | 评估、优先级、多轮任务、task pack、benchmark、productization | `evaluation/README.md` | 评估文档、任务包、测试计划、execution record | `../STATE.md`、必要时 `../DECISIONS.md` |
 | GitHub 首发、precheck、dry-run、release 范围、commit/stage/fileset | `release/README.md` | checklist、scope proposal、execution guide、dated precheck | `../README.md`、必要时 `../DECISIONS.md` |
+| 外部执行环境/沙箱底座调研（AgentENV 等） | `AGENTENV_SANDBOX_SUBSTRATE_RESEARCH.md` | 续写该调研或对应主线 plan | `../STATE.md`、必要时 `../DECISIONS.md` |
+| 持久化产物 owner / source-of-truth / 可重建纪律查询 | `PERSISTENCE_ARTIFACT_INVENTORY.md` | 续写该 inventory 或对应基线文档 | `../STATE.md`、必要时 `../DECISIONS.md` |
+| 控制图异步化竞态 / instance-identity 修复方案 | `CONTROL_GRAPH_ASYNC_INSTANCE_IDENTITY_PLAN.md` | 续写该方案或落代码 + 测试 | `../STATE.md`、必要时 `../DECISIONS.md` |
 | 任务还说不清属于哪里 | 本文 + `../STATE.md` + `../DECISIONS.md` | 先选一个主主题入口，再下钻 | 只在结论稳定后同步基线文档 |
 
 ## 文档分层
@@ -83,6 +86,7 @@
 - `TROUBLESHOOT.md`
 - `WEB_CONSOLE.md`
 - `HARNESS_CHANGE_CONTRACT.md`
+- `PERSISTENCE_ARTIFACT_INVENTORY.md`
 
 这些文档应尽量保持“今天仍然为真”的状态，不要把稳定结论只留在 dated record 里。
 

@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.Files;
@@ -48,7 +49,7 @@ public class TaskService {
     private final ArtifactDao artifactDao;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
-    private final java.util.concurrent.ConcurrentHashMap<String, Object> enterLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, ReentrantLock> enterLocks = new java.util.concurrent.ConcurrentHashMap<>();
 
     public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
                        WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
@@ -254,19 +255,23 @@ public class TaskService {
             }
             return;
         }
-        Object lock = enterLocks.computeIfAbsent(task.id(), k -> new Object());
+        ReentrantLock lock = enterLocks.computeIfAbsent(task.id(), k -> new ReentrantLock());
         Thread.ofVirtual().name("agentcloud-cg-" + action + "-", 0).start(() -> {
-            synchronized (lock) {
-                try {
-                    Task latest = taskDao.findById(task.id()).orElse(task);
-                    controlGraph.enter(latest);
-                } catch (Throwable e) {
-                    log.error("Async control graph {} failed. task={}", action, task.id(), e);
-                } finally {
-                    enterLocks.remove(task.id());
-                }
+            lock.lock();
+            try {
+                Task latest = taskDao.findById(task.id()).orElse(task);
+                controlGraph.enter(latest);
+            } catch (Throwable e) {
+                log.error("Async control graph {} failed. task={}", action, task.id(), e);
+            } finally {
+                lock.unlock();
             }
         });
+    }
+
+    /** Test hook: per-task round lock shared by enter/continue/resume (instance-identity + tryLock-abort). */
+    ReentrantLock roundLock(String taskId) {
+        return enterLocks.computeIfAbsent(taskId, k -> new ReentrantLock());
     }
 
     public Task getTask(String taskId) {
@@ -321,11 +326,15 @@ public class TaskService {
             return new TaskRecoveryResult(plan, null, handoff);
         }
 
-        Task prepared = prepareFreshSessionRecovery(task, plan, recoveryRequest);
+        Task prepared = controlGraph.bumpExecInstance(prepareFreshSessionRecovery(task, plan, recoveryRequest));
         taskDao.updateState(prepared);
         TaskControlResult control = "continue".equals(action)
             ? continueTask(taskId, actionMetadata)
             : resumeTask(taskId, actionMetadata);
+        if (!"continue".equals(action) && "resume_busy".equals(control.decision())) {
+            log.info("[Recovery] task={} resume deferred (round in flight); falling back to async continue to serialize", taskId);
+            control = continueTask(taskId, actionMetadata);
+        }
         return new TaskRecoveryResult(plan, control, null);
     }
 
@@ -2021,14 +2030,23 @@ public class TaskService {
 
     public TaskControlResult resumeTask(String taskId, Map<String, Object> actionMetadata) {
         Task t = taskDao.findById(taskId).orElseThrow(() -> new IllegalArgumentException("task not found"));
-        Task accepted = t.withStatus("active").withControlNode("scheduler").withWaitingReason(null);
-        recordControlActionEvent(accepted, "resume", null, actionMetadata);
-        recordTaskActionMessage(accepted, "resume", null, actionMetadata);
-        recordTaskStateProjection(t, accepted, null, actionMetadata);
-        Task updated = controlGraph.triggerResume(t);
-        ExperimentRunRecord experimentRun = refreshExperimentRunRecord(updated);
-        recordAssistantProgressMessage(updated, "resume", experimentRun);
-        return controlResult(updated, "resume", null);
+        ReentrantLock lock = enterLocks.computeIfAbsent(taskId, k -> new ReentrantLock());
+        if (!lock.tryLock()) {
+            log.info("[Resume] task={} deferred: a worker round is in flight (enterLock busy); retry resume shortly", taskId);
+            return controlResult(t, "resume_busy", "task is executing a worker round; retry resume shortly");
+        }
+        try {
+            Task accepted = t.withStatus("active").withControlNode("scheduler").withWaitingReason(null);
+            recordControlActionEvent(accepted, "resume", null, actionMetadata);
+            recordTaskActionMessage(accepted, "resume", null, actionMetadata);
+            recordTaskStateProjection(t, accepted, null, actionMetadata);
+            Task updated = controlGraph.triggerResume(t);
+            ExperimentRunRecord experimentRun = refreshExperimentRunRecord(updated);
+            recordAssistantProgressMessage(updated, "resume", experimentRun);
+            return controlResult(updated, "resume", null);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public TaskControlResult continueTask(String taskId) {

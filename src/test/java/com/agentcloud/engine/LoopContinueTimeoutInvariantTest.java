@@ -15,14 +15,15 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Loop 验收标准 #3: HTTP /continue 超时（或 controlGraph.enter 抛异常）不把 active 任务判成 failed。
  *
- * <p>当 controlGraph.enter() 抛出 RuntimeException 时，continueTask 不应改变 task 级状态，
- * task 应保持 active 而不是被标记为 failed。
+ * <p>enter 异步化（asyncEnterControlGraph，sync_enter 测试路径同步执行）后，continueTask 不再传播 enter() 失败
+ * （异常在 asyncEnterControlGraph 内捕获+日志，不改变 task 级状态）。本类断言的核心不变式是：即使 enter() 抛异常，
+ * task 也保持 active，不被判 failed，且不写 task_failed 事件。
  */
 class LoopContinueTimeoutInvariantTest {
 
@@ -61,8 +62,8 @@ class LoopContinueTimeoutInvariantTest {
             // Task should be active before continue
             assertEquals("active", task.status());
 
-            // continueTask should propagate the exception (HTTP layer will catch it and return 500)
-            assertThrows(RuntimeException.class, () -> service.continueTask(task.id()));
+            // enter-async 后 continueTask 不传播 enter() 失败（捕获+日志）；任务须保持 active，不被判 failed
+            assertDoesNotThrow(() -> service.continueTask(task.id()));
 
             // Task should still be active, NOT failed
             Task afterException = taskDao.findById(task.id()).orElseThrow();
@@ -104,7 +105,7 @@ class LoopContinueTimeoutInvariantTest {
             String originalStatus = task.status();
             String originalNode = task.controlNode();
 
-            assertThrows(RuntimeException.class, () -> service.continueTask(task.id()));
+            assertDoesNotThrow(() -> service.continueTask(task.id()));
 
             Task afterException = taskDao.findById(task.id()).orElseThrow();
             assertEquals(originalStatus, afterException.status(),
@@ -142,7 +143,7 @@ class LoopContinueTimeoutInvariantTest {
                 "no failed event on continue exception", null, null, null, Map.of(), false
             ));
 
-            assertThrows(RuntimeException.class, () -> service.continueTask(task.id()));
+            assertDoesNotThrow(() -> service.continueTask(task.id()));
 
             // Verify no "task_failed" event was written
             boolean hasFailedEvent = eventDao.listBySessionAndTask(task.sessionId(), task.id(), 50).stream()

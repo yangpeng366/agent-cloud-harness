@@ -23,6 +23,8 @@
 | 当前问题 | 先看哪里 | 再下钻 |
 |------|------|------|
 | 今天控制图、packet、checkpoint、control action、runtime 聚合到底以什么合同为准 | `../ARCHITECTURE.md` | `../SPEC.md`、`../API_CONTRACTS.md`、`../HARNESS_CHANGE_CONTRACT.md` |
+| 要查持久化产物 owner / source-of-truth / 可重建纪律（DB 表、harness-state.json、runtime 派生层） | `../PERSISTENCE_ARTIFACT_INVENTORY.md` | `../HARNESS_CHANGE_CONTRACT.md`、`../ARCHITECTURE.md` |
+| 控制图异步化后的跨路径竞态（pause/resume/handoff/recovery vs in-flight round）分析与修复方案 | `../CONTROL_GRAPH_ASYNC_INSTANCE_IDENTITY_PLAN.md` | `../AGENT_CLOUD_HARNESS_EXECUTION_CONTINUITY_MEMORY_FLOW.md`、`../HARNESS_CHANGE_CONTRACT.md` |
 | 要改 continuity、packet、active context、progress accumulation、checkpoint/refined packet 语义 | `../AGENT_CLOUD_HARNESS_EXECUTION_CONTINUITY_MEMORY_FLOW.md` | `../PROGRESS_ACCUMULATION_LANDING_PLAN.md`、`../M02_PACKET_SCHEMA_EXECUTION_RECORD_2026-06-30.md` |
 | 要推进 goal loop、agent action、bounded autonomy、长周期 outer loop 设计 | `../GOAL_LOOP_LANDING_PLAN.md` | `../AGENT_ACTION_MODEL_DRAFT.md`、`../BOUNDED_AUTONOMY_REFACTOR_V1.md` |
 | 要跑真实控制面链路、multi-round 任务、live flow、pause/resume/handoff 验证 | `../LIVE_FLOW_RUNBOOK.md` | `../TEST_DRIVEN_MULTI_ROUND_TASK_PLAN.md`、`../PROJECT_EVOLUTION_MULTI_ROUND_TASK_PACK.md`、`../MULTI_ROUND_TASK_EXECUTION_RUNBOOK.md` |
@@ -48,6 +50,7 @@
 - `../LIVE_FLOW_RUNBOOK.md`
 - `../TROUBLESHOOT.md`
 - `../HARNESS_CHANGE_CONTRACT.md`
+- `../PERSISTENCE_ARTIFACT_INVENTORY.md`
 
 这些文档更接近“今天仍然为真”的控制面结构、行为语义、验证入口和改动边界。若本轮改动改变了状态机、packet 合同、验证链或回归解释口径，优先回写这里。
 

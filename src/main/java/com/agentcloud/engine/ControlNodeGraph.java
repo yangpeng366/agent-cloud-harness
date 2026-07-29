@@ -313,8 +313,24 @@ public class ControlNodeGraph {
             log.info("[Scheduler] task={} executing one round with worker={}", task.id(), task.assignedWorker());
             Instant runStartedAt = Instant.now();
             AgentRunRecord agentRun = null;
+            long entryInstance = execInstance(task);
             try {
                 executionResult = executeOneRoundWithTimeout(ctx, task.assignedWorker());
+                Task currentTaskState = taskDao.findById(task.id()).orElse(task);
+                if (execInstance(currentTaskState) != entryInstance) {
+                    log.info("[Scheduler] task={} stale worker round discarded (success): exec_instance {} -> {} (concurrent control action)",
+                        task.id(), entryInstance, execInstance(currentTaskState));
+                    emitEvent(currentTaskState, "worker_round",
+                        "Stale worker round discarded: task state changed by concurrent control action",
+                        metadataOf(
+                            "control_node", "worker_round",
+                            "stale_round_discarded", true,
+                            "entry_instance", entryInstance,
+                            "current_instance", execInstance(currentTaskState),
+                            "selected_worker", task.assignedWorker()
+                        ));
+                    return currentTaskState;
+                }
                 executionResult = enrichCurrentRoundWorkerMetadata(
                     task,
                     route,
@@ -333,6 +349,21 @@ public class ControlNodeGraph {
                 }
                 agentRun = recordCompletedAgentRun(task, route, selectedWorker, executionResult, runStartedAt, Instant.now());
             } catch (RuntimeException e) {
+                Task currentTaskState = taskDao.findById(task.id()).orElse(task);
+                if (execInstance(currentTaskState) != entryInstance) {
+                    log.info("[Scheduler] task={} stale worker round discarded (failure): exec_instance {} -> {} (concurrent control action)",
+                        task.id(), entryInstance, execInstance(currentTaskState));
+                    emitEvent(currentTaskState, "worker_round",
+                        "Stale worker round failure discarded: task state changed by concurrent control action",
+                        metadataOf(
+                            "control_node", "worker_round",
+                            "stale_round_discarded", true,
+                            "entry_instance", entryInstance,
+                            "current_instance", execInstance(currentTaskState),
+                            "selected_worker", task.assignedWorker()
+                        ));
+                    return currentTaskState;
+                }
                 log.warn("Worker round post-processing failed. task={} worker={}", task.id(), task.assignedWorker(), e);
                 AgentRunRecord failedRun = recordFailedAgentRun(task, route, selectedWorker, runStartedAt, Instant.now(), e);
                 emitEvent(task, "worker_round_failed",
@@ -2189,7 +2220,7 @@ public class ControlNodeGraph {
 
     public Task triggerPause(Task task, String reason) {
         log.info("[Trigger] pause task={} reason={}", task.id(), reason);
-        Task t = task.withStatus("paused").withControlNode("packet").withWaitingReason(reason);
+        Task t = bumpExecInstance(task.withStatus("paused").withControlNode("packet").withWaitingReason(reason));
         taskDao.updateState(t);
         return packetNode(t);
     }
@@ -2197,7 +2228,7 @@ public class ControlNodeGraph {
     public Task triggerEscalate(Task task, String reason) {
         log.info("[Trigger] escalate task={} reason={}", task.id(), reason);
         persistTransitionPacket(task, "escalate_before");
-        Task t = task.withStatus("waiting_human").withControlNode("human_gate").withWaitingReason(reason);
+        Task t = bumpExecInstance(task.withStatus("waiting_human").withControlNode("human_gate").withWaitingReason(reason));
         taskDao.updateState(t);
         return humanGateNode(t);
     }
@@ -2205,14 +2236,14 @@ public class ControlNodeGraph {
     public Task triggerHandoff(Task task, String targetWorker) {
         log.info("[Trigger] handoff task={} to worker={}", task.id(), targetWorker);
         persistTransitionPacket(task.withAssignedWorker(targetWorker), "handoff_before");
-        Task t = withMetadataEntries(clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff"), "handoff_depth", handoffDepth(task) + 1);
+        Task t = bumpExecInstance(withMetadataEntries(clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff"), "handoff_depth", handoffDepth(task) + 1));
         taskDao.updateState(t);
         return handoffNode(t);
     }
 
     public Task triggerResume(Task task) {
         log.info("[Trigger] resume task={}", task.id());
-        Task t = clearAutoContinueBurst(task.withStatus("active").withControlNode("scheduler").withWaitingReason(null));
+        Task t = bumpExecInstance(clearAutoContinueBurst(task.withStatus("active").withControlNode("scheduler").withWaitingReason(null)));
         taskDao.updateState(t);
         return schedulerNode(t);
     }
@@ -2676,6 +2707,17 @@ public class ControlNodeGraph {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    private static final String EXEC_INSTANCE_KEY = "exec_instance";
+
+    private long execInstance(Task task) {
+        Long value = metadataLong(task != null ? task.metadata() : null, EXEC_INSTANCE_KEY);
+        return value != null ? value : 0L;
+    }
+
+    Task bumpExecInstance(Task task) {
+        return withMetadataEntries(task, EXEC_INSTANCE_KEY, execInstance(task) + 1L);
     }
 
     @SuppressWarnings("unchecked")

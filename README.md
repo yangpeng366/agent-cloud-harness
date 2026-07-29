@@ -92,6 +92,7 @@ curl -X POST http://localhost:8080/api/v1/tasks \
 # 查看 worker 列表
 curl http://localhost:8080/api/v1/workers
 ```
+> 想直接跑通一条端到端 happy path（建会话 -> 建任务 -> 轮询状态 -> 取 live_flow -> 关闭会话）？使用 [`examples/`](examples/) 目录的可运行脚本即可。
 
 ---
 
