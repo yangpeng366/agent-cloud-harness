@@ -29,7 +29,7 @@ final class WorkerPromptHeaderBuilder {
             goal
         );
         StringBuilder header = new StringBuilder();
-        header.append("Task: ").append(firstNonBlank(title, "(untitled task)")).append("\n");
+        header.append("Task Title: ").append(firstNonBlank(title, "(untitled task)")).append("\n");
         if (includeTaskType) {
             String taskType = PromptFieldDeduper.normalizePromptField(metadataString(metadata, "task_type"));
             if (!taskType.isBlank()) {

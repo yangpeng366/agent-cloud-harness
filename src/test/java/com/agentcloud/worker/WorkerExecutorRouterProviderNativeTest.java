@@ -182,8 +182,8 @@ class WorkerExecutorRouterProviderNativeTest {
     void explicitProviderBackendWithoutExecutorSupportFailsFastInsteadOfFallingBackToDefault() {
         WorkerRegistry registry = new WorkerRegistry();
         registry.register(new com.agentcloud.model.Worker(
-            "hermes-native",
-            "hermes",
+            "experimental-cli",
+            "experimental",
             List.of("coding"),
             List.of(),
             List.of(),
@@ -204,7 +204,7 @@ class WorkerExecutorRouterProviderNativeTest {
         );
 
         try {
-            router.executeOneRound(runtimeContext("hermes-native"), "hermes-native");
+            router.executeOneRound(runtimeContext("experimental-cli"), "experimental-cli");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage().contains("provider backend"));
             assertEquals(0, defaultExecutor.calls);
