@@ -3,6 +3,7 @@
 ## 当前状态
 
 - 2026-07-21 方向调整：dialogue 主题新增活跃焦点——UI 页面展示结果 / 返回与执行中状态判断。状态语义收成 active / running / waiting_human / failed / partial / done 一致口径，要求 HTTP /continue 超时不把 active 任务渲染成 failed，/dialogue/ pinned 输出区分最新一轮结果与任务级结果，/console/ 区分 worker 级与 task 级状态。新方向主入口为 ../LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md。
+- 2026-07-29: /dialogue/ 任务详情 decision 列表接入长任务收口合同卡。judgment-card-plan.js 扩展 buildJudgmentCardBody 支持 decision_rationale / progress_detail（additive，向后兼容）+ 新增 mapClosureContractFields 把 judgment_trace 字段映射成 card 输入；app.js 在 decision list 首项渲染"长任务收口合同"卡（仅当 decide 已产出 decision_rationale 时，否则不渲染）。dialogue-judgment-card-plan.test.mjs 4 场景；全量 JS 套件 311/0。
 - `dialogue/` 已正式升级为 `README.md + PROGRESS.md` 的轻量工作区，并已启用 `runs/README.md` 作为 acceptance / execution / precheck 聚合入口。
 - 当前活跃推进主要集中在三条线：`/dialogue/` 的 chat-first 壳层与 pinned 输出、`/console/` 的 operator/Provider 诊断读面、browser acceptance 与 facade/release gate 收口。
 - 现阶段仍不启用 `tasks/`、`archive/`；`runs/README.md` 只负责聚合 root-level dated 证据入口，不搬动文档本体，`PROGRESS.md` 继续负责把当前活跃主线串起来。

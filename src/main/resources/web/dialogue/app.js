@@ -6,7 +6,7 @@ import { buildMessageRoleSummary } from "./message-summary-plan.js";
 import { buildMessageSummaryStackPlan } from "./message-summary-stack-plan.js";
 import { renderMessageSummaryStackHtml } from "./message-summary-render-plan.js";
 import { buildMessageExpansionPlan, hasExpandedTaskOutcomeContent } from "./message-expansion-plan.js";
-import { buildJudgmentCardBody } from "./judgment-card-plan.js";
+import { buildJudgmentCardBody, mapClosureContractFields } from "./judgment-card-plan.js";
 import { buildRouteBoxPlan } from "./route-box-plan.js";
 import { buildProviderDeprioritizationPlan } from "./provider-deprioritization-plan.js";
 import { buildExperimentSummaryPlan } from "./experiment-summary-plan.js";
@@ -1506,6 +1506,15 @@ function renderDetails() {
     dom.experimentSummary.innerHTML = renderExperimentSummary(flow, state.experimentSummary);
 
     const decisionCards = [];
+    const closureFields = mapClosureContractFields(judgmentTrace);
+    if (closureFields.decisionRationale) {
+        decisionCards.push(stackItem(
+            "closure",
+            "长任务收口合同",
+            buildJudgmentCardBody(closureFields),
+            closureFields.progressSummary
+        ));
+    }
     const executionJudgment = judgmentTrace.execution_judgment || judgmentTrace.executionJudgment;
     const completionJudgment = judgmentTrace.completion_judgment || judgmentTrace.completionJudgment;
     const judgmentExecutionBoundary = judgmentTrace.execution_boundary || judgmentTrace.executionBoundary;

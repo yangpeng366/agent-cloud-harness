@@ -56,6 +56,8 @@
 
 当前 loop-activity-detector-plan.js 和 recovery-action-hint-plan.js 已作为独立模块落地，但尚未集成到实际 app.js。下一阶段：
 
+进度（2026-07-29）：judgment-card-plan.js 已扩展支持长任务收口合同字段（decision_rationale / progress_detail），经 mapClosureContractFields 映射并接入 app.js decision list--/dialogue/ 任务详情的 decision 列表首项现展示"长任务收口合同"卡（仅当 decide 已产出 decision_rationale 时渲染，向后兼容）。loop-activity / recovery-hint 仍待集成。
+
 - 将 loop activity detector 接入 /dialogue/ 的实时状态展示
 - 将 recovery action hint 接入 /dialogue/ 的 waiting_human 状态卡
 - /console/ 的 operator 读面展示 loop 活跃度趋势
