@@ -46,3 +46,7 @@
 - 本目录只做主题级 evidence 聚合入口；这里的“聚合入口”职责是不替代 root-level dated 文档本体。
 - 如果某条 record 已经只剩历史参考价值，再由 `evaluation/README.md` 降级分流，不在这里继续扩写解释。
 - 如果后续 execution evidence 继续密集增长，可在本目录下再按批次补更细的二级索引，但先保留轻量入口。
+
+### Long Stability / 7h+ Smoke
+
+- `../../LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md`

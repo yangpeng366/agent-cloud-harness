@@ -49,3 +49,30 @@
 - 观察：D:\gitAll\agent-cloud-harness 已从 2026-07-31 的目录异常中恢复，当前工作树可继续做 GitHub-ready 文档修补。
 - 未结清项：工作区仍有未提交改动（DECISIONS.md、STATE.md、docs/docs/、CodexAppServerWorkerExecutor.java、新测试文件），主会话确认前不代做 commit；探针仍停留在 waiting_human。
 - 建议：优先整理当前未提交文档/测试的公开边界，再回填 release gate 或首发 README。
+
+## 本轮已做
+
+1. 建立 25200s long stability smoke 的代码回归保护：`WorkerExecutionTimeoutConfigTest.longStabilitySmoke25200sOverrideIsAcceptedAcrossTiers`。
+2. 建立可重复 runner：`scripts/Run-LongStabilitySmoke.ps1`，默认对 `long-001` 单 case 单 mode 投 25200s smoke。
+3. 沉淀执行证据与文档入口：`docs/LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md`、`docs/evaluation/runs/README.md`、`docs/evaluation/PROGRESS.md`。
+
+## 本轮未做（留给下一步）
+
+1. 完成一轮真实 25200s 运行并回收 terminal/evaluated report。
+2. 恢复源码：src/main/java/com/agentcloud/engine/ControlNodeGraph.java 等 .java 文件目前在仓库中缺失，仅 JAR 内有 bytecode。补源码后才能继续在 control flow 上做 handoff-loop circuit breaker 修复。
+3. 评估 ccx-free 模型是否替换 / 是否需要 reading 类型 fallback 规则。
+4. 设计 deterministic experiment control（task 创建时锁定 assigned_worker 与 fixture 路径），避免再次因 fixture 丢失把探针任务拖入循环。
+5. 从 human_gate 重新触发探针（或新建任务），验证 docs 补齐后 control flow 能完整收敛。
+## 2026-08-02 巡检写回
+
+- 本轮时间：2026-08-02 10:02
+- 观察：D:\gitAll\agent-cloud-harness 已从 2026-07-31 的目录异常中恢复，当前工作树可继续做 GitHub-ready 文档修补。
+- 未结清项：工作区仍有未提交改动（DECISIONS.md、STATE.md、docs/docs/、CodexAppServerWorkerExecutor.java、新测试文件），主会话确认前不代做 commit；探针仍停留在 waiting_human。
+- 建议：优先整理当前未提交文档/测试的公开边界，再回填 release gate 或首发 README。
+## 2026-08-02 预算超时恢复回归
+
+- 本轮时间：2026-08-02
+- 根因已收口：仓库 HEAD 的 prepareFreshSessionRecovery 已会在 fresh session retry 前把 subgoal_status 里 blocked 子目标重置为 pending，并强制回写 status=active / control_node=scheduler / waiting_reason=null；当前 live task 	ask_21f7c333c57e4514 的 SQLite 副本也显示其 subgoal 已是 pending。
+- 新增回归覆盖：WorkerBudgetExhaustedRecoveryTest.prepareFreshSessionRecoveryClearsBlockedSubgoalsAndResetsWaitingState，直接从 waiting_human + blocked subgoal 出发验证 recovery 后状态可被清回 ctive。
+- 冲突说明：工作区无 merge conflict；未提交项仅为 docs/test/doc 写回，不阻塞源码修复。
+- 未结清项：运行中 JAR D:\gitAll\agent-cloud-harness\.tmp\runtime-jars\agent-cloud-harness-0.1.0-SNAPSHOT-shaded-port9091-20260731-135115.jar 仍为旧构建，所以 live API 仍显示 manual_recover_scheduled；需要重建 JAR 并热替换后，自动 retry 才会真的跑起来。

@@ -89,4 +89,13 @@ class WorkerExecutionTimeoutConfigTest {
         assertEquals(1800L, graph.effectiveWorkerTimeoutSeconds("openclaw-native"));
         assertEquals(1800L, ControlNodeGraph.resolveWorkerExecutionTimeoutSeconds());
     }
+
+    @Test
+    void longStabilitySmoke25200sOverrideIsAcceptedAcrossTiers() {
+        System.setProperty("harness.worker.timeout.seconds", "25200");
+        ControlNodeGraph graph = graphWithDefaultRegistry();
+        assertEquals(25200L, graph.effectiveWorkerTimeoutSeconds("codex"));
+        assertEquals(25200L, graph.effectiveWorkerTimeoutSeconds("openclaw-native"));
+        assertEquals(25200L, ControlNodeGraph.resolveWorkerExecutionTimeoutSeconds());
+    }
 }
