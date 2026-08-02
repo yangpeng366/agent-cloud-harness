@@ -1189,6 +1189,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static long configurableLong(String key, long defaultValue) {
         String raw = System.getProperty(key);
         if (raw == null || raw.isBlank()) {
+            raw = System.getenv(key.toUpperCase(Locale.ROOT).replace('.', '_'));
+        }
+        if (raw == null || raw.isBlank()) {
             return defaultValue;
         }
         try {
