@@ -17,7 +17,8 @@
 | continuity | 维持 | docs/continuity/README.md | pause/resume 链路在探针任务里跑通（resume 接口返回 200；deferred 时 enterLock busy 可恢复） |
 | provider | 观察中 | docs/provider/README.md | codex provider 接入正常；ccx-free model 输出质量问题独立跟进 |
 | dialogue | 维持 | docs/dialogue/README.md | 本轮未触及 |
-| elease | 维持 | docs/release/README.md | 本轮未触及 |
+| 
+elease | 维持 | docs/release/README.md | 本轮未触及 |
 | meta | 触发修复 | docs/meta/README.md | 本次按 AGENTS.md 补回 docs 索引面，待后续结构审计 |
 
 ## 探针任务总览
@@ -76,3 +77,11 @@
 - 新增回归覆盖：WorkerBudgetExhaustedRecoveryTest.prepareFreshSessionRecoveryClearsBlockedSubgoalsAndResetsWaitingState，直接从 waiting_human + blocked subgoal 出发验证 recovery 后状态可被清回 ctive。
 - 冲突说明：工作区无 merge conflict；未提交项仅为 docs/test/doc 写回，不阻塞源码修复。
 - 未结清项：运行中 JAR D:\gitAll\agent-cloud-harness\.tmp\runtime-jars\agent-cloud-harness-0.1.0-SNAPSHOT-shaded-port9091-20260731-135115.jar 仍为旧构建，所以 live API 仍显示 manual_recover_scheduled；需要重建 JAR 并热替换后，自动 retry 才会真的跑起来。
+
+## 2026-08-02 巡检写回
+
+- 本轮时间：2026-08-02 19:55
+- 观察：README / CONTRIBUTING / docs/release/README 的对外验证命令已对齐；文档类变更不再必须走完整 Maven 构建。
+- 已落地：`docs/release/README.md` 的重复公开边界提示已合并为一条，并追加认领候选前的边界确认要求。
+- 未结清项：未提交工作树仍存在；首个正式 PR/issue 公开边界待主会话确认；fastjson2 #3763 未见上游修复。
+- 建议：下轮优先把 `GFI-09` 或 `GFI-10` 沉淀为可提交贡献草稿。
