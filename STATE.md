@@ -43,3 +43,9 @@
 2. 评估 ccx-free 模型是否替换 / 是否需要 reading 类型 fallback 规则。
 3. 设计 deterministic experiment control（task 创建时锁定 ssigned_worker 与 fixture 路径），避免再次因 fixture 丢失把探针任务拖入循环。
 4. 从 human_gate 重新触发探针（或新建任务），验证 docs 补齐后 control flow 能完整收敛。
+## 2026-08-02 巡检写回
+
+- 本轮时间：2026-08-02 10:02
+- 观察：D:\gitAll\agent-cloud-harness 已从 2026-07-31 的目录异常中恢复，当前工作树可继续做 GitHub-ready 文档修补。
+- 未结清项：工作区仍有未提交改动（DECISIONS.md、STATE.md、docs/docs/、CodexAppServerWorkerExecutor.java、新测试文件），主会话确认前不代做 commit；探针仍停留在 waiting_human。
+- 建议：优先整理当前未提交文档/测试的公开边界，再回填 release gate 或首发 README。

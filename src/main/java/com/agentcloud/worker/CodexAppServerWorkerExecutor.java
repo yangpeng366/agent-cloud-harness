@@ -1360,6 +1360,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
         private JsonNode nextEnvelope(long deadlineAtMs) throws IOException, InterruptedException {
             while (System.currentTimeMillis() < deadlineAtMs) {
+                if (Thread.interrupted()) {
+                    return null;
+                }
                 if (!reader.ready()) {
                     TimeUnit.MILLISECONDS.sleep(10L);
                     continue;
