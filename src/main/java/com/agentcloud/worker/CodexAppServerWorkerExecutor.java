@@ -1363,26 +1363,31 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 if (Thread.interrupted()) {
                     return null;
                 }
-                if (!reader.ready()) {
-                    TimeUnit.MILLISECONDS.sleep(10L);
-                    continue;
-                }
-                String line = reader.readLine();
-                if (line == null) {
+                if (reader.ready()) {
+                    String line = reader.readLine();
+                    if (line != null) {
+                        String trimmed = line.trim();
+                        if (!trimmed.isBlank()) {
+                            markActivity();
+                            writeEvent("provider_recv", trimmed);
+                            try {
+                                return MAPPER.readTree(trimmed);
+                            } catch (Exception ignored) {
+                                if (!isCodexInternalLog(trimmed)) {
+                                    appendOutput(trimmed);
+                                }
+                            }
+                        }
+                    } else {
+                        return null;
+                    }
+                } else if (System.currentTimeMillis() >= deadlineAtMs) {
                     return null;
                 }
-                String trimmed = line.trim();
-                if (trimmed.isBlank()) {
-                    continue;
-                }
+                TimeUnit.MILLISECONDS.sleep(10L);
                 markActivity();
-                writeEvent("provider_recv", trimmed);
-                try {
-                    return MAPPER.readTree(trimmed);
-                } catch (Exception ignored) {
-                    if (!isCodexInternalLog(trimmed)) {
-                        appendOutput(trimmed);
-                    }
+                if (Thread.interrupted()) {
+                    return null;
                 }
             }
             return null;

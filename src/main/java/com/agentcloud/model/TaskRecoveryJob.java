@@ -3,6 +3,7 @@ package com.agentcloud.model;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -26,7 +27,17 @@ public record TaskRecoveryJob(
 ) {
     public TaskRecoveryJob {
         acceptedAt = acceptedAt != null ? acceptedAt : Instant.now();
-        metadata = metadata != null ? Map.copyOf(metadata) : Map.of();
+        if (metadata != null) {
+            LinkedHashMap<String, Object> cleaned = new LinkedHashMap<>();
+            metadata.forEach((key, value) -> {
+                if (key != null && value != null) {
+                    cleaned.put(key, value);
+                }
+            });
+            metadata = Map.copyOf(cleaned);
+        } else {
+            metadata = Map.of();
+        }
     }
 
     public TaskRecoveryJob withStatus(String status, Instant startedAt, Instant completedAt, String errorMessage) {

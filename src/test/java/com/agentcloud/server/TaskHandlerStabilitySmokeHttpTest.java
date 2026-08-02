@@ -83,6 +83,26 @@ class TaskHandlerStabilitySmokeHttpTest {
                 HttpResponse.BodyHandlers.discarding()
             );
 
+            for (int attempt = 0; attempt < 200; attempt++) {
+                harness.service.continueTask(task.id());
+                Task afterContinue = harness.service.getTask(task.id());
+                if ("active".equalsIgnoreCase(afterContinue.status())
+                    && "scheduler".equalsIgnoreCase(afterContinue.controlNode())) {
+                    break;
+                }
+                Thread.sleep(250);
+            }
+
+            for (int attempt = 0; attempt < 40; attempt++) {
+                Task afterContinue = harness.db.jdbi().onDemand(TaskDao.class).findById(task.id()).orElse(null);
+                if (afterContinue == null
+                    || !"waiting".equalsIgnoreCase(afterContinue.status())
+                    && !"active".equalsIgnoreCase(afterContinue.status())) {
+                    break;
+                }
+                Thread.sleep(250);
+            }
+
             HttpResponse<String> taskResponse = harness.client.send(
                 HttpRequest.newBuilder(harness.uri("/api/v1/tasks/" + task.id()))
                     .GET()
@@ -148,9 +168,14 @@ class TaskHandlerStabilitySmokeHttpTest {
             assertEquals(task.id(), String.valueOf(harness.map(liveFlowData.get("task")).get("id")));
             assertEquals("codex", String.valueOf(routePreview.get("selected_worker")));
             assertEquals("ready_fallback", String.valueOf(routePreview.get("route_source")));
-            assertTrue(judgmentTraceData.containsKey("decision_rationale"));
-            assertTrue(judgmentTraceData.containsKey("progress_detail"));
-            assertTrue(judgmentTraceData.containsKey("progress_summary"));
+            assertTrue(judgmentTraceData.containsKey("decision_rationale"), "judgment trace 应回传 decision_rationale");
+            assertTrue(judgmentTraceData.containsKey("progress_detail"), "judgment trace 应回传 progress_detail");
+            assertTrue(judgmentTraceData.containsKey("progress_summary"), "judgment trace 应回传 progress_summary");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> executionJudgment = harness.map(judgmentTraceData.get("execution_judgment"));
+            assertNotNull(executionJudgment, "judgment trace 应回传 execution_judgment");
+            assertNotNull(String.valueOf(executionJudgment.get("action")), "manual continue 后 execution judgment 应保留建议动作");
+            assertNotNull(String.valueOf(judgmentTraceData.get("recommended_next_step")), "manual continue 后 judgment trace 应保留下一步提示");
 
             List<Map<String, Object>> listedTasks = harness.list(harness.readJson(listResponse.body()).get("data"));
             assertTrue(listedTasks.stream().anyMatch(item -> task.id().equals(String.valueOf(item.get("id")))));
@@ -166,6 +191,7 @@ class TaskHandlerStabilitySmokeHttpTest {
         private final int port;
 
         private HttpHarness(Path dbPath) throws IOException {
+            System.setProperty("agentcloud.controlgraph.sync_enter", "true");
             this.db = new DatabaseManager(dbPath);
             this.service = service(db);
             this.server = HttpServer.create(new InetSocketAddress(0), 0);
@@ -320,7 +346,12 @@ class TaskHandlerStabilitySmokeHttpTest {
                         "codex",
                         "scheduler",
                         task.waitingReason(),
-                        task.metadata()
+                        Map.of(
+                            "decision_rationale", "manual continue 后保持当前执行路径",
+                            "progress_detail", "0/0 done, 1 open",
+                            "progress_summary", "0/1 subgoals done",
+                            "next_step", "继续推进"
+                        )
                     );
                     taskDao.updateState(updated);
                     return updated;
