@@ -128,6 +128,28 @@ public class Main {
 
         // Phase 1 新增: LLM Adapter Layer
         LlmConfig llmConfig = new LlmConfig();
+        if (harnessConfig.isPresent()) {
+            com.agentcloud.agent.providers.HarnessConfig.HarnessDefaults defaults = harnessConfig.get().defaults();
+            String configuredBaseUrl = defaults != null ? defaults.providerBaseUrl() : null;
+            String configuredApiKey = defaults != null ? defaults.providerBearerToken() : null;
+            if (configuredBaseUrl == null || configuredBaseUrl.isBlank()) {
+                configuredBaseUrl = llmConfig.baseUrl();
+            }
+            String mergedApiKey = (configuredApiKey == null || configuredApiKey.isBlank()) ? llmConfig.apiKey() : configuredApiKey;
+            String mergedBaseUrl = (configuredBaseUrl == null || configuredBaseUrl.isBlank()) ? llmConfig.baseUrl() : configuredBaseUrl;
+            llmConfig = new LlmConfig(
+                mergedApiKey,
+                mergedBaseUrl,
+                llmConfig.model(),
+                llmConfig.reviewModel(),
+                llmConfig.wireApi(),
+                llmConfig.requestTimeoutSeconds(),
+                llmConfig.maxRetries(),
+                llmConfig.maxTokens()
+            );
+            log.info("LLM config merged from harness-config.yml baseUrl={} apiKeyConfigured={}",
+                llmConfig.baseUrl(), llmConfig.available());
+        }
 
         // Phase 2: Auto-discover local environment and write harness-state.json
         try {
