@@ -1189,6 +1189,9 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static long configurableLong(String key, long defaultValue) {
         String raw = System.getProperty(key);
         if (raw == null || raw.isBlank()) {
+            raw = System.getenv(key.toUpperCase(Locale.ROOT).replace('.', '_'));
+        }
+        if (raw == null || raw.isBlank()) {
             return defaultValue;
         }
         try {
@@ -1360,26 +1363,34 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
         private JsonNode nextEnvelope(long deadlineAtMs) throws IOException, InterruptedException {
             while (System.currentTimeMillis() < deadlineAtMs) {
-                if (!reader.ready()) {
-                    TimeUnit.MILLISECONDS.sleep(10L);
-                    continue;
-                }
-                String line = reader.readLine();
-                if (line == null) {
+                if (Thread.interrupted()) {
                     return null;
                 }
-                String trimmed = line.trim();
-                if (trimmed.isBlank()) {
-                    continue;
-                }
-                markActivity();
-                writeEvent("provider_recv", trimmed);
-                try {
-                    return MAPPER.readTree(trimmed);
-                } catch (Exception ignored) {
-                    if (!isCodexInternalLog(trimmed)) {
-                        appendOutput(trimmed);
+                if (reader.ready()) {
+                    String line = reader.readLine();
+                    if (line != null) {
+                        String trimmed = line.trim();
+                        if (!trimmed.isBlank()) {
+                            markActivity();
+                            writeEvent("provider_recv", trimmed);
+                            try {
+                                return MAPPER.readTree(trimmed);
+                            } catch (Exception ignored) {
+                                if (!isCodexInternalLog(trimmed)) {
+                                    appendOutput(trimmed);
+                                }
+                            }
+                        }
+                    } else {
+                        return null;
                     }
+                } else if (System.currentTimeMillis() >= deadlineAtMs) {
+                    return null;
+                }
+                TimeUnit.MILLISECONDS.sleep(10L);
+                markActivity();
+                if (Thread.interrupted()) {
+                    return null;
                 }
             }
             return null;

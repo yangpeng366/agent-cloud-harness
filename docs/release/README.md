@@ -123,6 +123,14 @@
 - 要实际 replay 一轮首发流程：`../GITHUB_FIRST_RELEASE_EXECUTION_GUIDE.md`
 - 要看最新一轮本地公开前证据：`../GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md`
 
+## 公开边界提示
+
+当前仓库更适合作为**本地/受控环境的可公开实验验证原型**；对外贡献前请先阅读根目录 [SECURITY.md](../../SECURITY.md)，不要把未受管服务直接暴露到公网。
+
+适合参与的范围：本地实验验证、文档补强、控制面原型探索、小颗粒 issue/PR；不适合直接用于生产多租户、公开 SaaS 或需要严格 SLA 的在线服务。
+
+在认领 `GFI-09` / `GFI-10` 前，请先确认该候选是否仍在当前公开边界内，不把内部实验假设直接带到候选描述里。
+
 ## 外部协作候选
 
 - 外部贡献者可认领条目见仓库根 `../../CONTRIBUTING.md` 的「Good First Issues / Help Wanted 候选」节（good first issue / help wanted / feature 三档），每条带范围、验收标准与上下文入口，均来源于 `docs/NEXT_EVOLUTION_PLAN.md` 与 `docs/CURRENT_CAPABILITY_GAP_ASSESSMENT.md` 的真实 backlog。
