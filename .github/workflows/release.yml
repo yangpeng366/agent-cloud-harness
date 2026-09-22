@@ -1,0 +1,75 @@
+# Release pipeline — DRAFT for maintainer review.
+#
+# Adapted from the EchoBird desktop app release.yml pattern (tag-triggered,
+# least-privilege, draft-release-then-publish). Inert until a `v*` tag is pushed,
+# so it does NOT affect everyday push/PR CI (that stays in ci.yml).
+#
+# Why this exists:
+#   The repo currently has only ci.yml (build + test on push/PR) and NO
+#   automated release path — all releases so far are local manual dry-run +
+#   manual commit (see docs/GITHUB_FIRST_RELEASE_* and
+#   docs/GITHUB_RELEASE_CHECKLIST.md). This closes that "last-mile automation"
+#   gap while keeping the project's manual-review release culture.
+#
+# Behavior:
+#   1. Push a tag matching v* (e.g. v0.1.0).
+#   2. CI builds the shaded fat jar via Maven (tests run first, same as ci.yml).
+#   3. Creates a DRAFT GitHub Release with the jar attached +
+#      auto-generated release notes.
+#   4. Maintainer reviews the release notes and clicks "Publish".
+#
+# Why draft:true — preserves manual-review discipline; CI automates only the
+# build + asset staging, the human still owns the publish decision.
+#
+# Reference: benchmark analysis in
+#   02_项目推进/echobird-release-pipeline-benchmark-2026-08-12.md
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build shaded jar (tests run first)
+        # package phase runs surefire tests then maven-shade-plugin, mirroring
+        # ci.yml's `mvn -B test` gate so a failing test blocks the release.
+        run: mvn -B clean package
+
+      - name: Resolve version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage release asset
+        # maven-shade replaces the main artifact; the pre-shade original is
+        # written as original-*.jar and must be excluded from the upload.
+        run: |
+          mkdir -p staging
+          find target -maxdepth 1 -name 'agent-cloud-harness-*.jar' ! -name 'original-*' \
+            -exec cp {} "staging/agent-cloud-harness-${{ steps.ver.outputs.version }}.jar" \;
+          ls -lh staging/
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Agent Cloud Harness ${{ github.ref_name }}
+          generate_release_notes: true
+          files: staging/agent-cloud-harness-*.jar
