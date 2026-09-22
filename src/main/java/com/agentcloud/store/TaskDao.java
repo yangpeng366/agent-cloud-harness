@@ -57,4 +57,14 @@ public interface TaskDao extends SqlObject {
         return updateState(t.id(), t.status(), Instant.now(), t.completedAt(), t.summary(), t.nextStep(),
                            t.assignedWorker(), t.controlNode(), t.waitingReason(), JsonMapper.toJson(t.metadata()));
     }
+
+    @SqlQuery("SELECT * FROM tasks WHERE json_extract(metadata_json, '$.goal_id') = :goalId ORDER BY updated_at DESC")
+    List<Task> listByGoalId(@Bind("goalId") String goalId);
+
+    @SqlUpdate("UPDATE tasks SET metadata_json = :metadata, updated_at = :updatedAt WHERE id = :id")
+    int updateMetadata(@Bind("id") String id, @Bind("metadata") String metadata, @Bind("updatedAt") Instant updatedAt);
+
+    default int updateMetadata(Task t) {
+        return updateMetadata(t.id(), JsonMapper.toJson(t.metadata()), Instant.now());
+    }
 }

@@ -8,7 +8,24 @@ param(
     [int]$TaskPollIntervalSec = 5,
     [int]$TaskPollTimeoutSec = 240,
     [int]$MinimumTerminalRuns = 1,
-    [int]$MinimumEvaluatedRuns = 1
+    [int]$MinimumEvaluatedRuns = 1,
+    [ValidateSet('none', 'openeyes_structured')]
+    [ValidateSet('none', 'openeyes_structured', 'screenshot_diff')]
+    [string]$UiAssertionMode = 'none',
+    [string]$UiAssertionScriptPath = (Join-Path $PSScriptRoot 'Run-OpenEyesUiAssertion.ps1'),
+    [string]$UiAssertionAppTitleContains = '',
+    [string[]]$UiAssertionExpectedElementNameContains = @(),
+    [string[]]$UiAssertionExpectedElementAutomationId = @(),
+    [string[]]$UiAssertionExpectedElementControlType = @(),
+    [int]$UiAssertionMinimumElementCount = 1,
+    [int]$UiAssertionWindowIndex = 0,
+    [int]$UiAssertionMaxElements = 200,
+    [string]$UiAssertionOutputDirectory = '.tmp\openeyes-ui-assertion\baseline',
+    [string]$UiAssertionBaselineDirectory = '.tmp\openeyes-ui-assertion\baseline-png',
+    [string]$UiAssertionCurrentDirectory = '.tmp\openeyes-ui-assertion\current-png',
+    [switch]$UiAssertionAllowDisabled,
+    [switch]$UiAssertionAllowInvisible,
+    [switch]$UiAssertionSkipCapture
 )
 
 $ErrorActionPreference = 'Stop'
@@ -88,6 +105,51 @@ function Is-TerminalTaskState([string]$State) {
     }
 }
 
+function Invoke-OpenEyesUiAssertion {
+    param([string]$TaskId)
+    $outputDirectory = if ([System.IO.Path]::IsPathRooted($UiAssertionOutputDirectory)) { $UiAssertionOutputDirectory } else { Join-Path (Get-Location).Path $UiAssertionOutputDirectory }
+    New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+    $outputPath = Join-Path $outputDirectory ("{0}.json" -f $TaskId)
+    $assertionParams = @{
+        AppTitleContains    = $UiAssertionAppTitleContains
+        WindowIndex         = $UiAssertionWindowIndex
+        MaxElements         = $UiAssertionMaxElements
+        MinimumElementCount = $UiAssertionMinimumElementCount
+        OutputJsonPath      = $outputPath
+    }
+    if ($UiAssertionExpectedElementNameContains.Count -gt 0) { $assertionParams.ExpectedElementNameContains = $UiAssertionExpectedElementNameContains }
+    if ($UiAssertionExpectedElementAutomationId.Count -gt 0) { $assertionParams.ExpectedElementAutomationId = $UiAssertionExpectedElementAutomationId }
+    if ($UiAssertionExpectedElementControlType.Count -gt 0) { $assertionParams.ExpectedElementControlType = $UiAssertionExpectedElementControlType }
+    if ($UiAssertionAllowDisabled) { $assertionParams.AllowDisabled = $true }
+    if ($UiAssertionAllowInvisible) { $assertionParams.AllowInvisible = $true }
+    if ($UiAssertionSkipCapture) { $assertionParams.SkipCapture = $true }
+    & $UiAssertionScriptPath @assertionParams | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "OpenEyes structured UI assertion failed task=$TaskId report=$outputPath exit=$LASTEXITCODE" }
+    return (Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json)
+    }
+
+function Invoke-ScreenshotDiffAssertion {
+    param([string]$TaskId)
+    . (Join-Path $PSScriptRoot 'lib/BaselineScreenshotStub.ps1')
+    . (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')
+    . (Join-Path $PSScriptRoot 'lib/BaselinePng.ps1')
+    $baselinePath = Resolve-BaselinePngPath -BaselineDirectory $UiAssertionBaselineDirectory -TaskId $TaskId
+    if (-not $baselinePath) {
+        return New-ScreenshotDiffStubReport -TaskId $TaskId -BaselineDirectory $UiAssertionBaselineDirectory -BaselinePath $null
+    }
+    $currentPath = Join-Path $UiAssertionCurrentDirectory "$TaskId.png"
+    if (-not (Test-Path -LiteralPath $currentPath)) {
+        $stub = New-ScreenshotDiffStubReport -TaskId $TaskId -BaselineDirectory $UiAssertionBaselineDirectory -BaselinePath $baselinePath
+        $stub.note = 'Phase 2.5 pending: baseline PNG present but current PNG not captured yet'
+        return $stub
+    }
+    $compare = Compare-ScreenshotSimilarity -BaselinePath $baselinePath -CurrentPath $currentPath
+    if ($compare.error) {
+        return New-ScreenshotDiffComparisonReport -TaskId $TaskId -BaselinePath $baselinePath -CurrentPath $currentPath -Error $compare.error
+    }
+    return New-ScreenshotDiffComparisonReport -TaskId $TaskId -BaselinePath $baselinePath -CurrentPath $currentPath -Similarity $compare.similarity -Matched $compare.matched
+}
+
 function Wait-TaskTerminal {
     param([string]$TaskId)
 
@@ -133,6 +195,17 @@ if ([string]::IsNullOrWhiteSpace($ExperimentName)) {
 
 $resolvedReportPath = Resolve-OutputPath $ReportPath
 New-Item -ItemType Directory -Force -Path ([System.IO.Path]::GetDirectoryName($resolvedReportPath)) | Out-Null
+
+if ($UiAssertionMode -eq 'openeyes_structured') {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($UiAssertionAppTitleContains)) 'UiAssertionMode=openeyes_structured requires UiAssertionAppTitleContains'
+    Assert-True (Test-Path -LiteralPath $UiAssertionScriptPath) "OpenEyes assertion script not found: $UiAssertionScriptPath"
+}
+if ($UiAssertionMode -eq 'screenshot_diff') {
+    Assert-True (-not [string]::IsNullOrWhiteSpace($UiAssertionBaselineDirectory)) 'UiAssertionMode=screenshot_diff requires UiAssertionBaselineDirectory'
+    Assert-True (Test-Path -LiteralPath $UiAssertionBaselineDirectory) "Screenshot baseline directory not found: $UiAssertionBaselineDirectory"
+    Assert-True (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')) 'lib/ScreenshotCompare.ps1 not found'
+    . (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')
+}
 
 $health = Invoke-AgentApi -Method GET -Path '/api/v1/health'
 Assert-True ($health.status -eq 'up') "harness health check failed at $BaseUrl"
@@ -191,6 +264,7 @@ $tasks = @($batch.tasks)
 $terminalRunCount = 0
 $evaluatedRunCount = 0
 $taskReports = @()
+$uiAssertionReports = @()
 
 foreach ($task in $tasks) {
     $taskId = [string]$task.id
@@ -285,6 +359,15 @@ foreach ($task in $tasks) {
         judgment_trace_observed = $judgmentTrace.success
         tool_trace_observed = $toolTrace.success
         harness_trace_observed = $harnessTrace.success
+        ui_assertion = if ($UiAssertionMode -eq 'openeyes_structured') {
+            $assertion = Invoke-OpenEyesUiAssertion -TaskId $taskId
+            $uiAssertionReports += $assertion
+            $assertion
+        } elseif ($UiAssertionMode -eq 'screenshot_diff') {
+            $assertion = Invoke-ScreenshotDiffAssertion -TaskId $taskId
+            $uiAssertionReports += $assertion
+            $assertion
+        } else { $null }
     }
 }
 
@@ -300,6 +383,8 @@ $report = [ordered]@{
     case_keys = $CaseKeys
     modes = $Modes
     expected_run_count = $expectedRunCount
+    ui_assertion_mode = $UiAssertionMode
+    ui_assertion_reports = $uiAssertionReports
     created_run_count = $batch.created_run_count
     summary_total_runs = $summary.total_runs
     task_poll_interval_sec = $TaskPollIntervalSec
@@ -314,6 +399,7 @@ $report = [ordered]@{
         summary_expected_run_count = ($summary.total_runs -eq $expectedRunCount)
         minimum_terminal_runs_met = ($terminalRunCount -ge $MinimumTerminalRuns)
         minimum_evaluated_runs_met = ($evaluatedRunCount -ge $MinimumEvaluatedRuns)
+        ui_assertion_passed = ($UiAssertionMode -eq 'none' -or ($uiAssertionReports.Count -eq $expectedRunCount -and @($uiAssertionReports | Where-Object { $_.status -ne 'PASS' }).Count -eq 0))
     }
     terminal_run_count = $terminalRunCount
     evaluated_run_count = $evaluatedRunCount

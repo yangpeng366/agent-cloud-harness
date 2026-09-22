@@ -18,6 +18,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Comparator;
@@ -172,6 +175,22 @@ class TaskHandler implements HttpHandler {
                     int limit = parseLimit(params.get("limit"));
                     var trace = svc.listToolInvocations(id, limit);
                     NioHttpServer.sendJson(ex, 200, ApiResponse.ok(trace));
+                } else if (path.endsWith("/ui_assertion")) {
+                    Map<String, String> params = parseQuery(query);
+                    String dir = params.getOrDefault("dir", "baseline");
+                    if (!dir.matches("[a-zA-Z0-9_-]+")) {
+                        NioHttpServer.sendJson(ex, 400, ApiResponse.error("bad_request", "invalid assertion dir"));
+                        return;
+                    }
+                    Path reportPath = Paths.get(".tmp", "openeyes-ui-assertion", dir, id + ".json")
+                            .toAbsolutePath().normalize();
+                    if (!reportPath.startsWith(Paths.get(".tmp", "openeyes-ui-assertion").toAbsolutePath().normalize())
+                            || !Files.isRegularFile(reportPath)) {
+                        NioHttpServer.sendNotFound(ex);
+                        return;
+                    }
+                    String body = Files.readString(reportPath, StandardCharsets.UTF_8);
+                    NioHttpServer.sendJson(ex, 200, ApiResponse.ok(mapper.readValue(body, Object.class)));
                 } else if (path.endsWith("/recovery_jobs")) {
                     Map<String, String> params = parseQuery(query);
                     int limit = parseLimit(params.get("limit"));

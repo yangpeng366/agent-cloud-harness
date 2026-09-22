@@ -4,13 +4,8 @@
 
 Agent Cloud Harness 是一个**单进程、零外部依赖**的本地/单机控制平面。它负责会话与任务管理、Worker 自动路由、暂停/恢复/移交时的续跑上下文生成，以及过程数据的本地持久化。当前版本已内置 **Web Console** 和 **Dialogue** 前端，可直接在浏览器中交互式地创建任务、观察执行轨迹、查看路由决策与工具调用链。
 
-**当前版本**：`0.1.0-SNAPSHOT`  
-
-## 🧭 公开成熟度
-- 当前版本适合：本地单机实验验证、小功能贡献、控制面原型探索。
-- 暂不建议用于生产多租户、公开 SaaS 或需要严格 SLA 的在线服务。
-- 外部贡献请优先从 `CONTRIBUTING.md` 的 `Good First Issues / Help Wanted` 候选条入手。
-
+**当前版本**：`0.1.0-SNAPSHOT`（trunk 开发线）  
+**首个正式版本**：`0.1.0`（2026-07-27 已发布）  
 **定位**：本地原型与单机 harness，适合快速验证多 Agent 编排、工具链执行、记忆巩固与实验评估流程。
 
 ---
@@ -238,6 +233,16 @@ agent-cloud-harness/
 | 看最近进展和固定规则 | [`STATE.md`](STATE.md)、[`DECISIONS.md`](DECISIONS.md) | 一个看短进度，一个看稳定取舍 |
 
 根目录文档职责固定如下：
+
+贡献者可以先从这些仓库脚本开始，避免手动切 JDK / 跑错测试口径：
+
+- `.\scripts\Use-Java21.ps1`：在 Windows 多 JDK 环境里切到 Java 21
+- `.\scripts\Test-WithJava21.ps1`：在 Java 21 下跑测试与文档结构自验
+- `.\scripts\Run-HarnessWithJava21.ps1`：用正确 JDK 启动服务
+
+对外协作与提交 PR 前，建议先看 [`CONTRIBUTING.md`](CONTRIBUTING.md)、 [`docs/README.md`](docs/README.md) 和 [`CHANGELOG.md`](CHANGELOG.md)，保持对外叙事与仓库现状一致。
+如果 provider CLI 登录、交互、排障或 headless 调用不顺，先读 [`docs/TROUBLESHOOT.md`](docs/TROUBLESHOOT.md) 的 provider / Windows / `codex` worker 相关小节，再复现最小失败路径。
+
 
 - `README.md`：对外概览、能力说明、快速开始。
 - `STARTUP_GUIDE.md`：构建、启动、运行验证、启动期排障。

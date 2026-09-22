@@ -55,4 +55,16 @@ public interface ToolInvocationDao extends SqlObject {
     List<ToolInvocationRecord> listBySessionAndTask(@Bind("sessionId") String sessionId,
                                                     @Bind("taskId") String taskId,
                                                     @Bind("limit") int limit);
+
+    @SqlQuery("SELECT COUNT(*) FROM tool_invocations WHERE tool_name = :toolName")
+    long countByTool(@Bind("toolName") String toolName);
+
+    @SqlQuery("SELECT COUNT(*) FROM tool_invocations WHERE tool_name = :toolName AND success = 1")
+    long countByToolAndSuccess(@Bind("toolName") String toolName);
+
+    @SqlQuery("SELECT elapsed_ms FROM tool_invocations WHERE tool_name = :toolName AND elapsed_ms IS NOT NULL ORDER BY elapsed_ms ASC")
+    List<Integer> elapsedMillisByTool(@Bind("toolName") String toolName);
+
+    @SqlQuery("SELECT * FROM tool_invocations WHERE tool_name = :toolName ORDER BY created_at DESC LIMIT :limit")
+    List<ToolInvocationRecord> listRecentByTool(@Bind("toolName") String toolName, @Bind("limit") int limit);
 }

@@ -540,6 +540,24 @@ class RuntimeFactSetAssemblerTest {
         }
 
         @Override
+        public long countByTool(String toolName) { return records.size(); }
+
+        @Override
+        public long countByToolAndSuccess(String toolName) {
+            return records.stream().filter(com.agentcloud.model.ToolInvocationRecord::success).count();
+        }
+
+        @Override
+        public List<Integer> elapsedMillisByTool(String toolName) {
+            return records.stream().map(com.agentcloud.model.ToolInvocationRecord::elapsedMs).filter(java.util.Objects::nonNull).toList();
+        }
+
+        @Override
+        public List<com.agentcloud.model.ToolInvocationRecord> listRecentByTool(String toolName, int limit) {
+            return records.stream().limit(limit).toList();
+        }
+
+        @Override
         public org.jdbi.v3.core.Handle getHandle() {
             throw new UnsupportedOperationException();
         }

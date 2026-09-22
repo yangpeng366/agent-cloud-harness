@@ -16,7 +16,8 @@ import java.util.Set;
  * 宿主机工具可用性探测。
  */
 public final class HostToolAvailability {
-    private static final List<String> COMMAND_TOOL_CAPABILITIES = List.of("git", "shell", "powershell", "cmd");
+    private static final List<String> COMMAND_TOOL_CAPABILITIES = List.of(
+        "git", "shell", "powershell", "cmd", "openeyes");
     private static final Set<String> DEFAULT_WINDOWS_EXTENSIONS = Set.of(".exe", ".cmd", ".bat", ".com");
 
     private HostToolAvailability() {
@@ -45,6 +46,9 @@ public final class HostToolAvailability {
                 && (isToolAvailable("powershell.exe") || isToolAvailable("powershell"));
             case "cmd" -> isWindowsHost()
                 && (isToolAvailable("cmd.exe") || isToolAvailable("cmd"));
+            case "openeyes" -> isToolAvailable("eyes")
+                || isToolAvailable("eyes.exe")
+                || isToolAvailable("eyes.cmd");
             default -> true;
         };
     }

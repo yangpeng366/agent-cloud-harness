@@ -18,14 +18,29 @@ public record HarnessState(
     Map<String, CcxChannelStatus> ccxChannels,
     Map<String, WorkerAvailability> workers,
     Map<String, ProviderAvailability> providers,
-    int workerReadyCount
+    int workerReadyCount,
+    EyesMcpStatus eyesMcp
 ) {
     public HarnessState {
         if (ccxModels == null) ccxModels = List.of();
         if (ccxChannels == null) ccxChannels = Map.of();
         if (workers == null) workers = Map.of();
         if (providers == null) providers = Map.of();
+        if (eyesMcp == null) eyesMcp = EyesMcpStatus.disabled();
         if (lastUpdated == null) lastUpdated = Instant.now();
+    }
+
+    public HarnessState(
+        Instant lastUpdated,
+        boolean ccxReachable,
+        List<String> ccxModels,
+        Map<String, CcxChannelStatus> ccxChannels,
+        Map<String, WorkerAvailability> workers,
+        Map<String, ProviderAvailability> providers,
+        int workerReadyCount
+    ) {
+        this(lastUpdated, ccxReachable, ccxModels, ccxChannels, workers, providers,
+            workerReadyCount, EyesMcpStatus.disabled());
     }
 
     public record CcxChannelStatus(String name, String status, int priority) {}
@@ -33,4 +48,20 @@ public record HarnessState(
     public record WorkerAvailability(String workerId, boolean cliAvailable, String lastCheck) {}
 
     public record ProviderAvailability(String providerId, boolean available, boolean userEnabled) {}
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record EyesMcpStatus(
+        boolean available,
+        String status,
+        String serverName,
+        String serverVersion,
+        int toolCount,
+        long durationMs,
+        String error,
+        Instant checkedAt
+    ) {
+        public static EyesMcpStatus disabled() {
+            return new EyesMcpStatus(false, "disabled", null, null, 0, 0, null, Instant.now());
+        }
+    }
 }

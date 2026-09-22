@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class HarnessStateWriterTest {
@@ -23,6 +24,14 @@ class HarnessStateWriterTest {
         assertNotNull(state);
         assertFalse(state.ccxReachable());
         assertTrue(state.workers().containsKey("codex"));
+    }
+
+    @Test
+    void discoverKeysEyesMcpDisabledByDefault() {
+        HarnessState state = HarnessStateWriter.discover(null);
+        assertNotNull(state.eyesMcp());
+        assertFalse(state.eyesMcp().available());
+        assertEquals("disabled", state.eyesMcp().status());
     }
 
     @Test

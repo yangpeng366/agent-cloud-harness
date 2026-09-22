@@ -63,3 +63,6 @@ pom 仍保留 `0.1.0-SNAPSHOT` 作为 trunk 开发版本。Good First Issues 阻
 ### 运行时要求
 - Java 21（启用 `--enable-preview`）、Maven 3.9+、对 `${user.home}/.agentcloud/` 写权限。
 - 默认监听 `8080`。
+
+
+

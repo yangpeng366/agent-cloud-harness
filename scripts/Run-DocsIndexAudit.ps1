@@ -23,7 +23,12 @@ function Normalize-RelativePath {
         [string]$TargetPath
     )
     $baseFullPath = (Resolve-Path -LiteralPath $BasePath).Path
-    $targetFullPath = (Resolve-Path -LiteralPath $TargetPath).Path
+    if (Test-Path -LiteralPath $TargetPath) {
+        $targetFullPath = (Resolve-Path -LiteralPath $TargetPath).Path
+    } else {
+        # path no longer exists (e.g. README.md deleted to break topic detection)
+        return $null
+    }
     $baseUri = New-Object System.Uri(($baseFullPath.TrimEnd('\') + '\'))
     $targetUri = New-Object System.Uri($targetFullPath)
     $relativeUri = $baseUri.MakeRelativeUri($targetUri)
@@ -520,6 +525,7 @@ foreach ($topicDir in $topicDirs) {
     $topicName = $topicDir.Name
     $topicReadmePath = Join-Path $topicPath "README.md"
     $topicReadmeRelative = Normalize-RelativePath -BasePath $docsRootPath -TargetPath $topicReadmePath
+    if ($null -eq $topicReadmeRelative) { continue }
     $hasReadme = Test-Path -LiteralPath $topicReadmePath
     $topicReadmeContent = if ($hasReadme) { Read-Utf8Text -Path $topicReadmePath } else { "" }
 

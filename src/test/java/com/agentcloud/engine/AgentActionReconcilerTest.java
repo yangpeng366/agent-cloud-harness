@@ -405,6 +405,18 @@ class AgentActionReconcilerTest {
         }
 
         @Override
+        public List<Task> listByGoalId(String goalId) {
+            return tasks.stream()
+                .filter(task -> task.metadata() != null && goalId.equals(task.metadata().get("goal_id")))
+                .toList();
+        }
+
+        @Override
+        public int updateMetadata(String id, String metadata, Instant updatedAt) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public Handle getHandle() {
             throw new UnsupportedOperationException();
         }

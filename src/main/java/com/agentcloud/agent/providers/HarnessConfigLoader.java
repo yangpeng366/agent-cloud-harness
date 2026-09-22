@@ -73,11 +73,12 @@ public final class HarnessConfigLoader {
     @SuppressWarnings("unchecked")
     private static HarnessConfig fromMap(Map<String, Object> root) {
         if (root == null) {
-            return new HarnessConfig(null, null, null, null);
+            return new HarnessConfig(null, null, null, null, null);
         }
         Map<String, Object> harness = (Map<String, Object>) root.getOrDefault("harness", Map.of());
         Map<String, Object> defaultsMap = (Map<String, Object>) harness.getOrDefault("defaults", Map.of());
         Map<String, Object> ccxMap = (Map<String, Object>) harness.getOrDefault("ccx", Map.of());
+        Map<String, Object> eyesMcpMap = (Map<String, Object>) harness.getOrDefault("eyes_mcp", Map.of());
         List<Object> workersList = (List<Object>) harness.getOrDefault("workers", List.of());
         @SuppressWarnings("unchecked")
         Map<String, Object> workspaceAliasesMap = (Map<String, Object>) harness.getOrDefault("workspace-aliases", Map.of());
@@ -87,6 +88,17 @@ public final class HarnessConfigLoader {
                 workspaceAliases.put(entry.getKey(), entry.getValue().toString());
             }
         }
+
+        Map<String, Object> featureFlagsMap =
+            (Map<String, Object>) root.getOrDefault("feature_flags", Map.of());
+        Map<String, Object> jevFlagsMap =
+            (Map<String, Object>) featureFlagsMap.getOrDefault("jev", Map.of());
+        HarnessConfig.FeatureFlags featureFlags = new HarnessConfig.FeatureFlags(
+            booleanFromMap(jevFlagsMap, "context_scoring"),
+            booleanFromMap(jevFlagsMap, "patrol_dispatcher"),
+            booleanFromMap(jevFlagsMap, "patrol_postprocess"),
+            booleanFromMap(jevFlagsMap, "tool_recall_filter")
+        );
 
         HarnessConfig.HarnessDefaults defaults = new HarnessConfig.HarnessDefaults(
             stringFromMap(defaultsMap, "provider_model_provider"),
@@ -102,6 +114,14 @@ public final class HarnessConfigLoader {
             booleanFromMap(ccxMap, "channel_sync_on_startup")
         );
 
+        HarnessConfig.HarnessEyesMcpConfig eyesMcp = new HarnessConfig.HarnessEyesMcpConfig(
+            stringFromMap(eyesMcpMap, "command"),
+            booleanFromMap(eyesMcpMap, "health_check_on_startup"),
+            integerFromMap(eyesMcpMap, "startup_timeout_seconds"),
+            booleanFromMap(eyesMcpMap, "enabled"),
+            booleanFromMapOptional(eyesMcpMap, "register_as_tool")
+        );
+
         List<WorkerLaneConfig> workers = new ArrayList<>();
         for (Object item : workersList) {
             if (item instanceof Map) {
@@ -109,8 +129,17 @@ public final class HarnessConfigLoader {
             }
         }
 
-        return new HarnessConfig(defaults, ccx, List.copyOf(workers), Map.copyOf(workspaceAliases));
-    }
+        List<Object> providersList = (List<Object>) harness.getOrDefault("providers", List.of());
+        List<ProviderProtocolConfig> providers = new ArrayList<>();
+        for (Object item : providersList) {
+            if (item instanceof Map) {
+                providers.add(providerProtocolFromMap((Map<String, Object>) item));
+            }
+        }
+
+        return new HarnessConfig(defaults, ccx, List.copyOf(workers),
+            List.copyOf(providers), Map.copyOf(workspaceAliases), featureFlags, eyesMcp);
+}
 
     @SuppressWarnings("unchecked")
     private static WorkerLaneConfig workerLaneFromMap(Map<String, Object> map) {
@@ -160,6 +189,42 @@ public final class HarnessConfigLoader {
         );
     }
 
+    @SuppressWarnings("unchecked")
+    private static ProviderProtocolConfig providerProtocolFromMap(Map<String, Object> map) {
+        String id = stringFromMap(map, "id");
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("provider id required in providers[] section");
+        }
+
+        List<String> command = new ArrayList<>();
+        Object cmdObj = map.get("command");
+        if (cmdObj instanceof List) {
+            for (Object c : (List<?>) cmdObj) {
+                if (c != null) command.add(c.toString());
+            }
+        }
+
+        String outputParser = stringFromMap(map, "output_parser");
+        String launchMode = stringFromMap(map, "launch_mode");
+        String binaryOverride = stringFromMap(map, "binary_override");
+        boolean prependBinary = booleanFromMap(map, "prepend_configured_binary");
+
+        Map<String, String> environment = new LinkedHashMap<>();
+        Object envObj = map.get("environment");
+        if (envObj instanceof Map) {
+            for (var entry : ((Map<String, Object>) envObj).entrySet()) {
+                if (entry.getValue() != null) {
+                    environment.put(entry.getKey(), entry.getValue().toString());
+                }
+            }
+        }
+
+        return new ProviderProtocolConfig(
+            id, List.copyOf(command), outputParser, launchMode,
+            Map.copyOf(environment), binaryOverride, prependBinary
+        );
+    }
+
     static List<Path> defaultSearchPaths() {
         List<Path> paths = new ArrayList<>();
         paths.add(Paths.get("harness-config.yml"));
@@ -194,6 +259,14 @@ public final class HarnessConfigLoader {
         if (map == null || key == null) return false;
         Object value = map.get(key);
         if (value == null) return false;
+        if (value instanceof Boolean) return (Boolean) value;
+        return Boolean.parseBoolean(value.toString());
+    }
+
+    private static Boolean booleanFromMapOptional(Map<String, Object> map, String key) {
+        if (map == null || key == null) return null;
+        Object value = map.get(key);
+        if (value == null) return null;
         if (value instanceof Boolean) return (Boolean) value;
         return Boolean.parseBoolean(value.toString());
     }

@@ -47,6 +47,7 @@ public class TaskService {
     private final AgentRunService agentRunService;
     private final TaskRecoveryJobDao recoveryJobDao;
     private final ArtifactDao artifactDao;
+    private final GoalService goalService;
     private final RuntimeFactSetAssembler runtimeFactSetAssembler;
     private final RuntimeCognitionSurfaceAssembler runtimeCognitionSurfaceAssembler;
     private final java.util.concurrent.ConcurrentHashMap<String, ReentrantLock> enterLocks = new java.util.concurrent.ConcurrentHashMap<>();
@@ -131,6 +132,24 @@ public class TaskService {
                        AgentRunService agentRunService,
                        TaskRecoveryJobDao recoveryJobDao,
                        ArtifactDao artifactDao) {
+        this(taskDao, sessionDao, eventDao, packetDao, router, packetBuilder, controlGraph, judgmentService,
+            runtimeContextBuilder, consolidationService, learningMemoryService, toolInvocationDao,
+            sessionMessageDao, experimentRunService, agentRunService, recoveryJobDao, artifactDao, null);
+    }
+
+    public TaskService(TaskDao taskDao, SessionDao sessionDao, EventDao eventDao, ResumePacketDao packetDao,
+                       WorkerRouter router, PacketBuilder packetBuilder, ControlNodeGraph controlGraph,
+                       RuntimeJudgmentService judgmentService,
+                       TaskRuntimeContextBuilder runtimeContextBuilder,
+                       ConsolidationService consolidationService,
+                       LearningMemoryService learningMemoryService,
+                       ToolInvocationDao toolInvocationDao,
+                       SessionMessageDao sessionMessageDao,
+                       ExperimentRunService experimentRunService,
+                       AgentRunService agentRunService,
+                       TaskRecoveryJobDao recoveryJobDao,
+                       ArtifactDao artifactDao,
+                       GoalService goalService) {
         this.taskDao = taskDao;
         this.sessionDao = sessionDao;
         this.eventDao = eventDao;
@@ -148,6 +167,7 @@ public class TaskService {
         this.agentRunService = agentRunService;
         this.recoveryJobDao = recoveryJobDao;
         this.artifactDao = artifactDao;
+        this.goalService = goalService;
         this.runtimeFactSetAssembler = new RuntimeFactSetAssembler(runtimeContextBuilder, toolInvocationDao, router);
         this.runtimeCognitionSurfaceAssembler = new RuntimeCognitionSurfaceAssembler();
     }
@@ -224,6 +244,13 @@ public class TaskService {
         }
         eventDao.insert(new Event(IdGenerator.newId("evt"), sessionId, taskId, Instant.now(),
             "task_created", "system", null, "Task created: " + req.title(), eventMetadata));
+
+        if (goalService != null) {
+            String linkedGoalId = stringValue(meta.get("goal_id"));
+            if (linkedGoalId != null) {
+                goalService.noteTaskAttached(linkedGoalId, taskId);
+            }
+        }
 
         Task result = t;
         if (autoStart) {
@@ -2786,6 +2813,9 @@ public class TaskService {
         }
         recordTaskStateEvent(previousTask, currentTask, reason, extraMetadata);
         recordTaskStateMessage(previousTask, currentTask, reason, extraMetadata);
+        if (goalService != null) {
+            goalService.onTaskTransition(previousTask, currentTask, reason);
+        }
     }
 
     private void recordTaskStateMessage(Task previousTask, Task currentTask, String reason, Map<String, Object> extraMetadata) {

@@ -1,63 +1,47 @@
-# DECISIONS 稳定设计决策
+# DECISIONS
 
-> 本文件只放跨多主题、不轻易回退的稳定决策。短期的探索性选择仍在 docs/<topic>/PROGRESS.md 与代码注释里。
+## Jev Runtime
 
-## D01 — 文档结构合同
+- **Jev context scoring 非侵入装配**：Main 只在 `feature_flags.jev.context_scoring=true` 时包装 `PromptBasedJudgmentService`；关闭时不实例化 scorer、不访问 HTTP。缺 key、超时、HTTP 错误和解析异常一律 fallback 到原 judgment。命中结果必须带 `runtime_facts.jev_prefilter_decision` 进入 `/judgment_trace`，避免只省 token 却失去可解释性。
 
-仓库采用 docs/<topic>/ 工作区划分（continuity / provider / dialogue / evaluation / release / meta），活跃主题额外带 PROGRESS.md；uns/、	asks/、rchive/ 按需启用。详细规则见 docs/DOCS_GOVERNANCE.md（待补），根入口在 AGENTS.md、WAKE.md。
+## 架构决策
 
-**不退理由**：与 AGENTS.md 的入口约束绑定，被多个 agent 协作依赖；改结构会牵动所有主题入口。
+- **控制图异步化**：`createTask/continueTask` 不再在 HTTP 虚拟线程同步执行 `controlGraph.enter`，改为异步 + per-task 锁。理由：worker round 长耗时（数百秒）会触发 HTTP 超时，导致事件与状态丢失。
+- **Worker 超时 tier-aware**：strong tier（如 codex）600s，其余 300s，支持 `-Dharness.worker.timeout.seconds` 系统属性绝对覆盖。数据依据：codex p95=331s，旧 120s 砍掉 49% 轮次。
+- **Budget timeout 分类**：`worker_budget_exhausted` 首次 same-worker retry，二次直接 human_gate 并提示 raise timeout 或拆分任务，不跨 sibling lane。
+- **False-done Guardrail**：`expectsToolExecution && !hasExecutionProof` 时不再误标 done，写 `subgoal_judgment_source=evidence_gap_no_tool_proof`。
+- **Recovery 强制重置 blocked subgoal**：`prepareFreshSessionRecovery` 必须将 blocked subgoal 重置为 pending，清除 stale failure summaries。
 
-## D02 — 不引入额外 memory/、state/ 目录树
+## Worker 路由
 
-仓库继续使用轻量写回面（STATE.md + docs/<topic>/PROGRESS.md），不采用 rticleeditor 的 memory/、state/ 树。
+- **Free-first 路由**：cost-stage 分层（free_auto → paid_auto → manual_window），manual_window 只推荐不自动进入候选。
+- **配置驱动 Worker Lane**：`harness-config.yml` YAML 声明式注册，不硬编码。CCX 渠道变更频繁，配置驱动避免每次改 Java + 重建。
+- **Worker 双 lane 架构**：codex-main（paid_auto）+ codex-free（free_auto），CCX 负责模型路由，harness 不关心 CCX 背后渠道。
+- **Task Type 驱动路由**：含本地写文件意图的 research 自动提升为 coding，解决 research→openclaw-native 伪完成问题。
+- **Codex Profile 二层路由**：进入 codex family 后按 design/implement/verify 阶段路由到 openai/xfyun/deepseek profile，或显式 pin。
 
-**不退理由**：AGENTS.md 已明确划线，本仓库面向轻量持久化；引入额外目录树会与入口契约冲突。
+## CCX 集成
 
-## D03 — API 契约改动先改 docs/API_CONTRACTS.md 再改代码
+- **专属模型名**：CCX 配置 harness / harness-strong / harness-fast 模型名，避免与其他渠道负载均衡混淆。
+- **CCX 边界**：CCX 只负责 provider 网关层的 API 转换、渠道/Key/failover；harness 不复制 CCX 逻辑。
+- **CCX 健康检查**：启动时 precheck + 手动 refresh，不做自动 re-sync。
 
-任何 API 字段、表结构、JSON 形状变更必须先在 docs/API_CONTRACTS.md 留痕，再改代码，最后回填 src/test/java/。
+## 协议与扩展
 
-**不退理由**：是 §3 控制面回归测试的入口；改动不写文档会断探针任务的可重复性。
+- **Provider 接入统一 CLI Protocol**：Pi / Trae / CodeBuddy / Deveco 均通过 `ProviderCliWorkerExecutor` + Protocol 接入，不引入 gRPC/WebSocket。
+- **Advisory Handoff**：small tier worker 遇到 ready strong tier 时自动 advisory handoff（`handoff_reason=advisory_consult`），不是人在环。
+- **Handoff 深度限制**：`MAX_HANDOFF_DEPTH=3`，超限直接入 human_gate。
+- **非 JSON 行过滤**：codex 向 stdout 混入 ANSI 着色内部日志，`isCodexInternalLog` 过滤，只保留真实输出。
 
-## D04 — 状态机改动先改 docs/SPEC.md 再改代码
+## 数据与持久化
 
-控制图节点（intake / scheduler / continue / packet / human_gate / handoff / end）的状态转换规则，先在 docs/SPEC.md 描述清楚，再改 ControlNodeGraph 实现。
+- **Resume/Handoff Packet**：machine-readable 最小字段集，跨 worker handoff 不丢 typed continuity 字段。
+- **Goal Progress 优先**：`resolveAction` 优先消费 goal progress 而非单轮 execution result。
+- **LLM-assisted Subgoal Update**：仅在 ambiguous 场景（非 completed/failed/running）触发 LLM fallback，规则优先。
+- **Sublime 式配置**：默认自动发现 + 用户覆盖（harness-config.yml），YAML 而非 JSON。
 
-**不退理由**：§4 验证线全部基于 docs/SPEC.md 的状态机语义，状态机改动不写文档会断评估。
+## 文档治理（精简版）
 
-## D05 — utoUpdateSubgoalStatus execution_pending 守卫
-
-§4.1 #5 修复：在 ControlNodeGraph.autoUpdateSubgoalStatus 中加入守卫，当 model_mode=orchestrated 且 orchestration_stage=execution_pending 时，跳过 subgoal 自动完成，避免 esolveAction 把 ction=handoff 短路成 done。
-
-**不退理由**：已通过 ControlNodeGraphOrchestrationFlowTest 17/0、GoalProgressAutoUpdateTest 11/0、AdvisoryHandoffTest 12/0 三套单测，并在真实探针（	ask_6886b7bacc1c4ace）上验证 cf dispatch 真实发生。
-
-## D06 — Probe task 必须带 xperiment_name 与 intent
-
-POST /api/v1/tasks 提交的探针任务必须带 xperiment_name 与 intent 字段，否则不算评估证据。
-
-**不退理由**：是 uns/ 索引与 PROGRESS.md 摘录的唯一依据；缺字段会让 trace 链路断掉。
-
-## D07 — 暂停链路先落 packet 再持久化 checkpoint
-
-TaskService.pauseTask 必须在更新 pause checkpoint 之前先 persistTransitionPacket(pause_before)，并保证 pause → packet 路径最新 packet 可被 GET /api/v1/tasks/{id}/packet 取回。
-
-**不退理由**：回归保护在 TaskServicePacketContractTest.pauseTaskPersistsResumePacketAndPauseCheckpoint()；不持久化 packet 会让 resume 接口拿不到 packet，从而 deferred。
-
-## D08 — Consolidation 查询按 	ask.sessionId() + 	ask.id() 顺序
-
-ConsolidationService 查询 artifact 时按 session 优先、再 task id 顺序，避免 key_artifacts 跟 checkpoint/refined packet 对不齐。
-
-**不退理由**：回归保护在 ConsolidationServiceProtocolTest.consolidateProducesCheckpointProtocolPayload()。
-
-## D09 — 控制面错误响应脱敏
-
-所有 handler 通过 NioHttpServer 返回稳定错误体；500 固定为 internal error，不直接回传异常 .getMessage()。日志里可保留详情。
-
-**不退理由**：回归保护在 ControlActionHttpRouteTest.postPauseHidesInternalFailureDetails()、ApiErrorContractHttpTest；响应层回传内部异常细节会泄服务端栈。
-
-## 待结清项（非已落地决策）
-
-- **§4.1 #6**：ccx-free 模型在 reading 任务上的输出质量，不属于 control flow 范围，单独走 provider/decision。
-- **§4.1 #7**：探针任务 fixture 文档面（本仓库）被清理过；当前已补回 docs/README.md、docs/evaluation/README.md、docs/evaluation/PROGRESS.md、STATE.md、DECISIONS.md，但 src/main/java 源码仍未回到仓库，下次开工前需要先恢复源码。
-- **handoff-loop circuit breaker**：当 task goal 显式要求 	arget_worker，且 scalate_from_small_tier 触发时，是否直接 human_gate 而非 escalate，仍未决策。
+- **核心原则**：文档为代码服务，不为文档而文档。
+- **三层入口**：`README.md`（公开）→ `docs/README.md`（开发分流）→ `docs/<topic>/README.md`（主题入口）。
+- **文档即合同**：`API_CONTRACTS.md` / `SPEC.md` / `ARCHITECTURE.md` 为稳定基线，其余为可变文档。

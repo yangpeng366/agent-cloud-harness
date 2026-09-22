@@ -49,18 +49,6 @@
 
 - 2026-07-29：E2 codex-free lane 真机 e2e 冒烟验证完成。codex-free lane（经本地 CCX 3688 + codex app-server，provider_model_provider=ccx-free）真机执行一轮 reading 任务：codex-free init 超时（worker_runtime_transient） -> same_worker_retry_then_auto_handoff -> advisory handoff codex-free -> codex（strong tier，产出 README 摘要，~27s） -> completion partially_done（planner delegation gate missing_compact_brief）-> human_gate。长任务收口合同字段（decision_rationale / progress_detail / progress_summary）在 task metadata 与 /judgment_trace API 双通道验证 PASS；E1 #1/#2 + 可观测层 + E3 UI 验收 PASS。free_first_routing 默认关闭（codex-free selection_priority=70 < codex 100，config-driven by design）。证据沉淀到 ../E2_CODEX_FREE_E2E_SMOKE_EXECUTION_RECORD_2026-07-29.md。
 
+## 2026-08-08 WorkBuddy Bench 两个 Skill 借鉴类调研
 
-## 2026-08-02 Long Stability Smoke 25200s 回归保护
-
-- 本轮时间：2026-08-02
-- 观察：仓库现有 worker timeout override seam 已支持 7h+ 预算，但此前缺少 25200s 专项回归保护与 runner。
-- 动作：新增 `WorkerExecutionTimeoutConfigTest.longStabilitySmoke25200sOverrideIsAcceptedAcrossTiers()`，并新增 `scripts/Run-LongStabilitySmoke.ps1` 作为 `long-001` 25200s smoke 的可重复入口。
-- 证据：`docs/LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md`
-- 未结清项：完整真实 25200s run 需要持续 7h+ 环境窗口，当前证据为“入口与 regression 已就绪”，待真实环境窗口补 run。
-## 2026-08-02 预算超时恢复回归
-
-- 本轮时间：2026-08-02
-- 根因已收口：仓库 HEAD 的 prepareFreshSessionRecovery 已会在 fresh session retry 前把 subgoal_status 里 blocked 子目标重置为 pending，并强制回写 status=active / control_node=scheduler / waiting_reason=null；当前 live task 	ask_21f7c333c57e4514 的 SQLite 副本也显示其 subgoal 已是 pending。
-- 新增回归覆盖：WorkerBudgetExhaustedRecoveryTest.prepareFreshSessionRecoveryClearsBlockedSubgoalsAndResetsWaitingState，直接从 waiting_human + blocked subgoal 出发验证 recovery 后状态可被清回 ctive。
-- 冲突说明：工作区无 merge conflict；未提交项仅为 docs/test/doc 写回，不阻塞源码修复。
-- 未结清项：运行中 JAR D:\gitAll\agent-cloud-harness\.tmp\runtime-jars\agent-cloud-harness-0.1.0-SNAPSHOT-shaded-port9091-20260731-135115.jar 仍为旧构建，所以 live API 仍显示 manual_recover_scheduled；需要重建 JAR 并热替换后，自动 retry 才会真的跑起来。
+- 2026-08-08：公众号《刚刚，腾讯 WorkBuddy 开源了 2 个神级 Skill》落地，本仓库本地克隆 wbbench 仓库（深度 1）于 `D:\gitAll\agent-cloud-harness\.tmp\workbuddy-bench\`，拆解两个 skill（`wbbench-run-setup` 7 阶段、`wbbench-report-skills` 三子工作流）。结论：本轮**不落代码、不跑真评测、不引入新模块**；新建 `docs/WBBENCH_BENCH_SKILLS_RESEARCH.md`，立目 5 + 1 design pattern（id 边界辨认 / secrets 分离 / 阶段化+Guardrails / 报告卫生 / local_proxy 通用化 / 阶段化 references/ 目录结构）。三个备查脑洞：(A) `PROJECT_EVALUATION_AND_NEXT_PLAN` 对外叙事文案对标（零成本）、(B) skill design checklist 扩展 `DOCS_GOVERNANCE.md`（待后续 round）、(C) 用 wbbench 数据集做 harness goal-fit reality check（前置：需先在 skill-aware client 里跑通一轮，本轮不跑）。详见 `docs/WBBENCH_BENCH_SKILLS_RESEARCH.md`。`docs/README.md` 任务分流表已新增"外部 skill / framework 设计 pattern 借鉴"行作为索引入口。
