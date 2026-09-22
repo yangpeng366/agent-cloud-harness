@@ -3,6 +3,7 @@
 ## Jev Runtime
 
 - **Jev context scoring 非侵入装配**：Main 只在 `feature_flags.jev.context_scoring=true` 时包装 `PromptBasedJudgmentService`；关闭时不实例化 scorer、不访问 HTTP。缺 key、超时、HTTP 错误和解析异常一律 fallback 到原 judgment。命中结果必须带 `runtime_facts.jev_prefilter_decision` 进入 `/judgment_trace`，避免只省 token 却失去可解释性。
+- **巡检 hit_rate 不单独放行 active routing**：2026-09-22 真实 Bitable fake round 43 样本 hit_rate=0.9070，但无负标签/TN，属 positive-biased 观测；必须先补平衡人工标注并复核 uncertainty band。Phase 6 cascade/heatmap 只保持只读原型，不改派工、不写 Bitable。
 
 ## 架构决策
 

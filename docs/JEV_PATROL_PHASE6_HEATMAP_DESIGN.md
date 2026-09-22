@@ -76,5 +76,5 @@ score = 100
 
 ## 8. 下一步
 
-- 不在本轮写 `Run-BuildJevShadowHeatmap.ps1`；先把本文与 plan §六关联。
+- 5-10 行级 prototype 已落 `scripts/Build-JevShadowHeatmapPrototype.ps1`；真实 43 样本分布 B=21 / C=21 / F=1。
 - 若维护者要开启，再起单独 initiative（Jev-Heatmap-L1）落实施计划。

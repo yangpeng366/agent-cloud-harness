@@ -78,3 +78,9 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 未结清项：运行中 JAR D:\gitAll\agent-cloud-harness\.tmp\runtime-jars\agent-cloud-harness-0.1.0-SNAPSHOT-shaded-port9091-20260731-135115.jar 仍为旧构建，所以 live API 仍显示 manual_recover_scheduled；需要重建 JAR 并热替换后，自动 retry 才会真的跑起来。
 
 ## 2026-08-02 巡检写回
+
+## 2026-09-22 Jev Bitable fake round
+
+- Read 43 real Bitable rows, ran fake/dry-round with Jev shadow: 43 sidecars, 0 errors, TP=39 / FP=0 / FN=4 / TN=0, hit_rate=0.9070.
+- Result is positive-label-biased (no TN); active routing remains disabled. Evidence: `docs/evaluation/runs/2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md`.
+- Phase 6 cascade and heatmap prototypes are read-only and validated: cascade divergence=0.0041 / signal=0; heatmap B=21 / C=21 / F=1.

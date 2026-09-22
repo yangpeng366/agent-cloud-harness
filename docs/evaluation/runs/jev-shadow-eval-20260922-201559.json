@@ -1,0 +1,367 @@
+{
+  "threshold_low": 0.3,
+  "threshold_high": 0.7,
+  "total": 43,
+  "with_score": 43,
+  "errored": 0,
+  "unresolved": 0,
+  "tp": 39,
+  "fp": 0,
+  "fn": 4,
+  "tn": 0,
+  "hit_rate": 0.9069767441860465,
+  "in_uncertainty_band": 23,
+  "uncertainty_band_kept": 20,
+  "uncertainty_band_truncated": 3,
+  "auto_kept_correct": 0,
+  "auto_kept_wrong": 0,
+  "auto_truncated_correct": 0,
+  "auto_truncated_wrong": 0,
+  "per_project": [
+    {
+      "project": "巴中方正云雀-见报成品接入预研",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "编辑器账号过期扫码弹框",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "代码自动巡检/监听器",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-测试",
+      "count": 1,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-发布",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-稿件列表接口优化",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-稿库UI",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-热点",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体-选用",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "多媒体稿上传-高码展示延迟",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "广播采访音频处理场景（BTV 数字员工）",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "宇宙学闭环",
+      "count": 1,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "tn": 0
+    },
+    {
+      "project": "agent-cloud-harness",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "agent-cloud-harness / Jev 上下文评分门控",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "agent-cloud-harness / OpenEyes UI 自动化接入",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "APE 文案创作接入 /Editor",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "articleeditor 推送前正文表达式支持",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "articleeditor 选稿版本继承",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "articleeditor-webpack-漏洞修复",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "articleeditor修改轨迹",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "BTV项目对接",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "CCX 环境",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "DeepSeek Harness (dsh)",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "dsh插件调研",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "dsh升级/插件规划",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "dsh探索/贡献",
+      "count": 1,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "tn": 0
+    },
+    {
+      "project": "EchoBird",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "fastjson2",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "Jev × 飞书巡检流程接入",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "Jev 开源项目跟踪",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "MPD 审核任务重复排查与登录巡检",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "multimedia-agent-skill",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "networkx",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "OpenClaw / opencode 服务化集成",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "OpenEyes",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "OpenEyes / third-hand 计算机使用借鉴调研",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "OpenEyes Record",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "patrol-scaffold 开源脚手架",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "recvvabY8OpI6V",
+      "count": 1,
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "tn": 0
+    },
+    {
+      "project": "session-memory-curator",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "sichuan-focus",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "sichuanfocusapp-mutilmedia-article",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    },
+    {
+      "project": "Video Battle",
+      "count": 1,
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "tn": 0
+    }
+  ],
+  "mode": "bitable-fake-round"
+}

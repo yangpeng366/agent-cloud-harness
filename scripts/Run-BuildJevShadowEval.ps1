@@ -21,7 +21,7 @@ $eval = Build-JevShadowEvaluation -Inputs $inputs -ThresholdLow $ThresholdLow -T
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $jsonPath = Join-Path $OutputDirectory ("jev-shadow-eval-{0}.json" -f $stamp)
 $mdPath = Join-Path $OutputDirectory ("jev-shadow-eval-{0}.md" -f $stamp)
-$eval | Add-Member -NotePropertyName mode '($Mode)' -Force
+$eval | Add-Member -NotePropertyName mode $Mode -Force
 [System.IO.File]::WriteAllText($jsonPath, ($eval | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
 [System.IO.File]::WriteAllText($mdPath, (Format-JevShadowEvalMarkdown -Eval $eval), [System.Text.UTF8Encoding]::new($false))
 Write-Host "json=$jsonPath"

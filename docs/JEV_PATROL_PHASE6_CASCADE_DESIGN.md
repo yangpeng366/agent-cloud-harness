@@ -72,5 +72,5 @@
 
 ## 8. 下一步
 
-- 不在本轮写 `Run-BuildJevShadowCascade.ps1`；先把本文与 plan §六关联。
+- 5-10 行级 prototype 已落 `scripts/Build-JevShadowCascadePrototype.ps1`；真实摘要回归 divergence=0.0041、signal=0。
 - 若维护者要开启，再起单独 initiative（Jev-Cascade-L1）落实施计划。
