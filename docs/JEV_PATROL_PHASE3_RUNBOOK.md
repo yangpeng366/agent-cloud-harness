@@ -76,3 +76,14 @@ Remove-Item Env:TYPESAFE_API_KEY
 - 任何 Jev 调用抛错 → 写 `jev.error`，主循环继续；不会绕过 fake/real 分流或跳过 worker。
 - 任何 Bitable 写错 → 抛错以 `auth required / token expired`；`ReauthFile` + 飞书通知一次。
 - 任何 `Run-BuildJevShadowDigest.ps1` 跑空 → 仍然产 json + md，含 `total=0`。
+
+## 8. 多轮 sample window 编排器
+
+patrol-scaffold `scripts/Run-JevShadowSampleWindow.ps1` 用 R 轮 sample-tasks.json 拷贝 + 启动 patrol-loop，每轮产若干 sidecar，合并后跑 digest，输出 `downloads/reports/window/window-summary-<stamp>.{json,md}`。
+
+用法：
+
+```powershell
+$env:TYPESAFE_API_KEY = '<key>'
+pwsh -File D:\gitAll\patrol-scaffold\scripts\Run-JevShadowSampleWindow.ps1 -Rounds 3 -IncludeFeishuFake
+```
