@@ -166,7 +166,7 @@ patrol-last-*.md 落地后, 启动后处理:
 
 | **Phase 3** | L2 派工决策 dry-run（sidecar 已落地，默认关闭） | 飞书 concrete：`D:\gitAll\patrols\feishu-projects-patrol\scripts\JevShadow.ps1` 在 due 项目进入 Codex 前旁路评分；写 `state/jev-shadow/*.json`，不改变 fake/real 分流、不跳过 worker、不写 Jev 结果回 Bitable。scaffold concrete：`D:\gitAll\patrol-scaffold\scripts\JevShadow.ps1` provider-agnostic；默认在 worker 完成回写后旁路评分，写 `downloads/jev-shadow/*.json`；`tests/verify-jev-shadow.ps1` 离线合同 `9/9`。两条 concrete 主入口 AST 均为 0 errors。 | `jev_shadow.enabled=true` / `patrol-shadow-config.json enabled=true` + 临时进程 `TYPESAFE_API_KEY` | 待真实样本窗口 |
 | **Phase 4** | L2 派工决策 active | 启用 Jev 路由，failure fallback 到现状 | Phase 3 | 1 周 |
-| **Phase 5** | L5 schema 升级 | Bitable 加 5 个字段 | Phase 4 跑稳 | 1 周 |
+| **Phase 5** | L5 schema 升级（草案已存 docs/JEV_PATROL_PHASE5_SCHEMA_DESIGN.md） | Bitable 加 5 个 typeable 字段（最近一次 Jev 评分/时间/决策 + 历史 TP/TN/FP/FN）；维护者拍板 + sync_back 双闸门 + 启用阈值 95% eval | Phase 4 跑稳 ≥75% hit_rate | 1 周（草案已就绪，待拍板） |
 | **Phase 6** | 脑洞 A/B/C | 各自独立 | Phase 5 | 长期 |
 
 ## 5. 关键风险与缓解
