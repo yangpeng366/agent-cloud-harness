@@ -50,3 +50,7 @@
 ### Long Stability / 7h+ Smoke
 
 - `../../LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md`
+
+### Jev Patrol / Phase 6
+
+- `2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md` — real Bitable fake-round hit-rate caveat and read-only cascade/heatmap prototype evidence.
