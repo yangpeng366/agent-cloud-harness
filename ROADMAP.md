@@ -113,3 +113,24 @@ decide 已消费 `subgoal_status` 做 HALT/CONTINUE/ESCALATE 判断，但 goal p
 每条方向都对应 [`CONTRIBUTING.md`](CONTRIBUTING.md) 中可认领的贡献条目（good first issue / help wanted / feature）。认领流程与验收标准见其「Good First Issues / Help Wanted 候选」节。
 
 路线图随演进更新；某条方向完成后会在对应章节标注并保留入口（与 GFI 维护约定一致）。
+
+## 当前就绪度快照（2026-08-02）
+
+> 本仓库在 2026-07-31 目录异常后已恢复可继续推进；当前 GitHub-ready 的瓶颈已从“缺基础文档”转为“未提交工作树的公开边界 + 历史假设复核”。
+> 详细快照见 [docs/release/GITHUB_READINESS_SNAPSHOT_2026-08-02.md](docs/release/GITHUB_READINESS_SNAPSHOT_2026-08-02.md)。
+
+### 已具备
+- 对外入口：README.md、STARTUP_GUIDE.md、CONTRIBUTING.md、SECURITY.md、CODE_OF_CONDUCT.md、CHANGELOG.md、ROADMAP.md
+- 可运行示例：xamples/README.md、xamples/quickstart.sh、xamples/quickstart.ps1
+- GitHub 社区文件：.github/workflows/ci.yml、issue/PR 模板
+- 当前叙事：项目定位为本地/单机 harness，不夸大成 distributed production platform
+
+### 待人工收口
+- 未提交工作树：DECISIONS.md、STATE.md、docs/docs/、CodexAppServerWorkerExecutor.java、新测试文件
+- 公开边界复核：历史 dev token / 本机路径 / 旧假设（参考 CONTRIBUTING.md GFI-06 方向）
+- 遗留 gate：远端 GitHub Actions、严格人工 A-H 手点、真实干净环境预检
+
+### 建议优先顺序
+1. 先确认首个公开 commit 的切片边界。
+2. 再做 dev token / 主机路径 / 环境变量默认值复核。
+3. 最后回填 docs/GITHUB_RELEASE_CHECKLIST.md 与对外 runbook。

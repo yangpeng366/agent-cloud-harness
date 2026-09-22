@@ -162,6 +162,21 @@
 - 验收：见 `docs/NEXT_EVOLUTION_PLAN.md` E2 验收标准 1–3（含 codex-free 路由 + advisory handoff 端到端证据）。
 - 上下文入口：`docs/evaluation/README.md`、`P2_E2E_INTEGRATION_SMOKE_EXECUTION_RECORD_2026-07-22.md`。预估 2–3 天。
 
+
+**GFI-07 · 为外部贡献者补充开源贡献候选条目与中文说明 · open**
+- 背景：当前 `CONTRIBUTING.md` 已提供基本流程与代码约定，但缺少面向首次外部贡献者的中文 backlog 入口；这使得潜在的社区贡献者需要先翻多份计划文档才能开始。
+- 范围：`CONTRIBUTING.md`。
+- 验收：新增 1-2 条 `good first issue` / `help wanted`，每条均包含范围、上下文入口、验收标准与预估工时；仓库构建仍通过。
+- 上下文入口：`docs/NEXT_EVOLUTION_PLAN.md`、`docs/CURRENT_CAPABILITY_GAP_ASSESSMENT.md`。
+- 技能：Markdown。预估 ≤ 2h。
+
+**GFI-08 · 把仓库对外叙事从“内部原型”收紧为“可公开的原型控制平面” · open**
+- 背景：仓库已公开发布，但 README 中仍保留较多内部原型口径，缺少面向外部贡献者/使用者的成熟度说明。
+- 范围：`README.md`。
+- 验收：在 README 中增加 1 段公开成熟度说明，明确当前版本适合做实验验证、社区小贡献与本地单机控制面原型；不影响现有快速开始步骤。
+- 上下文入口：`STATE.md`、`docs/release/GITHUB_RELEASE_CHECKLIST.md`。
+- 技能：Markdown。预估 ≤ 1h。
+
 ### 候选维护约定
 
 - 条目来源稳定计划文档，不臆造；某条完成后标 ✅ 并保留入口，不直接删除。
