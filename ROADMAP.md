@@ -36,6 +36,8 @@ decide 已消费 `subgoal_status` 做 HALT/CONTINUE/ESCALATE 判断，但 goal p
 
 贡献入口：`FEAT-01`（见 `CONTRIBUTING.md`，需先开 issue 对齐字段设计）。
 
+可选依赖路径（借鉴类调研，非必选）：若维护者决定引入 System One Model 做上下文评分门控，可在 E1 验收项之上叠加一条 `[ ]`「decide / context / judgment 路径中至少有一处使用 Jev-style 评分门控（详见 `docs/JEV_CONTEXT_SCORING_RESEARCH.md` 与 `CONTRIBUTING.md` FEAT-03 / HW-09 / HW-10）」。立项前不开工，凭据由维护者自管，仓库内不出现。
+
 ### E2 - 端到端验证闭环（优先级 1，最高）
 
 已有 P2 e2e smoke 证据，但覆盖面仍窄。
@@ -48,6 +50,9 @@ decide 已消费 `subgoal_status` 做 HALT/CONTINUE/ESCALATE 判断，但 goal p
 验收：short/medium/long 三模式在 codex-main + codex-free 两条 lane 上都有 smoke 证据；advisory handoff（codex-free -> codex-main -> codex-free）有端到端证据；pre-existing 测试失败已修复或有 documented workaround。
 
 贡献入口：`FEAT-02`（扩展 matrix）、`GFI-01` / `GFI-02`（修复 pre-existing 测试失败，good first issue）。
+可选依赖路径（仅当 FEAT-05 立项）：`medium-001 / long-001` 端到端 smoke 验证时同步跑 OpenEyes 驱动的 structured UI assertion 模式（`scripts/Run-OpenEyesUiAssertion.ps1`），与现有 screenshot diff 模式对比 flaky 率与回归覆盖率；不绑死，E2 主线仍以 `short-001` baseline 为准。详见 `docs/OPENEYES_UI_AUTOMATION_RESEARCH.md`、`CONTRIBUTING.md` FEAT-04 / FEAT-05 / HW-11 / HW-12 / HW-13。
+
+可选依赖路径（仅当 FEAT-03 立项）：若 FEAT-03 落地，`medium-001 / long-001` smoke 验收时同步验证 Jev 评分门控在长任务下的 token 节省与 `key_decisions` 稳定性，输出对比数据；不强行绑死，E2 主线仍以 `short-001` 基线为准。
 
 ### E3 - UI Loop Activity 集成（优先级 2）
 
@@ -114,23 +119,47 @@ decide 已消费 `subgoal_status` 做 HALT/CONTINUE/ESCALATE 判断，但 goal p
 
 路线图随演进更新；某条方向完成后会在对应章节标注并保留入口（与 GFI 维护约定一致）。
 
-## 当前就绪度快照（2026-08-02）
+## 公开协作与发布准备候选清单
 
-> 本仓库在 2026-07-31 目录异常后已恢复可继续推进；当前 GitHub-ready 的瓶颈已从“缺基础文档”转为“未提交工作树的公开边界 + 历史假设复核”。
-> 详细快照见 [docs/release/GITHUB_READINESS_SNAPSHOT_2026-08-02.md](docs/release/GITHUB_READINESS_SNAPSHOT_2026-08-02.md)。
+下列条目面向外部贡献者，聚焦“更容易被理解、更容易被复用、更容易对外协作”的低风险推进点；不臆造能力，只把现有仓库材料整理成可独立认领、可独立验证的小颗粒工作。
 
-### 已具备
-- 对外入口：README.md、STARTUP_GUIDE.md、CONTRIBUTING.md、SECURITY.md、CODE_OF_CONDUCT.md、CHANGELOG.md、ROADMAP.md
-- 可运行示例：xamples/README.md、xamples/quickstart.sh、xamples/quickstart.ps1
-- GitHub 社区文件：.github/workflows/ci.yml、issue/PR 模板
-- 当前叙事：项目定位为本地/单机 harness，不夸大成 distributed production platform
+### 如何认领
 
-### 待人工收口
-- 未提交工作树：DECISIONS.md、STATE.md、docs/docs/、CodexAppServerWorkerExecutor.java、新测试文件
-- 公开边界复核：历史 dev token / 本机路径 / 旧假设（参考 CONTRIBUTING.md GFI-06 方向）
-- 遗留 gate：远端 GitHub Actions、严格人工 A-H 手点、真实干净环境预检
+1. 选一条候选，先读完本条目给出的上下文入口，确认范围理解一致。
+2. 在 issue 或 PR 描述里注明候选编号与验收结果。
+3. 只做本条范围，不改动首发边界、不新增对外发布渠道、不引入敏感凭据。
+4. 若只改文档，请至少说明你验证过的阅读路径与命令示例；若改代码，请跑通 `.\scripts\Test-WithJava21.ps1`。
 
-### 建议优先顺序
-1. 先确认首个公开 commit 的切片边界。
-2. 再做 dev token / 主机路径 / 环境变量默认值复核。
-3. 最后回填 docs/GITHUB_RELEASE_CHECKLIST.md 与对外 runbook。
+### 文档 / 治理
+
+**HW-05 · 补齐对外协作快速索引 · `help wanted`**
+- 背景：仓库已有 README、CHANGELOG、CONTRIBUTING、SECURITY、ROADMAP、docs index audit，但对外新人仍容易漏读 `docs/README.md` 与 `docs/release/README.md`。
+- 范围：只整理索引与阅读入口，不重写架构文档。
+- 验收：从 `README.md`、`CHANGELOG.md`、`CONTRIBUTING.md`、`ROADMAP.md`、`docs/README.md`、`docs/release/README.md` 都能快速定位到对方的入口；不改动首发范围与对外叙事。
+- 上下文入口：`docs/README.md`、`docs/release/README.md`、`CONTRIBUTING.md`、`ROADMAP.md`。
+- 技能：Markdown / 信息架构。预估 1–2h。
+
+### 发布准备
+
+**HW-06 · 更新公开就绪 backlog 清单 · `help wanted`**
+- 背景：`docs/GITHUB_RELEASE_CHECKLIST.md` 已有本地 precheck、dry-run、release gate 证据，但缺少面向后续对外协作的“接下来还要补什么”的集中清单。
+- 范围：在 `docs/GITHUB_RELEASE_CHECKLIST.md` 只追加一节可公开协作的 backlog；不改动首发阶段历史证据。
+- 验收：新增节只引用现有文件，不新增对外发布渠道；条目可逐条核对是否 still true；不引入敏感信息。
+- 上下文入口：`docs/GITHUB_RELEASE_CHECKLIST.md`、`docs/GITHUB_FIRST_RELEASE_PRECHECK_2026-06-02.md`、`docs/GITHUB_RELEASE_SCOPE_PROPOSAL.md`。
+- 技能：Markdown / 发布准备。预估 1–2h。
+
+### 代码 / 测试
+
+**HW-07 · 收敛 docs 审计命令的文档口径 · `help wanted`**
+- 背景：`CHANGELOG.md` 提到 docs index audit 持续全绿，但 README 只展示构建与运行，没有给贡献者一条“怎么自验文档结构”的最短命令。
+- 范围：只补充贡献者可自验的文档结构命令与预期结果，不改动审计脚本本身。
+- 验收：新命令能在当前仓库一次跑通；预期输出与当前 `passed=true` 结论一致；不新增依赖。
+- 上下文入口：`docs/README.md`、`CHANGELOG.md`、`scripts/Run-DocsIndexAudit.ps1`。
+- 技能：PowerShell / Markdown。预估 1–2h。
+
+### 维护约定
+
+- 条目来源稳定计划文档，不臆造；某条完成后标 ✅ 并保留入口，不直接删除。
+- 新增候选须同时给出「验收标准」与「上下文入口」，否则不录入。
+- 如新增根级 markdown，须同步跑 `scripts/Run-DocsIndexAudit.ps1` 防止 orphan。
+- 建议自验命令：`powershell -ExecutionPolicy Bypass -File .\scripts\Run-DocsIndexAudit.ps1`；期望关键输出包含 `passed=true`，并说明 `orphan` / `orphan-comment` 数量为 `0` 或仅剩允许项。

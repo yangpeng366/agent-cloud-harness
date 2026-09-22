@@ -97,6 +97,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
                 .redirectErrorStream(true);
             process = builder.start();
+            // Close stdin immediately — prompt is passed as CLI argument, no stdin needed
+            process.getOutputStream().close();
             output = runSession(process, plan, runFiles, partialOutputThreshold);
             if (process.waitFor(APP_SERVER_SHUTDOWN_GRACE_MS, TimeUnit.MILLISECONDS)) {
                 output = output.withExitCode(process.exitValue());
@@ -216,11 +218,19 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         Integer exitCode = null;
         try {
             runFiles.closeQuietly();
+            boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
             ProcessBuilder builder = new ProcessBuilder(plan.command())
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
-                .redirectInput(runFiles.promptPath().toFile())
                 .redirectOutput(runFiles.eventsPath().toFile())
                 .redirectErrorStream(true);
+            // On Windows, codex exec --json reads stdin even when prompt is on CLI.
+            // Closing a PIPE immediately causes codex to hang. Redirecting from
+            // NUL (Windows) or /dev/null (Unix) gives an immediate clean EOF.
+            if (isWindows) {
+                builder.redirectInput(new java.io.File("NUL"));
+            } else {
+                builder.redirectInput(new java.io.File("/dev/null"));
+            }
             process = builder.start();
             long processTimeoutMs = turnMaxDurationMs(plan);
             if (!process.waitFor(processTimeoutMs, TimeUnit.MILLISECONDS)) {
@@ -364,11 +374,15 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                          CodexExecutionPlan plan) {
         ArrayList<String> args = new ArrayList<>();
         args.add("exec");
-        args.add(CODEX_EXEC_NO_ALT_SCREEN_FLAG);
         args.add("--json");
         args.add("-o");
         args.add(runFiles.lastMessagePath().toString());
         args.add("--skip-git-repo-check");
+        // Pass prompt as CLI arg instead of stdin redirect (avoids Windows file lock issues)
+        String prompt = plan.prompt();
+        if (prompt != null && !prompt.isBlank()) {
+            args.add(prompt);
+        }
         return config.launchSpec().command(appendProfileArgs(args, toProfileConfig(plan)));
     }
 
@@ -1189,9 +1203,6 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
     private static long configurableLong(String key, long defaultValue) {
         String raw = System.getProperty(key);
         if (raw == null || raw.isBlank()) {
-            raw = System.getenv(key.toUpperCase(Locale.ROOT).replace('.', '_'));
-        }
-        if (raw == null || raw.isBlank()) {
             return defaultValue;
         }
         try {
@@ -1363,34 +1374,26 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
 
         private JsonNode nextEnvelope(long deadlineAtMs) throws IOException, InterruptedException {
             while (System.currentTimeMillis() < deadlineAtMs) {
-                if (Thread.interrupted()) {
+                if (!reader.ready()) {
+                    TimeUnit.MILLISECONDS.sleep(10L);
+                    continue;
+                }
+                String line = reader.readLine();
+                if (line == null) {
                     return null;
                 }
-                if (reader.ready()) {
-                    String line = reader.readLine();
-                    if (line != null) {
-                        String trimmed = line.trim();
-                        if (!trimmed.isBlank()) {
-                            markActivity();
-                            writeEvent("provider_recv", trimmed);
-                            try {
-                                return MAPPER.readTree(trimmed);
-                            } catch (Exception ignored) {
-                                if (!isCodexInternalLog(trimmed)) {
-                                    appendOutput(trimmed);
-                                }
-                            }
-                        }
-                    } else {
-                        return null;
-                    }
-                } else if (System.currentTimeMillis() >= deadlineAtMs) {
-                    return null;
+                String trimmed = line.trim();
+                if (trimmed.isBlank()) {
+                    continue;
                 }
-                TimeUnit.MILLISECONDS.sleep(10L);
                 markActivity();
-                if (Thread.interrupted()) {
-                    return null;
+                writeEvent("provider_recv", trimmed);
+                try {
+                    return MAPPER.readTree(trimmed);
+                } catch (Exception ignored) {
+                    if (!isCodexInternalLog(trimmed)) {
+                        appendOutput(trimmed);
+                    }
                 }
             }
             return null;

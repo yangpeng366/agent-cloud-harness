@@ -64,7 +64,7 @@ Task 级 goal 合同当前落在 `Task.goal` 与 `Task.metadata`：
 
 ### Advisory Handoff 合同 (P2)
 
-当 
+当
 esolveAction 输出 `escalate 且当前 worker 为 small tier 时，控制图优先尝试 advisory handoff 而非直接进入 human_gate：
 
 | 条件 | 动作 | 说明 |
@@ -116,17 +116,17 @@ Operator 通过 `harness-config.yml` 声明 worker lane，无需改 Java 代码�
 
 配置文件中声明的 worker lane 增量注册到 `WorkerRegistry`：与内置 worker id 相同则覆盖，否则新增。配置不存在时回退到内置默认值。
 
-字段：`harness.defaults`（CCX 全局默认）、`harness.ccx`（渠道健康检查配置）、`harness.workers[]`（worker lane 声明：id、provider、model_tier、cost_class、selection_priority、capabilities、profile、metadata）。
+字段：`harness.defaults`（CCX 全局默认）、`harness.ccx`（渠道健康检查配置）、`harness.eyes_mcp`（OpenEyes MCP stdio 启动可达性配置）、`harness.workers[]`（worker lane 声明：id、provider、model_tier、cost_class、selection_priority、capabilities、profile、metadata）。
 
 回归保护：HarnessConfigLoaderTest 7 场景 + WorkerRegistryConfigRegistrationTest 6 场景。
 
 ### harness-state.json 自动发现
 
-Harness 启动时自动探测本机环境，写入 `~/.agentcloud/harness-state.json`：CCX 可达性 + 模型列表 + worker CLI 可用性 + provider 启用状态。
+Harness 启动时自动探测本机环境，写入 `~/.agentcloud/harness-state.json`：CCX 可达性 + 模型列表 + worker CLI 可用性 + provider 启用状态 + OpenEyes MCP stdio 状态。
 
 与 `harness-config.yml` 的关系：Sublime 式"自动发现 + 用户覆盖"。`harness-state.json` 由 harness 自动维护，`harness-config.yml` 由用户手动编辑覆盖。合并规则：用户配置覆盖自动发现，未声明的用自动发现结果。
 
-回归保护：HarnessStateWriterTest 6 场景。
+回归保护：HarnessStateWriterTest 7 场景。
 
 ### Loop Continue 不变量
 
@@ -164,7 +164,7 @@ POST /api/v1/tasks/{id}/continue 的 HTTP 层超时或 controlGraph.enter() 异�
 | plan | `artifacts + decisions | orchestration_stage=plan_pending，selection_scope=planner |
 | execute | `artifacts + session_messages | orchestration_stage=execution_pending，worker_round message |
 | judge | decisions | `execution_judgment + completion_judgment 两条 Decision |
-| decide | `task.status / controlNode | 
+| decide | `task.status / controlNode |
 esolveAction 输出决定 task 状态迁移方向 |
 
 回归保护：ControlNodeGraphOrchestrationFlowTest.orchestratedTaskRunsPlannerThenExecutorInSingleEnter() 验证 4 条 decisions 含 `execution_judgment + completion_judgment，2 条 artifacts 含 plan_pending + `execution_pending，2 条 worker_round messages。
@@ -543,6 +543,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 - 触发这些判断时可见的 `runtime_context`
 - 同轮执行边界 `execution_boundary`
 - 可直接复用到诊断 UI 的 `runtime_facts`（含 route preview、tool summary、prompt mode、mounted-context rollout 信号、candidate workers、evidence refs、unfinished items）
+- Jev prefilter 开启时，`execution_judgment.metadata.runtime_facts.jev_prefilter_decision` 与 `completion_judgment.metadata.runtime_facts.jev_prefilter_decision` 会记录 `action`、`llm_called=false`、`probability`；关闭或 fallback 时该节点不出现
 
 `GET /api/v1/tasks/{id}/live_flow` 当前会一次性聚合：
 
@@ -1110,9 +1111,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Run-TaskRecoveryAcceptancePro
 
 | 方法 | 路径 | 用途 | 请求参数 | 响应概要 | 认证 |
 |------|------|------|---------|---------|------|
-| GET | `/api/v1/health` | 健康检查与版本探针 | 无 | `status/virtual_threads/version/llm` | 否 |
+| GET | `/api/v1/health` | 健康检查与版本探针 | 无 | `status/virtual_threads/version/eyes_mcp/llm` | 否 |
 
 `llm` 字段用于快速判断 judgment / tool-aware execution 是否有可用 LLM 配置。它返回 `available`、`api_key_configured`、`base_url`、`model`、`review_model`、`wire_api`、`request_timeout_seconds`、`max_retries`、`max_tokens`；不会回显 `OPENAI_API_KEY` 原文。
+
+`eyes_mcp` 返回 `status / available / server_name / server_version / tool_count / duration_ms / error / checked_at / tool_calls`。探针只执行 MCP `initialize` 与 `tools/list`，不调用 UI 动作工具；`eyes_mcp.health_check_on_startup=false` 时返回 `status=disabled`。
+
+`tool_calls` 从 `tool_invocations` 中聚合 `tool_name=openeyes` 的记录，返回 `count / success_count / success_rate / p50_ms / p95_ms / last_subcommand / last_status / last_success`；数据库不可达或渠道未 healthy 时指标为空态。该字段是运行可观测增量，不改变 tool 执行合同。
+
+### Worker tool openeyes 注册
+
+- harness.eyes_mcp.enabled=true && register_as_tool=true 时，Main.java 把 OpenEyesTool 注册进 ToolRegistry，所有 worker 自动获得 openeyes capability（默认 false，回滚 1 行 config）。
+- Tool 名称固定 openeyes；接受 subcommand（必填，单行）、	itle_contains、egex、dry_run、	imeout_ms 等参数；底层 yes <subcommand> [--title-contains X] [--regex R] [--dry-run]。
+- 输出 ToolResult.metadata 额外带 subcommand / openeyes_window_count / openeyes_first_title / openeyes_server / openeyes_server_version / exit_code / elapsed_ms。
+- 关闭 yes_mcp.enabled=false 时 ToolRegistry 中无 openeyes 注册；WorkerHandler.KNOWN_TOOL_CAPABILITIES 仍允许声明但不暴露给 ToolRegistry。
+
 
 ### 认证与鉴权
 

@@ -515,6 +515,18 @@ class TaskRuntimeContextBuilderMountedContextTest {
         }
 
         @Override
+        public long countByTool(String toolName) { return 0L; }
+
+        @Override
+        public long countByToolAndSuccess(String toolName) { return 0L; }
+
+        @Override
+        public List<Integer> elapsedMillisByTool(String toolName) { return List.of(); }
+
+        @Override
+        public List<ToolInvocationRecord> listRecentByTool(String toolName, int limit) { return List.of(); }
+
+        @Override
         public Handle getHandle() {
             throw new UnsupportedOperationException();
         }

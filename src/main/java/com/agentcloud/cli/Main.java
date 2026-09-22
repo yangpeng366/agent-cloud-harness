@@ -26,6 +26,7 @@ import com.agentcloud.store.*;
 import com.agentcloud.tool.CmdTool;
 import com.agentcloud.tool.GitTool;
 import com.agentcloud.tool.ListFilesTool;
+import com.agentcloud.tool.OpenEyesTool;
 import com.agentcloud.tool.PatchFileTool;
 import com.agentcloud.tool.PowerShellTool;
 import com.agentcloud.tool.ReadFileTool;
@@ -152,12 +153,17 @@ public class Main {
         }
 
         // Phase 2: Auto-discover local environment and write harness-state.json
+        com.agentcloud.engine.HarnessState harnessState = null;
         try {
-            com.agentcloud.engine.HarnessState state = com.agentcloud.engine.HarnessStateWriter.discover(llmConfig);
+            com.agentcloud.agent.providers.HarnessConfig.HarnessEyesMcpConfig eyesMcpConfig =
+                harnessConfig.map(com.agentcloud.agent.providers.HarnessConfig::eyesMcp).orElse(null);
+            com.agentcloud.engine.HarnessState state =
+                com.agentcloud.engine.HarnessStateWriter.discover(llmConfig, eyesMcpConfig);
             com.agentcloud.engine.HarnessStateWriter.write(state,
                 java.nio.file.Paths.get(System.getProperty("user.home"), ".agentcloud", "harness-state.json"));
             log.info("Harness state auto-discovery completed. ccxReachable={} models={} workerReadyCount={}",
                 state.ccxReachable(), state.ccxModels().size(), state.workerReadyCount());
+            harnessState = state;
         } catch (Exception e) {
             log.warn("Harness state auto-discovery failed (non-fatal): {}", e.getMessage());
         }
@@ -199,6 +205,11 @@ public class Main {
 
         // Phase 1/2: Worker Execution Layer（tool-aware 第一版：单次工具计划 + 单次工具调用）
         ToolPolicy toolPolicy = new ToolPolicy();
+        com.agentcloud.agent.providers.HarnessConfig.HarnessEyesMcpConfig eyesMcpToolConfig =
+            harnessConfig.map(com.agentcloud.agent.providers.HarnessConfig::eyesMcp).orElse(null);
+        boolean registerOpenEyesTool = eyesMcpToolConfig != null
+            && eyesMcpToolConfig.enabled()
+            && eyesMcpToolConfig.registerAsTool();
         ToolRegistry toolRegistry = new ToolRegistry()
             .register(new ListFilesTool(workerRegistry, toolPolicy))
             .register(new ReadFileTool(workerRegistry, toolPolicy))
@@ -210,6 +221,13 @@ public class Main {
             .register(new ShellTool(workerRegistry, toolPolicy))
             .register(new PowerShellTool(workerRegistry, toolPolicy))
             .register(new CmdTool(workerRegistry, toolPolicy));
+        if (registerOpenEyesTool) {
+            toolRegistry.register(new OpenEyesTool(workerRegistry, toolPolicy));
+        } else {
+            log.info("OpenEyes worker tool disabled: enabled={}, register_as_tool={}",
+                eyesMcpToolConfig != null && eyesMcpToolConfig.enabled(),
+                eyesMcpToolConfig != null && eyesMcpToolConfig.registerAsTool());
+        }
 
         WorkerExecutor defaultWorkerExecutor = new DefaultWorkerExecutor(
             llmClient,
@@ -281,6 +299,8 @@ public class Main {
             port, taskService, sessionService, workerRegistry, agentProviderRegistry, skillRegistry, consolidation, learningMemoryService,
             experimentRunService, experimentMatrixService, agentRunService, agentActionDao, llmConfig
         );
+        server.setSystemState(harnessState);
+        server.setToolInvocationDao(toolInvocationDao);
         server.start();
 
         log.info("Control plane ready. API: http://localhost:{}", port);

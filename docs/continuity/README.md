@@ -15,6 +15,7 @@
 ## 命中信号
 
 - 任务提到 `control node`、`pause/resume/handoff`、`packet`、`checkpoint`
+- 任务提到 Jev / System One / 上下文评分门控 / keep-probability / jev.context_scoring feature flag / FEAT-03
 - 任务提到 `runtime context`、`active context`、`goal loop`、`continuity`
 - 任务是在看控制面主链、多轮续跑、状态机或聚合诊断
 
@@ -30,6 +31,7 @@
 | 要跑真实控制面链路、multi-round 任务、live flow、pause/resume/handoff 验证 | `../LIVE_FLOW_RUNBOOK.md` | `../TEST_DRIVEN_MULTI_ROUND_TASK_PLAN.md`、`../PROJECT_EVOLUTION_MULTI_ROUND_TASK_PACK.md`、`../MULTI_ROUND_TASK_EXECUTION_RUNBOOK.md` |
 | 要处理 provider 502、partial result、artifact 已落盘但 Dialogue 只显示失败、本地 agent 执行链重设计 | `../HARNESS_REDESIGN_FOR_LOCAL_AGENTS.md` | `../LIVE_FLOW_RUNBOOK.md`、`../TROUBLESHOOT.md` |
 | 要回看 packet / control-route / multi-round / closure 的真实 execution evidence | `runs/README.md` | 再进入对应 dated record，并把仍然有效的结论回收到 runbook / 基线 / `PROGRESS.md` |
+| 要为 FEAT-03 / HW-09 / HW-10（System One 上下文评分门控）落地字段设计、fallback 合同、测试合同 | `JEV_CONTEXT_SCORING_PLAN.md` | `../JEV_CONTEXT_SCORING_RESEARCH.md`（立项依据）、`../API_CONTRACTS.md`、`../TROUBLESHOOT.md`、`../HARNESS_CHANGE_CONTRACT.md`（Contract-Additive 流程） |
 
 ## 最小阅读顺序
 
@@ -61,11 +63,14 @@
 - `PROGRESS.md`
 
 ### Continuity / Packet / Runtime-Memory 主线
+- `JEV_CONTEXT_SCORING_PLAN.md` — FEAT-03 / HW-09 / HW-10 落地设计：字段默认值、runtime 观测增量、packet keep-probability、judgment 前置过滤、fallback 合同、测试合同、凭据纪律、立项门槛 8 条；立项签字后由本文档接管主线。`../JEV_CONTEXT_SCORING_RESEARCH.md`（借鉴类调研）为立项依据。
 
 - `../AGENT_CLOUD_HARNESS_EXECUTION_CONTINUITY_MEMORY_FLOW.md`
 - `../PROGRESS_ACCUMULATION_LANDING_PLAN.md`
 
 ### Goal Loop / Agent Action / Bounded Autonomy
+- [INITIATIVES/INDEX.md](../INITIATIVES/INDEX.md) — Jev / OpenEyes 立项跟踪总览(本地 16 张 candidate card; FEAT-03 / HW-09 / HW-10 是当前主线入口)。
+- `../JEV_GRAPH_NODES_PLAN.md` — Jev × 决策树 × 复杂网络 算法借鉴研究；路径 B "RuntimeJudgmentService 升级为 parallel questions" 是 RuntimeJudgmentService 的下一次演进方向（parallel_questions cookbook 12.2× cheap / 10× fast）。
 
 - `../GOAL_LOOP_LANDING_PLAN.md`
 - `../LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` — 下一阶段方向主入口：Loop 主闭环 + Goal 合同 + 交接 packet + UI 状态与结果
@@ -108,6 +113,8 @@
   - 需要明确改动边界时同步 `HARNESS_CHANGE_CONTRACT.md`
 - continuity、packet、checkpoint、active context、progress accumulation 变化：
   - 优先写 `AGENT_CLOUD_HARNESS_EXECUTION_CONTINUITY_MEMORY_FLOW.md`
+  - 或 `JEV_CONTEXT_SCORING_PLAN.md`（System One 上下文评分门控落地设计，待签字）
+- 或 `JEV_GRAPH_NODES_PLAN.md`（Jev × 决策树 × 复杂网络 算法借鉴研究，路径 B RuntimeJudgmentService 升级）
   - 或 `PROGRESS_ACCUMULATION_LANDING_PLAN.md`
 - goal loop、agent action、bounded autonomy、outer loop 设计变化：
   - 优先写 `GOAL_LOOP_LANDING_PLAN.md`
@@ -154,3 +161,8 @@
 - 要做 packet / live flow / 多轮续跑验证：先看 `../LIVE_FLOW_RUNBOOK.md`
 - 要处理 provider 结果断链或本地 agent 重设计：先看 `../HARNESS_REDESIGN_FOR_LOCAL_AGENTS.md`
 - 要回看 control-plane execution evidence：`runs/README.md`
+- 要为 FEAT-03（System One 上下文评分门控）落地字段设计与 fallback 合同：`JEV_CONTEXT_SCORING_PLAN.md`
+- 要为 RuntimeJudgmentService 升级为 parallel questions 决策树（parallel_questions cookbook）：`JEV_GRAPH_NODES_PLAN.md`
+- 要看 Jev 做元决策的真实验证据（路径 B prototype）: [JEV_DECISION_TREE_REAL_EXPERIMENT.md](../JEV_DECISION_TREE_REAL_EXPERIMENT.md)（5 choice questions × 1 call / 1014ms / $0.001 / 5/5 票对用户拍板；confidence 天然揭露 C 在 git_tracking 上 confidence=0.38）
+- 要看 Jev / OpenEyes 立项候选全貌与状态机：[INITIATIVES/INDEX.md](../INITIATIVES/INDEX.md)（本地 16 张 candidate card，每条含状态 / 立项门槛 / blocker / sign-off checklist）
+- 要回看 debug session 逐次诊断/修复证据（codex exec hang、启动验证等）：`../TROUBLESHOOT-debug-sessions.md`

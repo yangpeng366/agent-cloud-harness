@@ -31,8 +31,10 @@ import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Runtime Control Node Graph
@@ -132,6 +134,17 @@ public class ControlNodeGraph {
     private final AgentActionReconciler agentActionReconciler;
     private final LlmSubgoalJudgmentService llmSubgoalJudgmentService;
 
+    /**
+     * Per-taskId 锁池：保证同一 task 的控制节点操作（enter / trigger*）串行执行，
+     * 消除并发竞态（重复 judgment / 重复 decision 插入 / 状态覆盖）。
+     * ReentrantLock 可重入，支持同线程内 schedulerNode ↔ continueNode 递归调用。
+     */
+    private final ConcurrentHashMap<String, ReentrantLock> taskLocks = new ConcurrentHashMap<>();
+
+    private ReentrantLock lockFor(String taskId) {
+        return taskLocks.computeIfAbsent(taskId, k -> new ReentrantLock());
+    }
+
     public ControlNodeGraph(TaskDao taskDao, EventDao eventDao, SessionDao sessionDao,
                             ResumePacketDao packetDao, WorkerRouter router, PacketBuilder packetBuilder,
                             ConsolidationService consolidation,
@@ -228,6 +241,16 @@ public class ControlNodeGraph {
     }
 
     public Task enter(Task task) {
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            return enterInternal(task);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private Task enterInternal(Task task) {
         String node = task.controlNode();
         if (node == null) node = "intake";
         return switch (node) {
@@ -635,7 +658,8 @@ public class ControlNodeGraph {
             "needs_human", execDecision.needsHuman(),
             "target_worker", firstNonBlank(execDecision.targetWorker(), task.assignedWorker()),
             "retry_decision", execDecision.retryDecision(),
-            "escalation_decision", execDecision.escalationDecision()
+            "escalation_decision", execDecision.escalationDecision(),
+            "runtime_facts", execDecision.runtimeFacts()
         ), judgmentPromptMetrics);
         Decision judgmentRecord = new Decision(
             IdGenerator.newId("dec"), task.sessionId(), task.id(), Instant.now(),
@@ -672,7 +696,8 @@ public class ControlNodeGraph {
                 "evaluator_reason", evaluatorReason,
                 "orchestration_closed_loop_observed", orchestrationClosedLoopObserved,
                 "retry_decision", execDecision.retryDecision(),
-                "escalation_decision", execDecision.escalationDecision()
+                "escalation_decision", execDecision.escalationDecision(),
+                "runtime_facts", completionDecision.runtimeFacts()
             ), judgmentPromptMetrics)
         );
         decisionDao.insert(completionRecord);
@@ -2372,41 +2397,71 @@ public class ControlNodeGraph {
     // === 外部触发方法 ===
 
     public Task triggerPause(Task task, String reason) {
-        log.info("[Trigger] pause task={} reason={}", task.id(), reason);
-        Task t = bumpExecInstance(task.withStatus("paused").withControlNode("packet").withWaitingReason(reason));
-        taskDao.updateState(t);
-        return packetNode(t);
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            log.info("[Trigger] pause task={} reason={}", task.id(), reason);
+            Task t = bumpExecInstance(task.withStatus("paused").withControlNode("packet").withWaitingReason(reason));
+            taskDao.updateState(t);
+            return packetNode(t);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Task triggerEscalate(Task task, String reason) {
-        log.info("[Trigger] escalate task={} reason={}", task.id(), reason);
-        persistTransitionPacket(task, "escalate_before");
-        Task t = bumpExecInstance(task.withStatus("waiting_human").withControlNode("human_gate").withWaitingReason(reason));
-        taskDao.updateState(t);
-        return humanGateNode(t);
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            log.info("[Trigger] escalate task={} reason={}", task.id(), reason);
+            persistTransitionPacket(task, "escalate_before");
+            Task t = bumpExecInstance(task.withStatus("waiting_human").withControlNode("human_gate").withWaitingReason(reason));
+            taskDao.updateState(t);
+            return humanGateNode(t);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Task triggerHandoff(Task task, String targetWorker) {
-        log.info("[Trigger] handoff task={} to worker={}", task.id(), targetWorker);
-        persistTransitionPacket(task.withAssignedWorker(targetWorker), "handoff_before");
-        Task t = bumpExecInstance(withMetadataEntries(clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff"), "handoff_depth", handoffDepth(task) + 1));
-        taskDao.updateState(t);
-        return handoffNode(t);
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            log.info("[Trigger] handoff task={} to worker={}", task.id(), targetWorker);
+            persistTransitionPacket(task.withAssignedWorker(targetWorker), "handoff_before");
+            Task t = bumpExecInstance(withMetadataEntries(clearAutoContinueBurst(task.withAssignedWorker(targetWorker)).withControlNode("handoff"), "handoff_depth", handoffDepth(task) + 1));
+            taskDao.updateState(t);
+            return handoffNode(t);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Task triggerResume(Task task) {
-        log.info("[Trigger] resume task={}", task.id());
-        Task t = bumpExecInstance(clearAutoContinueBurst(task.withStatus("active").withControlNode("scheduler").withWaitingReason(null)));
-        taskDao.updateState(t);
-        return schedulerNode(t);
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            log.info("[Trigger] resume task={}", task.id());
+            Task t = bumpExecInstance(clearAutoContinueBurst(task.withStatus("active").withControlNode("scheduler").withWaitingReason(null)));
+            taskDao.updateState(t);
+            return schedulerNode(t);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Task triggerHalt(Task task, String reason) {
-        log.info("[Trigger] halt task={} reason={}", task.id(), reason);
-        persistTransitionPacket(task, "halt_before");
-        Task t = finalizeCompletedTask(task).withWaitingReason(reason);
-        taskDao.updateState(t);
-        return t;
+        ReentrantLock lock = lockFor(task.id());
+        lock.lock();
+        try {
+            log.info("[Trigger] halt task={} reason={}", task.id(), reason);
+            persistTransitionPacket(task, "halt_before");
+            Task t = finalizeCompletedTask(task).withWaitingReason(reason);
+            taskDao.updateState(t);
+            return t;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -2594,7 +2649,7 @@ public class ControlNodeGraph {
             log.info("[AutoContinue] task={} rejected: grounded output already present", task.id());
             return false;
         }
-        
+
         // 获取 LLM 返回的下一步想法
         String nextStep = firstNonBlank(
             stringValue(latestWorkerMetadata.get("suggested_next_action")),
@@ -2603,7 +2658,7 @@ public class ControlNodeGraph {
             task.nextStep()
         );
         boolean hasNextStep = nextStep != null && !nextStep.isBlank();
-        
+
         // 检查是否有显式的 goal（目标）
         String goal = firstNonBlank(task.goal(), metadataString(task.metadata(), "goal"));
         boolean hasGoal = goal != null && !goal.isBlank();
@@ -2636,7 +2691,7 @@ public class ControlNodeGraph {
             log.info("[AutoContinue] task={} rejected: no declared next round, next step, unfinished items, goal, or auto_multi_round enabled", task.id());
             return false;
         }
-        
+
         // 允许所有任务类型自动继续到下一轮
         // 仅保留突发计数限制，防止无限循环
         boolean canContinue = autoContinueBurstCount(task) < autoContinueBurstLimit(task, executionResult, latestWorkerMetadata);
@@ -3882,7 +3937,7 @@ public class ControlNodeGraph {
         String outputText = metadataString(latestWorkerMetadata, "output_text");
         String artifactContent = metadataString(latestWorkerMetadata, "artifact_content");
         String toolSummary = metadataString(latestWorkerMetadata, "tool_summary");
-        
+
         return blankToNull(outputText) == null && blankToNull(artifactContent) == null && blankToNull(toolSummary) == null;
     }
 

@@ -10,7 +10,10 @@ param(
     [ValidateSet('real', 'ui_seam')]
     [string]$LifecycleMode = 'real',
     [ValidateSet('both', 'chat', 'responses')]
-    [string]$Surface = 'both'
+    [string]$Surface = 'both',
+    [switch]$UseOpenEyesProfile,
+    [string]$OpenEyesProfileDir = "$env:USERPROFILE\.openeyes\profiles\dialogue-acceptance",
+    [switch]$OpenEyesNoSeed
 )
 
 $ErrorActionPreference = 'Stop'
@@ -129,23 +132,59 @@ function Assert-Health {
 function Start-ProbeBrowser {
     param(
         [int]$Port,
-        [string]$ProfileDir
+        [string]$ProfileDir,
+        [string]$OpenEyesSeedMode = 'direct'
     )
 
     Assert-PortFree -Port $Port
     New-Item -ItemType Directory -Force -Path $ProfileDir | Out-Null
-    $args = @(
-        '--headless=new',
-        "--remote-debugging-port=$Port",
-        "--user-data-dir=$ProfileDir",
-        'about:blank'
-    )
-    $process = Start-Process -FilePath $BrowserPath -ArgumentList $args -PassThru
+    if ($OpenEyesSeedMode -eq 'direct') {
+        $args = @(
+            '--headless=new',
+            "--remote-debugging-port=$Port",
+            "--user-data-dir=$ProfileDir",
+            'about:blank'
+        )
+        $process = Start-Process -FilePath $BrowserPath -ArgumentList $args -PassThru
+    } else {
+        $eyesCommand = Get-Command eyes -ErrorAction SilentlyContinue
+        Assert-True -Condition ($null -ne $eyesCommand) -Message 'OpenEyes CLI not found: eyes'
+        $launchArgs = @(
+            'browser', 'launch',
+            '--url', 'about:blank',
+            '--port', $Port,
+            '--profile-dir', $ProfileDir
+        )
+        $launchArgs += if ($OpenEyesSeedMode -eq 'seed') { '--seed' } else { '--no-seed' }
+        $launchArgs += '--headless'
+        $raw = & $eyesCommand @launchArgs | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "OpenEyes browser launch failed seed=$OpenEyesSeedMode exit=$LASTEXITCODE" }
+        $launch = $raw | ConvertFrom-Json
+        $process = Get-Process -Id $launch.pid -ErrorAction Stop
+    }
     $version = Wait-DebugEndpoint -Port $Port -TimeoutSec $StartupTimeoutSec
     return [pscustomobject]@{
         Process = $process
         Version = $version
     }
+}
+
+function Test-OpenEyesSeedMarker {
+    param([string]$MarkerPath)
+    Test-Path -LiteralPath $MarkerPath
+}
+
+function Save-OpenEyesSeedMarker {
+    param([string]$MarkerPath)
+    $marker = [ordered]@{
+        created_at = (Get-Date).ToUniversalTime().ToString('o')
+        marker_version = 1
+    }
+    [System.IO.File]::WriteAllText(
+        $MarkerPath,
+        ($marker | ConvertTo-Json -Compress),
+        [System.Text.UTF8Encoding]::new($false)
+    )
 }
 
 function Stop-ProbeBrowser {
@@ -163,12 +202,16 @@ function Invoke-SurfaceProbe {
         [int]$Port,
         [string]$ProfileDir,
         [string]$DialoguePath,
-        [string]$ExpectedSurface
+        [string]$ExpectedSurface,
+        [string]$OpenEyesSeedMode = 'direct'
     )
 
     $browser = $null
     try {
-        $browser = Start-ProbeBrowser -Port $Port -ProfileDir $ProfileDir
+        $browser = Start-ProbeBrowser -Port $Port -ProfileDir $ProfileDir -OpenEyesSeedMode $OpenEyesSeedMode
+        if ($UseOpenEyesProfile -and $OpenEyesSeedMode -eq 'seed' -and $openEyesMarkerPath) {
+            Save-OpenEyesSeedMarker -MarkerPath $openEyesMarkerPath
+        }
         return Invoke-BrowserProbeRunner -ScriptPath $runnerScript -Payload @{
             wsUrl = $browser.Version.webSocketDebuggerUrl
             dialogueUrl = "$BaseUrl$DialoguePath"
@@ -192,6 +235,20 @@ $nodeExecutable = Resolve-NodeExecutable -PreferredPath $NodePath
 New-Item -ItemType Directory -Force -Path '.tmp' | Out-Null
 $resolvedUserDataDir = [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $UserDataDir))
 New-Item -ItemType Directory -Force -Path $resolvedUserDataDir | Out-Null
+$openEyesSeedMode = 'direct'
+$openEyesMarkerPath = $null
+if ($UseOpenEyesProfile) {
+    $resolvedOpenEyesProfile = if ([System.IO.Path]::IsPathRooted($OpenEyesProfileDir)) {
+        [System.IO.Path]::GetFullPath($OpenEyesProfileDir)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path (Get-Location) $OpenEyesProfileDir))
+    }
+    $openEyesMarkerPath = Join-Path $resolvedOpenEyesProfile 'dialogue-acceptance.profile-seeded.json'
+    $openEyesSeedMode = if ($OpenEyesNoSeed) { 'no-seed' } elseif (Test-OpenEyesSeedMarker -MarkerPath $openEyesMarkerPath) { 'no-seed' } else { 'seed' }
+    if ($openEyesSeedMode -eq 'no-seed') {
+        Assert-True -Condition (Test-Path -LiteralPath $openEyesMarkerPath) -Message "OpenEyes profile seed marker missing: $openEyesMarkerPath"
+    }
+}
 $resolvedScreenshotDir = $null
 if (-not [string]::IsNullOrWhiteSpace($ScreenshotDir)) {
     $resolvedScreenshotDir = if ([System.IO.Path]::IsPathRooted($ScreenshotDir)) {
@@ -209,23 +266,25 @@ if ($Surface -in @('both', 'chat')) {
     $chatResult = Invoke-SurfaceProbe `
         -SurfaceName 'chat' `
         -Port $DebugPort `
-        -ProfileDir $resolvedUserDataDir `
+        -ProfileDir $(if ($UseOpenEyesProfile) { $resolvedOpenEyesProfile } else { $resolvedUserDataDir }) `
         -DialoguePath '/dialogue/' `
-        -ExpectedSurface 'chat_completions'
+        -ExpectedSurface 'chat_completions' `
+        -OpenEyesSeedMode $openEyesSeedMode
 }
 if ($Surface -in @('both', 'responses')) {
     $responsesPort = if ($Surface -eq 'both') { $DebugPort + 1 } else { $DebugPort }
     $responsesProfileDir = if ($Surface -eq 'both') {
-        [System.IO.Path]::GetFullPath("$resolvedUserDataDir-responses")
-    } else {
-        $resolvedUserDataDir
-    }
+            if ($UseOpenEyesProfile) { $resolvedOpenEyesProfile } else { [System.IO.Path]::GetFullPath("$resolvedUserDataDir-responses") }
+        } else {
+            if ($UseOpenEyesProfile) { $resolvedOpenEyesProfile } else { $resolvedUserDataDir }
+        }
     $responsesResult = Invoke-SurfaceProbe `
         -SurfaceName 'responses' `
         -Port $responsesPort `
         -ProfileDir $responsesProfileDir `
         -DialoguePath '/dialogue/#facade=responses' `
-        -ExpectedSurface 'responses'
+        -ExpectedSurface 'responses' `
+        -OpenEyesSeedMode $(if ($UseOpenEyesProfile) { 'no-seed' } else { 'direct' })
 }
 
     $chatSurface = if ($null -ne $chatResult -and $null -ne $chatResult.chat_surface) {
@@ -266,6 +325,12 @@ if ($Surface -in @('both', 'responses')) {
         debug_port = $DebugPort
         node_path = $nodeExecutable
         screenshot_dir = $resolvedScreenshotDir
+        openeyes_profile_enabled = [bool]$UseOpenEyesProfile
+        openeyes_profile_dir = $resolvedOpenEyesProfile
+        openeyes_seed_mode = $openEyesSeedMode
         chat_surface = $chatSurface
         responses_surface = $responsesSurface
     } | ConvertTo-Json -Depth 10
+if ($UseOpenEyesProfile -and $openEyesSeedMode -eq 'seed') {
+    Save-OpenEyesSeedMarker -MarkerPath $openEyesMarkerPath
+}

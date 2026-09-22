@@ -1,6 +1,66 @@
 # Troubleshoot
 
-## 1. Gotchas — 已知坑点
+### 2.11 provider CLI 是交互式子命令 / 登录态命令，但 harness 只看到 `[?]`、无 JSON 事件
+
+- **典型表现**:
+  1. 本机手动执行 provider CLI 可以正常登录、交互或输出 rich UI，例如 Codex 的 `codex`、Claude 的 `claude`
+  2. 在 Dialogue、task summary、worker artifact 里却只看到 `[?]`、进度条、空行或 ASCII 界面，没有 harness 期望的 JSON/JSONL 事件流
+  3. 甚至可能出现“明明能登录，但 provider 像卡住/无响应”的假象，本质不是网络登录失败，而是 transport contract 不匹配
+- **不要误判成什么**:
+  1. 不要直接把 provider CLI 判定成“账号/认证完全失败”
+  2. 不要拿一条能交互成功的手工命令，反推 harness 也应该能直接消费它
+  3. 不要忽略 provider detect / worker readiness 里已经给出的 `cli_launch_mode` / `cli_resolved_binary` / `cli_command_preview`
+- **常见根因**:
+  1. provider CLI 是交互式前端，不是纯非交互 JSON API；harness 的 app-server / JSON-RPC / native_cli_* 只消费稳定结构化输出
+  2. 登录/交互子命令需要 TTY，被 harness 后台启动后表现为只输出交互式 UI 或 `[?]` 提示
+  3. Windows 上额外混入 wrapper 解析、Alt Screen、shell profile、中文 GBK 控制台编码等问题，导致首字节就进入 rich output 而不是 JSON
+- **当前推荐排查步骤**:
+  1. 先确认 provider CLI 的 help / non-interactive 入口：
+
+    ```powershell
+    codex --version
+    codex --help
+    codex exec --help
+    codex exec resume --help
+    codex app-server --help
+    codex debug app-server --help
+    ```
+
+  2. 优先使用 harness 明确支持的非交互协议，而不是交互式前端：
+
+    - Codex：`codex app-server --listen stdio://` + JSON-RPC
+    - Native CLI：`native_cli_text` / `native_cli_json` / `native_cli_lines` / `native_cli_stream_json` 中挑一个 provider 真正稳定输出的协议
+  3. 查 live flow / agent run 时，重点看：
+
+    - `cli_launch_mode`
+    - `cli_resolved_binary` / `launch_target` / `launch_mode`
+    - `provider_protocol_trace`、`provider_error`、`provider_failure_class`
+  4. 若 provider CLI 必须交互登录，常见替代路径：
+
+    - 用 provider 的 non-interactive / resume / headless 子命令先完成登录态准备
+    - 把认证/登录信息转成 harness 支持的环境变量或配置层，而不是在 task 执行期依赖交互式界面
+    - 在 Windows 上把 wrapper / shell profile 的影响显式剥掉，避免 Java `ProcessBuilder` 和手工终端走两条路径
+- **对外协作建议**:
+  1. 如果这是你准备贡献 upstream 或给仓库补文档时的场景，优先写“已验证的非交互入口 + 失败时的结构化字段”，不要只写一条能成功登录的手工命令
+  2. 如果问题仍定位在“rich UI vs JSON transport”边界，最容易 upstream 的贡献通常是：
+
+    - 补 README / docs 里的非交互 runbook
+    - 补齐 `provider_protocol_trace` 级别的诊断字段
+    - 在 examples / CI 里增加一条 headless happy path
+
+
+
+### JEV-01 Jev context scoring 开了但 judgment 没走 prefilter
+
+- **位置**: `src/main/java/com/agentcloud/cli/Main.java`, `src/main/java/com/agentcloud/judgment/JevPrefilteredJudgmentService.java`, `src/main/java/com/agentcloud/scorer/JevContextScorer.java`
+- **当前合同**:
+  1. `feature_flags.jev.context_scoring=false` 时，Main 不包装 judgment，行为与旧链路完全一致，也不访问 Jev HTTP。
+  2. `context_scoring=true` 时，缺 `TYPESAFE_API_KEY`、HTTP 非 2xx、超时或解析失败都会 fallback 到原 judgment；不阻断任务。
+  3. 命中 prefilter 时，`/api/v1/tasks/{id}/judgment_trace` 的 execution/completion judgment metadata 会出现 `runtime_facts.jev_prefilter_decision`，字段为 `action`、`llm_called=false`、`probability`。
+- **排查步骤**:
+  1. 先确认 YAML 根级 `feature_flags.jev.context_scoring` 是否为 `true`，重启后生效。
+  2. 确认进程环境存在 `TYPESAFE_API_KEY`，必要时确认 `TYPESAFE_BASE_URL` 指向可用网关。
+  3. 如果没有 `jev_prefilter_decision` 节点，优先把这次当成 Jev fallback 排查；当前实现选择“不阻断原 judgment”，后续 shadow 运行再补熔断与限流指标。
 
 ### G01: 控制动作接口处于 GET/POST 双兼容期
 
@@ -1926,4 +1986,3 @@ curl -X POST "http://localhost:8080/api/v1/tasks/<task_id>/recover" `
 
 #### 修复 4：乱码检测与编码 fallback
 **文件**：`src/main/java/com/agentcloud/runtime/TextDecoding.java`
-**修改**：增加 `looksLikeGarbage()` 和 `containsGbkGarbagePattern()` 方法，当 UTF-8 解码结果看起来像乱码时，自动尝试 GBK/GB18030 编码

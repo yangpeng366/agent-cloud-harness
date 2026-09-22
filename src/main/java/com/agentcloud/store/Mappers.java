@@ -212,4 +212,24 @@ public final class Mappers {
         rs.getString("error_message"),
         JsonMapper.fromJson(rs.getString("metadata_json"))
     );
+
+    public static final RowMapper<Goal> GOAL = (rs, ctx) -> new Goal(
+        rs.getString("id"), rs.getString("session_id"), rs.getString("parent_goal_id"),
+        rs.getString("title"), rs.getString("status"), rs.getString("phase"),
+        rs.getString("source_task_id"), rs.getString("active_task_id"), rs.getString("objective"),
+        JsonMapper.fromJson(rs.getString("success_criteria_json")),
+        JsonMapper.fromJson(rs.getString("constraints_json")),
+        JsonMapper.fromJson(rs.getString("budget_json")),
+        JsonMapper.fromJson(rs.getString("progress_json")),
+        rs.getString("outcome_summary"),
+        rs.getObject("revision") != null ? rs.getInt("revision") : null,
+        instant(rs, "opened_at"), instant(rs, "updated_at"), instant(rs, "closed_at"),
+        JsonMapper.fromJson(rs.getString("metadata_json"))
+    );
+
+    public static final RowMapper<GoalEvent> GOAL_EVENT = (rs, ctx) -> new GoalEvent(
+        rs.getString("id"), rs.getString("goal_id"), rs.getString("event_type"),
+        rs.getString("actor_type"), rs.getString("actor_id"), rs.getString("summary"),
+        JsonMapper.fromJson(rs.getString("payload_json")), instant(rs, "created_at")
+    );
 }

@@ -6,6 +6,7 @@ import com.agentcloud.engine.ChatFacadeService;
 import com.agentcloud.engine.ConsolidationService;
 import com.agentcloud.engine.ExperimentMatrixService;
 import com.agentcloud.engine.ExperimentRunService;
+import com.agentcloud.engine.HarnessState;
 import com.agentcloud.engine.LearningMemoryService;
 import com.agentcloud.engine.SessionService;
 import com.agentcloud.engine.SkillRegistry;
@@ -13,6 +14,7 @@ import com.agentcloud.engine.TaskService;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.llm.LlmConfig;
 import com.agentcloud.store.AgentActionDao;
+import com.agentcloud.store.ToolInvocationDao;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -45,6 +47,8 @@ public class NioHttpServer {
     private final ObjectMapper mapper;
     private final ClassLoader appClassLoader;
     private HttpServer server;
+    private HarnessState systemState;
+    private ToolInvocationDao toolInvocationDao;
 
     public NioHttpServer(int port, TaskService taskService, SessionService sessionService,
                          WorkerRegistry workerRegistry, AgentProviderRegistry agentProviderRegistry, SkillRegistry skillRegistry,
@@ -141,7 +145,7 @@ public class NioHttpServer {
         server.createContext("/api/v1/experiment_runs", new ExperimentRunHandler(taskService, experimentRunService));
         server.createContext("/api/v1/experiment_matrix", new ExperimentMatrixHandler(experimentMatrixService, mapper));
         server.createContext("/api/v1/health", exchange -> {
-            sendJson(exchange, 200, healthPayload(llmConfig));
+            sendJson(exchange, 200, healthPayload(llmConfig, systemState, toolInvocationDao));
         });
 
         server.start();
@@ -166,6 +170,23 @@ public class NioHttpServer {
                 "api_key_configured", config.available()
             )
         );
+    }
+
+    public void setSystemState(HarnessState systemState) {
+        this.systemState = systemState;
+    }
+
+    public void setToolInvocationDao(ToolInvocationDao toolInvocationDao) {
+        this.toolInvocationDao = toolInvocationDao;
+    }
+
+    static Map<String, Object> healthPayload(LlmConfig llmConfig,
+                                             HarnessState systemState,
+                                             ToolInvocationDao toolInvocationDao) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>(healthPayload(llmConfig));
+        payload.put("eyes_mcp", OpenEyesHealthEnricher.snapshot(systemState, toolInvocationDao));
+        payload.put("jev_context_scoring", JevHealthEnricher.snapshot());
+        return payload;
     }
 
     public void stop() {

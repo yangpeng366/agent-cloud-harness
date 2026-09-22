@@ -22,7 +22,7 @@ class WorkerHandler implements HttpHandler {
     private static final Logger log = LoggerFactory.getLogger(WorkerHandler.class);
     private static final Set<String> KNOWN_TOOL_CAPABILITIES = Set.of(
         "search_text", "read_file", "write_file", "write_files", "list_files", "patch_file",
-        "git", "shell", "powershell", "cmd"
+        "git", "shell", "powershell", "cmd", "openeyes"
     );
     private final WorkerRegistry registry;
     private final ObjectMapper mapper;

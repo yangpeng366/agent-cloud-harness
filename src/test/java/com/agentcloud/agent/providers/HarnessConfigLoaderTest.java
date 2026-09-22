@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -40,6 +41,25 @@ class HarnessConfigLoaderTest {
         assertNotNull(cfg.defaults());
         assertNotNull(cfg.ccx());
         assertTrue(cfg.workers().isEmpty());
+    }
+
+    @Test
+    void loadParsesJevFeatureFlags() throws Exception {
+        Path config = tempDir.resolve("harness-config.yml");
+        Files.writeString(config, """
+            feature_flags:
+              jev:
+                context_scoring: true
+                patrol_dispatcher: false
+                patrol_postprocess: true
+                tool_recall_filter: false
+            """);
+
+        HarnessConfig cfg = HarnessConfigLoader.load(List.of(config)).orElseThrow();
+        assertTrue(cfg.featureFlags().jevContextScoring());
+        assertFalse(cfg.featureFlags().jevPatrolDispatcher());
+        assertTrue(cfg.featureFlags().jevPatrolPostprocess());
+        assertFalse(cfg.featureFlags().jevToolRecallFilter());
     }
 
     @Test
@@ -101,6 +121,45 @@ class HarnessConfigLoaderTest {
         assertTrue(cfg.ccx().healthCheckOnStartup());
     }
 
+    @Test
+    void loadParsesEyesMcpStartupConfig() throws Exception {
+        Path config = tempDir.resolve("harness-config-eyes-mcp.yml");
+        Files.writeString(config, """
+            harness:
+              eyes_mcp:
+                command: eyes-mcp
+                health_check_on_startup: true
+                startup_timeout_seconds: 5
+              workers: []
+            """);
+
+        HarnessConfig cfg = HarnessConfigLoader.load(List.of(config)).orElseThrow();
+        assertEquals("eyes-mcp", cfg.eyesMcp().command());
+        assertTrue(cfg.eyesMcp().healthCheckOnStartup());
+        assertEquals(5, cfg.eyesMcp().startupTimeoutSeconds());
+        assertFalse(cfg.eyesMcp().enabled());
+        assertFalse(cfg.eyesMcp().registerAsTool());
+    }
+
+    @Test
+    void loadParsesEyesMcpToolRegistrationConfig() throws Exception {
+        Path config = tempDir.resolve("harness-config-eyes-mcp-tool.yml");
+        Files.writeString(config, """
+            harness:
+              eyes_mcp:
+                command: eyes-mcp
+                health_check_on_startup: false
+                startup_timeout_seconds: 5
+                enabled: true
+                register_as_tool: true
+              workers: []
+            """);
+
+        HarnessConfig cfg = HarnessConfigLoader.load(List.of(config)).orElseThrow();
+        assertTrue(cfg.eyesMcp().enabled());
+        assertTrue(cfg.eyesMcp().registerAsTool());
+        assertFalse(cfg.eyesMcp().healthCheckOnStartup());
+    }
     @Test
     void loadParsesWorkerLanes() throws Exception {
         Path config = tempDir.resolve("harness-config.yml");

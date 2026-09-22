@@ -10,8 +10,11 @@ import { buildLegacyControlAuditPlan } from "../dialogue/legacy-control-audit-pl
 import { buildTaskFocusLineBase } from "../dialogue/task-focus-line-plan.js";
 import { buildTaskOverviewPlan } from "../dialogue/task-overview-plan.js";
 import { toneForConsoleTaskStatus as toneForStatus, toneForConsoleRunStatus as toneForRunStatus } from "./console-status-tone-plan.js";
+import { buildOpenEyesMcpHealthPlan } from "./openeyes-mcp-health-plan.js";
+import { buildOpenEyesUiAssertionPlan, shouldRenderOpenEyesUiAssertion } from "./openeyes-ui-assertion-plan.js";
 
 const state = {
+    health: null,
     sessions: [],
     tasks: [],
     workers: [],
@@ -44,6 +47,7 @@ const state = {
     agentRunArtifacts: [],
     agentActions: [],
     experimentSummary: null,
+    structuredAssertion: null,
     inspectorSurface: "summary",
     toastTimer: null,
     pollingTimer: null,
@@ -183,6 +187,7 @@ async function refreshAll(loud) {
 
 async function loadHealth() {
     const health = await api("/api/v1/health");
+    state.health = health;
     dom.healthBadge.dataset.state = health.status === "up" ? "up" : "down";
     dom.healthBadge.textContent = health.status === "up" ? `healthy 路 v${health.version}` : "down";
 }
@@ -379,9 +384,11 @@ async function loadSelectedTask(taskId, loud) {
         apiOrNull(`/api/v1/tasks/${encodedTaskId}/recovery_jobs?limit=5`),
         apiOrNull(`/api/v1/agent_actions?task_id=${encodedTaskId}&limit=20`)
     ]);
+    const structuredAssertion = await apiOrNull(`/api/v1/tasks/${encodedTaskId}/ui_assertion`);
     state.liveFlow = flow;
     state.recoveryJobs = Array.isArray(recoveryJobs) ? recoveryJobs : [];
     state.agentActions = Array.isArray(agentActions) ? agentActions : [];
+    state.structuredAssertion = structuredAssertion;
     state.providerSelection = providerSelection;
     state.agentRun = agentRun;
     state.agentRunEvents = agentRunEvents || [];
@@ -1049,6 +1056,14 @@ function renderRuntimeHealth() {
         metadata: health.metadata || {},
         providerStats: health.provider_stats || health.providerStats || []
     });
+    const eyesMcpHealthPlan = buildOpenEyesMcpHealthPlan(state.health?.eyes_mcp || {});
+    const selectedTask = state.liveFlow?.task || state.tasks.find((item) => item.id === state.selectedTaskId) || null;
+    const selectedTaskInvocations = state.liveFlow?.tool_invocations || state.liveFlow?.toolInvocations || [];
+    const uiAssertionPlan = buildOpenEyesUiAssertionPlan({
+        task: selectedTask || {},
+        toolInvocations: selectedTaskInvocations
+    });
+    const showUiAssertionCard = shouldRenderOpenEyesUiAssertion(state.health?.eyes_mcp || {}, selectedTask);
     const activeRunCount = numberValue(health.active_run_count, health.activeRunCount, 0);
     const failedRunCount = numberValue(health.failed_run_count_24h, health.failedRunCount24h, 0);
     const crashedRunCount = numberValue(health.crashed_run_count_24h, health.crashedRunCount24h, 0);
@@ -1137,6 +1152,42 @@ function renderRuntimeHealth() {
 
     dom.runtimeHealth.innerHTML = `
         <div class="runtime-health__grid">${metricCards}</div>
+        <div class="artifact-item runtime-health__openeyes-mcp">
+            <div class="artifact-item__meta">
+                <span class="task-badge" data-tone="${escapeHtml(eyesMcpHealthPlan.tone)}">${escapeHtml(eyesMcpHealthPlan.label)}</span>
+                <span>OpenEyes MCP</span>
+            </div>
+            <strong>${escapeHtml(eyesMcpHealthPlan.headline)}</strong>
+            <p>${escapeHtml(eyesMcpHealthPlan.detail)}</p>
+        </div>
+        ${showUiAssertionCard ? `
+            <div class="artifact-item runtime-health__openeyes-ui-assertion">
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${escapeHtml(uiAssertionPlan.tone)}">${escapeHtml(uiAssertionPlan.status)}</span>
+                    <span>OpenEyes UI Assertion</span>
+                </div>
+                <strong>${escapeHtml(uiAssertionPlan.headline)}</strong>
+                <p>${escapeHtml(uiAssertionPlan.detail)}</p>
+            </div>
+        ` : ""}
+        ${state.structuredAssertion ? (() => {
+            const sa = state.structuredAssertion;
+            const status = String(sa.status || "unknown").toUpperCase();
+            const tone = status === "PASS" ? "done" : status === "FAIL" ? "failed" : "default";
+            const checks = Array.isArray(sa.checks) ? sa.checks : [];
+            const passed = checks.filter(c => c && c.passed === true).length;
+            const windowTitle = sa.window && typeof sa.window === "object" ? (sa.window.title || "") : "";
+            const detail = `${passed}/${checks.length} checks passed` + (windowTitle ? ` · ${windowTitle}` : "");
+            return `
+            <div class="artifact-item runtime-health__structured-assertion">
+                <div class="artifact-item__meta">
+                    <span class="task-badge" data-tone="${escapeHtml(tone)}">${escapeHtml(status)}</span>
+                    <span>Structured UI Assertion</span>
+                </div>
+                <strong>${escapeHtml(detail)}</strong>
+            </div>
+            `;
+        })() : ""}
         ${runtimeHealthPlan.deprioritizedProviders.length > 0 ? `
             <div class="artifact-item runtime-health__deprioritization">
                 <div class="artifact-item__meta">

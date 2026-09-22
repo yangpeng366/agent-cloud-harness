@@ -280,6 +280,43 @@ CREATE TABLE IF NOT EXISTS task_recovery_jobs (
   FOREIGN KEY(task_id) REFERENCES tasks(id)
 );
 
+
+CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  session_id TEXT,
+  parent_goal_id TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  source_task_id TEXT,
+  active_task_id TEXT,
+  objective TEXT,
+  success_criteria_json TEXT,
+  constraints_json TEXT,
+  budget_json TEXT,
+  progress_json TEXT,
+  outcome_summary TEXT,
+  revision INTEGER NOT NULL DEFAULT 1,
+  opened_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  closed_at TEXT,
+  metadata_json TEXT,
+  FOREIGN KEY(session_id) REFERENCES sessions(id),
+  FOREIGN KEY(parent_goal_id) REFERENCES goals(id)
+);
+
+CREATE TABLE IF NOT EXISTS goal_events (
+  id TEXT PRIMARY KEY,
+  goal_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  actor_type TEXT,
+  actor_id TEXT,
+  summary TEXT,
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(goal_id) REFERENCES goals(id)
+);
+
 -- 索引
 CREATE INDEX IF NOT EXISTS idx_tasks_session_status_updated
 ON tasks(session_id, status, updated_at);
@@ -349,3 +386,9 @@ ON agent_actions(action_type, status, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_task_recovery_jobs_task_accepted
 ON task_recovery_jobs(task_id, accepted_at);
+
+CREATE INDEX IF NOT EXISTS idx_goals_session_status_updated
+ON goals(session_id, status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_goal_events_goal_created
+ON goal_events(goal_id, created_at);
