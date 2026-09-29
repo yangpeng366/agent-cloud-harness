@@ -195,3 +195,18 @@
 ## 巡检补登
 
 - `../CODING_E2E_SMOKE_EXECUTION_RECORD_2026-07-22.md`（与 `P2_BASELINE_MATRIX_REAL_WORKER_SMOKE_EXECUTION_RECORD_2026-07-21.md` 同属 evaluation 主题 real-worker smoke 证据线；本轮 #auto-patrol# 末尾追加，修复 docs index audit orphan 回归）
+## 巡检补登：一次性历史证据
+
+本节用于把不进入稳定基线、但需要从某个主题入口追到的 dated 一次性历史文档挂到本主题，避免在 `docs/` 根目录留下 orphan。
+
+- `../JEV_PATROL_PHASE_REVIEW.md` — Jev × 飞书巡检 Phase 总览与跨阶段对照（旧）
+- `../JEV_PATROL_PHASE3_RUNBOOK.md` — Jev × 飞书巡检 Phase 3 runbook
+- `../JEV_PATROL_PHASE4_DESIGN.md` — Jev × 飞书巡检 Phase 4 设计稿
+- `../JEV_PATROL_PHASE5_SCHEMA_DESIGN.md` — Jev × 飞书巡检 Phase 5 schema 设计
+- `../JEV_PATROL_PHASE6_CASCADE_DESIGN.md` — Jev × 飞书巡检 Phase 6 cascade 设计
+- `../JEV_PATROL_PHASE6_HEATMAP_DESIGN.md` — Jev × 飞书巡检 Phase 6 heatmap 设计
+- `../FEAT-05_FLAKY_RATE_COMPARISON_DESIGN.md` — FEAT-05 flaky 率对照实验设计
+- `../BUDGET_TIMEOUT_RECOVERY_EXECUTION_RECORD_2026-08-02.md` — budget / timeout 恢复回归 dated 执行记录
+- `../LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md` — 长稳冒烟 25200s dated 执行记录
+
+这些 dated 文档今天主要作为历史对照样本，不应替代当前评估主线；只在回看当时实验、回归点或稳定性证据时进入。

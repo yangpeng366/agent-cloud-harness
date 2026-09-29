@@ -9,6 +9,13 @@
 3. 确认主题后，先读对应 `docs/<topic>/README.md`；如果该主题已启用 `PROGRESS.md`，接着读它，再下钻到具体文档。
 4. 文档治理或结构整理任务，先从 `meta/README.md` 进入，不要直接改一圈历史文件。
 
+## 命中信号
+
+- 任务提到“按任务找入口”里的任何条目；判断任务主题不明确
+- 任务是在找“应该先读哪份文档”
+- 任务是要在 `docs/` 根索引这一层做结构调整或入口收口
+- 任务涉及 `DOCS_GOVERNANCE.md` 或 `docs/README.md` 本身的重写
+
 ## 按角色找入口
 
 | 你现在是谁 / 要做什么 | 先看哪里 | 再做什么 |
@@ -31,57 +38,66 @@
 | `../DECISIONS.md` | 已固定的设计取舍与稳定规则 |
 | 本文 | `docs/` 总索引、任务分流、新文档落点判断 |
 
+## 最小阅读顺序
+
+1. 先按 `../WAKE.md` 与 `../AGENTS.md` 建立上下文。
+2. `本文` 命中信号 + 按任务找入口，判断当前任务属于哪个主题。
+3. 进入对应 `docs/<topic>/README.md`；如果该主题已启用 `PROGRESS.md`，接着读它。
+4. 如果任务落在某个稳定基线（架构 / API / 状态机 / 排障 / Web Console），直接读 `docs/` 根目录同名基线文档。
+5. 跨主题短摘要读 `../STATE.md`，稳定设计取舍读 `../DECISIONS.md`。
+
 ## 按任务找入口
 
 | 任务类型 | 先看入口 | 优先续写 | 需要同步的稳定面 |
 |------|------|------|------|
 | 文档治理、结构审计、命名合同、专题工作区升级 | `meta/README.md` | `meta/PROGRESS.md` 或 `DOCS_GOVERNANCE.md` | `../AGENTS.md`、`../WAKE.md`、`../DECISIONS.md` |
 | 控制图、packet、runtime、checkpoint、goal loop、hardness、goal runtime diff | `continuity/README.md` | 最贴近的 continuity 方案文档或 runbook | `ARCHITECTURE.md`、`SPEC.md`、`API_CONTRACTS.md` |
-| Loop / Goal / 交接 / UI 状态与结果聚焦（下一阶段方向） | `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` | `NEXT_5_ENGINEERING_PRIORITIES.md`、`CURRENT_CAPABILITY_GAP_ASSESSMENT.md` 的方向调整段 | `../STATE.md`、`../DECISIONS.md` |
-| 下一阶段演进计划（Loop Decide / Goal Progress / 端到端验证 / UI Loop Activity） | `NEXT_EVOLUTION_PLAN.md` | `LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md`、`CCX_PI_HARNESS_ADVISOR_INTEGRATION_PLAN.md` | `../STATE.md`、`../DECISIONS.md` |
-| CCX + Pi + Harness + Advisor 集成落地（产品决策与优先级） | `CCX_PI_HARNESS_ADVISOR_INTEGRATION_PLAN.md` | Pi protocol、Advisory handoff、Trae protocol | `provider/README.md`、`API_CONTRACTS.md` |
-
-
 | Provider、Worker、路由、profile、恢复、工具层、本地 CLI 兼容性/编码 | `provider/README.md` | 最贴近的 provider/routing 设计文档或 execution record | `AGENT_PROVIDER_TECHNICAL_DESIGN.md`、`API_CONTRACTS.md`、`TROUBLESHOOT.md` |
-| 免费模型 Worker Lane + harness-config.yml 配置驱动 + CCX codex-free 映射 | `FREE_MODEL_WORKER_LANE_PLAN.md` | `provider/README.md`、`CODEX_MULTI_API_PROFILE_ROUTING_DESIGN.md` | `API_CONTRACTS.md`、`../DECISIONS.md` |
 | `/dialogue/`、`/console/`、chat facade、UI 验证、页面 release gate | `dialogue/README.md` | 当前 UI 计划、runbook 或 acceptance record | `WEB_CONSOLE.md`、`TROUBLESHOOT.md` |
 | 评估、优先级、多轮任务、task pack、benchmark、productization | `evaluation/README.md` | 评估文档、任务包、测试计划、execution record | `../STATE.md`、必要时 `../DECISIONS.md` |
 | GitHub 首发、precheck、dry-run、release 范围、commit/stage/fileset | `release/README.md` | checklist、scope proposal、execution guide、dated precheck | `../README.md`、必要时 `../DECISIONS.md` |
-| 外部执行环境/沙箱底座调研（AgentENV 等） | `AGENTENV_SANDBOX_SUBSTRATE_RESEARCH.md` | 续写该调研或对应主线 plan | `../STATE.md`、必要时 `../DECISIONS.md` |
-| 持久化产物 owner / source-of-truth / 可重建纪律查询 | `PERSISTENCE_ARTIFACT_INVENTORY.md` | 续写该 inventory 或对应基线文档 | `../STATE.md`、必要时 `../DECISIONS.md` |
-| 控制图异步化竞态 / instance-identity 修复方案 | `CONTROL_GRAPH_ASYNC_INSTANCE_IDENTITY_PLAN.md` | 续写该方案或落代码 + 测试 | `../STATE.md`、必要时 `../DECISIONS.md` |
-| 外部 skill / framework 设计 pattern 借鉴（WorkBuddy Bench 两个 skill、AgentENV 等） | `WBBENCH_BENCH_SKILLS_RESEARCH.md` | 续写该调研或在对应主线文档落启发点 | `../STATE.md`、必要时 `../DECISIONS.md` |
-| 上下文评分门控 / System One Model 借鉴（Jev、Harness Engineering 上下文预算等） | JEV_CONTEXT_SCORING_RESEARCH.md | 续写该调研或挂 ROADMAP §E1 / §E2 作为可选依赖；不落代码、不动凭据 | ../STATE.md、必要时 ../DECISIONS.md |
-| FEAT-03 / HW-09 / HW-10（System One 上下文评分门控）落地设计 | JEV_CONTEXT_SCORING_PLAN.md | 字段默认值 / fallback 合同 / 测试合同 / 立项门槛 8 条；维护者签字前不开工 | ../CONTRIBUTING.md（FEAT-03 / HW-09 / HW-10）、../STATE.md、必要时 ../DECISIONS.md |
-| OpenEyes UI 自动化借鉴（UIA + CDP + MCP 13 tool，对接 native / browser / structured assertion） | OPENEYES_UI_AUTOMATION_RESEARCH.md | 续写该调研；HW-11 smoke + HW-12 UIA probe 已落，HW-13 MCP stdio 启动可达性 precheck 已落生产代码；不替换现有 puppeteer-core 路径，只叠加 | ../CONTRIBUTING.md（HW-11/12/13 / FEAT-04 / FEAT-05）、../STATE.md、必要时 ../DECISIONS.md |
-| agent-desktop 桌面代理模式借鉴（skeleton/drill、风险闸门、stable ref、bounded loop） | AGENT_DESKTOP_OPENEYES_LEARNING.md | 吸收到 OpenEyes FEAT-04/05；当前 FEAT-05 assertion 与 baseline opt-in 模式已落，console 历史透传待做 | ../docs/evaluation/README.md、../CONTRIBUTING.md（FEAT-05）、../STATE.md |
-| OpenEyes acceptance 演示脚本（HW-11 smoke 已落，HW-12 UIA probe 验收通过） | OPENEYES_ACCEPTANCE_DEMO_PLAN.md | HW-11 已落 `../scripts/Run-OpenEyesProfileSmoke.ps1` 与 Dialogue probe `UseOpenEyesProfile`，集成 no-seed acceptance 5/5；HW-12 已落 `../scripts/Run-NativeAppAcceptanceProbe.ps1`，安全 dry-run 通过，Any VPN `--go` 待窗口实测 | ../CONTRIBUTING.md（HW-11 / HW-12）、../STATE.md |
-| Third Hand 计算机使用借鉴（macOS menu bar / Accessibility + Vision OCR + CDP + Jev 决策；OpenEyes 第 4 调研样本） | THIRD_HAND_COMPUTER_USE_RESEARCH.md | 多后端渐进 fallback + Electron/CDP 探测 + Jev 决策协议 + focus 守护 + 受限文本输入 5 模式；建议落地为「OpenEyes 决策层可选叠加」默认 enabled=false | ../OPENEYES_UI_AUTOMATION_RESEARCH.md、../CONTRIBUTING.md（FEAT-04 / FEAT-05）、../STATE.md |
-| Jev 本地实测笔记（clone fast-jev-compaction + 29 用例全绿 + fake Jev 合同） | JEV_HANDS_ON_NOTES.md | 修正 plan §1.2/§1.4/§3/§13 与原文有 5 处差异；fake Jev 迁入 src/test/java 时按本文 §2 模板实现 | ../JEV_CONTEXT_SCORING_PLAN.md、../STATE.md |
-| Jev 官方材料吸收笔记（typesafe-ai/skills SKILL.md + 5 cookbook + 2 pattern + confidence） | JEV_OFFICIAL_SKILL_ABSORPTION.md | 引入 confidence 3 段阈值 + ThresholdDict 模式 + skill_suggestion progressive disclosure + 官方 6 个 common issues；ACH 借鉴 5 切入点 vs 官方 cookbook 一一对应 | ../JEV_CONTEXT_SCORING_PLAN.md、../CONTRIBUTING.md、../STATE.md |
-| Jev 真 API demo metrics（9 次真实调用：short/medium/long × threshold 0.3/0.5/0.7） | JEV_REAL_API_DEMO.md | latency p50 ≈ 300ms / goal awareness 极强 / 单 batch 1910 token / cost ~$0.001/次 | ../JEV_CONTEXT_SCORING_PLAN.md、../STATE.md |
-| Jev × 飞书巡检流程接入（5 层路径 + 3 个中长期脑洞） | JEV_PATROL_INTEGRATION_PLAN.md | L1 信息层(已做)/L2 派工决策级(高价值)/L3 输出后处理级/L4 跨项目联动(脑洞)/L5 schema 升级 | ../JEV_OFFICIAL_SKILL_ABSORPTION.md、../JEV_REAL_API_DEMO.md、../CONTRIBUTING.md、../STATE.md |
-| Jev × 决策树 × 复杂网络 算法借鉴（networkx 算法集 5 类 fixture + 3 类借鉴路径） | JEV_GRAPH_NODES_PLAN.md | 路径 A mounted_context_view 图节点评分 / 路径 B RuntimeJudgmentService parallel questions / 路径 C decision_trace × centrality；5 类 fixture（G(n,p)/maxflow/centrality/真实图）；5 步 Phase 落地 | ../JEV_OFFICIAL_SKILL_ABSORPTION.md、../JEV_CONTEXT_SCORING_PLAN.md、../STATE.md |
-| Jev × Graph Hybrid 实验记录（fake Jev × karate_club 真实数据） | JEV_GRAPH_HYBRID_EXPERIMENT.md | **核心发现**:B 场景(σ=0.15)Kendall τ=0.19 < random(-0.14);证伪 Jev single-shot 排序;确认 hybrid 路径正确形态(Jev = rerank layer 不是 oracle) | ../JEV_GRAPH_NODES_PLAN.md(§6.2a 已扩)、../JEV_FEASIBILITY_FILTER.md、../STATE.md |
-| Jev × Graph Hybrid 实验 Phase 2 真 API（karate_club 34 节点全量） | JEV_GRAPH_HYBRID_EXPERIMENT_REAL.md | real Jev noise std=0.119 / top-5 hit=5/5 / top-10 hit=8/10 / hybrid(α=0.7,γ=0.3) top-10=9/10;cost=$0.005,latency=5.8s/5 batches;修正 Phase 1 结论 | ../JEV_GRAPH_HYBRID_EXPERIMENT.md、../JEV_GRAPH_NODES_PLAN.md、../STATE.md |
-| Jev × Graph Hybrid 实验 Phase 3 baseline（G(100,0.05) 100 节点） | JEV_GRAPH_HYBRID_EXPERIMENT_BASELINE.md | real Jev τ=+0.10（Phase 2 -0.13 sign 反转） / top-5=5/5 / top-10=9/10;hybrid α=0.5 γ=0.5 top-10=9/10;cost=$0.013,latency=14s/13 batches | ../JEV_GRAPH_HYBRID_EXPERIMENT_REAL.md、../JEV_GRAPH_NODES_PLAN.md、../STATE.md |
-| Jev / OpenEyes 立项表 Schema 设计（16 字段 + 17 条候选映射，2026-09-21 新增 Jev-ToolRecall-Filter） | JEV_OPENEYES_INITIATIVE_TABLE_DESIGN.md | 新建独立 Bitable 立项表(与项目方向表正交);盘点 11 个 Jev doc + 3 条 Bitable 记录抽出 17 条独立可立项候选;字段含 status/owner/signoff_date/blocker/phase/rollout_decision | ../CONTRIBUTING.md、../JEV_PATROL_INTEGRATION_PLAN.md、../STATE.md |
-| Jev / OpenEyes 立项跟踪总览（本地落仓，17 张 candidate card） | INITIATIVES/INDEX.md | 每条候选对应 1 张 card: FEAT-03 / HW-09-13 / FEAT-04-05 / Jev-Patrol-L2-L3-L5 / Jev-Graph-A-B / Jev-ToolRecall-Filter / Jev-A-B-C | ../JEV_OPENEYES_INITIATIVE_TABLE_DESIGN.md、../CONTRIBUTING.md |
-| Jev tool recall filter 真 API demo（Toutiao 全网解禁当日，precision@5=100%） | JEV_TOOL_RECALL_FILTER_DEMO.md | 10 候选 (5 relevant + 5 noise) / 2 noul questions / jev-1.13.0 / 1.05s / $0.00009；立项门槛 1 达成；屠龙架构 (Astra planner / Jev action selector / Code executor) 直接对应 ACH | ../JEV_CONTEXT_SCORING_PLAN.md、../CONTRIBUTING.md、../STATE.md |
-| Jev Decision Tree 真实验(元决策 5 选 1 / 1.0s / $0.001 / 5/5 票对) | JEV_DECISION_TREE_REAL_EXPERIMENT.md | **直接验证路径 B**: Jev parallel questions decision tree 适合做元决策;confidence 天然揭露不确定性(C 在 git_tracking 上 confidence=0.38) | ../JEV_GRAPH_NODES_PLAN.md、../JEV_OFFICIAL_SKILL_ABSORPTION.md、../STATE.md |
-| 任务还说不清属于哪里 | 本文 + `../STATE.md` + `../DECISIONS.md` | 先选一个主主题入口，再下钻 | 只在结论稳定后同步基线文档 |
 
-## 文档分层
+## 稳定基线
 
-| 层级 | 入口 | 作用 |
-|------|------|------|
-| 根目录入口 | `../README.md`、`../WAKE.md`、`../AGENTS.md`、`../STATE.md`、`../DECISIONS.md` | 开工顺序、协作规则、跨主题状态、稳定取舍 |
-| `docs/` 总索引 | 本文 | 按任务分流、决定应该进入哪个主题 |
-| 文档治理入口 | `meta/README.md`、`DOCS_GOVERNANCE.md` | 结构合同、命名合同、索引审计、工作区升级规则 |
-| 专题入口 | `meta/README.md`、`continuity/README.md`、`provider/README.md`、`dialogue/README.md`、`evaluation/README.md`、`release/README.md` | 每个主题的阅读顺序、主线文档、写回地图、历史分流 |
-| 基线文档 | `ARCHITECTURE.md`、`API_CONTRACTS.md`、`SPEC.md`、`TROUBLESHOOT.md`、`WEB_CONSOLE.md`、`HARNESS_CHANGE_CONTRACT.md` | 今天仍然为真的结构事实、行为语义、契约与排障口径 |
-| 活跃文档 | `*_PLAN.md`、`*_TECHNICAL_DESIGN.md`、`*_ROADMAP.md`、专题 runbook | 当前方案、执行步骤、推进主线 |
-| 证据文档 | `*_EXECUTION_RECORD_YYYY-MM-DD.md`、`*_ACCEPTANCE_RECORD_YYYY-MM-DD.md`、`*_PRECHECK_YYYY-MM-DD.md` | 某一轮真实验证、操作轨迹、日期化结论 |
+- `DOCS_GOVERNANCE.md` — 文档结构合同、命名合同、dated 文档规则、专题工作区升级规则
+- `ARCHITECTURE.md` — 模块边界、进程边界、状态机所在文档，今天仍然为真
+- `API_CONTRACTS.md` — API 字段、存储表、JSON 形状、HTTP 错误体约定
+- `SPEC.md` — 状态机、控制图节点、合并 / 包 / 持久化语义
+- `TROUBLESHOOT.md` — 已知坑、排障步骤、回归点收口位置
+- `WEB_CONSOLE.md` — Web Console / Dialogue 阅读面契约
+- `HARNESS_CHANGE_CONTRACT.md` — harness 变更与控制面兼容合同，今天仍然为真
+- `PERSISTENCE_ARTIFACT_INVENTORY.md` — 持久化产物 owner / source-of-truth / 可重建纪律
+
+这些文档应尽量保持“今天仍然为真”的状态，不要把稳定结论只留在 dated record 里。
+
+## 当前主线文档
+
+### 总索引与入口分流
+
+- 本文
+- `../README.md` — 对外入口
+- `../STARTUP_GUIDE.md` — 启动 / 部署 / 验证
+- `../WAKE.md` — Agent 开工入口
+- `../AGENTS.md` — Agent 协作约束
+
+### 结构合同与命名合同
+
+- `DOCS_GOVERNANCE.md`
+
+### 审计与回归入口
+
+- `scripts/Run-DocsIndexAudit.ps1`
+- `src/test/java/com/agentcloud/docs/DocsStructureContractTest.java`
+- `src/test/java/com/agentcloud/docs/DocsIndexAuditScriptTest.java`
+
+### 专题入口
+
+- `meta/README.md` — 文档治理、专题工作区、Agent 开工入口
+- `continuity/README.md` — 控制面主链、continuity、packet、goal loop、checkpoint
+- `provider/README.md` — Provider、Worker、路由、profile、工具层
+- `dialogue/README.md` — `/dialogue/`、`/console/`、chat facade、UI 验证
+- `evaluation/README.md` — 评估、优先级、多轮任务、execution record
+- `release/README.md` — GitHub 首发、precheck、dry-run、commit/stage 边界
 
 ## 当前专题工作区现状
 
@@ -93,50 +109,18 @@
 | `dialogue/` | 已启用 `PROGRESS.md` | `dialogue/README.md -> dialogue/PROGRESS.md -> 当前子线文档 -> dialogue/runs/README.md` | 如并行子线继续增多时补 `tasks/`；若 acceptance/precheck evidence 继续密集增长，再在 `runs/` 下补更细分组 |
 | `evaluation/` | 已启用 `PROGRESS.md` | `evaluation/README.md -> evaluation/PROGRESS.md -> 当前子线文档 -> evaluation/runs/README.md` | 如子线继续增多时补 `tasks/`；若 dated execution evidence 继续密集增长，再在 `runs/` 下补更细分组 |
 | `release/` | 仅 `README.md` | `release/README.md -> docs/` 根目录主线文档 | 新一轮 release 周期开始，且连续短进度或多份新 dated precheck/dry-run 证据需要在主题内集中追踪时 |
+| `docs/` | 仅 `README.md` | `docs/README.md -> docs/<topic>/README.md -> DOCS_GOVERNANCE.md -> PROGRESS.md / STATE.md / DECISIONS.md` | 当 `docs/` 根索引本身需要独立活跃进度追踪时 |
 
 更多工作区升级规则、命名合同和历史例外口径，统一见 `DOCS_GOVERNANCE.md`。
 
-## 基线文档
+## 写回顺序
 
-- `DOCS_GOVERNANCE.md`
-- `ARCHITECTURE.md`
-- `API_CONTRACTS.md`
-- `SPEC.md`
-- `TROUBLESHOOT.md`
-- `WEB_CONSOLE.md`
-- `HARNESS_CHANGE_CONTRACT.md`
-- `PERSISTENCE_ARTIFACT_INVENTORY.md`
-
-这些文档应尽量保持“今天仍然为真”的状态，不要把稳定结论只留在 dated record 里。
-
-## 专题入口
-
-### [meta/README.md](meta/README.md)
-
-文档治理、结构审计、命名合同、专题工作区与 Agent 开工入口相关任务的专题入口。
-
-### [continuity/README.md](continuity/README.md)
-
-控制面主链、continuity、packet、goal loop、runtime/active context、control node 相关文档入口。
-
-### [provider/README.md](provider/README.md)
-
-Provider、Worker、路由、恢复策略、tool layer、本地 CLI 集成相关文档入口。
-
-已启用 `provider/runs/README.md` 作为 provider 主题下 codex profile、route/recovery、CLI protocol 与 focused execution evidence 的聚合入口。
-
-### [dialogue/README.md](dialogue/README.md)
-
-`/dialogue/`、`/console/`、chat facade、UI 验证、operator 诊断面相关文档入口。
-
-### [evaluation/README.md](evaluation/README.md)
-
-评估、工程优先级、多轮任务包、runbook、execution record 相关文档入口。
-
-### [release/README.md](release/README.md)
-
-GitHub 首发、release checklist、precheck、dry-run、提交边界相关文档入口。
-- 小版本发布维护：`release/README.md` -> `docs/GITHUB_RELEASE_MAINTENANCE_RUNBOOK.md`
+- 文档治理 / 结构审计 / 命名合同 / 入口收口：先改本文，再改 `meta/README.md`，必要时同步 `DOCS_GOVERNANCE.md`，活跃进度写 `meta/PROGRESS.md`
+- 跨主题短摘要 / 已完成 / 未完成 / 下一步 / 风险：写 `../STATE.md`
+- 稳定设计取舍 / 长期约束 / 历史例外口径：写 `../DECISIONS.md`
+- 调研、方案、验收结论：先沉淀到对应专题的 `README.md` / `PROGRESS.md` / `tasks/` / `runs/`，再决定是否动代码
+- 新增 plan / runbook / execution record / acceptance record / precheck 必须能从某个专题入口追到，不要在 `docs/` 根目录裸放
+- 默认写回链：`docs/README.md -> docs/<topic>/README.md -> DOCS_GOVERNANCE.md -> PROGRESS.md / STATE.md / DECISIONS.md`
 
 ## 新文档落点决策
 
@@ -146,6 +130,14 @@ GitHub 首发、release checklist、precheck、dry-run、提交边界相关文�
 - 内容是一轮具体执行证据：优先写 dated `execution record / acceptance record / precheck`。
 - 内容只是跨主题短状态：写 `../STATE.md`。
 - 内容是稳定约束或取舍：写 `../DECISIONS.md`。
+
+## 历史材料使用规则
+
+- 旧 execution record / precheck 主要用于对照，不应用来替代当前优先级或当前基线。
+- 同一份 dated 文档有多个并行入口时，先从对应主题的 `runs/README.md` 或子线入口进入，不要在 root-level 长名单里猜。
+- dated doc 命名若不匹配 `*_EXECUTION_RECORD_YYYY-MM-DD.md` / `*_ACCEPTANCE_RECORD_YYYY-MM-DD.md` / `*_PRECHECK_YYYY-MM-DD.md`，需要走历史例外口径登记到 `DECISIONS.md` 或 `DOCS_GOVERNANCE.md`，否则视为命名合同违规。
+- 已经稳定的结论应从 dated record / 历史专项设计稿回收到当前基线文档或 `STATE.md` / `DECISIONS.md`，不再长期只留在历史文档里。
+- 如果某条规则已经稳定，应回收到 `DOCS_GOVERNANCE.md`，不要长期只留在 `PROGRESS.md` 或对话里。
 
 ## 文档治理与审计
 

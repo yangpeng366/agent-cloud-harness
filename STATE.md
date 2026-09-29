@@ -84,3 +84,23 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - Read 43 real Bitable rows, ran fake/dry-round with Jev shadow: 43 sidecars, 0 errors, TP=39 / FP=0 / FN=4 / TN=0, hit_rate=0.9070.
 - Result is positive-label-biased (no TN); active routing remains disabled. Evidence: `docs/evaluation/runs/2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md`.
 - Phase 6 cascade and heatmap prototypes are read-only and validated: cascade divergence=0.0041 / signal=0; heatmap B=21 / C=21 / F=1.
+## 2026-09-28T12:07:57+08:00 RESUME 巡检写回（saved-output recheck #46 — M0 稳态 + docs audit 回归）
+- 复核 m0 worktree saved-output review 与 M0 产物：review=1911B/SHA 26B5DB70...；hello-m0.txt=16B/无 BOM/无尾换行；port9090 shaded JAR=20453006B/SHA 7DA1D644...。M0 不重跑，M1 继续待放行。
+- 实测当前 master=2cf90c2，仅用户自管 `_tmp_task.json` dirty；patrol/release worktree clean。
+- 新发现 `Run-DocsIndexAudit.ps1` passed=false，violation_count=33，含 10 个 root docs orphan、dated 命名违约、release topic 结构与 docs 总入口 contract 不同步；违反清单落 `.tmp/audit-violations-20260928.txt`。
+- 本轮仅写回 `.tmp/patrol-last-20260928-120757.md`、`.tmp/project-results/agent-cloud-harness-20260928-120757.json`、本备份与追加段；未改正式文档/源码，未 commit/push/发布/启动 harness。
+- blocker：high=docs audit 33 项回归；low=M1 未放行与历史 drift/orphan 处置待审定。
+- 下一步：从 `docs/meta/README.md` 进入修复审计回归，重跑至 passed=true、violation_count=0；M1 放行后再在 m0 worktree 单独执行并验 resume_packet / pause_checkpoint / key_artifacts / 终态字节。
+## 2026-09-29 docs index audit 收口
+
+- 本轮按 `Run-DocsIndexAudit.ps1` 修复 33 项违规，至 `violation_count=0` / `passed=true`。
+- 操作要点：
+  - 删除 legacy `docs/docs/`（重复 `docs/README.md` 与 `docs/evaluation/*`）。
+  - `docs/BUDGET_TIMEOUT_RECOVERY_REGRESSION_2026-08-02.md` 改名为 `BUDGET_TIMEOUT_RECOVERY_EXECUTION_RECORD_2026-08-02.md`（对齐 dated doc 核心命名合同）。
+  - `docs/release/GITHUB_READINESS_SNAPSHOT_2026-08-02.md` 移出 `release/` 根并改名为 `GITHUB_READINESS_SNAPSHOT_EXECUTION_RECORD_2026-08-02.md`，由 `release/README.md` “巡检补登”节承接。
+  - `docs/README.md` 重构为带 命中信号 / 最小阅读顺序 / 稳定基线 / 当前主线文档 / 写回顺序 / 历史材料使用规则 顺序的结构，并在工作区现状表里新增 `docs/` 自身（仅 `README.md`）。
+  - `docs/release/README.md` 去掉误导的 `+` 前缀、保留 subtopic-routing 表头（`当前问题 / 先看哪里 / 再下钻`），并新增 “巡检补登：一次性历史快照”节。
+  - `docs/evaluation/README.md` 新增 “巡检补登：一次性历史证据”节，承接 9 份 JEV patrol / FEAT-05 / BUDGET / LONG_STABILITY dated 文档。
+  - `docs/meta/README.md` 新增 “巡检补登：跨主题共享参考”节，承接 `GLOSSARY.md`。
+- 复跑 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/Run-DocsIndexAudit.ps1` 验证：`violation_count=0`, `passed=True`。
+- 全部修改文件 BOM 校验通过（首三字节均非 `EF BB BF`）。
