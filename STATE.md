@@ -759,3 +759,16 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 本轮写回 .tmp/patrol-last-20260930-092136.md、.tmp/project-results/agent-cloud-harness-20260930-092136.json、.tmp/audit-this-run-20260930-092136-auto.json、.tmp/audit-20260930-092136.md、.tmp/STATE.md.bak-20260930-092136、STATE.md 追加段；仅 STATE.md 计划以 [auto-patrol] 提交 (NEW #1 writeback #35)，未改源码、未改正式文档、未 push、未发布、未重启 harness。
 - blocker：high=无 (audit 仍 passed=True / violation_count=0; master 与 worktree 稳态; BOM 合规); low=M1 multi-turn 待维护者显式放行 + 25200s 长稳真实终态报告待回收 + 启动会话 stdin 快照仍回放 2026-09-28T12:07:57 (连续 36 轮过期未对齐, orchestrator 责任) + master 领先 origin/master 37 commit 待维护者批准推送 + eval 侧 PROGRESS / runs README / yibite 证据仍待维护者决定 commit/push。
 - 下一步：M1 放行后在 m0 worktree 用 .tmp/m0-m1.db 投追加 'M1 resume OK' 的 follow-up coding 任务，验 resume_packet / pause_checkpoint / key_artifacts 字节与终态；eval 侧 yibite 证据由维护者决定 commit/push；25200s 长稳真实终态报告视稳定性窗口择机再投；orchestrator 端将 stdin 快照对齐至最新 patrol-last 时间戳；复跑 git push origin master 待维护者批准 (现领先 37 commit)。
+
+
+## 2026-09-30T09:41:11+08:00 巡检写回 (NEW #1 writeback #36 / audit recheck #90 - 过期 stdin 续轮 + 审计/BOM 双稳态)
+
+- stdin 携带 2026-09-28T12:07:57+08:00 的过期 blocker（audit 失败 33 项 + 修复入口 docs/meta/README.md）连续 37 轮已不再成立；本轮以实际工作区为准。
+- master HEAD=2568ee9954b32ca3aa5956ee0d88a319de03fa73（writeback #36 落库后），本地 ahead origin/master 39 commit；与上一轮提交 2568ee9 (#35) 同源，本轮再次 audit/BOM 复核后 commit。
+- Run-DocsIndexAudit.ps1：passed=True / violation_count=0 / orphan_root_markdown_count=0 / docs_readme_only_root_markdown_count=0 / dated_doc_violation_count=0；dated_doc_count=3 / core_dated_doc_count=3 / historical_dated_doc_count=0；根目录 45 份 .md 全部 topic_linked；JSON 落 .tmp/audit-this-run-20260930-094111-auto.json、Markdown 落 .tmp/audit-20260930-094111.md。
+- 全仓 UTF-8 无 BOM：Invoke-TextFileBomSweep -Path . -Extensions .md,.java,.json,.yml,.xml,.ps1,.js -Recurse，Scanned=1784 / Found=0 / Fixed=0；本轮新写 patrol-last / project-results / audit-this-run-auto / audit-md / STATE.md.bak 首三字节均非 EF BB BF（23 20 23 / 7B 0A 20 / 7B 0A 20 / 23 20 44 / 0A 3E 20）。
+- worktree dirty：STATE.md（追加段；本轮提交）、docs/evaluation/PROGRESS.md、docs/evaluation/runs/README.md、新增 docs/evaluation/runs/2026-09-29-awesome-jev-ecosystem-watch.md（只读生态复查证据）、_tmp_task.json（用户自管）；与 #35 一致，本轮不代为 commit 评估侧变更。
+- 方针复核：用户既定结论为不放权抽 skill，provider-routing 与 doc-audit 在 Codex subagent 默认场景下差异化不足，维护成本高于收益，保留冻结 recipes 文档并定锚 review；本轮遵守既定取舍，未抽 skill、未升 provider-routing 与 doc-audit。
+- 本轮写回：.tmp\patrol-last-20260930-094111.md、.tmp\project-results\agent-cloud-harness-20260930-094111.json、.tmp\audit-this-run-20260930-094111-auto.json、.tmp\audit-20260930-094111.md、.tmp\STATE.md.bak-20260930-094111、STATE.md；仅 STATE.md 计划以 [auto-patrol] 提交 (NEW #1 writeback #36)；未改源码 / 正式文档 / eval 侧变更，未 push，未发布，未重启 harness；M1 未获维护者放行、未启动。
+- blocker：high=无（audit 仍 passed=True / violation_count=0；master 与工作区状态与 #35 一致；BOM 合规）；low=M1 multi-turn 待维护者明确放行 + 25200s 长稳真实终态报告仍待稳定性窗口回收 + orchestrator 端 stdin 快照 37 轮过期未对齐 + master 领先 origin/master 39 commit 待维护者批准推送 + eval 侧 PROGRESS / runs README / yibite 证据仍待维护者决定 commit/push。
+- 下一步：M1 放行后在 m0 worktree 用 .tmp\m0-m1.db 投追加 'M1 resume OK' follow-up coding 任务，验 resume_packet / pause_checkpoint / key_artifacts 字节与终态；未放行前仅监听新提交并复跑审计；eval 侧 dirty 由维护者决定是否纳入下一次 commit；orchestrator 端将 stdin 快照对齐至最新 patrol-last 时间戳；git push origin master 待维护者批准（现领先 39 commit）。
