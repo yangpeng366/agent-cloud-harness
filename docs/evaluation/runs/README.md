@@ -55,3 +55,4 @@
 
 - `2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md` — real Bitable fake-round hit-rate caveat and read-only cascade/heatmap prototype evidence.
 - 2026-09-29-awesome-jev-ecosystem-watch.md — read-only ecosystem delta, CI-comment contract check, and non-adopted local-decision candidate evidence.
+- 2026-10-08-awesome-jev-ecosystem-watch.md — ff-only advance bece57c→0839b92 (101 commits), PR #305 / PR #307 MERGED, new openclaw agent vocabulary, TetraJev promoted candidate→merged.
