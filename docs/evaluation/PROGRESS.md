@@ -7,6 +7,7 @@
 - 现阶段仍不启用 `tasks/`、`archive/`；`runs/README.md` 只负责聚合 root-level dated 执行证据入口，不搬动文档本体，`PROGRESS.md` 则继续负责把当前活跃主线串起来。
 
 ## 已完成
+- 2026-09-29: 完成 `yibie/awesome-jev` 只读生态复查（本地 `bece57c` 对远端 `fd4df757` 共 48 commits）；确认 dsh / robotics 无新独立样本、catalog 评论工作流仅在失败时发言，记录 TetraJev 与 Jev Deep Research 为未采纳候选。证据：`runs/2026-09-29-awesome-jev-ecosystem-watch.md`。
 - 2026-09-22: Jev × patrol completed a real Bitable read + fake/dry-run round (43/43 sidecars, 0 errors). Hit rate was 0.9070, but the set had no negative labels/TN, so active routing stays disabled. Added read-only Phase 6 cascade and heatmap prototypes; evidence is in `runs/2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md`.
 - 2026-07-22: P2 端到端集成验证全部 PASS。CCX precheck（health + 30 models + completion）通过；harness 启动后创建 auto_start task，codex worker 通过 CCX 路由到 glm-4-flash 完成执行，loop judge -> decide 输出 `status=done`，goal progress auto-update 生效（`1/1 subgoals done`），`last_loop_tick` 写入 metadata。证据沉淀到 `../P2_E2E_INTEGRATION_SMOKE_EXECUTION_RECORD_2026-07-22.md` 和 `../CCX_INTEGRATION_PRECHECK_EXECUTION_RECORD_2026-07-22.md`。
 - 2026-07-22：P2 baseline matrix follow-up 复跑完成。新增 P2_BASELINE_MATRIX_REAL_WORKER_SMOKE_FOLLOWUP_EXECUTION_RECORD_2026-07-22.md，确认 codex app-server --listen stdio:// 已能完成 JSON-RPC initialize 交互，不再被 --no-alt-screen 参数错误阻断；本轮仍未拿到 accepted/completed 样本，剩余瓶颈转为本机 provider auth / LLM 可用性与 recovery budget。
