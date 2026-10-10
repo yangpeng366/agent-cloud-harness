@@ -898,3 +898,16 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 下一步：(1) orchestrator 据本轮 last-message 再升一轮 skip-zero-interval；(2) 维护者如有需要可随时恢复巡检（按 RETIRE → 待命 → 重新激活）；(3) 已连续 2 轮稳态 RETIRE，本方向若无新增判定（FEAT-03 M1 放行 / 25200s 长稳终态报告 / orchestrator stdin 快照修复），后续 round 预算可继续收敛。
 
 [SUGGEST-RETIRE interval=0 reason='origin/master 已含 8232193 SUGGEST-RETIRE + 0851b97 NEW #1 + f1d5249 sibling M1 Router，mirror+smoke 门槛连续 2 轮稳态 (4 套离线合同 32/0 PASS + audit/BOM 全绿)，方向交付节点达 RETIRE 阈值']
+
+## 2026-10-11T00:45:54+08:00 巡检写回 (RESUME #1 Jev × 飞书 / SUGGEST-RETIRE 三轮确认)
+
+- 本轮 stdin 接 RESUME 模式（项目方向 Jev × 飞书巡检流程接入，阶段 验证）；距上一轮 RESUME #2（commit 900cf47 / 22:30）已逾 2h，期间落 2 笔 sibling commit：e91669b（M1 Router 旁路接入 WorkerExecutorRouter，6 文件 / 435+/175- / 5 用例）22:44:34 + 4a16a19（M3 Tool Gate 旁路观察 + 启发式 Provider heuristic-shadow-v1，4 文件 / 436+）00:22:39；HEAD = 4a16a19 = origin/master。
+- worktree dirty 仅 2 处：`?? _tmp_task.json`（用户自管）+ `?? tests/fixtures/`（sibling untracked；本方向不代 commit）。
+- 验证 mode 复测：4 套离线合同复跑与上轮同结果 — `verify-project-jev-decision.ps1` 9/0 + `verify-item-jev-decision.ps1` 6/0 + `verify-jev-balanced-label.ps1` 12/0 + `verify-shadow-decision-hint.ps1` 5/0 = **32/0 PASS**。
+- 配套 Java 套件：在 JDK 21 下补跑 `mvn -Dtest='Jev*Test,RouterShadowHookAdapterTest,ToolGate*Test,HeuristicToolGate*Test' test`，**17 测试类 / 102 用例 / 0 fail / 0 err**；e91669b M1 旁路（envelope.metadata 5 字段注入）+ 4a16a19 M3 Tool Gate（heuristic-shadow-v1 三件套 + ToolGateShadowService）落地后，Jev/Router/ToolGate 全线无回归。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / orphan_root_markdown_count=0（与上轮一致）。
+- BOM：Invoke-TextFileBomSweep Scanned=1882 / Found=0 / Fixed=0（与上一轮 1870 相比 +12，来自 e91669b 6 文件 + 4a16a19 4 文件 + 本轮新落 audit-this-run + patrol-last + project-results + STATE.md.bak）。
+- 镜像 + smoke 门槛连续 3 轮稳态，本轮再标 `[SUGGEST-RETIRE interval=0 ...]`。state/projects/Jev × 飞书巡检流程接入.json 仍显示 `lastMode=NEW` + `nextDueAt=2026-10-11T00:30:11`（interval 仍按 120 min 推算，未进入 skip-zero-interval），orchestrator 端 stdin 快照与 last-message 处理尚需维护者手动对齐；本方向不主动改 orchestrator 端 state。
+- decision.enabled 仍 false；balanced labeling runbook 留维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
+- blocker：high=无；medium=无；low=orchestrator stdin 对齐 (连续 ≥ 4 轮未对齐，本轮 threadCreatedAt=2026-10-10T22:30:11 + resumeCount=0 + lastMode=NEW) + 平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板 + M1 旁路已落但 `RouterShadowHook` 默认 null = no-op，待维护者放行后才入 M1 multi-turn 真实落点。
+- 下一步：(1) orchestrator 据本轮 last-message 同步把 interval 写 0 进入 skip-zero-interval；(2) 维护者如有需要可随时恢复巡检（按 RETIRE → 待命 → 重新激活）；(3) 已连续 3 轮稳态 RETIRE，本方向若无新增判定（orchestrator stdin 快照修复 / M1 放行 / 平衡标注 TN 充填），后续 round 预算可继续收敛。
