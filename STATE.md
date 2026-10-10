@@ -911,3 +911,17 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - decision.enabled 仍 false；balanced labeling runbook 留维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
 - blocker：high=无；medium=无；low=orchestrator stdin 对齐 (连续 ≥ 4 轮未对齐，本轮 threadCreatedAt=2026-10-10T22:30:11 + resumeCount=0 + lastMode=NEW) + 平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板 + M1 旁路已落但 `RouterShadowHook` 默认 null = no-op，待维护者放行后才入 M1 multi-turn 真实落点。
 - 下一步：(1) orchestrator 据本轮 last-message 同步把 interval 写 0 进入 skip-zero-interval；(2) 维护者如有需要可随时恢复巡检（按 RETIRE → 待命 → 重新激活）；(3) 已连续 3 轮稳态 RETIRE，本方向若无新增判定（orchestrator stdin 快照修复 / M1 放行 / 平衡标注 TN 充填），后续 round 预算可继续收敛。
+
+## 2026-10-11T03:05:29+08:00 巡检写回 (RESUME #2 Jev × 飞书 / SUGGEST-RETIRE 四轮确认)
+
+- 本轮 stdin 接 RESUME 模式（项目方向 Jev × 飞书巡检流程接入，阶段 验证）；距上一轮 RESUME #1（commit 9b7f076）已逾 2h，期间 sibling 落 1 笔新 commit `debce99 feat(judgment/shadow): M3 Verifier 旁路观察服务 + 启发式 Provider (heuristic-shadow-v1)`（4 文件 / 三件套 + VerifierShadowService，2026-10-11 02:02:42）；HEAD = debce99 = origin/master。
+- orchestrator 端 state/projects/Jev × 飞书巡检流程接入.json 已更新为 `resumeCount=1` + `lastMode=RESUME` + `nextDueAt=2026-10-11T02:47:42` —— 即 orchestrator **读取了上轮 last-message 但未将 [SUGGEST-RETIRE] 落地为 lastMode=RETIRED / interval=0**，仍按 120 min 节奏拉起后续轮次；连续 4 轮 trigger 未生效为 medium blocker（非本方向可控）。
+- worktree dirty 仅 2 处：`?? _tmp_task.json`（用户自管）+ `?? tests/fixtures/`（sibling untracked；本方向不代 commit）。
+- 验证 mode 复测：4 套离线合同复跑与上轮同结果 — `verify-project-jev-decision.ps1` 9/0 + `verify-item-jev-decision.ps1` 6/0 + `verify-jev-balanced-label.ps1` 12/0 + `verify-shadow-decision-hint.ps1` 5/0 = **32/0 PASS**。
+- 配套 Java 套件：在 JDK 21 下补跑 `mvn -Dtest='Jev*Test,RouterShadowHookAdapterTest,ToolGate*Test,HeuristicToolGate*Test,VerifierShadowServiceTest' test`，**17 测试类 / 105 用例 / 0 fail / 0 err**；debce99 Verifier 三档 + 4a16a19 Tool Gate 三档 + e91669b M1 旁路 5 字段入 master 后，Jev/Router/ToolGate/Verifier 全线零回归。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / orphan=0。
+- BOM：Invoke-TextFileBomSweep Scanned=1892 / Found=0 / Fixed=0（与上一轮 1882 相比 +10，来自 debce99 4 文件 + 本轮新落 audit-this-run + patrol-last + project-results + STATE.md.bak）。
+- 镜像 + smoke + Java 零失败门槛连续 4 轮稳态，本轮再标 `[SUGGEST-RETIRE interval=0 ...]`；期望 orchestrator 据此自动 upsert Bitable 「巡检间隔(分钟)」= 0 + state/projects JSON `lastMode=RETIRED` —— 但**已连续 4 轮 trigger 未被 orchestrator 处理**，强烈建议维护者手动打开 Bitable 把该字段改 0，或修 patrol 脚本读取规则（参见 logs/run-Jev_×_飞书巡检流程接入-20261011-004139.err.log 中 `justification requires an explicit sandbox_permissions` 错误一类可能挡道的关联症状）。
+- decision.enabled 仍 false；balanced labeling runbook 留维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
+- blocker：high=无；medium=orchestrator `[SUGGEST-RETIRE]` 解析不生效（连续 4 轮 trigger 未将 interval=0，本方向持续被 120 min 节奏拉起；建议维护者手动同步 Bitable 或修 patrol 脚本）；low=平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板 + M-stage M1+M2+M3 旁路全部入 master 但 `RouterShadowHook` 默认 null = no-op，待维护者放行后才入 multi-turn 真实落点。
+- 下一步：(1) 维护者手动把 Bitable 「巡检间隔(分钟)」= 0 或修 patrol 脚本读取规则；(2) 若需恢复巡检，按 RETIRE → 待命 → 重新激活；(3) 已连续 4 轮稳态 RETIRE；若无 orchestrator stdin 快照修复 / M-stage 放行 / 平衡标注 TN 充填，本方向无新动作可推进。
