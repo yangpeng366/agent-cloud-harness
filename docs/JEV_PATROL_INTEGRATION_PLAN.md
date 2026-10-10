@@ -198,7 +198,7 @@ ACH 自有借鉴（FEAT-03 / HW-09 / HW-10）走的是 **harness 内部**判断 
 - Phase 4 设计稿已存 docs/JEV_PATROL_PHASE4_DESIGN.md：决策准入（uncertainty band 0.30-0.70 必须人审，小于 0.30 直接 KEEP，大于 0.70 直接 TRUNCATE；sidecar 1xx Jev 异常均 fallback） + 控制器（feishu Invoke-JevProjectDecision / scaffold Invoke-JevItemDecision） + 评测（Run-BuildJevShadowEval.ps1 输出 per-project 命中率、TP/FP/FN/TN 与人工对照）。
 - uto-deploy ↔ patrol-scaffold ↔ Bitable 的桥已恢复；下一步是真实 shadow 窗口下放 sample run，验证 sidecar 切错码、错位、漏数据等异常被捕获。
 - Phase 2 已完成：真 key 仅以临时进程环境变量注入，未写入仓库或文档
-- 下一步按 Phase 3 shadow mode 设计旁路记录，不改变现有 worker pool 派工
+- Phase 3 shadow 已落地；当前卡点转为「平衡人工标注补 TN」，见 `docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`。在 TN>0 且 uncertainty 覆核达标前，不打开 `decision.enabled`。
 
 ## 9. 参考
 

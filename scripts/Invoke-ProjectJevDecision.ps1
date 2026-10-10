@@ -9,6 +9,17 @@ param(
 $ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
+function Resolve-JevLibPath {
+    param([Parameter(Mandatory)][string]$Name)
+    foreach ($candidate in @(
+        (Join-Path $PSScriptRoot $Name),
+        (Join-Path $PSScriptRoot ("lib\" + $Name))
+    )) {
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $null
+}
+
 if ($PSCmdlet.ParameterSetName -eq 'JsonPath') {
     if (-not (Test-Path -LiteralPath $ProjectRowJsonPath)) { throw "ProjectRowJsonPath not found: $ProjectRowJsonPath" }
     $raw = Get-Content -LiteralPath $ProjectRowJsonPath -Raw -Encoding UTF8
@@ -22,13 +33,14 @@ if ($PSCmdlet.ParameterSetName -eq 'JsonPath') {
     }
 }
 
-$decisionLib = Join-Path $PSScriptRoot 'JevDecision.ps1'
-if (-not (Test-Path -LiteralPath $decisionLib)) { throw "JevDecision.ps1 not found at $decisionLib" }
+$decisionLib = Resolve-JevLibPath -Name 'JevDecision.ps1'
+if (-not $decisionLib) { throw "JevDecision.ps1 not found under $PSScriptRoot or lib\" }
 . $decisionLib
 
-$shadowLib = Join-Path $PSScriptRoot 'JevShadow.ps1'
+$shadowLib = Resolve-JevLibPath -Name 'JevShadowFeishu.ps1'
+if (-not $shadowLib) { $shadowLib = Resolve-JevLibPath -Name 'JevShadow.ps1' }
 $shadowDotSourced = $false
-if (Test-Path -LiteralPath $shadowLib) { . $shadowLib; $shadowDotSourced = $true }
+if ($shadowLib) { . $shadowLib; $shadowDotSourced = $true }
 
 $shadowConfig = $null
 if (Test-Path -LiteralPath $JevShadowConfigPath) {

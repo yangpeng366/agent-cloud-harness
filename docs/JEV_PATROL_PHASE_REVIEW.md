@@ -75,3 +75,11 @@ scaffold/config/jev-decision.json.enabled = false            # 状态：默认�
 - fake / real 派工分流不动。
 - 凭据仅走临时进程环境变量；仓库与文档零暴露。
 - patrol 仓不 commit（runtime-only）；维护者需要独立仓时可与我直接 `git init` + `git remote add`。
+
+## 7. 2026-10-10 NEW 巡检恢复补记
+
+- ACH `Invoke-ProjectJevDecision.ps1` / `Invoke-ItemJevDecision.ps1` 原先按 feishu 同目录布局找 lib，但 ACH 实际把库放在 `scripts/lib/`；已改为 `Resolve-JevLibPath`（同目录优先，其次 `lib/`），并补 `scripts/lib/JevShadowFeishu.ps1`。
+- verify endpoint 去掉硬编码 key；live case 仅在 `~/.openclaw/secrets/typesafe.key` 存在时跑。离线合同：project 9/0、item 6/0、balanced-label 12/0、shadow-decision-hint 5/0。
+- 新增平衡标注工具：`scripts/lib/JevBalancedLabel.ps1` + `scripts/Run-JevBalancedLabelQueue.ps1` + `docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`。
+- 对 fake-round 43 扫描结果：labeled=0 / status_neg=0 / tn_candidates=0；queue 已落到 `.tmp/jev-balanced-label-20261010-143027/`。
+- `decision.enabled` 仍为 false；Phase 6 heatmap 只读原型已复跑确认。

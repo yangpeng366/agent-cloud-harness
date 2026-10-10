@@ -57,3 +57,8 @@ uns/2026-10-10-awesome-jev-ecosystem-watch.md。
 ## 2026-08-08 WorkBuddy Bench 两个 Skill 借鉴类调研
 
 - 2026-08-08：公众号《刚刚，腾讯 WorkBuddy 开源了 2 个神级 Skill》落地，本仓库本地克隆 wbbench 仓库（深度 1）于 `D:\gitAll\agent-cloud-harness\.tmp\workbuddy-bench\`，拆解两个 skill（`wbbench-run-setup` 7 阶段、`wbbench-report-skills` 三子工作流）。结论：本轮**不落代码、不跑真评测、不引入新模块**；新建 `docs/WBBENCH_BENCH_SKILLS_RESEARCH.md`，立目 5 + 1 design pattern（id 边界辨认 / secrets 分离 / 阶段化+Guardrails / 报告卫生 / local_proxy 通用化 / 阶段化 references/ 目录结构）。三个备查脑洞：(A) `PROJECT_EVALUATION_AND_NEXT_PLAN` 对外叙事文案对标（零成本）、(B) skill design checklist 扩展 `DOCS_GOVERNANCE.md`（待后续 round）、(C) 用 wbbench 数据集做 harness goal-fit reality check（前置：需先在 skill-aware client 里跑通一轮，本轮不跑）。详见 `docs/WBBENCH_BENCH_SKILLS_RESEARCH.md`。`docs/README.md` 任务分流表已新增"外部 skill / framework 设计 pattern 借鉴"行作为索引入口。
+
+## 2026-10-10 Jev × 飞书 NEW 恢复
+
+- Invoke lib-path 修复 + balanced labeling runbook/工具落地；fake-round 43 仍 TN=0。
+- 入口：`docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`；decision.enabled 保持 false。

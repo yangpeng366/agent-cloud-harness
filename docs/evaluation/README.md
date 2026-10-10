@@ -205,6 +205,7 @@
 - `../JEV_PATROL_PHASE5_SCHEMA_DESIGN.md` — Jev × 飞书巡检 Phase 5 schema 设计
 - `../JEV_PATROL_PHASE6_CASCADE_DESIGN.md` — Jev × 飞书巡检 Phase 6 cascade 设计
 - `../JEV_PATROL_PHASE6_HEATMAP_DESIGN.md` — Jev × 飞书巡检 Phase 6 heatmap 设计
+- `../JEV_PATROL_BALANCED_LABELING_RUNBOOK.md` — Jev × 飞书巡检平衡标注（TN/负标签）runbook；不打开 decision.enabled
 - `../FEAT-05_FLAKY_RATE_COMPARISON_DESIGN.md` — FEAT-05 flaky 率对照实验设计
 - `../BUDGET_TIMEOUT_RECOVERY_EXECUTION_RECORD_2026-08-02.md` — budget / timeout 恢复回归 dated 执行记录
 - `../LONG_STABILITY_SMOKE_25200S_EXECUTION_RECORD_2026-08-02.md` — 长稳冒烟 25200s dated 执行记录
