@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 按 worker 合同选择执行器的统一门面。
@@ -23,6 +24,7 @@ public class WorkerExecutorRouter implements WorkerExecutor {
     private final WorkerExecutor toolAwareExecutor;
     private final ProviderCliWorkerExecutor providerCliExecutor;
     private final CodexAppServerWorkerExecutor codexAppServerExecutor;
+    private volatile RouterShadowHook routerShadowHook;
 
     public WorkerExecutorRouter(WorkerRegistry workerRegistry,
                                 WorkerExecutor defaultExecutor,
@@ -43,6 +45,13 @@ public class WorkerExecutorRouter implements WorkerExecutor {
         String executionId = context.task().id() + ":" + workerId + ":" + startedAt.toEpochMilli();
         WorkerExecutionResult result = executor.executeOneRound(context, workerId);
         Instant finishedAt = Instant.now();
+        Map<String, Object> shadowMeta = routerShadowHook == null
+            ? Map.of()
+            : routerShadowHook.preEnvelope(context, workerId, executionId);
+        LinkedHashMap<String, Object> envelopeMetadata = new LinkedHashMap<>();
+        if (shadowMeta != null && !shadowMeta.isEmpty()) {
+            envelopeMetadata.putAll(shadowMeta);
+        }
         WorkerExecutionEnvelope envelope = new WorkerExecutionEnvelope(
             executionId,
             context.task().sessionId(),
@@ -54,7 +63,7 @@ public class WorkerExecutorRouter implements WorkerExecutor {
             result != null ? result.executionStatus() : "unknown",
             result,
             readToolInvocationIds(result),
-            new LinkedHashMap<>()
+            envelopeMetadata
         );
         return WorkerExecutionResult.withEnvelope(
             result,
@@ -120,6 +129,14 @@ public class WorkerExecutorRouter implements WorkerExecutor {
     private boolean isUnsupportedBackend(Worker worker) {
         String backend = metadataString(worker, "execution_backend");
         return "unsupported".equalsIgnoreCase(backend);
+    }
+
+    public void setRouterShadowHook(RouterShadowHook routerShadowHook) {
+        this.routerShadowHook = routerShadowHook;
+    }
+
+    public RouterShadowHook routerShadowHook() {
+        return routerShadowHook;
     }
 
     private String metadataString(Worker worker, String key) {

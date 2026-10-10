@@ -107,4 +107,34 @@ class RouterShadowServiceTest {
         assertNotNull(digest);
         assertEquals("worker:codex", digest.get("subject_ref").asText());
     }
+
+    @Test
+    void providerRuntimeExceptionMarksDecisionDegraded(@TempDir Path tmp) throws Exception {
+        Path target = tmp.resolve("router-shadow-degraded.jsonl");
+        DecisionEventSink sink = new JsonlDecisionEventSink(target, 4);
+        RouterProvider throwing = new RouterProvider() {
+            @Override
+            public JudgmentDecision decide(JudgmentRequest request) {
+                throw new IllegalStateException("provider offline");
+            }
+            @Override
+            public String providerRef() {
+                return "fake-throwing";
+            }
+        };
+        RouterShadowService service = new RouterShadowService(throwing, sink);
+
+        JudgmentDecision decision = service.observe("run-deg", "turn-1", "task-D",
+                "worker:codex", Map.of("difficulty", 0.5));
+
+        assertEquals(true, decision.degraded(), "Provider 异常时 decision 必须标 degraded=true");
+        assertEquals("balanced", decision.action(), "fallback action=balanced");
+        assertEquals("fake-throwing", decision.modelRef());
+        assertTrue(decision.reasonCodes().containsKey("fallback"), "reasonCodes.fallback 必须存在");
+
+        List<String> lines = Files.readAllLines(target);
+        assertEquals(1, lines.size());
+        JsonNode n = MAPPER.readTree(lines.get(0));
+        assertTrue(n.get("degraded").asBoolean());
+    }
 }
