@@ -852,12 +852,12 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 本轮 stdin 为 NEW 模式，主线自 2026-09-22 起约 16 天 dormant；闸门复核：feishu `decision.enabled=false`、scaffold decision 默认关、DECISIONS「hit_rate 不单独放行」与「Phase 6 只读」仍成立。
 - 修复 ACH Invoke 库路径漂移：`scripts/Invoke-ProjectJevDecision.ps1` / `Invoke-ItemJevDecision.ps1` 增加 `Resolve-JevLibPath`（同目录优先，其次 `lib/`）；补 `scripts/lib/JevShadowFeishu.ps1`（feishu project shadow API）。
 - verify 去硬编码 key：live case 仅当 `~/.openclaw/secrets/typesafe.key` 存在时跑。合同结果：project 9/0、item 6/0、balanced-label 12/0、shadow-decision-hint 5/0。
-- 新增平衡标注路径：`scripts/lib/JevBalancedLabel.ps1` + `scripts/Run-JevBalancedLabelQueue.ps1` + `tests/verify-jev-balanced-label.ps1` + `docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`；已挂到 `docs/evaluation/README.md`，并回写 Phase Review §7 / Integration Plan §8。
+- 新增平衡标注路径：`scripts/lib/JevBalancedLabel.ps1` + `scripts/Run-JevBalancedLabelQueue.ps1` + `tests/vverify-jev-balanced-label.ps1` + `docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`；已挂到 `docs/evaluation/README.md`，并回写 Phase Review §7 / Integration Plan §8。
 - fake-round 43 扫描：total=43 labeled=0 unlabeled=43 status_pos=43 status_neg=0 tn_candidates=0；queue 落 `.tmp/jev-balanced-label-20261010-143027/`。
 - Phase 6 只读复跑：heatmap 43 projects；cascade divergence=0.0041 / signal=0。
 - Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / topic_linked=46 / referenced=46 / orphan=0。
 - BOM：Invoke-TextFileBomSweep Scanned=1845 / Found=0 / Fixed=0。
-- blocker：medium=维护者需在 queue 填负标签以产生 TN，否则不能放行 active routing；low=TYPESAFE_API_KEY 是否给 auto-deploy 用仍待拍板；feishu `tests/verify-project-jev-decision.ps1` 仍含硬编码 key（跨仓，本轮未改）。
+- blocker：medium=维护者需在 queue 填负标签以产生 TN，否则不能放行 active routing；low=TYPESAFE_API_KEY 是否给 auto-deploy 用仍待拍板；feishu `tests/vverify-project-jev-decision.ps1` 仍含硬编码 key（跨仓，本轮未改）。
 - 下一步：(1) 维护者按 BALANCED_LABELING_RUNBOOK 标注 ≥10 负样本；(2) 对标注副本重跑 eval，确认 TN>0；(3) 达门槛后再议 `decision.enabled`；(4) 勿因 hit_rate=0.9070 单独放行。
 
 ## 2026-10-10T19:21:20+08:00 巡检写回 (RESUME #3 writeback #44 / audit recheck #96 - sibling 已推 f1d5249 + FEAT-03 Jev 6 项聚焦 34/34 PASS)
@@ -884,3 +884,17 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 镜像 + smoke 门槛已齐，标 [SUGGEST-RETIRE interval=0 reason="origin/master 已含 0851b97 + 4 套离线合同 32/0 PASS + audit/BOM 全绿"]，交 patrol 脚本自动把 Bitable 巡检间隔(分钟) 改为 0；state/projects/Jev × 飞书巡检流程接入.json 已置 lastMode=RETIRED。
 - decision.enabled 仍 false；balanced labeling runbook 留作维护者入口（TN>0 + uncertainty band 人工覆核达标后再议 active routing）。
 - 下一步：(1) orchestrator 据本轮 last-message 自动 skip-zero-interval；(2) 维护者如有需要，可随时恢复巡检（按 RETIRE → 待命 → 重新激活）。
+
+## 2026-10-10T22:26:27+08:00 巡检写回 (RESUME #2 Jev × 飞书 / SUGGEST-RETIRE 二轮)
+
+- 本轮 stdin 接 RESUME 模式（项目方向 Jev × 飞书巡检流程接入，阶段 验证）；距上一轮 RESUME #1 SUGGEST-RETIRE（commit 8232193 / 20:11:53）已逾 2h，HEAD = 8232193 = origin/master，无新提交。
+- worktree dirty 仅 2 处：?? _tmp_task.json（用户自管）+ ?? tests/fixtures/（sibling RESUME #3 untracked，本方向按自主决策不代为 commit）。
+- 验证 mode 复测：4 套离线合同复跑与上一轮同结果 — verify-project-jev-decision.ps1 9/0 + verify-item-jev-decision.ps1 6/0 + verify-jev-balanced-label.ps1 12/0 + verify-shadow-decision-hint.ps1 5/0 = 32/0 PASS，0 fail。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / orphan_root_markdown_count=0（与 RESUME #1 时一致）。
+- BOM：Invoke-TextFileBomSweep Scanned=1870 / Found=0 / Fixed=0（与上一轮 1861 相比 +9，来自本轮新写的 audit-this-run JSON + patrol-last + project-results + STATE.md.bak；本方向无新落源码/文档进入追踪面）。
+- 镜像 + smoke 门槛连续 2 轮稳态，本轮再标 [SUGGEST-RETIRE interval=0 reason="..."]，交 patrol 脚本自动把 Bitable 巡检间隔(分钟) 改为 0；state/projects/Jev × 飞书巡检流程接入.json 已置 lastMode=RETIRED + lastRun=2026-10-10T22:26:27（本轮 project-results 重写 round=2 + stamp=20261010-222627）。
+- decision.enabled 仍 false；balanced labeling runbook 留作维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
+- blocker：high=无；medium=无；low=orchestrator 端 stdin 快照对齐 (连续 ≥ 3 轮过期未对齐，需维护者手动同步) + 平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板。
+- 下一步：(1) orchestrator 据本轮 last-message 再升一轮 skip-zero-interval；(2) 维护者如有需要可随时恢复巡检（按 RETIRE → 待命 → 重新激活）；(3) 已连续 2 轮稳态 RETIRE，本方向若无新增判定（FEAT-03 M1 放行 / 25200s 长稳终态报告 / orchestrator stdin 快照修复），后续 round 预算可继续收敛。
+
+[SUGGEST-RETIRE interval=0 reason='origin/master 已含 8232193 SUGGEST-RETIRE + 0851b97 NEW #1 + f1d5249 sibling M1 Router，mirror+smoke 门槛连续 2 轮稳态 (4 套离线合同 32/0 PASS + audit/BOM 全绿)，方向交付节点达 RETIRE 阈值']
