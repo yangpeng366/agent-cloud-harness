@@ -873,3 +873,14 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 本轮写回 .tmp\patrol-last-20261010-192120.md、.tmp\project-results\agent-cloud-harness-20261010-192120.json、.tmp\audit-this-run-20261010-192120-auto.json、.tmp\audit-20261010-192120.md、.tmp\STATE.md.bak-20261010-192120、STATE.md 追加段；STATE.md 计划以 [auto-patrol] 提交并 push 到 origin/master (RESUME #3 writeback #44)。
 - blocker：high=无 (audit 仍 passed=True / violation_count=0；Jev 6 项聚焦 34/34 PASS；sibling 已推 master/origin 同步；BOM 合规)；low=M1 multi-turn 待维护者显式放行（连续 ≥3 轮低，sibling M1 Router 旁路服务已落地，本方向 M1 主路径待主路径接入） + 25200s 长稳真实终态报告待回收 + FEAT-03 TYPESAFE_API_KEY 是否给 auto-deploy 用仍待维护者拍板 + orchestrator 端 stdin 快照对齐 (连续 41+ 轮过期未对齐) + tests/fixtures/ 8 份 json 属 sibling 决策面，本方向不代 commit。
 - 下一步：(1) STATE.md 追加段落库并 push；(2) M1 放行后在 m0 worktree 用 .tmp\m0-m1.db 投追加 'M1 resume OK' 的 follow-up coding 任务；(3) FEAT-03 TYPESAFE_API_KEY 由维护者拍板后即可关闭 card；(4) 25200s 长稳真实终态报告视稳定性窗口择机再投；(5) orchestrator 端将 stdin 快照对齐至最新 patrol-last 时间戳；(6) 已连续两轮 6 项 Jev 聚焦复测，下轮可跳过聚焦（如无新 judgment/model/shadow 改动），节省 round 预算；如连续 ≥3 轮无新推进项且仍待维护者决策，按 prompt 「空转自决」触发 `[SUGGEST-RETIRE interval=0 reason="..."]` 标记。
+
+## 2026-10-10T20:11:30+08:00 巡检写回 (RESUME #1 Jev × 飞书巡检流程接入 / SUGGEST-RETIRE)
+
+- 本轮 stdin 为 RESUME 模式（项目方向 Jev × 飞书巡检流程接入，阶段 验证）。验证态规约：仅看 master/镜像/smoke，不动代码。
+- 复核 HEAD 018c46 / origin/master 同步；commit  851b97（NEW #1 修复 Invoke 库路径 + 平衡标注工具/runbook）已在镜像。
+- 4 套离线合同再跑：project 9/0 + item 6/0 + balanced-label 12/0 + shadow-decision-hint 5/0 = 32/0。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / orphan=0。
+- BOM：Invoke-TextFileBomSweep Scanned=1861 / Found=0 / Fixed=0。
+- 镜像 + smoke 门槛已齐，标 [SUGGEST-RETIRE interval=0 reason="origin/master 已含 0851b97 + 4 套离线合同 32/0 PASS + audit/BOM 全绿"]，交 patrol 脚本自动把 Bitable 巡检间隔(分钟) 改为 0；state/projects/Jev × 飞书巡检流程接入.json 已置 lastMode=RETIRED。
+- decision.enabled 仍 false；balanced labeling runbook 留作维护者入口（TN>0 + uncertainty band 人工覆核达标后再议 active routing）。
+- 下一步：(1) orchestrator 据本轮 last-message 自动 skip-zero-interval；(2) 维护者如有需要，可随时恢复巡检（按 RETIRE → 待命 → 重新激活）。
