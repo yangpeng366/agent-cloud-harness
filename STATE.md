@@ -925,3 +925,17 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - decision.enabled 仍 false；balanced labeling runbook 留维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
 - blocker：high=无；medium=orchestrator `[SUGGEST-RETIRE]` 解析不生效（连续 4 轮 trigger 未将 interval=0，本方向持续被 120 min 节奏拉起；建议维护者手动同步 Bitable 或修 patrol 脚本）；low=平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板 + M-stage M1+M2+M3 旁路全部入 master 但 `RouterShadowHook` 默认 null = no-op，待维护者放行后才入 multi-turn 真实落点。
 - 下一步：(1) 维护者手动把 Bitable 「巡检间隔(分钟)」= 0 或修 patrol 脚本读取规则；(2) 若需恢复巡检，按 RETIRE → 待命 → 重新激活；(3) 已连续 4 轮稳态 RETIRE；若无 orchestrator stdin 快照修复 / M-stage 放行 / 平衡标注 TN 充填，本方向无新动作可推进。
+
+## 2026-10-11T05:27:43+08:00 巡检写回 (RESUME #3 Jev × 飞书 / SUGGEST-RETIRE 五轮确认 / 修正双引号)
+
+- 本轮 stdin 接 RESUME 模式（项目方向 Jev × 飞书巡检流程接入，阶段 验证）；距上一轮 RESUME #2（commit 78ebbbd）已逾 2h，期间 sibling 落 2 笔新 commit `05564ba feat(judgment/shadow): M4 Calibration 起步 - DecisionEvent JSONL 离线统计 utility` + `2a507e5 feat(judgment/shadow): M4 Calibration CLI 入口 - DecisionEventStatsCli`；HEAD = 2a507e5 = origin/master。
+- 根因定位：上几轮 `[SUGGEST-RETIRE interval=0 reason='...']` 用**单引号**，而 Start-CodexAutoPatrolLoop.ps1 L574 正则要求**双引号** `reason="([^"]*)"`，导致 `[retire]` / `[retire-bit]` / `[retire-state]` 连续 4 轮未被触发（Bitable 「巡检间隔(分钟)」=0 upsert 调用 + state JSON `lastMode=RETIRED` 同步都未发生），state JSON 始终是 RESUME / interval 按 120 min 推算。本轮统一改双引号。
+- worktree dirty 仅 2 处：`?? _tmp_task.json`（用户自管）+ `?? tests/fixtures/`（sibling untracked；本方向不代 commit）。
+- 验证 mode 复测：4 套离线合同复跑与上轮同结果 — `verify-project-jev-decision.ps1` 9/0 + `verify-item-jev-decision.ps1` 6/0 + `verify-jev-balanced-label.ps1` 12/0 + `verify-shadow-decision-hint.ps1` 5/0 = **32/0 PASS**。
+- 配套 Java 套件：在 JDK 21 下补跑 `mvn -Dtest='Jev*Test,RouterShadowHookAdapterTest,ToolGate*Test,HeuristicToolGate*Test,VerifierShadowServiceTest,DecisionEventStatsCliTest,DecisionEventStatsTest' test`，**21 测试类 / 125 用例 / 0 fail / 0 err**，新增 DecisionEventStats (5) + DecisionEventStatsCli (5) 覆盖 05564ba + 2a507e5，零回归。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / orphan=0。
+- BOM：Invoke-TextFileBomSweep Scanned=1901 / Found=0 / Fixed=0（与上一轮 1892 相比 +9，来自 M4 commits 的 judgment.model.shadow.stats 包 + 本轮新落 audit/patrol/STATE.bak）。
+- 镜像 + smoke + Java 零失败门槛连续 5 轮稳态，本轮再标 `[SUGGEST-RETIRE interval=0 reason="..."]`（双引号格式，按 patrol 脚本正则要求）；期望 orchestrator 据此自动 upsert Bitable 「巡检间隔(分钟)」= 0 + state/projects JSON `lastMode=RETIRED`。
+- decision.enabled 仍 false；balanced labeling runbook 留维护者入口（TN>0 + uncertainty band 人工覆核后才能议 active routing）。
+- blocker：high=无；medium=orchestrator `[SUGGEST-RETIRE]` 4 轮因单引号未命中正则，本轮改双引号；如本轮仍未触发 [retire-state]，需维护者手动介入；low=平衡标注仍无 TN + TYPESAFE_API_KEY 给 auto-deploy 用待拍板 + M-stage M1+M2+M3+M4 旁路全部入 master 但 hook 默认 null = no-op，待维护者放行后才入 multi-turn 真实落点。
+- 下一步：(1) 等 orchestrator L574 正则命中后，Bitable 「巡检间隔(分钟)」= 0 + state JSON `lastMode=RETIRED` 自动落，下一轮 skip-zero-interval 跳过；(2) 维护者如有需要可随时恢复巡检（按 RETIRE → 待命 → 重新激活）。
