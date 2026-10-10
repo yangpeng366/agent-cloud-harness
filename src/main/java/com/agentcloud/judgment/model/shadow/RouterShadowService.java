@@ -68,7 +68,13 @@ public class RouterShadowService {
                 200L
         );
 
-        JudgmentDecision decision = provider.decide(req);
+        JudgmentDecision decision;
+        try {
+            decision = provider.decide(req);
+        } catch (RuntimeException e) {
+            decision = JudgmentDecision.fallback(judgmentId, "balanced",
+                    "provider_error:" + e.getClass().getSimpleName(), provider.providerRef(), 0L);
+        }
 
         Map<String, Object> digest = new LinkedHashMap<>();
         digest.put("subject_ref", subjectRef == null ? "" : subjectRef);
