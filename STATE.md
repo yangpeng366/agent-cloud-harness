@@ -846,3 +846,16 @@ elease | 维持 | docs/release/README.md | 本轮未触及 |
 - 本轮写回 .tmp\patrol-last-20261010-140048.md、.tmp\project-results\agent-cloud-harness-20261010-140048.json、.tmp\audit-this-run-20261010-140048-auto.json、.tmp\audit-20261010-140048.md、.tmp\STATE.md.bak-20261010-140048、STATE.md 追加段；STATE.md 计划以 [auto-patrol] 提交并 push 到 origin/master (RESUME #2 writeback #43)。
 - blocker：high=无 (audit 仍 passed=True / violation_count=0；Jev 6 项聚焦 34/34 PASS；push 成功，origin/master 与 master 同步；BOM 合规)；low=M1 multi-turn 待维护者显式放行 + 25200s 长稳真实终态报告待回收 + FEAT-03 TYPESAFE_API_KEY 是否给 auto-deploy 用仍待维护者拍板 + orchestrator 端 stdin 快照对齐 (连续 41+ 轮过期未对齐) + sibling patrol 节奏变更（已切 RESUME #4 写 41）属 sibling 决策面。
 - 下一步：(1) STATE.md 追加段落库并 push；(2) M1 放行后在 m0 worktree 用 .tmp\m0-m1.db 投追加 'M1 resume OK' 的 follow-up coding 任务；(3) FEAT-03 TYPESAFE_API_KEY 由维护者拍板后即可关闭 card；(4) 25200s 长稳真实终态报告视稳定性窗口择机再投；(5) orchestrator 端将 stdin 快照对齐至最新 patrol-last 时间戳；(6) 本轮 Jev 6 项聚焦已验证 FEAT-03 无回归，下次 round 可不再聚焦（除非有新 judgment/* 改动）。
+
+## 2026-10-10T14:35:00+08:00 巡检写回 (NEW #1 Jev × 飞书巡检流程接入 / writeback #44)
+
+- 本轮 stdin 为 NEW 模式，主线自 2026-09-22 起约 16 天 dormant；闸门复核：feishu `decision.enabled=false`、scaffold decision 默认关、DECISIONS「hit_rate 不单独放行」与「Phase 6 只读」仍成立。
+- 修复 ACH Invoke 库路径漂移：`scripts/Invoke-ProjectJevDecision.ps1` / `Invoke-ItemJevDecision.ps1` 增加 `Resolve-JevLibPath`（同目录优先，其次 `lib/`）；补 `scripts/lib/JevShadowFeishu.ps1`（feishu project shadow API）。
+- verify 去硬编码 key：live case 仅当 `~/.openclaw/secrets/typesafe.key` 存在时跑。合同结果：project 9/0、item 6/0、balanced-label 12/0、shadow-decision-hint 5/0。
+- 新增平衡标注路径：`scripts/lib/JevBalancedLabel.ps1` + `scripts/Run-JevBalancedLabelQueue.ps1` + `tests/verify-jev-balanced-label.ps1` + `docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`；已挂到 `docs/evaluation/README.md`，并回写 Phase Review §7 / Integration Plan §8。
+- fake-round 43 扫描：total=43 labeled=0 unlabeled=43 status_pos=43 status_neg=0 tn_candidates=0；queue 落 `.tmp/jev-balanced-label-20261010-143027/`。
+- Phase 6 只读复跑：heatmap 43 projects；cascade divergence=0.0041 / signal=0。
+- Run-DocsIndexAudit：passed=True / violation_count=0 / root=46 / topic_linked=46 / referenced=46 / orphan=0。
+- BOM：Invoke-TextFileBomSweep Scanned=1845 / Found=0 / Fixed=0。
+- blocker：medium=维护者需在 queue 填负标签以产生 TN，否则不能放行 active routing；low=TYPESAFE_API_KEY 是否给 auto-deploy 用仍待拍板；feishu `tests/verify-project-jev-decision.ps1` 仍含硬编码 key（跨仓，本轮未改）。
+- 下一步：(1) 维护者按 BALANCED_LABELING_RUNBOOK 标注 ≥10 负样本；(2) 对标注副本重跑 eval，确认 TN>0；(3) 达门槛后再议 `decision.enabled`；(4) 勿因 hit_rate=0.9070 单独放行。
