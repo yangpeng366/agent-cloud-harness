@@ -7,6 +7,8 @@
 - 现阶段仍不启用 `tasks/`、`archive/`；`runs/README.md` 只负责聚合 root-level dated 执行证据入口，不搬动文档本体，`PROGRESS.md` 则继续负责把当前活跃主线串起来。
 
 ## 已完成
+- 2026-10-10: 远端 `awesome-jev` 18 commits ahead（`7fce0f1` -> `39ac115`），新增 `scripts/maintainer/merge-prs.sh` 132 行 + jev-curation SKILL 更新（README-only 条目回流标准流程），`dsh-jev-plugin` 落地（dsh 第 4 独立样本），`RSI-Jev v6.1-VL 4B/27B` 升级。本地 `git fetch` 因 `github.com:443` 21s 超时两次未能 advance，本轮基于 API diff 落痕。证据：`runs/2026-10-10-awesome-jev-ecosystem-watch.md`。
+uns/2026-10-10-awesome-jev-ecosystem-watch.md。
 - 2026-10-08: 本地 `awesome-jev` 同步 `bece57c -> 0839b92`（ff-only，101 commits ahead）；PR `#305 Jev Deep Research` 与 `#307 TetraJev` 已 MERGED；`tags.json` 新增 `openclaw` 词表 + 2 条 openclaw 类目条目；`scripts/tests` 由 26 → 34 全绿；README 重建零漂移。证据：`runs/2026-10-08-awesome-jev-ecosystem-watch.md`。
 - 2026-09-29: 完成 `yibie/awesome-jev` 只读生态复查（本地 `bece57c` 对远端 `fd4df757` 共 48 commits）；确认 dsh / robotics 无新独立样本、catalog 评论工作流仅在失败时发言，记录 TetraJev 与 Jev Deep Research 为未采纳候选。证据：`runs/2026-09-29-awesome-jev-ecosystem-watch.md`。
 - 2026-09-22: Jev × patrol completed a real Bitable read + fake/dry-run round (43/43 sidecars, 0 errors). Hit rate was 0.9070, but the set had no negative labels/TN, so active routing stays disabled. Added read-only Phase 6 cascade and heatmap prototypes; evidence is in `runs/2026-09-22-jev-bitable-fake-round-and-phase6-prototypes.md`.
