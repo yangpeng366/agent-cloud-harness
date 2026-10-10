@@ -234,3 +234,18 @@ else:
     target = elements[action.target_index]
     click_xy(target.center.x, target.center.y)
 ```
+
+## 9. third-hand 不变量速查表（10 行 OpenEyes 风格 · 借鉴样板 `docs/push-squash-plan.md`）
+
+> 全文源码已落地复核（2026-10-10 R1）：`TextFieldFocus.swift:38` / `AXTreeWalker.swift:5,46,53` / `VisionObserver.swift:21,54,69` / `JevClient.swift:18-22,164,328` / `TextEntryPlan.swift:13,24,42` / `TaskRunner.swift:43,64,85,243`。
+
+1. **focus 双闸**：`TextFieldFocus.confirmed` + 32-hop parent 链硬上限防 cyclic AX；先 `kAXFocusedUIElementAttribute`，回退 `kAXFocusedAttribute`；`prepare` 仅 focus 超时才 click。
+2. **AX 观测预算**：`AXUIElementSetMessagingTimeout(0.1s)`、timeBudget=0.8s、maxDepth=30、limit=1200、visited<3000；frame 不与 frontWindow 相交者剔除；focused+outcome-evidence 0 优先、`AXStaticText` 3 殿后。
+3. **Vision 仅补不发明**：`VisionObserver.merging` 只造 `AXStaticText` source="ocr"，confidence ≥0.8、prefix 500、从不发明 button/text field，永不构造可点击元素。
+4. **Jev 决策契约**：endpoint `https://api.typesafe.ai/v1/systemone`，`doneThreshold=0.70` 强转 DONE、`absentThreshold=0.50`、`maxChoices=255`、`pickedNone→BLOCKED`；Jev 发射集仅 11 op：`CLICK / TYPE_TEXT / CLICK_TEXT / SCROLL_UP / SCROLL_DOWN / PRESS_RETURN / PRESS_TAB / PRESS_ESCAPE / WAIT / DONE / BLOCKED`（`TaskRunner.execute` 还替 DOUBLE_CLICK/RIGHT_CLICK 留了 fallback，但 Jev 永不产——修正 §2.4 操作集）。
+5. **CLICK_TEXT 严守**：`JevClient.swift:174` 原文「OCR does not prove interactivity; never click headings or ordinary content」；OCR 文本必须能唯一定位目标控件。
+6. **文本候选单源**：`TextEntryPlan.candidates` 仅取当前 goal 引号字面 + 1..12-word N-gram，cap 100 条 / 单条 utf8 ≤1000B；terminal 走 bundle 白名单（Terminal / iTerm2 / Ghostty / Warp-Stable / kitty / alacritty）；`build` 拒多行（`\n\r\0`）与「Jev cannot provide」自由写作 / 命令生成。
+7. **KEY_PRESS 三键定**：`JevClient.decode` 把 `PRESS_RETURN / PRESS_TAB / PRESS_ESCAPE` 唯一映射到 `return / tab / escape`；其他键不接受。
+8. **TaskRunner 步进守护**：`maxSteps=30`、外层 observe 40、`AsyncTimeout 180s`；`checkFocus` 每步守 `NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid`，失焦或目标进程终止即 abort。
+9. **terminal 录入硬约束**：terminal 先 `Ctrl+A / Ctrl+K` 清行（非 terminal 走 `Cmd+A`），80ms settle 再输；`InputController.type(check:)` 每字符再 `checkTypingFocus`，焦点失即抛 `TextFieldFocus.Failure.changed`。
+10. **签 identity 与 TCC 守恒**：`AGENTS.md` 已纳——永不 ad-hoc `codesign --sign -`、不动 `.thirdhand-signing-identity`、不绕签；bypass 会让 macOS 撤销已授权 TCC。
