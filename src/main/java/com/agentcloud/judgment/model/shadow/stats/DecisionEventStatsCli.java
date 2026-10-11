@@ -37,30 +37,35 @@ public final class DecisionEventStatsCli {
 
     public static int run(String[] args, PrintStream out, PrintStream err) {
         if (args == null || args.length == 0) {
-            err.println("Usage: DecisionEventStatsCli [--pretty] <jsonl-path>");
+            err.println("Usage: DecisionEventStatsCli [--pretty] [--reasons] <jsonl-path>");
             return 2;
         }
 
         boolean pretty = false;
+        boolean reasons = false;
         String pathArg = null;
         for (String a : args) {
             if ("--pretty".equals(a)) {
                 pretty = true;
+            } else if ("--reasons".equals(a)) {
+                reasons = true;
             } else if (pathArg == null) {
                 pathArg = a;
             }
         }
         if (pathArg == null) {
-            err.println("Usage: DecisionEventStatsCli [--pretty] <jsonl-path>");
+            err.println("Usage: DecisionEventStatsCli [--pretty] [--reasons] <jsonl-path>");
             return 2;
         }
 
         Path jsonlPath = Paths.get(pathArg);
         try {
-            DecisionEventStats.Summary summary = DecisionEventStats.compute(jsonlPath);
             Map<String, Object> envelope = new LinkedHashMap<>();
             envelope.put("path", jsonlPath.toString());
-            envelope.put("summary", summary);
+            envelope.put("summary", DecisionEventStats.compute(jsonlPath));
+            if (reasons) {
+                envelope.put("reasons", DecisionEventReasonStats.compute(jsonlPath));
+            }
             String json = MAPPER.writeValueAsString(envelope);
             out.println(json);
             return 0;
