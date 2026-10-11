@@ -4,7 +4,6 @@ import com.agentcloud.judgment.model.shadow.DecisionEventSink;
 import com.agentcloud.judgment.model.shadow.HeuristicRouterProvider;
 import com.agentcloud.judgment.model.shadow.JsonlDecisionEventSink;
 import com.agentcloud.judgment.model.shadow.RouterShadowService;
-import com.agentcloud.judgment.model.shadow.stats.DecisionEventStats.Summary;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -20,7 +19,7 @@ import java.nio.file.Paths;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DecisionEventStatsCliTest {
@@ -99,6 +98,39 @@ class DecisionEventStatsCliTest {
         String output = out.toString();
         JsonNode root = MAPPER.readTree(output);
         assertEquals(0L, root.get("summary").get("totalEvents").asLong());
+    }
+
+    @Test
+    void reasonsFlagIncludesReasonSummary(@TempDir Path tmp) throws Exception {
+        Path jsonl = tmp.resolve("reasons.jsonl");
+        DecisionEventSink sink = new JsonlDecisionEventSink(jsonl, 16);
+        RouterShadowService router = new RouterShadowService(new HeuristicRouterProvider(), sink);
+        router.observe("run-A", "turn-1", "task-A", "worker:codex",
+                Map.of("difficulty", 0.92, "high_stakes", true));
+        router.observe("run-A", "turn-2", "task-A", "worker:openclaw",
+                Map.of("difficulty", 0.10));
+
+        int code = runCli(new String[]{"--reasons", jsonl.toString()});
+        assertEquals(0, code);
+        String output = out.toString();
+        JsonNode root = MAPPER.readTree(output);
+        assertEquals(2L, root.get("summary").get("totalEvents").asLong());
+        assertTrue(root.has("reasons"), "--reasons 必须含 reasons 字段");
+        assertEquals(2L, root.get("reasons").get("totalEvents").asLong());
+        assertEquals(1L, root.get("reasons").get("reasonsByKind").get("router:human_or_high_stakes_flag_set").asLong());
+        assertEquals(1L, root.get("reasons").get("reasonsByKind").get("router:difficulty_below_fast_max").asLong());
+    }
+
+    @Test
+    void withoutReasonsFlagOmitsReasonSummary(@TempDir Path tmp) throws Exception {
+        Path jsonl = tmp.resolve("noreasons.jsonl");
+        Files.writeString(jsonl, "");
+
+        int code = runCli(new String[]{jsonl.toString()});
+        assertEquals(0, code);
+        JsonNode root = MAPPER.readTree(out.toString());
+        assertTrue(root.has("summary"));
+        assertFalse(root.has("reasons"), "不带 --reasons 时不应含 reasons 字段");
     }
 
     private int runCli(String[] args) {
