@@ -63,3 +63,31 @@ harness:
         primary_role: cannon_fodder
         execution_backend: provider_app_server
         local_workspace_access: true
+
+# Judgment Shadow（Provider-agnostic 三件套 + M1/M2/M3 旁路观察 + M4 Calibration 工具链）
+# 详见 notes/49 / 50 / 51 号（位于 D:\BaiduSyncdisk\Obsidian Vault\当前项目\02_项目推进\agent-cloud-architecture\notes\）
+# 默认 enabled=false；整套 shadow 包不挂 sink；既有路径不变。
+# 当 enabled=true + profile=record_only：Router/Tool Gate/Verifier 写 DecisionEvent JSONL；
+#                                         WorkerExecutor 既有路径不变；DecisionEventStatsCli 周期回放。
+# 当 enabled=true + profile=enforce：Router judgment 决定 worker 候选；Tool Gate 写入类工具按 approval 强制 block；
+#                                     Verifier retry_once / handoff 实际生效（按工具种类分批开放）。
+judgment:
+  shadow:
+    enabled: false                  # 默认关
+    profile: record_only            # record_only | enforce
+    policy_version: default         # 关联 DecisionPolicy.version
+    router:
+      enabled: true                 # M1 开关（commit e91669b 已接入 WorkerExecutorRouter）
+      provider: heuristic-shadow-v1
+      path: "/var/log/ach/router-shadow.jsonl"
+    tool_gate:
+      enabled: false                # M2 集成候选（commit 4a16a19 已落 service，待 WorkerExecutor 接入）
+      provider: heuristic-shadow-v1
+      path: "/var/log/ach/tool-gate-shadow.jsonl"
+    verifier:
+      enabled: false                # M3 集成候选（commit debce99 已落 service，待 WorkerExecutor 接入）
+      provider: heuristic-shadow-v1
+      path: "/var/log/ach/verifier-shadow.jsonl"
+    stats:
+      enabled: false                # M4 Calibration 周期回放任务（CLI 已落：commit 2a507e5 + de9fdd6）
+      cli_command: "java -cp '<ach-classpath>' com.agentcloud.judgment.model.shadow.stats.DecisionEventStatsCli --pretty {path}"
