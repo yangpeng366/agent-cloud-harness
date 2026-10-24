@@ -220,6 +220,8 @@ Fallback 时**严格保留**当前行为：
 9. questions 和 thresholds 必须集中定义在 `JevContextScorerConfig.java` 单文件（来自官方 typesafe-ai/skills SKILL.md "common issues" 第 4 条）；改 policy 时是 constant edit under code review，不是 reworded question。
 
 
+> 2026-10-24 上游印证（仅记录证据，**不改门槛语义**）：yibie/awesome-jev 本轮并入 `opencode-jev-safe-compact` 条目（PR #384，2026-10-22）。该条目写明：`Noul` 分数会随状态形状漂移，而其 AUC 仍稳定在 0.70-0.83，因此该插件按**排序**而非绝对阈值决定裁掉多少。本计划第 4 条的绝对阈值 `keepThreshold = 0.5`（同 `fast-jev-compaction` 源）正属同一形态 —— 签字前应把「绝对阈值 vs 排序保留 + AUC 锚定」一并比对。证据：`docs/evaluation/runs/2026-10-24-awesome-jev-ecosystem-watch.md`。
+
 ## 13. 测试合同源码骨架（不落 `src/`，仅作 plan 附录供维护者签字时对照）
 
 > 本节是 plan 文档的**附录**——为方便维护者对照测试合同、把 fake Jev 直接迁入 `src/test/java/`，先在 plan 里给完整骨架代码片段。**本轮不创建任何 `src/` 文件**；维护者签字后，由 FEAT-03 实施 PR 一次性迁入。
