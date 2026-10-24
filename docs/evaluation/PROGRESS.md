@@ -7,6 +7,7 @@
 - 现阶段仍不启用 `tasks/`、`archive/`；`runs/README.md` 只负责聚合 root-level dated 执行证据入口，不搬动文档本体，`PROGRESS.md` 则继续负责把当前活跃主线串起来。
 
 ## 已完成
+- 2026-10-24: 本地 `awesome-jev` 同步 `7d8405c -> ddbda70`（ff-only，18 commits，改走 `ssh.github.com:443`；`github.com:443` 本机不通）；目录 640 → 656 条，34 tests / audit 0 notice / README 零漂移；周快照更正 jev-ultrafast 星标为 23546★/1778 fork（原行内 13.6k/838 已过期）；只读记录 `choice404` 三 PR 批量投递簇 #387/#388/#389 与 opencode-jev-safe-compact 绝对阈值漂移证据，后者挂到 FEAT-03 plan §11 第 4 条（不改门槛语义）。证据：`runs/2026-10-24-awesome-jev-ecosystem-watch.md`。
 - 2026-10-10: 远端 `awesome-jev` 18 commits ahead（`7fce0f1` -> `39ac115`），新增 `scripts/maintainer/merge-prs.sh` 132 行 + jev-curation SKILL 更新（README-only 条目回流标准流程），`dsh-jev-plugin` 落地（dsh 第 4 独立样本），`RSI-Jev v6.1-VL 4B/27B` 升级。本地 `git fetch` 因 `github.com:443` 21s 超时两次未能 advance，本轮基于 API diff 落痕。证据：`runs/2026-10-10-awesome-jev-ecosystem-watch.md`。
 uns/2026-10-10-awesome-jev-ecosystem-watch.md。
 - 2026-10-08: 本地 `awesome-jev` 同步 `bece57c -> 0839b92`（ff-only，101 commits ahead）；PR `#305 Jev Deep Research` 与 `#307 TetraJev` 已 MERGED；`tags.json` 新增 `openclaw` 词表 + 2 条 openclaw 类目条目；`scripts/tests` 由 26 → 34 全绿；README 重建零漂移。证据：`runs/2026-10-08-awesome-jev-ecosystem-watch.md`。
