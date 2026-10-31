@@ -63,3 +63,7 @@ uns/2026-10-10-awesome-jev-ecosystem-watch.md。
 
 - Invoke lib-path 修复 + balanced labeling runbook/工具落地；fake-round 43 仍 TN=0。
 - 入口：`docs/JEV_PATROL_BALANCED_LABELING_RUNBOOK.md`；decision.enabled 保持 false。
+
+## 2026-10-31 Jev 开源周巡检
+
+- 2026-10-31：`yibie/awesome-jev` 镜像 ddbda70→51906421（35 commits，SSH-over-443 ff-only）。目录 656→679 条（+25，−2：两个 Trio-Spark demo 子条目按上游新“同源只交代一次”规则折入父条目）；34 tests / 0 audit notice / README 零漂移。周快照：awesome-jev 2515★/374 fork、jev-ultrafast 23964★/1836 fork/213 open issues（主干自 2026-09-18 未动）、typesafe-ai/skills 仍 v0.6.2（21 个官方 cookbook 本轮未变）。一手核验 3 个新上游条目（`s1kit` 按问题置信度阈值、`dsh-jev-goal-judge` question/state 分离、`Flide` exact state forking），证据分别落到 `docs/JEV_CONTEXT_SCORING_PLAN.md` §11 与 `docs/JEV_GRAPH_NODES_PLAN.md` §2.4；**未改任何门槛与 checklist 语义**。详见 `docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。

@@ -56,6 +56,8 @@
 
 **决策树映射**：把整棵树"摊平"成 N 个独立 question，1 个 API call 拿全部答案。
 
+> 2026-10-31 上游印证（仅记录证据，**不改方案语义**）：本轮上游目录并入 `Flide`（`OmniJev/Flide`，Apache-2.0，Python，2026-10-24 建仓，7 star，0 二进制）。其 README 自述 "Exact State Forking"：普通生成式引擎把每个问题拆成独立序列、重算部分 state，并给 multi-item scoring 加分隔符——"multi-item scoring adds 3 delimiters **that change the answers**"；Flide 改为一条序列、不重复计算，使 "every answer is the one the model gives the [single question]"，相对 vLLM / SGLang 快至多 9.4 倍。即：本路径的收益（13 question / 1 call、12.2× cheap、10× fast）**以 fan-out 答案与单问答案等价为前提**，批量推理本身不保真。建议（待维护者拍板，本轮不改 checklist）：适配层验收增加一条——抽样比对 fan-out 答案与隔离单问答案，偏差需有明确上限。证据等级：lead（7 star，但 121 MB 自托管推理栈，与我方运行时差距大）。证据：`docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。
+
 ### 2.5 `confidence-routing` 形态 —— 边的 confidence 阈值
 
 **官方描述**：confidence as second axis; answer 告诉你"什么"，confidence 告诉你"是否应该行动"。
