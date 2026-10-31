@@ -229,6 +229,8 @@ Fallback 时**严格保留**当前行为：
 >
 > 证据：`docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。
 
+> 2026-11-01 复核结论（已一手复现，**不改门槛语义**）：s1kit 0.2.0（HEAD `9948b2d`，仅依赖 PyYAML，可离线跑，其自带测试 30 passed）实测：`calibrate` 输出按 **(provider, question)** 粒度给阈值 `threshold / precision / coverage / n`，无阈值可达目标时写 `null`（永远升级）；同一 provider 下 `keyword/team` 在 0.71 处 100% 精度、覆盖 100%，`keyword/urgent` 在 0.70 处同样 100% 精度却只覆盖 5% —— 单一全局阈值无法同时表达两者。另其 Router 语义为「任一问不达标即整批升级，链尾 provider 无条件兜底（fail-open）」，与本仓 Router / Tool Gate / Verifier 多问一次调用的形状不同：只搬阈值表而不改判定粒度，会把一个不可校准的问题变成整批成本放大。故第 4 条的三个候选（绝对阈值 / 排序保留 + AUC / 按问题拟合阈值）应由维护者拍板取其一或并存，试点原文见 `docs/evaluation/runs/2026-11-01-s1kit-per-question-cutoff-spike.md`。
+
 ## 13. 测试合同源码骨架（不落 `src/`，仅作 plan 附录供维护者签字时对照）
 
 > 本节是 plan 文档的**附录**——为方便维护者对照测试合同、把 fake Jev 直接迁入 `src/test/java/`，先在 plan 里给完整骨架代码片段。**本轮不创建任何 `src/` 文件**；维护者签字后，由 FEAT-03 实施 PR 一次性迁入。

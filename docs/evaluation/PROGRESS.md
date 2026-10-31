@@ -67,3 +67,7 @@ uns/2026-10-10-awesome-jev-ecosystem-watch.md。
 ## 2026-10-31 Jev 开源周巡检
 
 - 2026-10-31：`yibie/awesome-jev` 镜像 ddbda70→51906421（35 commits，SSH-over-443 ff-only）。目录 656→679 条（+25，−2：两个 Trio-Spark demo 子条目按上游新“同源只交代一次”规则折入父条目）；34 tests / 0 audit notice / README 零漂移。周快照：awesome-jev 2515★/374 fork、jev-ultrafast 23964★/1836 fork/213 open issues（主干自 2026-09-18 未动）、typesafe-ai/skills 仍 v0.6.2（21 个官方 cookbook 本轮未变）。一手核验 3 个新上游条目（`s1kit` 按问题置信度阈值、`dsh-jev-goal-judge` question/state 分离、`Flide` exact state forking），证据分别落到 `docs/JEV_CONTEXT_SCORING_PLAN.md` §11 与 `docs/JEV_GRAPH_NODES_PLAN.md` §2.4；**未改任何门槛与 checklist 语义**。详见 `docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。
+
+## 2026-11-01 s1kit 按问题阈值试点
+
+- 2026-11-01：跟进 10-31 的 `[NEXT-FOCUS]`，**离线**拉取 s1kit 0.2.0（`9948b2d`，仅依赖 PyYAML，其自带测试 30 passed）跑通 `s1kit calibrate`：阈值按 **(provider, question)** 粒度输出，无阈值可达目标时为 `null`（永远升级）；同一 provider 下两个问题的覆盖率在相同目标精度下相差 20 倍（100% vs 5%），直接支撑“全局阈值不足以表达逐问题精度”。另发现其 Router 为「任一问不达标即整批升级、链尾 fail-open」，与我方多问一次调用的形状不同，需按问判定而非整批 OR。结论与映射提案落 `docs/evaluation/runs/2026-11-01-s1kit-per-question-cutoff-spike.md` 与 `docs/JEV_CONTEXT_SCORING_PLAN.md` §11（**未改门槛与 checklist 语义，等维护者拍板**）。同期：typesafe-ai/skills 仍 v0.6.2（21 个官方 cookbook 未变）；browser-use/jev-ultrafast 主干新增 1 条**纯文档** commit（`8251e272`，BU Ultrafast GA，`model: "bu-ultrafast"`），代码侧自 2026-09-18 未动，仍无 tag / release。
