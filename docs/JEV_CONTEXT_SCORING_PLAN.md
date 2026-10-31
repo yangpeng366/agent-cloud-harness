@@ -222,6 +222,13 @@ Fallback 时**严格保留**当前行为：
 
 > 2026-10-24 上游印证（仅记录证据，**不改门槛语义**）：yibie/awesome-jev 本轮并入 `opencode-jev-safe-compact` 条目（PR #384，2026-10-22）。该条目写明：`Noul` 分数会随状态形状漂移，而其 AUC 仍稳定在 0.70-0.83，因此该插件按**排序**而非绝对阈值决定裁掉多少。本计划第 4 条的绝对阈值 `keepThreshold = 0.5`（同 `fast-jev-compaction` 源）正属同一形态 —— 签字前应把「绝对阈值 vs 排序保留 + AUC 锚定」一并比对。证据：`docs/evaluation/runs/2026-10-24-awesome-jev-ecosystem-watch.md`。
 
+> 2026-10-31 上游印证（仅记录证据，**不改门槛语义**）：本轮上游目录并入 `s1kit`（2026-10-28 新仓，MIT，0 star，6 open issues）与 `dsh-jev-goal-judge`（2026-10-12，MIT，1 star），二者 README 均已一手核验。
+>
+> - `s1kit` 对应第 4 条：`s1kit calibrate results.jsonl --target 0.95` **按问题**各取一个达到目标精度的最低置信度阈值；其自带样例给出 `keyword/mood >= 0.5761 -> 100.0% 精度、覆盖 25%`、`keyword/team >= 0.3333 -> 100.0% 精度、覆盖 100%`、`keyword/urgent >= 0.7143 -> 100.0% 精度、覆盖 40%`——同一模型在不同问题上的可用阈值相差 2 倍以上，故全局阈值（`keepThreshold = 0.5`；§1.1a 的 `lowStakesThreshold 0.60` / `highStakesThreshold 0.85`）要么误放、要么误杀。签字前应把「全局阈值 vs 按问题拟合阈值（附目标精度与覆盖率）」与 2026-10-24 的「绝对阈值 vs 排序保留」并列为同一决策项。证据等级：lead（0 star、三天新仓、README 数字未复现）。
+> - `dsh-jev-goal-judge` 对应第 9 条：该插件把**问题文本**与**被观察内容**分开——instruction 字符串为常量，transcript 只进 `state` 数据字段，"tool output can never rewrite what is being asked"；一 call 五问（`achieved` / `evidence` noul + `progress` score + `sameObstacle` noul + `action` choice），阈值 achieved ≥ 0.75 / evidence ≥ 0.6，任何降级一律 fail-open，shadow 默认写 `telemetry.jsonl`；首轮真实 API 冒烟 achieved 0.83 / evidence 0.90 / progress 3.94（confidence 0.95）。第 9 条只要求「question 字符串不许改写」，此处补的是更硬的另一半：**工具输出不得进入 instruction**——本仓 judgment 层的 question 组装正来自 runtime facts 与工具结果，这是需要检查的注入面。证据等级：lead（1 star，但带真实 key 冒烟数字）。
+>
+> 证据：`docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。
+
 ## 13. 测试合同源码骨架（不落 `src/`，仅作 plan 附录供维护者签字时对照）
 
 > 本节是 plan 文档的**附录**——为方便维护者对照测试合同、把 fake Jev 直接迁入 `src/test/java/`，先在 plan 里给完整骨架代码片段。**本轮不创建任何 `src/` 文件**；维护者签字后，由 FEAT-03 实施 PR 一次性迁入。
