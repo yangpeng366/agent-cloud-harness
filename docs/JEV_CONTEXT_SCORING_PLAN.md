@@ -16,7 +16,7 @@
 JevContextScorerConfig {
   boolean enabled                       # default false；feature flag，由 harness-config.yml 控制
   String apiKeyEnvVar                   # default "TYPESAFE_API_KEY"；运行时从环境变量读
-  String baseUrl                        # default "https://api.typesafeai.com"
+  String baseUrl                        # default "https://api.typesafe.ai"（2026-11-04 订正：原缺一点，与代码 JevContextScorerConfig.DEFAULT_BASE_URL 不一致）
   int    requestTimeoutMs               # default 5000；>5000ms 直接 fallback
   double keepThreshold                  # default 0.5 (probability threshold; 官方更推荐 confidence 3 段阈值,见 §1.1a)
   int    preserveRecentMessages         # default 6
@@ -230,6 +230,84 @@ Fallback 时**严格保留**当前行为：
 > 证据：`docs/evaluation/runs/2026-10-31-awesome-jev-ecosystem-watch.md`。
 
 > 2026-11-01 复核结论（已一手复现，**不改门槛语义**）：s1kit 0.2.0（HEAD `9948b2d`，仅依赖 PyYAML，可离线跑，其自带测试 30 passed）实测：`calibrate` 输出按 **(provider, question)** 粒度给阈值 `threshold / precision / coverage / n`，无阈值可达目标时写 `null`（永远升级）；同一 provider 下 `keyword/team` 在 0.71 处 100% 精度、覆盖 100%，`keyword/urgent` 在 0.70 处同样 100% 精度却只覆盖 5% —— 单一全局阈值无法同时表达两者。另其 Router 语义为「任一问不达标即整批升级，链尾 provider 无条件兜底（fail-open）」，与本仓 Router / Tool Gate / Verifier 多问一次调用的形状不同：只搬阈值表而不改判定粒度，会把一个不可校准的问题变成整批成本放大。故第 4 条的三个候选（绝对阈值 / 排序保留 + AUC / 按问题拟合阈值）应由维护者拍板取其一或并存，试点原文见 `docs/evaluation/runs/2026-11-01-s1kit-per-question-cutoff-spike.md`。
+
+> 2026-11-04 候选 C 草案（**待维护者拍板；不改动第 4 条现行条文、门槛值与 checklist 语义**）：
+>
+> **先说清这份草案的性质（状态校正）**：第 4 条已随 FEAT-03 于 2026-09-21 签字并落地（`JevContextScorerConfig.DEFAULT_KEEP_THRESHOLD = 0.5`，见 `docs/INITIATIVES/FEAT-03.md` §14「签字 + 迁入 src/main + src/test」；该卡「当前状态 = 验收通过」）。故本段**不是补签，而是变更提案**：采纳即一次 policy constant edit（§1.1a 纪律「改 policy 是 constant edit under code review」）。签字前不动 `JevContextScorerConfig`、不建 `src/` 文件。
+>
+> **第 4 条的三个候选（取其一或并存）**
+>
+> | 候选 | 形态 | 依据 | 状态 |
+> |---|---|---|---|
+> | A 绝对阈值 | 单一 `keepThreshold = 0.5`（§1.1a 另有 `lowStakesThreshold 0.60` / `highStakesThreshold 0.85`） | `fast-jev-compaction` 源 | 现行条文，已落地 |
+> | B 排序保留 + AUC 锚定 | 按 `Noul` 分数**排序**决定保留量，AUC 0.70-0.83 锚定 | `opencode-jev-safe-compact`（2026-10-24 印证） | 候选，未展开 |
+> | C 按问题拟合阈值 | 每个问题一条**校准出来**的阈值，附目标精度 / 覆盖率 / 样本量 | `s1kit calibrate`（2026-11-01 已一手复现） | **本段草案** |
+>
+> **候选 C 拟定条文（签字时逐字替换或增补第 4 条）**
+>
+> ```text
+> 4. keepThreshold = 0.5 是否接受；不接受则改 0.6（更保守）或 0.4（更激进）。
+>     4-C（未签字前不生效）若引入按问题拟合阈值 perQuestionCutoffs：
+>     a) 拟合表以「问题指令 + 来源标签」为主键（见 D4），每项含
+>        threshold / targetPrecision / coverage / n / source / calibratedAt；
+>     b) 命中条目 → 用该项 threshold 判该问题；未命中条目 → 回落全局 keepThreshold；
+>        全局阈值亦缺失 → 判「不可回答」，不判「回答」；
+>     c) alwaysEscalate = true 的条目 → 该问题直通 confirm 通道，本层不给 keep/drop 判定；
+>     d) 一次调用含多问题时按问判定，调用级结论取最严者（任一问题不可回答 → 该门控升级）；
+>        不得整批 OR；
+>     e) 拟合表是校准产物不是策略：只读加载，随第 9 条落在 JevContextScorerConfig.java 单文件内。
+> ```
+>
+> **表结构**
+>
+> 人读（评审 / plan 用）：
+>
+> | question | source | threshold | targetPrecision | coverage | n | alwaysEscalate | sourceOfRecord | calibratedAt |
+> |---|---|---|---|---|---|---|---|---|
+> | `keep_verbatim_relevant` | `judgment` | 0.71 | 0.95 | 1.00 | 20 | false | `s1kit-calibrate@9948b2d` | 2026-11-01 |
+> | `keep_verbatim_relevant` | `tool_result` | 0.70 | 0.95 | 0.05 | 20 | false | `s1kit-calibrate@9948b2d` | 2026-11-01 |
+> | `evidence_sufficiency` | `panel` | — | 0.95 | — | 0 | true | `s1kit-calibrate@9948b2d` | 2026-11-01 |
+>
+> 机读（配置形状，**候选，未实现**）：
+>
+> ```yaml
+> perQuestionCutoffs:
+>   - question: keep_verbatim_relevant
+>     source: judgment
+>     threshold: 0.71
+>     targetPrecision: 0.95
+>     coverage: 1.00
+>     n: 20
+>     alwaysEscalate: false
+>     sourceOfRecord: s1kit-calibrate@9948b2d
+>     calibratedAt: 2026-11-01
+> ```
+>
+> 判定表（单问判定 → 调用级结论取最严）：
+>
+> | 该问题状态 | 该问题去向 | 调用级影响 |
+> |---|---|---|
+> | 命中条目且 `p >= threshold` | keep | 取最严 |
+> | 命中条目且 `p < threshold` | 升级（fail-open 至 confirm / 强档） | 取最严 |
+> | 命中条目且 `alwaysEscalate` | 直通 confirm | 取最严 |
+> | 未命中（有全局阈值） | 用全局 `keepThreshold` 判 | 取最严 |
+> | 未命中且无全局阈值 | 不可回答 → 升级 | 取最严 |
+>
+> **待拍板点（D1-D5；括号内为推荐值）**
+>
+> | 编号 | 决策点 | 选项 | 影响 |
+> |---|---|---|---|
+> | D1 | 未校准问题怎么走 | (A) 回落全局 `keepThreshold`（**推荐**） / (B) 直通 confirm | A 保持 §3 fallback 合同「Jev 只是加速、fallback 是安全选择」；B 更保守，但把不可校准问题变成常态 confirm 流量 |
+> | D2 | `alwaysEscalate` 是否直通人工 | (A) 直通 confirm 通道（**推荐**） / (B) 直通人工 | 我方 confirm 通道可自动/半自动；直通人工会让任一不可校准问题变成人工瓶颈 |
+> | D3 | 拟合表落位 | (A) 与 `JevContextScorerConfig.java` 同文件常量（**推荐**，遵守第 9 条） / (B) 外置 YAML 资源 | B 需维护者同意偏离第 9 条「thresholds 集中单文件」 |
+> | D4 | 拟合表主键 | (A) 「问题指令 + 来源标签」（**推荐**） / (B) 只按问题指令 | 我方当前每次调用只发**一条**问题（`JevContextScorer.decideOneHttp`，question key = `item.id()`，instruction 为固定串），真正有差异的维度是 `JevRequestItem.source`（`judgment` / `panel` / `tool_call` / `tool_result` / `user_msg`）；只按指令则表退化为一行 |
+> | D5 | 与 §1.1a 三段阈值的关系 | (A) 命中拟合表按问阈值，全局三段作兜底（**推荐**） / (B) 拟合表完全覆盖三段阈值 | B 会让 `lowStakesThreshold` / `highStakesThreshold` 两档失去用途 |
+>
+> **若候选 C 被采纳，需同步复核的位置**（供评估工作量；本轮未改）：§1.1 字段、§1.1a 三段阈值表、§3 fallback 合同、§4 测试合同（Fake Jev 需能按问题/来源返回不同置信度）、§5 可观察性（建议加 `perQuestionCutoffUsed` 字段）、§9 验收项。
+>
+> **本轮新增上游印证（第 2 条，只记录证据，不改门槛）**：`browser-use/jev-ultrafast` open PR #232（2026-10-25，提案人 R3-da，**未合并**）把硬编码端点改为读环境变量 `TYPESAFE_BASE_URL`（含版本段，空值回落托管端点），并给出 OpenRouter 路由写法 `TYPESAFE_BASE_URL=https://openrouter.ai/api/v1` + `TYPESAFE_MODEL=~typesafe/jev-latest`（另有 #175 提同一变量）。我方代码已先行同向：`JevContextScorerConfig.enabledDefaults()` 已读 `TYPESAFE_BASE_URL`，默认 `https://api.typesafe.ai`。证据等级 lead（未合并提案）。
+>
+> 草案原文、形状实验与周快照：`docs/evaluation/runs/2026-11-04-jev-feat03-item4-candidate-draft.md`。
 
 ## 13. 测试合同源码骨架（不落 `src/`，仅作 plan 附录供维护者签字时对照）
 
