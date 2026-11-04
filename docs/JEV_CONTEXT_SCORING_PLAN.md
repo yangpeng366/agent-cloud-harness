@@ -268,6 +268,8 @@ Fallback 时**严格保留**当前行为：
 > | `keep_verbatim_relevant` | `tool_result` | 0.70 | 0.95 | 0.05 | 20 | false | `s1kit-calibrate@9948b2d` | 2026-11-01 |
 > | `evidence_sufficiency` | `panel` | — | 0.95 | — | 0 | true | `s1kit-calibrate@9948b2d` | 2026-11-01 |
 >
+> > 表中三行为**示意**：把 s1kit 样例的 (provider, question) 轴映射到我方「问题指令 + 来源标签」轴的形状，`threshold / targetPrecision / coverage / n` 取自 2026-11-01 的 s1kit 实测值，**不是**我方数据上的校准结果——我方首轮校准须用真实 key 跑出（见 §11 blocker）。
+>
 > 机读（配置形状，**候选，未实现**）：
 >
 > ```yaml
