@@ -28,3 +28,6 @@ harness-config.yml
 
 # Maven shade build artifact
 dependency-reduced-pom.xml
+
+# 重写历史前的 .git 备份（含旧密钥，禁止入库）
+.git.bak-*/
