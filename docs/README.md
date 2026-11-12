@@ -99,6 +99,10 @@
 - `evaluation/README.md` — 评估、优先级、多轮任务、execution record
 - `release/README.md` — GitHub 首发、precheck、dry-run、commit/stage 边界
 
+### 外部调研结论
+
+- `jev-absorption-matrix.md` — Jev 决策模式吸收矩阵（上游目录仓 `yibie/awesome-jev` 调研结论，供下游 agent 直接读；由 `evaluation/README.md` 的「对标 / 借鉴 / 产品化」一节追到）。
+
 ## 当前专题工作区现状
 
 | 主题 | 当前状态 | 默认阅读路径 | 何时升级 |

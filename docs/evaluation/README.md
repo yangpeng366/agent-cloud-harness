@@ -87,6 +87,7 @@
 - ../JEV_CONTEXT_SCORING_RESEARCH.md — TypeSafe Jev
 - ../JEV_HANDS_ON_NOTES.md — Jev 本地实测记录
 - ../JEV_OFFICIAL_SKILL_ABSORPTION.md — Jev 官方材料吸收笔记（typesafe-ai/skills GitHub 仓库 + 5 cookbook + 2 pattern + confidence.md + system-one.md 共 9 份原始材料），引入 confidence 3 段阈值 / ThresholdDict 模式 / progressive disclosure / 官方 6 个 common issues。
+- ../jev-absorption-matrix.md — Jev 决策模式吸收矩阵（上游目录仓 yibie/awesome-jev 调研结论）：ACH tool/permission gate 与 pre-judgment 快通道、OpenEyes browser/action gate 与上下文裁剪、巡检 skill/model routing 与 uncertainty band 四组的「Jev 现状 / 最小验证 / 吸收建议」；本仓路径写仓库相对路径，外部仓写「本地仓路径」，保留「待验证」条目与 FEAT-03 §16 口径漂移。
 - ../JEV_REAL_API_DEMO.md — Jev 真 API demo metrics
 - ../JEV_PATROL_INTEGRATION_PLAN.md — Jev × 飞书巡检流程接入 system map
 - ../JEV_GRAPH_NODES_PLAN.md — Jev × 决策树 × 复杂网络 算法借鉴研究

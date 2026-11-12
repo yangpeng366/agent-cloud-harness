@@ -41,6 +41,7 @@
 - `docs/<topic>/runs/`（可选）：主题级 dated execution/acceptance/precheck 证据聚合面。
 - `docs/<topic>/archive/`（可选）：已降级历史材料；不作为默认入口。
 - `.tmp/`：临时探针、截图、脚本输出、草稿。若后续要持续引用，必须提炼迁入 `docs/`。
+- `docs/jev-absorption-matrix.md`：Jev 决策模式吸收矩阵（外部目录仓调研结论，供下游 agent 直接读）。
 
 ## 当前工作区现状
 
@@ -128,6 +129,10 @@
 - **新增 HTTP 资源**：沿用现有 `XxxHandler implements HttpHandler` 模式。
 - **新增数据实体**：在 `model/` 定义 Record，在 `store/` 定义 DAO，在 `schema.sql` 加表，在 `DatabaseManager` 注册 RowMapper。
 - **不要引入**：Spring Boot、额外 Web 框架、全局 memory/state 目录树。
+
+## 实践与调试
+
+- **外部目录仓无写权时的落点**：外部目录仓（如 `yibie/awesome-jev`）我方无写权时，结论先落自有仓 `docs/`，别把内部工作笔记推给上游。
 
 ## 调研与文档沉淀约定
 
