@@ -133,6 +133,8 @@
 ## 实践与调试
 
 - **外部目录仓无写权时的落点**：外部目录仓（如 `yibie/awesome-jev`）我方无写权时，结论先落自有仓 `docs/`，别把内部工作笔记推给上游。
+- **main 既有红（与最近提交无关）**：**症状**：`mvn -B test` 在 main 上一直失败 2 项（`DocsStructureContractTest`），是既有红，与最近提交、与新改动无关；**原因**：`docs/INITIATIVES/` 顶层散放着 19 张已跟踪的 card（`FEAT-03.md`、`FEAT-04.md`、`HW-*.md` 等），而本仓轻量工作区契约规定 `docs/` 每个子目录顶层只许有 `README.md` / `PROGRESS.md`，于是该目录既缺专题 README（`topic README missing`），又顶层文件超限（19× `topic_contract_unexpected_file`）；**对策 / 重要结论**：光补 `docs/INITIATIVES/README.md` 不能转绿——补 README 后这些顶层 card 变成“未登记的条目”，`Run-DocsIndexAudit.ps1` 的违规反而从 2 处涨到 21 处（多出 19 条 `topic_contract_unexpected_file` + `topic_entry_unreferenced_from_docs_readme` + `docs_readme_workspace_state_out_of_sync`），彻底转绿需把 19 张 card 迁进 `tasks/` / `runs/` / `archive/` 之类允许的子目录，并同步 `docs/README.md`、`WAKE.md`、`AGENTS.md` 与 `DocsIndexAuditScriptTest` 里的硬编码计数。复现命令：`pwsh -NoProfile -File scripts/Run-DocsIndexAudit.ps1` 与 `pwsh -NoProfile -File scripts/Test-WithJava21.ps1 -QuietMaven -Dtest=DocsStructureContractTest -DfailIfNoTests=false`。
+- **本次新增 docs 根文档后，Run-DocsIndexAudit 必须仍为 0 违规**：新增 `docs/` 根文档必须同时登记到 `docs/README.md` 与对应专题 README，否则会出现 `orphan_root_doc` / `root_doc_missing_topic_entry`。
 
 ## 调研与文档沉淀约定
 
