@@ -13,17 +13,22 @@ param(
     [switch]$SkipCapture,
     [string]$CaptureDirectory = '.tmp\openeyes-ui-assertion',
     [string]$OutputJsonPath = '',
-    [string]$EyesBin = 'eyes'
+    [string]$EyesBin = 'eyes',
+    [string[]]$OpenEyesSourceRootCandidates = @(),
+    [int]$EyesTimeoutSec = 60,
+    [switch]$SkipCliEnvSetup
 )
 
 $ErrorActionPreference = 'Stop'
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib\OpenEyesElement.ps1')) { . (Join-Path $PSScriptRoot 'lib\OpenEyesElement.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1')) { . (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1') }
 $startedAt = [DateTimeOffset]::UtcNow
 $result = [ordered]@{
     schema_version = 1
     assertion_mode = 'openeyes_structured'
     status = 'FAIL'
     app_title_contains = $AppTitleContains
+    eyes_cli = $null
     window = $null
     element_count = 0
     checks = @()
@@ -34,11 +39,17 @@ $result = [ordered]@{
 }
 
 function Invoke-Eyes([string[]]$Arguments) {
-    $output = & $EyesBin @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "eyes failed: $($Arguments -join ' ') exit=$LASTEXITCODE output=$($output -join [Environment]::NewLine)"
+    $run = Invoke-OpenEyesCliProcess -EyesBin $EyesBin -Arguments $Arguments -TimeoutSec $EyesTimeoutSec
+    if ($run.exit_code -ne 0) {
+        throw "eyes failed: $($Arguments -join ' ') exit=$($run.exit_code) output=$($run.output)$($run.stderr)"
     }
-    return @($output | ForEach-Object { [string]$_ })
+    return @($run.output)
+}
+
+function Invoke-EyesJson {
+    param([string[]]$Arguments, [string[]]$EnvelopeKeys)
+    $payload = Invoke-OpenEyesJson -EyesBin $EyesBin -Arguments $Arguments -EnvelopeKeys $EnvelopeKeys -TimeoutSec $EyesTimeoutSec
+    return @($payload.items)
 }
 
 function Add-Check([System.Collections.Generic.List[object]]$Checks, [string]$Kind, [string]$Expected, [string]$Actual, [bool]$Passed, [string]$Message, $Evidence) {
@@ -58,10 +69,17 @@ function Test-State([object]$Element) {
 }
 
 try {
+    if (-not $SkipCliEnvSetup) {
+        $cli = Initialize-OpenEyesCliEnvironment -EyesBin $EyesBin -SourceRootCandidates $OpenEyesSourceRootCandidates
+        $result.eyes_cli = $cli
+        if ($cli.status -ne 'ok') {
+            throw "eyes CLI unavailable ($($cli.status)): $($cli.reason). remediation: $($cli.remediation)"
+        }
+        $EyesBin = $cli.executable
+    }
     $eyesCommand = Get-Command -Name $EyesBin -ErrorAction Stop
     $result.eyes_bin = $eyesCommand.Source
-    $windowOutput = Invoke-Eyes @('windows', 'list', '--title-contains', $AppTitleContains)
-    $windows = @(($windowOutput -join [Environment]::NewLine) | ConvertFrom-Json)
+    $windows = Invoke-EyesJson -Arguments @('windows', 'list', '--json', '--title-contains', $AppTitleContains) -EnvelopeKeys @('windows')
     if ($WindowIndex -ge $windows.Count) {
         throw "window not found: '$AppTitleContains' candidates=$($windows.Count) requested=$WindowIndex"
     }
@@ -74,8 +92,7 @@ try {
     $titlePassed = ([string]$window.title).IndexOf($AppTitleContains, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
     Add-Check $checks 'window_title_contains' $AppTitleContains ([string]$window.title) $titlePassed 'Window title must contain the expected text.' $null
 
-    $detectOutput = Invoke-Eyes @('detect', '--window', [string]$window.hwnd, '--max', [string]$MaxElements)
-    $elements = @(($detectOutput -join [Environment]::NewLine) | ConvertFrom-Json)
+    $elements = Invoke-EyesJson -Arguments @('detect', '--window', [string]$window.hwnd, '--max', [string]$MaxElements, '--json') -EnvelopeKeys @('elements')
     $result.element_count = $elements.Count
     Add-Check $checks 'minimum_element_count' ([string]$MinimumElementCount) ([string]$elements.Count) ($elements.Count -ge $MinimumElementCount) 'Window must expose enough UIA elements.' $null
 

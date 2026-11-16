@@ -11,13 +11,20 @@ param(
     [string]$ExpectedWindowTitle = '',
     [switch]$ActivateIfMismatch,
     [string]$OutputJsonPath = '',
-    [double]$Interval = 0
+    [double]$Interval = 0,
+    [string]$EyesBin = 'eyes',
+    [string[]]$OpenEyesSourceRootCandidates = @(),
+    [int]$EyesTimeoutSec = 60
 )
 
 $ErrorActionPreference = 'Stop'
 $startedAt = [DateTimeOffset]::UtcNow
 
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib\OpenEyesDelivery.ps1')) { . (Join-Path $PSScriptRoot 'lib\OpenEyesDelivery.ps1') }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1')) { . (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1') }
+
+$cli = Initialize-OpenEyesCliEnvironment -EyesBin $EyesBin -SourceRootCandidates $OpenEyesSourceRootCandidates
+if ($cli.status -eq 'ok') { $EyesBin = $cli.executable }
 
 Add-Type -TypeDefinition @'
 using System;
@@ -40,9 +47,12 @@ function Get-ForegroundTitle {
 
 function Find-WindowHandle([string]$TitleContains) {
     if ([string]::IsNullOrWhiteSpace($TitleContains)) { return [IntPtr]::Zero }
-    $raw = & eyes windows list 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $raw) { return [IntPtr]::Zero }
-    try { $windows = $raw | ConvertFrom-Json } catch { return [IntPtr]::Zero }
+    if ($cli.status -ne 'ok') { return [IntPtr]::Zero }
+    try {
+        $payload = Invoke-OpenEyesJson -EyesBin $EyesBin -Arguments @('windows', 'list', '--json', '--title-contains', $TitleContains) -EnvelopeKeys @('windows') -TimeoutSec $EyesTimeoutSec
+        $windows = @($payload.items)
+    }
+    catch { return [IntPtr]::Zero }
     if (-not $windows) { return [IntPtr]::Zero }
     $match = $windows | Where-Object { $_.title -and $_.title.ToLower().Contains($TitleContains.ToLower()) } | Select-Object -First 1
     if ($match -and $match.hwnd) { return [IntPtr]$match.hwnd }
@@ -67,12 +77,10 @@ if (-not [string]::IsNullOrWhiteSpace($ExpectedWindowTitle) -and $ActivateIfMism
 $focusMatches = if ([string]::IsNullOrWhiteSpace($ExpectedWindowTitle)) { $null }
     else { $focusBefore.ToLower().Contains($ExpectedWindowTitle.ToLower()) }
 
-if ($Interval -gt 0) {
-    & eyes type --text $Text --interval $Interval 2>$null
-} else {
-    & eyes type --text $Text 2>$null
-}
-$eyesExit = $LASTEXITCODE
+$typeArguments = @('type', '--text', $Text)
+if ($Interval -gt 0) { $typeArguments += @('--interval', [string]$Interval) }
+$typeRun = Invoke-OpenEyesCliProcess -EyesBin $EyesBin -Arguments $typeArguments -TimeoutSec $EyesTimeoutSec
+$eyesExit = $typeRun.exit_code
 
 $focusAfter = Get-ForegroundTitle
 $endedAt = [DateTimeOffset]::UtcNow
@@ -91,6 +99,7 @@ $result = [ordered]@{
     expected_window_title = $ExpectedWindowTitle
     focus_matches_expected = $focusMatches
     window_activated = $activated
+    eyes_cli_status = $cli.status
     eyes_exit_code = $eyesExit
     duration_ms = $durationMs
     started_at = $startedAt.ToString('o')

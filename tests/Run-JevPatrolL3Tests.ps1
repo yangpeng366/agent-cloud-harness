@@ -16,6 +16,7 @@ $suites = @(
     @{ Path = 'tests\Test-JevPatrolL3Markdown.ps1'; Name = 'render'; EmitSummary = $true },
     @{ Path = 'tests\Test-OpenEyesDelivery.ps1'; Name = 'openeyes-delivery'; EmitSummary = $true },
     @{ Path = 'tests\Test-OpenEyesElement.ps1'; Name = 'openeyes-element'; EmitSummary = $true },
+    @{ Path = 'tests\Test-OpenEyesCli.ps1'; Name = 'openeyes-cli'; EmitSummary = $true },
     @{ Path = 'tests\Test-ScreenshotCompare.ps1'; Name = 'screenshot-compare'; EmitSummary = $true },
     @{ Path = 'tests\Test-BaselineScreenshotStub.ps1'; Name = 'baseline-screenshot-stub'; EmitSummary = $true },
     @{ Path = 'tests\Test-BaselinePng.ps1'; Name = 'baseline-png'; EmitSummary = $true },

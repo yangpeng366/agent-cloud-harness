@@ -11,16 +11,21 @@ param(
     [ValidateRange(1, 500)]
     [int]$MaxElements = 50,
     [string]$CaptureDirectory = '.tmp\openeyes-native-probe',
+    [string[]]$OpenEyesSourceRootCandidates = @(),
+    [int]$EyesTimeoutSec = 60,
+    [switch]$SkipCliEnvSetup,
     [switch]$Go
 )
 
 $ErrorActionPreference = 'Stop'
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1')) { . (Join-Path $PSScriptRoot 'lib\OpenEyesCli.ps1') }
 $startedAt = [DateTimeOffset]::UtcNow
 $result = [ordered]@{
     schema_version = 1
     status = 'FAIL'
     mode = if ($Go) { 'real_click' } else { 'dry_run' }
     eyes_bin = $EyesBin
+    eyes_cli = $null
     app_title_contains = $AppTitleContains
     button_name_contains = $ButtonNameContains
     control_type = $ControlType
@@ -36,21 +41,30 @@ $result = [ordered]@{
 
 function Invoke-Eyes {
     param([string[]]$Arguments)
-    $output = & $EyesBin @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "eyes command failed: $($Arguments -join ' ') (exit=$LASTEXITCODE): $($output -join [Environment]::NewLine)"
+    $run = Invoke-OpenEyesCliProcess -EyesBin $EyesBin -Arguments $Arguments -TimeoutSec $EyesTimeoutSec
+    $combined = (@($run.output, $run.stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
+    if ($run.exit_code -ne 0) {
+        throw "eyes command failed: $($Arguments -join ' ') (exit=$($run.exit_code)): $combined"
     }
-    return ($output -join [Environment]::NewLine)
+    return $combined
 }
 
 try {
+    if (-not $SkipCliEnvSetup) {
+        $cli = Initialize-OpenEyesCliEnvironment -EyesBin $EyesBin -SourceRootCandidates $OpenEyesSourceRootCandidates
+        $result.eyes_cli = $cli
+        if ($cli.status -ne 'ok') {
+            throw "eyes CLI unavailable ($($cli.status)): $($cli.reason). remediation: $($cli.remediation)"
+        }
+        $EyesBin = $cli.executable
+    }
     $eyesCommand = Get-Command -Name $EyesBin -ErrorAction Stop
     $result.eyes_bin = $eyesCommand.Source
 
-    $windowOutput = Invoke-Eyes -Arguments @(
-        'windows', 'list', '--title-contains', $AppTitleContains
-    )
-    $windows = @($windowOutput | ConvertFrom-Json)
+    $windowPayload = Invoke-OpenEyesJson -EyesBin $EyesBin -Arguments @(
+        'windows', 'list', '--json', '--title-contains', $AppTitleContains
+    ) -EnvelopeKeys @('windows') -TimeoutSec $EyesTimeoutSec
+    $windows = @($windowPayload.items)
     if ($WindowIndex -ge $windows.Count) {
         throw "window not found: title contains '$AppTitleContains'; candidates=$($windows.Count); requested index=$WindowIndex"
     }
@@ -66,14 +80,15 @@ try {
         '--window', [string]$window.hwnd,
         '--name-contains', $ButtonNameContains,
         '--control-type', $ControlType,
-        '--max', [string]$MaxElements
+        '--max', [string]$MaxElements,
+        '--json'
     )
     if ($Depth -gt 0) {
         $detectArguments += @('--depth', [string]$Depth)
     }
 
-    $detectOutput = Invoke-Eyes -Arguments $detectArguments
-    $detectedElements = @($detectOutput | ConvertFrom-Json)
+    $detectPayload = Invoke-OpenEyesJson -EyesBin $EyesBin -Arguments $detectArguments -EnvelopeKeys @('elements') -TimeoutSec $EyesTimeoutSec
+    $detectedElements = @($detectPayload.items)
     $elements = @(
         foreach ($element in $detectedElements) {
             if ($null -ne $element.center -and $null -ne $element.bbox) {
