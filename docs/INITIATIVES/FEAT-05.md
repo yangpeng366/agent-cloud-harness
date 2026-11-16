@@ -65,6 +65,14 @@
 ## 参考
 
 - 关联文档: ../OPENEYES_ACCEPTANCE_DEMO_PLAN.md
+- CLI 环境与 JSON 契约: ../OPENEYES_CLI_CONTRACT.md
 - 设计依据: docs/JEV_OPENEYES_INITIATIVE_TABLE_DESIGN.md
 - 本地落仓决策依据: 2026-09-21 Codex session (落仓优于新建 Bitable 表, 等 schema 稳定后迁)
 2026-09-22：Phase 1 实施：`Run-BaselineMatrixRealWorkerSmoke.ps1` 给 `UiAssertionMode` 加 `[ValidateSet('none','openeyes_structured','screenshot_diff')]` + `UiAssertionBaselineDirectory` 参数 + `Invoke-ScreenshotDiffAssertion` stub 函数。Phase 2 准备工作：`scripts/lib/ScreenshotCompare.ps1` + `BaselineScreenshotStub.ps1` (3 pure functions) + `BaselinePng.ps1` (2 pure functions)。Phase 2.5 wiring 完成：`Invoke-ScreenshotDiffAssertion` 完整三分支（phase_1_stub / phase_2_with_baseline / phase_2_5_real_comparison），加 `UiAssertionCurrentDirectory` 参数。tests/phase25_smoke.ps1 9/9 PASS。9 套件 / 149 总通过 / 0 失败。
+
+2026-11-17（auto-patrol）：发现并修复 eyes CLI 契约漂移，Phase 2 数据采集的前置条件恢复。三处不兼容：① 默认输出已从 JSON 变人类表格，机器解析必须显式 `--json`；② `--json` 现在返回信封 `{ok,count,windows|elements}`，原脚本按裸数组解析会炸；③ zh-CN 控制台 gbk 编码下，窗口标题含非 GBK 字符触发 `UnicodeEncodeError`，整条命令失败；另加旧的 editable 安装映射仍指向已搬走的 `E:\gitAll\openeyes`，直接 `ModuleNotFoundError`。
+落地：新增 `scripts/lib/OpenEyesCli.ps1`（CLI 探针 + 失败分类 + 源码根发现 + `PYTHONIOENCODING/PYTHONPATH` 自动兜底 + 容忍信封/裸数组/NDJSON 的 payload 解析 + 带超时的子进程执行）；`Run-OpenEyesUiAssertion.ps1` / `Run-NativeAppAcceptanceProbe.ps1` / `Run-OpenEyesTypeVerified.ps1` 全部改走该适配层，CLI 不可用时 fail-fast 并在报告写 `eyes_cli{status,reason,remediation,version,recovered}`。
+实测：`tests/Test-OpenEyesCli.ps1` 26/26；整套 runner `tests/Run-JevPatrolL3Tests.ps1` 14 套件 / 215 通过 / 0 失败。真实 e2e：隔离 WinForms 目标窗口 → `status=PASS`，9 个 UIA 元素 / 5 checks 全 PASS / 3903ms，`eyes_cli.version=0.2.0`、`recovered=true`（自动 PYTHONPATH 兜底）；native app probe（dry-run click）同样 PASS，点击坐标 (115,186)。
+环境与契约说明：`docs/OPENEYES_CLI_CONTRACT.md`。
+
+下一步（未做，需环境/时间）：Phase 2 数据采集 9 组合 × 2 mode = 18 baseline run 需 harness + 真实 worker + baseline PNG 库，单轮 >30min，留给专门轮次。

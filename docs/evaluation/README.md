@@ -100,6 +100,7 @@
 - ../OPENEYES_UI_AUTOMATION_RESEARCH.md — yangpeng366/openeyes
 - `../AGENT_DESKTOP_OPENEYES_LEARNING.md` — lahfir/agent-desktop 快照学习：skeleton/drill、headless policy、BARS 风险闸门、stable ref、bounded loop；映射到 OpenEyes FEAT-04/05。
 - ../OPENEYES_ACCEPTANCE_DEMO_PLAN.md — HW-11 + HW-12 演示脚本骨架（不落 scripts/），含 PR-1（profile 持久化）+ PR-2（native app probe）双骨架；与现有 puppeteer-core acceptance 套件叠加，不替换。
+- ../OPENEYES_CLI_CONTRACT.md — eyes CLI 环境与 JSON 契约（`PYTHONIOENCODING`/`PYTHONPATH` 兜底、`--json` 信封、版本漂移分类、默认值/回滚），三个 OpenEyes acceptance 脚本共用 `scripts/lib/OpenEyesCli.ps1`。
 - ../THIRD_HAND_COMPUTER_USE_RESEARCH.md — shhivv/third-hand（macOS menu bar 计算机使用助手；Accessibility + Vision OCR + CDP + Jev 决策）；OpenEeyes 第 4 调研样本；提炼多后端渐进 fallback + Electron/CDP 探测 + Jev 决策协议 + focus 守护 + 受限文本输入 5 模式，建议落地为「OpenEyes 决策层可选叠加」默认 enabled=false。
 - ../FAST_JEV_COMPACTION_RESEARCH.md — tamaratran/fast-jev-compaction（Claude Code plugin + npm library：用 Jev 决策替换默认 compaction summary）；与 JEV_HANDS_ON_NOTES.md 互为 fast-jev-compaction 视角补充。
 - ../JEV_ULTRAFAST_RESEARCH.md — browser-use/jev-ultrafast（description: "i. am. speed."；"A browser agent that chooses instead of generating"）；浏览器 agent 用 Jev 做选择而非生成，ACH 借鉴价值在「decision over generation」范式。
