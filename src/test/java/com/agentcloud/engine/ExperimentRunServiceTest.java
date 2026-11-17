@@ -33,6 +33,102 @@ class ExperimentRunServiceTest {
     Path tempDir;
 
     @Test
+    void refreshAggregatesProviderTokenUsageFromWorkerArtifacts() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("experiment-run-tokens.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
+
+            ExperimentRunService service = new ExperimentRunService(
+                experimentRunDao,
+                decisionDao,
+                artifactDao,
+                eventDao,
+                toolInvocationDao
+            );
+
+            String sessionId = IdGenerator.newId("session");
+            String taskId = IdGenerator.newId("task");
+            sessionDao.insert(Session.create(sessionId, "token session", "active"));
+            Task task = new Task(
+                taskId,
+                sessionId,
+                null,
+                "token accounting run",
+                "done",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                "Executor delivered the target draft.",
+                "Produce a verified draft.",
+                null,
+                "kimi",
+                "end",
+                null,
+                Map.of("task_type", "coding", "model_mode", "orchestrated")
+            );
+            taskDao.insert(task);
+
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                sessionId,
+                taskId,
+                Instant.now(),
+                "worker_output",
+                "Planner brief",
+                null,
+                null,
+                "Planner delegated the concrete execution step.",
+                Map.of(
+                    "selected_model_tier", "strong",
+                    "llm_input_tokens", 400,
+                    "llm_output_tokens", 100,
+                    "llm_cached_tokens", 0,
+                    "llm_usage_source", "provider"
+                )
+            ));
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                sessionId,
+                taskId,
+                Instant.now(),
+                "worker_artifact",
+                "Executor draft",
+                null,
+                null,
+                "Execution worker produced the requested draft.",
+                Map.of(
+                    "selected_model_tier", "small",
+                    "llm_input_tokens", 1200,
+                    "llm_output_tokens", 300,
+                    "llm_cached_tokens", 800,
+                    "llm_usage_source", "provider"
+                )
+            ));
+
+            ExperimentRunRecord record = service.refresh(task);
+
+            assertEquals(Integer.valueOf(1600), record.inputTokens());
+            assertEquals(Integer.valueOf(400), record.outputTokens());
+            assertEquals(Integer.valueOf(800), record.cachedTokens());
+            assertEquals("provider", record.usageSource());
+            // 落库验证：从 DB 重读，证明不是只在内存里对
+            ExperimentRunRecord reloaded = experimentRunDao.findByTaskId(taskId).orElseThrow();
+            assertEquals(Integer.valueOf(1600), reloaded.inputTokens());
+            assertEquals(Integer.valueOf(400), reloaded.outputTokens());
+            assertEquals(Integer.valueOf(800), reloaded.cachedTokens());
+            assertEquals("provider", reloaded.usageSource());
+        }
+    }
+
+    @Test
     void refreshAggregatesComparableBaselineMetrics() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("experiment-run-service.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
