@@ -88,6 +88,11 @@ this.jdbi.registerRowMapper(com.agentcloud.model.GoalEvent.class, Mappers.GOAL_E
             ensureColumn(handle, "tool_invocations", "execution_id", "TEXT");
             ensureColumn(handle, "tool_invocations", "status", "TEXT");
             ensureColumn(handle, "tool_invocations", "touched_paths_json", "TEXT");
+            // B 向 Step1：experiment_runs 真实 token 计量列（幂等，老库升级安全）
+            ensureColumn(handle, "experiment_runs", "input_tokens", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(handle, "experiment_runs", "output_tokens", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(handle, "experiment_runs", "cached_tokens", "INTEGER NOT NULL DEFAULT 0");
+            ensureColumn(handle, "experiment_runs", "usage_source", "TEXT NOT NULL DEFAULT 'unavailable'");
         });
     }
 

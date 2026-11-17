@@ -45,27 +45,44 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public String chat(String systemPrompt, String userPrompt) {
-        return send("default", config.model(), systemPrompt, userPrompt, List.of());
+        return chatResult(systemPrompt, userPrompt).text();
     }
 
     @Override
     public String chat(String systemPrompt, String userPrompt, List<LlmImageInput> imageInputs) {
-        return send("default", config.model(), systemPrompt, userPrompt, imageInputs);
+        return chatResult(systemPrompt, userPrompt, imageInputs).text();
     }
 
     @Override
     public String review(String systemPrompt, String userPrompt) {
+        return reviewResult(systemPrompt, userPrompt).text();
+    }
+
+    @Override
+    public LlmCallResult chatResult(String systemPrompt, String userPrompt) {
+        return send("default", config.model(), systemPrompt, userPrompt, List.of());
+    }
+
+    @Override
+    public LlmCallResult chatResult(String systemPrompt,
+                                    String userPrompt,
+                                    List<LlmImageInput> imageInputs) {
+        return send("default", config.model(), systemPrompt, userPrompt, imageInputs);
+    }
+
+    @Override
+    public LlmCallResult reviewResult(String systemPrompt, String userPrompt) {
         return send("review", config.reviewModel(), systemPrompt, userPrompt, List.of());
     }
 
-    private String send(String channel,
-                        String model,
-                        String systemPrompt,
-                        String userPrompt,
-                        List<LlmImageInput> imageInputs) {
+    private LlmCallResult send(String channel,
+                               String model,
+                               String systemPrompt,
+                               String userPrompt,
+                               List<LlmImageInput> imageInputs) {
         if (!config.available()) {
             log.warn("LLM not configured (missing OPENAI_API_KEY), returning empty response");
-            return "";
+            return new LlmCallResult("", LlmUsage.unavailable(), model, channel);
         }
 
         try {
@@ -76,15 +93,15 @@ public class OpenAiCompatibleClient implements LlmClient {
 
         } catch (Exception e) {
             log.error("LLM chat failed", e);
-            return "";
+            return new LlmCallResult("", LlmUsage.unavailable(), model, channel);
         }
     }
 
-    private String sendChatCompletions(String channel,
-                                       String model,
-                                       String systemPrompt,
-                                       String userPrompt,
-                                       List<LlmImageInput> imageInputs) throws Exception {
+    private LlmCallResult sendChatCompletions(String channel,
+                                             String model,
+                                             String systemPrompt,
+                                             String userPrompt,
+                                             List<LlmImageInput> imageInputs) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", model);
         if (config.maxTokens() != null && config.maxTokens() > 0) {
@@ -120,11 +137,11 @@ public class OpenAiCompatibleClient implements LlmClient {
         );
     }
 
-    private String sendResponses(String channel,
-                                 String model,
-                                 String systemPrompt,
-                                 String userPrompt,
-                                 List<LlmImageInput> imageInputs) throws Exception {
+    private LlmCallResult sendResponses(String channel,
+                                        String model,
+                                        String systemPrompt,
+                                        String userPrompt,
+                                        List<LlmImageInput> imageInputs) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", model);
         body.put("instructions", systemPrompt);
@@ -220,12 +237,12 @@ public class OpenAiCompatibleClient implements LlmClient {
         return "application/octet-stream";
     }
 
-    private String sendJsonRequest(String wireApi,
-                                   String channel,
-                                   String model,
-                                   ObjectNode body,
-                                   List<String> urls,
-                                   ResponseBodyParser parser) throws Exception {
+    private LlmCallResult sendJsonRequest(String wireApi,
+                                          String channel,
+                                          String model,
+                                          ObjectNode body,
+                                          List<String> urls,
+                                          ResponseBodyParser parser) throws Exception {
         String requestBody = MAPPER.writeValueAsString(body);
         for (String url : urls) {
             for (int attempt = 1; attempt <= Math.max(1, config.maxRetries()); attempt++) {
@@ -277,9 +294,16 @@ public class OpenAiCompatibleClient implements LlmClient {
                     }
 
                     preferredUrl = url;
-                    log.debug("LLM response content length={} wireApi={} channel={} url={} attempt={}/{}",
-                        content.length(), wireApi, channel, url, attempt, config.maxRetries());
-                    return content;
+                    LlmUsage usage = extractUsage(root, wireApi);
+                    if (!usage.present()) {
+                        log.warn("LLM response has no usage block; billing must fall back to estimated."
+                            + " wireApi={} channel={} url={} model={}", wireApi, channel, url, model);
+                    }
+                    log.debug("LLM response content length={} inputTokens={} outputTokens={} usageSource={}"
+                            + " wireApi={} channel={} url={} attempt={}/{}",
+                        content.length(), usage.inputTokens(), usage.outputTokens(), usage.source(),
+                        wireApi, channel, url, attempt, config.maxRetries());
+                    return new LlmCallResult(content, usage, model, channel);
                 } catch (Exception attemptError) {
                     log.warn("LLM request attempt failed. wireApi={} channel={} url={} attempt={}/{}, message={}",
                         wireApi, channel, url, attempt, config.maxRetries(), attemptError.toString());
@@ -287,7 +311,39 @@ public class OpenAiCompatibleClient implements LlmClient {
                 }
             }
         }
-        return "";
+        return new LlmCallResult("", LlmUsage.unavailable(), model, channel);
+    }
+
+    /**
+     * 从响应体解析真实 token 用量。两种 wire API 的字段名不同，缺失时返回 unavailable，不猜值。
+     */
+    private LlmUsage extractUsage(JsonNode root, String wireApi) {
+        if (root == null || root.isMissingNode()) {
+            return LlmUsage.unavailable();
+        }
+        JsonNode usage = root.path("usage");
+        if (usage.isMissingNode() || !usage.isObject()) {
+            return LlmUsage.unavailable();
+        }
+        int inputTokens;
+        int outputTokens;
+        if ("responses".equals(wireApi)) {
+            inputTokens = usage.path("input_tokens").asInt(0);
+            outputTokens = usage.path("output_tokens").asInt(0);
+        } else {
+            inputTokens = usage.path("prompt_tokens").asInt(0);
+            outputTokens = usage.path("completion_tokens").asInt(0);
+        }
+        int cachedTokens = usage.path("cached_tokens").asInt(0);
+        if (cachedTokens <= 0) {
+            cachedTokens = "responses".equals(wireApi)
+                ? usage.path("input_tokens_details").path("cached_tokens").asInt(0)
+                : usage.path("prompt_tokens_details").path("cached_tokens").asInt(0);
+        }
+        if (inputTokens <= 0 && outputTokens <= 0) {
+            return LlmUsage.unavailable();
+        }
+        return LlmUsage.provider(inputTokens, outputTokens, cachedTokens);
     }
 
     private List<String> candidateUrls(String wireApi) {

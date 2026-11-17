@@ -110,6 +110,7 @@ public class ExperimentRunService {
         String failureReason = deriveFailureReason(task, acceptanceResult, completionJudgment, executionJudgment, events);
         Boolean recoverySuccess = resumeCount > 0 ? "done".equalsIgnoreCase(task.status()) : null;
         double strongModelCostRatio = totalCost <= 0.0 ? 0.0 : roundToThree(strongCost / totalCost);
+        LlmTokenTotals llmTokens = aggregateLlmTokens(artifacts);
         String evaluatorRole = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_role");
         String evaluatorModelTier = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_model_tier");
         String evaluatorReason = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_reason");
@@ -166,6 +167,11 @@ public class ExperimentRunService {
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("cost_basis", "heuristic_worker_round_v1");
+        metadata.put("input_tokens", llmTokens.inputTokens());
+        metadata.put("output_tokens", llmTokens.outputTokens());
+        metadata.put("cached_tokens", llmTokens.cachedTokens());
+        metadata.put("usage_source", llmTokens.usageSource());
+        metadata.put("token_unit_basis", "provider_usage_v1");
         metadata.put("worker_round_count", workerRoundCount);
         metadata.put("tool_invocation_count", toolInvocationCount);
         metadata.put("strong_round_count", strongRoundCount);
@@ -313,6 +319,10 @@ public class ExperimentRunService {
             acceptanceResult,
             totalCost,
             strongModelCostRatio,
+            llmTokens.inputTokens(),
+            llmTokens.outputTokens(),
+            llmTokens.cachedTokens(),
+            llmTokens.usageSource(),
             handoffCount,
             resumeCount,
             humanGateCount,
@@ -329,6 +339,75 @@ public class ExperimentRunService {
 
     public ExperimentRunRecord getByTaskId(String taskId) {
         return experimentRunDao.findByTaskId(taskId).orElse(null);
+    }
+
+    /**
+     * 按 task 汇总真实 token（B 向 Step1 记账层）。
+     *
+     * <p>数据源是 worker 轮次 artifact 的 metadata（由 WorkerExecutor 从 provider usage 写入）。
+     * 口径规则：
+     * <ul>
+     *   <li>只要有一条来自 provider 真实 usage，就标 {@code provider}（部分缺失记 0，不估算）；</li>
+     *   <li>零真实值时不编造，标 {@code unavailable}；</li>
+     *   <li>与轮次代理成本 {@code total_cost} 并存，是否失真交给下游对账（A2 判据）。</li>
+     * </ul>
+     */
+    private LlmTokenTotals aggregateLlmTokens(List<Artifact> artifacts) {
+        if (artifacts == null || artifacts.isEmpty()) {
+            return LlmTokenTotals.unavailable();
+        }
+        int inputTokens = 0;
+        int outputTokens = 0;
+        int cachedTokens = 0;
+        boolean anyProvider = false;
+        for (Artifact artifact : artifacts) {
+            Map<String, Object> metadata = artifact == null ? null : artifact.metadata();
+            if (metadata == null || metadata.isEmpty()) {
+                continue;
+            }
+            int artifactInput = metadataInt(metadata, "llm_input_tokens");
+            int artifactOutput = metadataInt(metadata, "llm_output_tokens");
+            int artifactCached = metadataInt(metadata, "llm_cached_tokens");
+            if (artifactInput <= 0 && artifactOutput <= 0) {
+                continue;
+            }
+            inputTokens += artifactInput;
+            outputTokens += artifactOutput;
+            cachedTokens += Math.max(0, artifactCached);
+            if ("provider".equalsIgnoreCase(metadataString(metadata, "llm_usage_source"))) {
+                anyProvider = true;
+            }
+        }
+        if (inputTokens <= 0 && outputTokens <= 0) {
+            return LlmTokenTotals.unavailable();
+        }
+        return new LlmTokenTotals(inputTokens, outputTokens, cachedTokens,
+            anyProvider ? "provider" : "estimated");
+    }
+
+    private int metadataInt(Map<String, Object> metadata, String key) {
+        if (metadata == null || key == null || key.isBlank()) {
+            return 0;
+        }
+        Object value = metadata.get(key);
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value.toString().trim());
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
+    }
+
+    /** 单个 task 的真实 token 汇总结果。 */
+    private record LlmTokenTotals(int inputTokens, int outputTokens, int cachedTokens, String usageSource) {
+        static LlmTokenTotals unavailable() {
+            return new LlmTokenTotals(0, 0, 0, "unavailable");
+        }
     }
 
     public List<ExperimentRunRecord> listRuns(String experimentName,
@@ -1770,6 +1849,12 @@ public class ExperimentRunService {
         copyMetadata(source, target, "mounted_archive_count");
         copyMetadata(source, target, "image_input_count");
         copyMetadata(source, target, "image_input_used");
+        copyMetadata(source, target, "llm_input_tokens");
+        copyMetadata(source, target, "llm_output_tokens");
+        copyMetadata(source, target, "llm_cached_tokens");
+        copyMetadata(source, target, "llm_usage_source");
+        copyMetadata(source, target, "llm_model");
+        copyMetadata(source, target, "llm_channel");
         copyMetadata(source, target, "tool_name");
         copyMetadata(source, target, "tool_success");
         copyMetadata(source, target, "tool_summary");

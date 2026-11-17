@@ -190,6 +190,94 @@ class OpenAiCompatibleClientTest {
         }
     }
 
+    @Test
+    void chatResultExposesProviderUsageForChatCompletions() throws Exception {
+        try (StubServer server = new StubServer("""
+            {"choices":[{"message":{"content":"ok"}}],
+             "usage":{"prompt_tokens":120,"completion_tokens":45,
+                      "prompt_tokens_details":{"cached_tokens":80}}}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "chat_completions",
+                30,
+                1,
+                100
+            );
+
+            LlmCallResult result = new OpenAiCompatibleClient(config)
+                .chatResult("system prompt", "user prompt");
+
+            assertEquals("ok", result.text());
+            assertEquals(120, result.usage().inputTokens());
+            assertEquals(45, result.usage().outputTokens());
+            assertEquals(80, result.usage().cachedTokens());
+            assertEquals(165, result.usage().totalTokens());
+            assertEquals(LlmUsage.SOURCE_PROVIDER, result.usage().source());
+            assertEquals("gpt-5.4", result.model());
+            assertEquals("default", result.channel());
+        }
+    }
+
+    @Test
+    void reviewResultParsesResponsesUsage() throws Exception {
+        try (StubServer server = new StubServer("""
+            {"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],
+             "usage":{"input_tokens":900,"output_tokens":120,
+                      "input_tokens_details":{"cached_tokens":640}}}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "responses",
+                30,
+                1,
+                100
+            );
+
+            LlmCallResult result = new OpenAiCompatibleClient(config)
+                .reviewResult("system prompt", "user prompt");
+
+            assertEquals("done", result.text());
+            assertEquals(900, result.usage().inputTokens());
+            assertEquals(120, result.usage().outputTokens());
+            assertEquals(640, result.usage().cachedTokens());
+            assertEquals("gpt-5.4-review", result.model());
+            assertEquals("review", result.channel());
+        }
+    }
+
+    @Test
+    void chatResultMarksUnavailableWhenProviderOmitsUsage() throws Exception {
+        try (StubServer server = new StubServer("""
+            {"choices":[{"message":{"content":"ok"}}]}
+            """)) {
+            LlmConfig config = new LlmConfig(
+                "test-key",
+                server.baseUrl(),
+                "gpt-5.4",
+                "gpt-5.4-review",
+                "chat_completions",
+                30,
+                1,
+                100
+            );
+
+            LlmCallResult result = new OpenAiCompatibleClient(config)
+                .chatResult("system prompt", "user prompt");
+
+            assertEquals("ok", result.text());
+            assertEquals(LlmUsage.SOURCE_UNAVAILABLE, result.usage().source());
+            assertEquals(0, result.usage().totalTokens());
+            assertTrue(!result.usage().present());
+        }
+    }
+
     private static final class StubServer implements AutoCloseable {
         private final HttpServer server;
         private final String responseBody;

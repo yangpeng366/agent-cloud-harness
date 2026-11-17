@@ -1,8 +1,10 @@
 package com.agentcloud.worker;
 
+import com.agentcloud.llm.LlmCallResult;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.llm.LlmImageInput;
 import com.agentcloud.llm.LlmImageInputResolver;
+import com.agentcloud.llm.LlmUsage;
 import com.agentcloud.model.Artifact;
 import com.agentcloud.model.Decision;
 import com.agentcloud.model.Event;
@@ -76,10 +78,12 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
         String userPrompt = buildUserPrompt(context, workerId, renderingMode, mountedRenderResult);
         List<LlmImageInput> imageInputs = LlmImageInputResolver.resolve(context);
 
-        String raw = llmClient.chat(systemPrompt, userPrompt, imageInputs);
+        LlmCallResult llmCall = llmClient.chatResult(systemPrompt, userPrompt, imageInputs);
+        String raw = llmCall.text();
         long durationMs = System.currentTimeMillis() - startMs;
         WorkerExecutionResult result = parseExecutionResult(raw, durationMs);
         WorkerExecutionResult enriched = attachRenderingMetadata(result, renderingMode, context, imageInputs, mountedRenderResult);
+        enriched = attachLlmUsage(enriched, llmCall);
         MountedContextPromptMetrics metrics = MountedContextPromptMetrics.from(
             context,
             renderingMode,
@@ -252,6 +256,48 @@ public class DefaultWorkerExecutor implements WorkerExecutor {
             context.task(),
             context,
             12,
+            metadata
+        );
+    }
+
+    /**
+     * 把 LLM 计量挂到执行结果上：metadata 里落明细（供 ExperimentRunService 按 task 汇总），
+     * tokenUsage 落总数（兼容既有 token_usage 通道）。
+     * <p>usage 不可用时只写 source=unavailable，total 保持 null，不写 0——避免把「没测到」伪装成「消耗为零」。
+     */
+    private WorkerExecutionResult attachLlmUsage(WorkerExecutionResult result, LlmCallResult llmCall) {
+        if (result == null) {
+            return null;
+        }
+        LlmUsage usage = llmCall == null ? LlmUsage.unavailable() : llmCall.usage();
+        LinkedHashMap<String, Object> metadata = new LinkedHashMap<>();
+        if (result.metadata() != null) {
+            metadata.putAll(result.metadata());
+        }
+        metadata.put("llm_input_tokens", usage.inputTokens());
+        metadata.put("llm_output_tokens", usage.outputTokens());
+        metadata.put("llm_cached_tokens", usage.cachedTokens());
+        metadata.put("llm_usage_source", usage.source());
+        if (llmCall != null && llmCall.model() != null && !llmCall.model().isBlank()) {
+            metadata.put("llm_model", llmCall.model());
+        }
+        if (llmCall != null && llmCall.channel() != null && !llmCall.channel().isBlank()) {
+            metadata.put("llm_channel", llmCall.channel());
+        }
+        Integer totalTokens = usage.present() ? usage.totalTokens() : result.tokenUsage();
+        return new WorkerExecutionResult(
+            result.summary(),
+            result.outputText(),
+            result.producedArtifact(),
+            result.artifactTitle(),
+            result.artifactContent(),
+            result.suggestedNextStep(),
+            result.confidence(),
+            result.executionStatus(),
+            result.evidenceRefs(),
+            result.unfinishedItems(),
+            totalTokens,
+            result.durationMs(),
             metadata
         );
     }

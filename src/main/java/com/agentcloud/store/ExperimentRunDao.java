@@ -16,12 +16,14 @@ public interface ExperimentRunDao extends SqlObject {
         INSERT INTO experiment_runs (
             id, session_id, task_id, experiment_name, task_case_key, task_title, task_type,
             task_length_bucket, model_mode, total_steps, completion_status, acceptance_result,
-            total_cost, strong_model_cost_ratio, handoff_count, resume_count, human_gate_count,
+            total_cost, strong_model_cost_ratio, input_tokens, output_tokens, cached_tokens, usage_source,
+            handoff_count, resume_count, human_gate_count,
             failure_reason, recovery_success, final_artifact_quality_note, created_at, updated_at, metadata_json
         ) VALUES (
             :id, :sessionId, :taskId, :experimentName, :taskCaseKey, :taskTitle, :taskType,
             :taskLengthBucket, :modelMode, :totalSteps, :completionStatus, :acceptanceResult,
-            :totalCost, :strongModelCostRatio, :handoffCount, :resumeCount, :humanGateCount,
+            :totalCost, :strongModelCostRatio, :inputTokens, :outputTokens, :cachedTokens, :usageSource,
+            :handoffCount, :resumeCount, :humanGateCount,
             :failureReason, :recoverySuccess, :finalArtifactQualityNote, :createdAt, :updatedAt, :metadata
         )
         ON CONFLICT(task_id) DO UPDATE SET
@@ -36,6 +38,10 @@ public interface ExperimentRunDao extends SqlObject {
             acceptance_result = excluded.acceptance_result,
             total_cost = excluded.total_cost,
             strong_model_cost_ratio = excluded.strong_model_cost_ratio,
+            input_tokens = excluded.input_tokens,
+            output_tokens = excluded.output_tokens,
+            cached_tokens = excluded.cached_tokens,
+            usage_source = excluded.usage_source,
             handoff_count = excluded.handoff_count,
             resume_count = excluded.resume_count,
             human_gate_count = excluded.human_gate_count,
@@ -59,6 +65,10 @@ public interface ExperimentRunDao extends SqlObject {
                    @Bind("acceptanceResult") String acceptanceResult,
                    @Bind("totalCost") double totalCost,
                    @Bind("strongModelCostRatio") Double strongModelCostRatio,
+                   @Bind("inputTokens") int inputTokens,
+                   @Bind("outputTokens") int outputTokens,
+                   @Bind("cachedTokens") int cachedTokens,
+                   @Bind("usageSource") String usageSource,
                    @Bind("handoffCount") int handoffCount,
                    @Bind("resumeCount") int resumeCount,
                    @Bind("humanGateCount") int humanGateCount,
@@ -85,6 +95,10 @@ public interface ExperimentRunDao extends SqlObject {
             record.acceptanceResult(),
             record.totalCost(),
             record.strongModelCostRatio(),
+            record.inputTokens() == null ? 0 : record.inputTokens(),
+            record.outputTokens() == null ? 0 : record.outputTokens(),
+            record.cachedTokens() == null ? 0 : record.cachedTokens(),
+            record.usageSource() == null ? "unavailable" : record.usageSource(),
             record.handoffCount(),
             record.resumeCount(),
             record.humanGateCount(),
