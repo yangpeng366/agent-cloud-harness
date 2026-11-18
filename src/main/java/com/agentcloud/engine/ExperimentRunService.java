@@ -365,9 +365,9 @@ public class ExperimentRunService {
             if (metadata == null || metadata.isEmpty()) {
                 continue;
             }
-            int artifactInput = metadataInt(metadata, "llm_input_tokens");
-            int artifactOutput = metadataInt(metadata, "llm_output_tokens");
-            int artifactCached = metadataInt(metadata, "llm_cached_tokens");
+            int artifactInput = metadataIntOrZero(metadata, "llm_input_tokens");
+            int artifactOutput = metadataIntOrZero(metadata, "llm_output_tokens");
+            int artifactCached = metadataIntOrZero(metadata, "llm_cached_tokens");
             if (artifactInput <= 0 && artifactOutput <= 0) {
                 continue;
             }
@@ -385,7 +385,7 @@ public class ExperimentRunService {
             anyProvider ? "provider" : "estimated");
     }
 
-    private int metadataInt(Map<String, Object> metadata, String key) {
+    private int metadataIntOrZero(Map<String, Object> metadata, String key) {
         if (metadata == null || key == null || key.isBlank()) {
             return 0;
         }
