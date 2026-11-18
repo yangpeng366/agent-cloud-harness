@@ -77,7 +77,7 @@ judgment:
     profile: record_only            # record_only | enforce
     policy_version: default         # 关联 DecisionPolicy.version
     router:
-      enabled: true                 # M1 开关（commit e91669b 已接入 WorkerExecutorRouter）
+      enabled: true                 # M1：service + HookAdapter 已落；Main 未注入（grep setRouterShadowHook 无调用点），真旁路上线在 B 向 W2
       provider: heuristic-shadow-v1
       path: "/var/log/ach/router-shadow.jsonl"
     tool_gate:

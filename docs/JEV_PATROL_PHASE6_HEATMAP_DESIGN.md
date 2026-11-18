@@ -3,23 +3,43 @@
 > 目的：用 sidecar 中已有的 probability / latency / error 三个信号，按时间窗口聚合成 per-project 评分（B、C、F 三个等级），并产出可被 Bitable view / 飞书机器人消费的 markdown 热力图。
 > 本文是设计稿，仅 Phase 6 候选；不写 Bitable、不改派工。
 
-## 1. 评分公式（per project, per window）
+## 1. 评分公式（per project, per window）—— 口径 v1（2026-11-18 定稿）
 
 ```
-score = 100
-       - 60 * avg(1 - probability)                # 概率越低扣分越多
-       - 25 * p95(latency_ms) / 5000              # 延迟 5s 为阈值上限
-       - 15 * error_rate                          # error 率每 +1 减 15
-       + 10 * window_count_in_due                 # 连续 due 计数，多表示"持续被命中"
+score = clamp(0, 100,
+              100
+            - 60 * (1 - prob_avg)              # 概率越低扣分越多（权重 60）
+            - 25 * (lat_p95 / latency_budget)  # 延迟归一化，权重 25
+            - 15 * error_rate)                 # error 率每 +1 减 15
 ```
 
-每条 sidecar：
-- `error != null` → `error_rate = 1`，否则 `0`。
-- `latency_ms > 5000` → 延迟按 (latency/5000)² clip，避免极慢路径让均值失控。
+字段定义（与 `scripts/Build-JevShadowHeatmapPrototype.ps1` 一一对应，任何一侧修改必须同步另一侧并跑 `tests/Test-JevShadowHeatmapPrototype.ps1`）：
 
-聚合：
-- 默认 7 天滑动窗口（per-project）。
-- score ≥ 80 → B（健康）/ ≥ 60 → C（关注）/ < 60 → F（告警）。
+| 字段 | 定义 |
+|---|---|
+| `prob_avg` | 该 project 内**有数值 `jev.probability` 且非 error** 的样本算术平均；无此类样本时记 `0` |
+| `lat_p95` | 每条 `jev.duration_ms` 先硬截断到 `[0, latency_budget]`，再取 **nearest-rank** p95（`rank = ceil(0.95*n)`，结果即第 rank 小值） |
+| `latency_budget` | 默认 `5000` ms（`-LatencyBudgetMs`） |
+| `error_rate` | 该 project 内 `jev.error` 为真的样本数 / 样本总数 |
+| `samples` | 该 project 在窗口内的样本数（输出里同时给出，便于人工判断样本稀薄） |
+
+等级（含端点，对 round 后的 score 判定）：
+
+- `score ≥ 80` → B（健康）
+- `60 ≤ score < 80` → C（关注）
+- `score < 60` → F（告警）
+
+窗口：默认 `-WindowDays 7`，按 sidecar 的 `generated_at` 过滤（缺该字段时回退文件 mtime）；`-WindowDays 0` = 全量不限窗口。
+
+### 1.1 口径变更历史（为什么和早期草稿不一致）
+
+| 项 | 早期草稿 | v1 定稿 | 理由 |
+|---|---|---|---|
+| 延迟处理 | 单条按 `(latency/5000)²` clip | 单条硬截断到 budget，再由 p95 归一化 | 平方项叠在 p95 之上会让单条极值主导等级；硬截断 + p95 使扣分严格落在 `[0,25]`，与 25 分权重对齐、可解释 |
+| `+10 * window_count_in_due` | 计入 | **v1 未启用**（待 v2） | sidecar 无 due 字段，硬加等于凭空造分；需先接 cascade window 数据源再作为独立开关（默认 0） |
+| p95 取位 | `floor(n*0.95)`（n=5 时取到第 4 小值） | `ceil(0.95n)` nearest-rank（n=5 → 第 5 小值） | 与统计学 nearest-rank p95 一致，小样本时不会低估尾部 |
+| 概率均值样本域 | 未写明 | 仅非 error 且 probability 有数值的样本 | error 样本通常无 probability，混入会污染均值 |
+| score 上下界 | 未写明 | clamp 到 `[0,100]`，保留 1 位小数 | 早期样例出现负数分未定义行为；保留 1 位避免 80/60 端点歧义 |
 
 ## 2. 输出
 
@@ -76,5 +96,6 @@ score = 100
 
 ## 8. 下一步
 
-- 5-10 行级 prototype 已落 `scripts/Build-JevShadowHeatmapPrototype.ps1`；真实 43 样本分布 B=21 / C=21 / F=1。
-- 若维护者要开启，再起单独 initiative（Jev-Heatmap-L1）落实施计划。
+- 5-10 行级 prototype 已落 `scripts/Build-JevShadowHeatmapPrototype.ps1`；真实 43 样本分布 B=21 / C=21 / F=1（旧口径，常数 60/25/15 相同但延迟项与 p95 取位不同，**不可与 v1 数字直接对比**）。
+- 2026-11-18：口径统一为 v1，脚本 + 本文 §1 + 金标准用例三处对齐；验证 `pwsh -NoProfile -File tests/Test-JevShadowHeatmapPrototype.ps1` → pass=31 fail=0。
+- 若维护者要开启，再起单独 initiative（Jev-Heatmap-L1）落实施计划；v2 的 due-count 加分需先接 cascade window 输出。
