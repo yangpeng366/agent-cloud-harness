@@ -1,29 +1,13 @@
 # Test-RunFlakyComparison.ps1
 #
 # Contract test for scripts/Run-FlakyComparison.ps1 helper functions.
-# We test the script's Get-Summary helper in isolation by re-sourcing
+# We test the script's Get-FlakyComparisonSummary helper in isolation by re-sourcing
 # the function body. The full script invocation requires a running harness.
 
 $ErrorActionPreference = 'Stop'
 
-# Extract the Get-Summary helper logic for testing without harness dependency.
-function Get-Summary {
-    param([object]$Report, [string]$Mode)
-    if (-not $Report) { return $null }
-    $reports = @($Report.ui_assertion_reports)
-    $count = $reports.Count
-    if ($count -eq 0) { return [ordered]@{ mode = $Mode; pass_count = 0; fail_count = 0; pass_rate = $null } }
-    $pass = @($reports | Where-Object { $_.status -eq 'PASS' }).Count
-    $fail = $count - $pass
-    return [ordered]@{
-        mode = $Mode
-        pass_count = $pass
-        fail_count = $fail
-        pass_rate = if ($count -gt 0) { [math]::Round($pass / $count, 4) } else { $null }
-        task_reports_count = $Report.task_reports.Count
-        terminal_run_count = $Report.terminal_run_count
-    }
-}
+# Use the production helper so this test cannot drift from the script it covers.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\lib\FlakyComparisonSummary.ps1')
 
 $pass = 0
 $fail = 0
@@ -59,7 +43,7 @@ function Assert-True {
 }
 
 # null report
-$nullSummary = Get-Summary -Report $null -Mode 'screenshot_diff'
+$nullSummary = Get-FlakyComparisonSummary -Report $null -Mode 'screenshot_diff'
 Assert-Null $nullSummary 'null report returns null'
 
 # empty report
@@ -68,7 +52,7 @@ $emptyReport = [pscustomobject]@{
     task_reports = @()
     terminal_run_count = 0
 }
-$emptySummary = Get-Summary -Report $emptyReport -Mode 'openeyes_structured'
+$emptySummary = Get-FlakyComparisonSummary -Report $emptyReport -Mode 'openeyes_structured'
 Assert-Eq 0 $emptySummary.pass_count 'empty report pass_count'
 Assert-Eq 0 $emptySummary.fail_count 'empty report fail_count'
 Assert-Null $emptySummary.pass_rate 'empty report pass_rate null'
@@ -84,7 +68,7 @@ $passReport = [pscustomobject]@{
     task_reports = @('a', 'b', 'c')
     terminal_run_count = 3
 }
-$passSummary = Get-Summary -Report $passReport -Mode 'openeyes_structured'
+$passSummary = Get-FlakyComparisonSummary -Report $passReport -Mode 'openeyes_structured'
 Assert-Eq 3 $passSummary.pass_count 'all-pass pass_count'
 Assert-Eq 0 $passSummary.fail_count 'all-pass fail_count'
 Assert-Eq 1.0 $passSummary.pass_rate 'all-pass rate=1.0'
@@ -100,7 +84,7 @@ $mixedReport = [pscustomobject]@{
     task_reports = @('a', 'b', 'c', 'd')
     terminal_run_count = 4
 }
-$mixedSummary = Get-Summary -Report $mixedReport -Mode 'screenshot_diff'
+$mixedSummary = Get-FlakyComparisonSummary -Report $mixedReport -Mode 'screenshot_diff'
 Assert-Eq 2 $mixedSummary.pass_count 'mixed pass_count (only PASS)'
 Assert-Eq 2 $mixedSummary.fail_count 'mixed fail_count (WARN + FAIL)'
 Assert-Eq 0.5 $mixedSummary.pass_rate 'mixed rate=0.5'
@@ -129,6 +113,28 @@ Assert-Eq '20260922-130000' $roundtrip.stamp 'roundtrip stamp'
 Assert-True ($roundtrip.pass_rate_lift -gt 0) 'roundtrip pass_rate_lift positive'
 Assert-Eq 0.667 $roundtrip.diff.pass_rate 'roundtrip diff pass_rate'
 Assert-Eq 1.0 $roundtrip.structured.pass_rate 'roundtrip structured pass_rate'
+
+# Regression: a loop variable named $report used to clobber the $Report parameter
+# (PowerShell is case-insensitive), silently zeroing task_reports_count / terminal_run_count
+# and attributing every phase to the last assertion. Keep an assertion-heavy report here.
+$fieldReport = [pscustomobject]@{
+    terminal_run_count = 2
+    task_reports = @([pscustomobject]@{ task_id = 't1' }, [pscustomobject]@{ task_id = 't2' })
+    ui_assertion_reports = @(
+        [pscustomobject]@{ status = 'PASS'; phase = 'phase_2_5_real_comparison'; duration_ms = 800 }
+        [pscustomobject]@{ status = 'WARN'; phase = 'phase_2_5_real_comparison'; duration_ms = 1200 }
+        [pscustomobject]@{ status = 'PASS'; phase = 'phase_1_stub' }
+    )
+}
+$fieldSummary = Get-FlakyComparisonSummary -Report $fieldReport -Mode 'screenshot_diff'
+Assert-Eq 2 $fieldSummary.task_reports_count 'field report task_reports_count survives helper'
+Assert-Eq 2 $fieldSummary.terminal_run_count 'field report terminal_run_count survives helper'
+Assert-Eq 2 $fieldSummary.comparable_count 'field report comparable_count counts real comparisons only'
+Assert-Eq 0.5 $fieldSummary.comparable_pass_rate 'field report comparable_pass_rate uses comparable denominator'
+Assert-Eq 2 $fieldSummary.phase_counts['phase_2_5_real_comparison'] 'field report phase_counts real comparison'
+Assert-Eq 1 $fieldSummary.phase_counts['phase_1_stub'] 'field report phase_counts stub'
+Assert-Eq 800 $fieldSummary.duration_p50_ms 'field report duration_p50_ms'
+Assert-Eq 1200 $fieldSummary.duration_p95_ms 'field report duration_p95_ms'
 
 Write-Host ''
 Write-Host "=== Test-RunFlakyComparison summary: pass=$pass fail=$fail ==="

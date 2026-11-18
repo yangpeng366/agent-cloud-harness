@@ -9,7 +9,6 @@ param(
     [int]$TaskPollTimeoutSec = 240,
     [int]$MinimumTerminalRuns = 1,
     [int]$MinimumEvaluatedRuns = 1,
-    [ValidateSet('none', 'openeyes_structured')]
     [ValidateSet('none', 'openeyes_structured', 'screenshot_diff')]
     [string]$UiAssertionMode = 'none',
     [string]$UiAssertionScriptPath = (Join-Path $PSScriptRoot 'Run-OpenEyesUiAssertion.ps1'),
@@ -123,6 +122,9 @@ function Invoke-OpenEyesUiAssertion {
     if ($UiAssertionAllowDisabled) { $assertionParams.AllowDisabled = $true }
     if ($UiAssertionAllowInvisible) { $assertionParams.AllowInvisible = $true }
     if ($UiAssertionSkipCapture) { $assertionParams.SkipCapture = $true }
+    # Reset before the child script: a PASS returning without `exit` would otherwise
+    # leave the previous native command's code in $LASTEXITCODE and look like a failure.
+    $global:LASTEXITCODE = 0
     & $UiAssertionScriptPath @assertionParams | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "OpenEyes structured UI assertion failed task=$TaskId report=$outputPath exit=$LASTEXITCODE" }
     return (Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json)

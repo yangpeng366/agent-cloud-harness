@@ -150,4 +150,6 @@ if (-not [string]::IsNullOrWhiteSpace($OutputJsonPath)) {
 }
 
 $json
-if ($result.status -ne 'PASS') { exit 1 }
+# Always exit deterministically: a PASS that falls through leaves $LASTEXITCODE
+# untouched, and callers (baseline matrix smoke) treat a stale non-zero value as failure.
+if ($result.status -ne 'PASS') { exit 1 } else { exit 0 }

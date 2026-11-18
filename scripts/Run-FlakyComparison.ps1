@@ -69,75 +69,94 @@ Write-Host "stamp: $stamp"
 Write-Host "case_keys: $($CaseKeys -join ', ')"
 Write-Host "modes: $($Modes -join ', ')"
 
+# Invoke the baseline smoke in-process with a splat instead of shelling out with
+# `pwsh -File`: an empty [string[]] selector forwarded over a native argv turns into
+# "Missing an argument for parameter '...'" and kills the leg before it starts.
+function Invoke-BaselineLeg {
+    param([hashtable]$Parameters, [string]$Label)
+    $errorMessage = $null
+    try {
+        & $baselineScript @Parameters | Out-Null
+        $exitCode = 0
+    }
+    catch {
+        $exitCode = 1
+        $errorMessage = $_.Exception.Message
+        Write-Host "$Label failed: $errorMessage"
+    }
+    # Parse the report here, in the leg's own scope: reading it later in the caller
+    # after an in-process run produced a truncated view (ui_assertion_reports only).
+    $reportPath = [string]$Parameters.ReportPath
+    $parsed = $null
+    if (Test-Path -LiteralPath $reportPath) {
+        try { $parsed = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json }
+        catch { Write-Host "$Label report unreadable: $($_.Exception.Message)" }
+    }
+    return [pscustomobject]@{ exit_code = $exitCode; error = $errorMessage; report = $parsed }
+}
+
+$diffParameters = @{
+    CaseKeys                             = $CaseKeys
+    Modes                                = $Modes
+    BaseUrl                              = $BaseUrl
+    TaskPollTimeoutSec                   = $TaskPollTimeoutSec
+    TaskPollIntervalSec                  = $TaskPollIntervalSec
+    UiAssertionMode                      = 'screenshot_diff'
+    UiAssertionAppTitleContains          = $UiAssertionAppTitleContains
+    UiAssertionBaselineDirectory         = $BaselineDirectory
+    UiAssertionCurrentDirectory          = $CurrentDirectory
+    ExperimentName                       = $diffExperiment
+    ReportPath                           = $diffReportPath
+    MinimumTerminalRuns                  = $MinimumTerminalRuns
+    MinimumEvaluatedRuns                 = $MinimumEvaluatedRuns
+}
+$structuredParameters = @{
+    CaseKeys                             = $CaseKeys
+    Modes                                = $Modes
+    BaseUrl                              = $BaseUrl
+    TaskPollTimeoutSec                   = $TaskPollTimeoutSec
+    TaskPollIntervalSec                  = $TaskPollIntervalSec
+    UiAssertionMode                      = 'openeyes_structured'
+    UiAssertionAppTitleContains          = $UiAssertionAppTitleContains
+    ExperimentName                       = $structuredExperiment
+    ReportPath                           = $structuredReportPath
+    MinimumTerminalRuns                  = $MinimumTerminalRuns
+    MinimumEvaluatedRuns                 = $MinimumEvaluatedRuns
+    UiAssertionMinimumElementCount       = $MinimumElementCount
+}
+if ($ExpectedElementAutomationId.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementAutomationId = $ExpectedElementAutomationId }
+if ($ExpectedElementControlType.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementControlType = $ExpectedElementControlType }
+if ($ExpectedElementNameContains.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementNameContains = $ExpectedElementNameContains }
+
 Write-Host ''
 Write-Host "Run 1/2: screenshot_diff ..."
-& pwsh -NoProfile -File $baselineScript `
-    -CaseKeys $CaseKeys `
-    -Modes $Modes `
-    -BaseUrl $BaseUrl `
-    -TaskPollTimeoutSec $TaskPollTimeoutSec `
-    -TaskPollIntervalSec $TaskPollIntervalSec `
-    -UiAssertionMode screenshot_diff `
-    -UiAssertionAppTitleContains $UiAssertionAppTitleContains `
-    -UiAssertionBaselineDirectory $BaselineDirectory `
-    -UiAssertionCurrentDirectory $CurrentDirectory `
-    -ExperimentName $diffExperiment `
-    -ReportPath $diffReportPath `
-    -MinimumTerminalRuns $MinimumTerminalRuns `
-    -MinimumEvaluatedRuns $MinimumEvaluatedRuns 2>&1 | Out-Null
-$diffExit = $LASTEXITCODE
+$diffLeg = Invoke-BaselineLeg -Parameters $diffParameters -Label 'screenshot_diff'
+$diffExit = $diffLeg.exit_code
 Write-Host "diff exit=$diffExit"
 
 Write-Host ''
 Write-Host "Run 2/2: openeyes_structured ..."
-& pwsh -NoProfile -File $baselineScript `
-    -CaseKeys $CaseKeys `
-    -Modes $Modes `
-    -BaseUrl $BaseUrl `
-    -TaskPollTimeoutSec $TaskPollTimeoutSec `
-    -TaskPollIntervalSec $TaskPollIntervalSec `
-    -UiAssertionMode openeyes_structured `
-    -UiAssertionAppTitleContains $UiAssertionAppTitleContains `
-    -UiAssertionExpectedElementAutomationId $ExpectedElementAutomationId `
-    -UiAssertionExpectedElementControlType $ExpectedElementControlType `
-    -UiAssertionExpectedElementNameContains $ExpectedElementNameContains `
-    -UiAssertionMinimumElementCount $MinimumElementCount `
-    -ExperimentName $structuredExperiment `
-    -ReportPath $structuredReportPath `
-    -MinimumTerminalRuns $MinimumTerminalRuns `
-    -MinimumEvaluatedRuns $MinimumEvaluatedRuns 2>&1 | Out-Null
-$structuredExit = $LASTEXITCODE
+$structuredLeg = Invoke-BaselineLeg -Parameters $structuredParameters -Label 'openeyes_structured'
+$structuredExit = $structuredLeg.exit_code
 Write-Host "structured exit=$structuredExit"
 
 Write-Host ''
 Write-Host "Aggregate summary ..."
-$diffReport = if (Test-Path -LiteralPath $diffReportPath) {
-    Get-Content -LiteralPath $diffReportPath -Raw | ConvertFrom-Json
-} else { $null }
-$structuredReport = if (Test-Path -LiteralPath $structuredReportPath) {
-    Get-Content -LiteralPath $structuredReportPath -Raw | ConvertFrom-Json
-} else { $null }
-
-function Get-Summary {
-    param([object]$Report, [string]$Mode)
-    if (-not $Report) { return $null }
-    $reports = @($Report.ui_assertion_reports)
-    $count = $reports.Count
-    if ($count -eq 0) { return [ordered]@{ mode = $Mode; pass_count = 0; fail_count = 0; pass_rate = $null } }
-    $pass = @($reports | Where-Object { $_.status -eq 'PASS' }).Count
-    $fail = $count - $pass
-    return [ordered]@{
-        mode = $Mode
-        pass_count = $pass
-        fail_count = $fail
-        pass_rate = if ($count -gt 0) { [math]::Round($pass / $count, 4) } else { $null }
-        task_reports_count = $Report.task_reports.Count
-        terminal_run_count = $Report.terminal_run_count
-    }
+$diffReport = $diffLeg.report
+$structuredReport = $structuredLeg.report
+if ($null -eq $diffReport -and (Test-Path -LiteralPath $diffReportPath)) {
+    $diffReport = Get-Content -LiteralPath $diffReportPath -Raw | ConvertFrom-Json
+}
+if ($null -eq $structuredReport -and (Test-Path -LiteralPath $structuredReportPath)) {
+    $structuredReport = Get-Content -LiteralPath $structuredReportPath -Raw | ConvertFrom-Json
 }
 
-$diffSummary = Get-Summary -Report $diffReport -Mode 'screenshot_diff'
-$structuredSummary = Get-Summary -Report $structuredReport -Mode 'openeyes_structured'
+$summaryLibrary = Join-Path $PSScriptRoot 'lib\FlakyComparisonSummary.ps1'
+if (-not (Test-Path -LiteralPath $summaryLibrary)) { throw "summary library not found: $summaryLibrary" }
+. $summaryLibrary
+
+$diffSummary = Get-FlakyComparisonSummary -Report $diffReport -Mode 'screenshot_diff'
+$structuredSummary = Get-FlakyComparisonSummary -Report $structuredReport -Mode 'openeyes_structured'
 
 $summary = [ordered]@{
     schema_version = 1
@@ -152,6 +171,8 @@ $summary = [ordered]@{
     overall = [ordered]@{
         diff_exit_code = $diffExit
         structured_exit_code = $structuredExit
+        diff_failure_reason = $diffLeg.error
+        structured_failure_reason = $structuredLeg.error
         diff_report_path = $diffReportPath
         structured_report_path = $structuredReportPath
         summary_path = $summaryPath
