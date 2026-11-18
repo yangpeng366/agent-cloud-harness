@@ -141,6 +141,14 @@ openeyes_structured 在某些 case（高动态 UI、频繁重排）反而 false 
 
 跑 short-001 / medium-001 / long-001 × strong_only / small_only / orchestrated = 9 组合 × 2 mode = 18 个 run。collect duration + status。
 
+**2026-11-19 最小切片实跑结果（1/18）**
+
+- 命令：`pwsh -File scripts/Run-FlakyComparison.ps1 -CaseKeys short-001 -Modes strong_only -BaseUrl http://localhost:18082 -UiAssertionAppTitleContains ACH-OpenEyes-Baseline-Target -ExpectedElementAutomationId btnConnect`
+- 汇总：`.tmp/flaky-comparison/20261118-202007-flaky-comparison.json`；diff exit=0、structured exit=0。
+- 指标：diff pass_rate=1.0（`phase_counts={phase_1_stub:1}`，`comparable_count=0`）；structured pass_rate=1.0，duration_p50=p95=3258ms。`pass_rate_lift=0`。
+- worker lane：两条腿的 task 都停在 `waiting_human` / `acceptance_result=rejected`（本机 provider CCX `127.0.0.1:3688` 未监听），UI assertion 与 worker 终态解耦，断言仍执行。
+- 遗留项（阻塞有意义的 H1 对比）：`Resolve-BaselinePngPath` 以 `task_id` 命名 baseline，而每次 run 都新建 task，所以 screenshot_diff 永远落在 `phase_1_stub`（无条件 PASS，实质是 wiring 通道而非像素对比）。下一步要么把 baseline 键改成 `case_key`，要么在 `Invoke-ScreenshotDiffAssertion` 里补 current PNG 捕获 + baseline seeding。
+
 ### Phase 3: 分析（1-2 天）
 
 写 docs/FEAT-05_FLAKY_RATE_COMPARISON_RESULTS.md：

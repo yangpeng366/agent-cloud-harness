@@ -44,6 +44,8 @@
 
 2026-09-22：flaky rate comparison 设计文档落地 `docs/FEAT-05_FLAKY_RATE_COMPARISON_DESIGN.md`。设计同一 baseline matrix 跑 screenshot_diff 与 openeyes_structured 双模式，量化 pass_rate / duration_p50/p95 / false_failure_rate / failure_reason_distribution 四维度。Phase 1 需先给 `Run-BaselineMatrixRealWorkerSmoke.ps1` 加 `screenshot_diff` 分支。
 
+2026-11-19：Phase 2 最小切片首次跑通并落汇总 JSON。`Run-FlakyComparison.ps1 -CaseKeys short-001 -Modes strong_only` 在 `http://localhost:18082` 上两条腿均 exit=0，输出 `.tmp/flaky-comparison/20261118-202007-flaky-comparison.json`（diff pass_rate=1.0 / structured pass_rate=1.0 / lift=0 / structured duration_p50=3258ms）。两条腿的 task 均停在 `waiting_human`（provider CCX `127.0.0.1:3688` 未监听，worker lane 未产出 accepted 结果），UI assertion 本身不受影响。本轮修复 4 处阻断/失真问题：① `Run-FlakyComparison.ps1` 用 `pwsh -File` 转发空 `[string[]]` selector 触发 `Missing an argument for parameter` 导致 structured 腿必失败，改为 in-process splat；② `Run-OpenEyesUiAssertion.ps1` PASS 分支不 `exit 0`，残留 `$LASTEXITCODE` 被 smoke 误判为失败；③ `Run-BaselineMatrixRealWorkerSmoke.ps1` 调用前重置 `$LASTEXITCODE`；④ 聚合函数里 `foreach ($report ...)` 与 `$Report` 参数同名（PowerShell 大小写不敏感）清零 `task_reports_count`/`terminal_run_count`，已抽到 `scripts/lib/FlakyComparisonSummary.ps1` 并被 24 条合同测试覆盖。仍缺：screenshot_diff 的真实像素比较（baseline 以 task_id 命名，新 run 永远 `phase_1_stub`），见设计文档 Phase 2 遗留项。
+
 ## blocker
 
 (无)
