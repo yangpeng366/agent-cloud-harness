@@ -73,6 +73,10 @@
 - `../LOOP_GOAL_HANDOFF_UI_FOCUS_PLAN.md` — 下一阶段方向主入口：取代原 P1–P5 排序口径（Loop / Goal / 交接 / UI 状态）
 - `../PHASE2_ROADMAP.md`
 
+### 分级降级与判定开销（B 向）
+
+- `../tiered-degradation-config.md` — 分级路由 / `judgment.shadow` 配置口径；`record_only` 默认关，不改路由
+
 ### 目标导向评测 / 评估场景
 
 - `../GOAL_ORIENTED_EVAL_PLAN.md`

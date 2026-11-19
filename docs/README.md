@@ -67,6 +67,7 @@
 - `WEB_CONSOLE.md` — Web Console / Dialogue 阅读面契约
 - `HARNESS_CHANGE_CONTRACT.md` — harness 变更与控制面兼容合同，今天仍然为真
 - `PERSISTENCE_ARTIFACT_INVENTORY.md` — 持久化产物 owner / source-of-truth / 可重建纪律
+- `tiered-degradation-config.md` — 分级降级 / `judgment.shadow` 配置口径（`record_only` 默认关，不改路由）
 
 这些文档应尽量保持“今天仍然为真”的状态，不要把稳定结论只留在 dated record 里。
 
