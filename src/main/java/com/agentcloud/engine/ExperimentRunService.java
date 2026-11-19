@@ -111,6 +111,8 @@ public class ExperimentRunService {
         Boolean recoverySuccess = resumeCount > 0 ? "done".equalsIgnoreCase(task.status()) : null;
         double strongModelCostRatio = totalCost <= 0.0 ? 0.0 : roundToThree(strongCost / totalCost);
         LlmTokenTotals llmTokens = aggregateLlmTokens(artifacts);
+        // W3-A：判定器自身 token（M5 分子）与执行 token（分母）同 task 粒度落同一账本。
+        LlmTokenTotals judgmentTokens = aggregateJudgmentTokens(executionJudgment, completionJudgment);
         String evaluatorRole = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_role");
         String evaluatorModelTier = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_model_tier");
         String evaluatorReason = metadataString(completionJudgment != null ? completionJudgment.metadata() : null, "evaluator_reason");
@@ -172,6 +174,15 @@ public class ExperimentRunService {
         metadata.put("cached_tokens", llmTokens.cachedTokens());
         metadata.put("usage_source", llmTokens.usageSource());
         metadata.put("token_unit_basis", "provider_usage_v1");
+        metadata.put("judgment_input_tokens", judgmentTokens.inputTokens());
+        metadata.put("judgment_output_tokens", judgmentTokens.outputTokens());
+        metadata.put("judgment_cached_tokens", judgmentTokens.cachedTokens());
+        metadata.put("judgment_usage_source", judgmentTokens.usageSource());
+        int judgmentTokenTotal = judgmentTokens.inputTokens() + judgmentTokens.outputTokens();
+        int executionTokenTotal = llmTokens.inputTokens() + llmTokens.outputTokens();
+        metadata.put("judgment_token_share", (judgmentTokenTotal + executionTokenTotal) <= 0
+            ? 0.0
+            : roundToThree((double) judgmentTokenTotal / (judgmentTokenTotal + executionTokenTotal)));
         metadata.put("worker_round_count", workerRoundCount);
         metadata.put("tool_invocation_count", toolInvocationCount);
         metadata.put("strong_round_count", strongRoundCount);
@@ -375,6 +386,40 @@ public class ExperimentRunService {
             outputTokens += artifactOutput;
             cachedTokens += Math.max(0, artifactCached);
             if ("provider".equalsIgnoreCase(metadataString(metadata, "llm_usage_source"))) {
+                anyProvider = true;
+            }
+        }
+        if (inputTokens <= 0 && outputTokens <= 0) {
+            return LlmTokenTotals.unavailable();
+        }
+        return new LlmTokenTotals(inputTokens, outputTokens, cachedTokens,
+            anyProvider ? "provider" : "estimated");
+    }
+
+    /**
+     * W3-A：从判定记录 metadata 汇总判定器自身 token。与执行侧 aggregateLlmTokens 同口径：
+     * 只累加实测值，provider 优先，unavailable 不写 0 冒充。
+     */
+    private LlmTokenTotals aggregateJudgmentTokens(Decision executionJudgment, Decision completionJudgment) {
+        int inputTokens = 0;
+        int outputTokens = 0;
+        int cachedTokens = 0;
+        boolean anyProvider = false;
+        for (Decision decision : new Decision[]{executionJudgment, completionJudgment}) {
+            Map<String, Object> metadata = decision == null ? null : decision.metadata();
+            if (metadata == null || metadata.isEmpty()) {
+                continue;
+            }
+            int decisionInput = metadataIntOrZero(metadata, "judgment_input_tokens");
+            int decisionOutput = metadataIntOrZero(metadata, "judgment_output_tokens");
+            int decisionCached = metadataIntOrZero(metadata, "judgment_cached_tokens");
+            if (decisionInput <= 0 && decisionOutput <= 0) {
+                continue;
+            }
+            inputTokens += decisionInput;
+            outputTokens += decisionOutput;
+            cachedTokens += Math.max(0, decisionCached);
+            if ("provider".equalsIgnoreCase(metadataString(metadata, "judgment_usage_source"))) {
                 anyProvider = true;
             }
         }

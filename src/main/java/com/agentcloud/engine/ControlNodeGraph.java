@@ -5,6 +5,7 @@ import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.judgment.JudgmentContext;
 import com.agentcloud.judgment.JudgmentService;
+import com.agentcloud.llm.LlmUsage;
 import com.agentcloud.model.*;
 import com.agentcloud.runtime.TaskRuntimeContext;
 import com.agentcloud.runtime.context.MountedContextPromptRenderResult;
@@ -513,6 +514,26 @@ public class ControlNodeGraph {
         return continueNode(task, null);
     }
 
+    /**
+     * W3-A：把判定器自身 token 挂进判定记录 metadata，与执行侧 token 同 task 粒度、同账本。
+     * 仅在有实测值（provider/estimated）时写入；unavailable 不写 0 冒充消耗。
+     */
+    private Map<String, Object> withJudgmentUsageMetadata(Map<String, Object> base, Task task, String stage) {
+        if (base == null || judgmentService == null || task == null) {
+            return base;
+        }
+        LlmUsage usage = judgmentService.lastUsage(task.id(), stage);
+        if (usage == null || !usage.present()) {
+            return base;
+        }
+        LinkedHashMap<String, Object> merged = new LinkedHashMap<>(base);
+        merged.put("judgment_input_tokens", usage.inputTokens());
+        merged.put("judgment_output_tokens", usage.outputTokens());
+        merged.put("judgment_cached_tokens", usage.cachedTokens());
+        merged.put("judgment_usage_source", usage.source());
+        return merged;
+    }
+
     private Task continueNode(Task task, WorkerExecutionResult executionResult) {
         log.info("[Continue] task={} status={}", task.id(), task.status());
         emitEvent(task, "node_continue", "Continue evaluation");
@@ -633,7 +654,8 @@ public class ControlNodeGraph {
             : List.of();
 
         // 记录 judgment 决策
-        Map<String, Object> executionJudgmentMetadata = withJudgmentPromptMetadata(metadataOf(
+        Map<String, Object> executionJudgmentMetadata = withJudgmentUsageMetadata(
+            withJudgmentPromptMetadata(metadataOf(
             "action", execDecision.action(),
             "judgment_actor", "judgment_service",
             "judgment_stage", "execution",
@@ -660,7 +682,7 @@ public class ControlNodeGraph {
             "retry_decision", execDecision.retryDecision(),
             "escalation_decision", execDecision.escalationDecision(),
             "runtime_facts", execDecision.runtimeFacts()
-        ), judgmentPromptMetrics);
+        ), judgmentPromptMetrics), task, "execution");
         Decision judgmentRecord = new Decision(
             IdGenerator.newId("dec"), task.sessionId(), task.id(), Instant.now(),
             "execution_judgment",
@@ -677,7 +699,7 @@ public class ControlNodeGraph {
             appendProofSummary("Completion judgment: " + completionDecision.status(), latestWorkerMetadata),
             completionDecision.reason(),
             "medium", null,
-            withJudgmentPromptMetadata(metadataOf(
+            withJudgmentUsageMetadata(withJudgmentPromptMetadata(metadataOf(
                 "judgment_actor", "judgment_service",
                 "judgment_stage", "completion",
                 "selected_worker", selectedWorkerId,
@@ -698,7 +720,7 @@ public class ControlNodeGraph {
                 "retry_decision", execDecision.retryDecision(),
                 "escalation_decision", execDecision.escalationDecision(),
                 "runtime_facts", completionDecision.runtimeFacts()
-            ), judgmentPromptMetrics)
+            ), judgmentPromptMetrics), task, "completion")
         );
         decisionDao.insert(completionRecord);
 

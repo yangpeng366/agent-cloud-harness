@@ -2,7 +2,9 @@ package com.agentcloud.judgment;
 
 import com.agentcloud.judgment.model.CompletionDecision;
 import com.agentcloud.judgment.model.ExecutionDecision;
+import com.agentcloud.llm.LlmCallResult;
 import com.agentcloud.llm.LlmClient;
+import com.agentcloud.llm.LlmUsage;
 import com.agentcloud.runtime.RuntimeCognitionSurfaceAssembler;
 import com.agentcloud.runtime.RuntimeFactPromptFormatter;
 import com.agentcloud.runtime.context.MountedContextPromptBudgetSupport;
@@ -18,6 +20,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 基于 Prompt + LLM 的最小 Judgment 实现。
@@ -29,6 +32,8 @@ public class PromptBasedJudgmentService implements JudgmentService {
     private final LlmClient llmClient;
     private final MountedContextPromptRenderer mountedContextPromptRenderer;
     private final RuntimeFactPromptFormatter runtimeFactPromptFormatter;
+    /** W3-A：判定器自身 token 进同一账本。按 task+stage 保留最近一次调用的真实计量。 */
+    private final ConcurrentHashMap<String, LlmCallResult> lastCalls = new ConcurrentHashMap<>();
 
     public PromptBasedJudgmentService(LlmClient llmClient) {
         this(llmClient, new MountedContextPromptRenderer(), new RuntimeFactPromptFormatter());
@@ -69,7 +74,9 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "target_worker (string). No markdown, no extra text.";
 
             JudgmentPrompt prompt = buildExecutionPrompt(context);
-            String raw = llmClient.review(system, prompt.prompt()).trim();
+            LlmCallResult call = llmClient.reviewResult(system, prompt.prompt());
+            recordCall(taskId, "execution", call);
+            String raw = call.text() == null ? "" : call.text().trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String action = parseAction(json.path("action").asText("continue"));
@@ -120,7 +127,9 @@ public class PromptBasedJudgmentService implements JudgmentService {
                 + "No markdown, no extra text.";
 
             JudgmentPrompt prompt = buildCompletionPrompt(context);
-            String raw = llmClient.review(system, prompt.prompt()).trim();
+            LlmCallResult call = llmClient.reviewResult(system, prompt.prompt());
+            recordCall(taskId, "completion", call);
+            String raw = call.text() == null ? "" : call.text().trim();
 
             JsonNode json = MAPPER.readTree(raw);
             String status = parseCompletionStatus(json.path("status").asText("partially_done"));
@@ -145,6 +154,23 @@ public class PromptBasedJudgmentService implements JudgmentService {
             log.error("judgeCompletion failed for task={}, fallback to incomplete", taskId, e);
             return defaultCompletionDecision();
         }
+    }
+
+    @Override
+    public LlmUsage lastUsage(String taskId, String stage) {
+        LlmCallResult call = lastCalls.get(callKey(taskId, stage));
+        return call == null || call.usage() == null ? LlmUsage.unavailable() : call.usage();
+    }
+
+    private void recordCall(String taskId, String stage, LlmCallResult call) {
+        if (call == null) {
+            return;
+        }
+        lastCalls.put(callKey(taskId, stage), call);
+    }
+
+    private static String callKey(String taskId, String stage) {
+        return (taskId == null ? "-" : taskId) + "|" + (stage == null ? "-" : stage);
     }
 
     private boolean isLlmAvailable() {

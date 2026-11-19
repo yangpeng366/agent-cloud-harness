@@ -354,6 +354,26 @@ class TaskHandlerStabilitySmokeHttpTest {
                         )
                     );
                     taskDao.updateState(updated);
+                    // judgment 已下沉到 ControlNodeGraph.continueNode（5778bf0）；本 stub 整体覆写 enter()，
+                    // 需按生产同形补写 execution_judgment 记录，否则 judgment_trace 的 execution_judgment 读面恒为 null。
+                    decisionDao.insert(new Decision(
+                        IdGenerator.newId("dec"),
+                        updated.sessionId(),
+                        updated.id(),
+                        Instant.now(),
+                        "execution_judgment",
+                        "Execution judgment: continue",
+                        "manual continue 后保持当前执行路径",
+                        "medium",
+                        null,
+                        new java.util.LinkedHashMap<>(Map.of(
+                            "action", "continue",
+                            "judgment_actor", "judgment_service",
+                            "judgment_stage", "execution",
+                            "selected_worker", "codex",
+                            "next_step", "继续推进"
+                        ))
+                    ));
                     return updated;
                 }
             };

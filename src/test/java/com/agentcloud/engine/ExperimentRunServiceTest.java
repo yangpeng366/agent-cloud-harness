@@ -129,6 +129,121 @@ class ExperimentRunServiceTest {
     }
 
     @Test
+    void refreshAggregatesJudgmentTokenUsageFromJudgmentDecisions() {
+        try (DatabaseManager db = new DatabaseManager(tempDir.resolve("experiment-run-judgment-tokens.db"))) {
+            SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
+            TaskDao taskDao = db.jdbi().onDemand(TaskDao.class);
+            DecisionDao decisionDao = db.jdbi().onDemand(DecisionDao.class);
+            ArtifactDao artifactDao = db.jdbi().onDemand(ArtifactDao.class);
+            EventDao eventDao = db.jdbi().onDemand(EventDao.class);
+            ToolInvocationDao toolInvocationDao = db.jdbi().onDemand(ToolInvocationDao.class);
+            ExperimentRunDao experimentRunDao = db.jdbi().onDemand(ExperimentRunDao.class);
+
+            ExperimentRunService service = new ExperimentRunService(
+                experimentRunDao,
+                decisionDao,
+                artifactDao,
+                eventDao,
+                toolInvocationDao
+            );
+
+            String sessionId = IdGenerator.newId("session");
+            String taskId = IdGenerator.newId("task");
+            sessionDao.insert(Session.create(sessionId, "judgment token session", "active"));
+            Task task = new Task(
+                taskId,
+                sessionId,
+                null,
+                "judgment token run",
+                "done",
+                "high",
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                Instant.now(),
+                null,
+                "Executor delivered the target draft.",
+                "Produce a verified draft.",
+                null,
+                "kimi",
+                "end",
+                null,
+                Map.of("task_type", "coding")
+            );
+            taskDao.insert(task);
+
+            // 执行侧 token（M5 分母）
+            artifactDao.insert(new Artifact(
+                IdGenerator.newId("art"),
+                sessionId,
+                taskId,
+                Instant.now(),
+                "worker_artifact",
+                "Executor draft",
+                null,
+                null,
+                "Execution worker produced the requested draft.",
+                Map.of(
+                    "selected_model_tier", "small",
+                    "llm_input_tokens", 1000,
+                    "llm_output_tokens", 200,
+                    "llm_cached_tokens", 0,
+                    "llm_usage_source", "provider"
+                )
+            ));
+            // 判定器自身 token（M5 分子），W3-A 后与执行侧同一 task 账本
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                sessionId,
+                taskId,
+                Instant.now(),
+                "execution_judgment",
+                "Execution judgment: continue",
+                "manual continue",
+                "medium",
+                null,
+                Map.of(
+                    "action", "continue",
+                    "judgment_input_tokens", 120,
+                    "judgment_output_tokens", 40,
+                    "judgment_cached_tokens", 0,
+                    "judgment_usage_source", "provider"
+                )
+            ));
+            decisionDao.insert(new Decision(
+                IdGenerator.newId("dec"),
+                sessionId,
+                taskId,
+                Instant.now(),
+                "completion_judgment",
+                "Completion judgment: partially_done",
+                "needs more work",
+                "medium",
+                null,
+                Map.of(
+                    "status", "partially_done",
+                    "judgment_input_tokens", 80,
+                    "judgment_output_tokens", 20,
+                    "judgment_cached_tokens", 0,
+                    "judgment_usage_source", "provider"
+                )
+            ));
+
+            ExperimentRunRecord record = service.refresh(task);
+
+            assertEquals(Integer.valueOf(1000), record.inputTokens());
+            assertEquals(Integer.valueOf(200), record.outputTokens());
+            ExperimentRunRecord reloaded = experimentRunDao.findByTaskId(taskId).orElseThrow();
+            Map<String, Object> metadata = reloaded.metadata();
+            assertEquals(200, ((Number) metadata.get("judgment_input_tokens")).intValue());
+            assertEquals(60, ((Number) metadata.get("judgment_output_tokens")).intValue());
+            assertEquals("provider", metadata.get("judgment_usage_source"));
+            // 260 / (260 + 1200) = 0.178
+            assertEquals(0.178, ((Number) metadata.get("judgment_token_share")).doubleValue(), 0.002);
+        }
+    }
+
+    @Test
     void refreshAggregatesComparableBaselineMetrics() {
         try (DatabaseManager db = new DatabaseManager(tempDir.resolve("experiment-run-service.db"))) {
             SessionDao sessionDao = db.jdbi().onDemand(SessionDao.class);
