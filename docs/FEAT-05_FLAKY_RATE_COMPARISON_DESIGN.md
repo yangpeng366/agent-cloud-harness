@@ -147,7 +147,15 @@ openeyes_structured 在某些 case（高动态 UI、频繁重排）反而 false 
 - 汇总：`.tmp/flaky-comparison/20261118-202007-flaky-comparison.json`；diff exit=0、structured exit=0。
 - 指标：diff pass_rate=1.0（`phase_counts={phase_1_stub:1}`，`comparable_count=0`）；structured pass_rate=1.0，duration_p50=p95=3258ms。`pass_rate_lift=0`。
 - worker lane：两条腿的 task 都停在 `waiting_human` / `acceptance_result=rejected`（本机 provider CCX `127.0.0.1:3688` 未监听），UI assertion 与 worker 终态解耦，断言仍执行。
-- 遗留项（阻塞有意义的 H1 对比）：`Resolve-BaselinePngPath` 以 `task_id` 命名 baseline，而每次 run 都新建 task，所以 screenshot_diff 永远落在 `phase_1_stub`（无条件 PASS，实质是 wiring 通道而非像素对比）。下一步要么把 baseline 键改成 `case_key`，要么在 `Invoke-ScreenshotDiffAssertion` 里补 current PNG 捕获 + baseline seeding。
+- 遗留项（2026-11-20 已关闭）：`Resolve-BaselinePngPath` 曾以 `task_id` 命名 baseline，而每次 run 都新建 task，所以 screenshot_diff 永远落在 `phase_1_stub`（无条件 PASS，实质是 wiring 通道而非像素对比）。已改为 `case_key` 作 baseline 键 + `eyes` 实采 current PNG + 首次 run seeding。
+
+**2026-11-20 baseline 键改造后的两次实跑（同一 harness / 同一窗口）**
+
+- 命令（两次相同）：`pwsh -File scripts/Run-FlakyComparison.ps1 -CaseKeys short-001 -Modes strong_only -BaseUrl http://localhost:18082 -ExpectedElementAutomationId btnConnect`
+- 第 1 次：`.tmp/flaky-comparison/20261119-183449-flaky-comparison.json`，diff `phase_counts={phase_2_seeded_baseline:1}`、`comparable_count=0`、`baseline_key=short-001`、`capture_mode=eyes_cli`、capture 76354 bytes、assertion duration 2518ms。
+- 第 2 次：`.tmp/flaky-comparison/20261119-183652-flaky-comparison.json`，diff `phase_counts={phase_2_5_real_comparison:1}`、`comparable_count=1`、`comparable_pass_rate=1.0`、`similarity=1`、`matched=true`、duration 2289ms。structured 腿两次均 `pass_rate=1.0`。
+- 两条腿的 task 仍停在 `waiting_human`（provider CCX 未监听），UI assertion 与 worker 终态解耦。
+- 仍缺：需要 ≥2 次不同基线状态的 run 才能算 false_failure_rate / 稳定 flaky 率；`comparable_count` 现取「真实像素比较」样本，首次 seeding 不计入。<br>下一轮可跑全量 9 组合 × 2 mode（单轮 >30min，须拆分）。
 
 ### Phase 3: 分析（1-2 天）
 
@@ -180,3 +188,12 @@ openeyes_structured 在某些 case（高动态 UI、频繁重排）反而 false 
 6. ⏳ Phase 2 数据采集（9 组合 × 2 mode = 18 baseline run）需 harness + baseline PNG 库管理
 5. ✅ Run-FlakyComparison.ps1（聚合脚本）落地：跑 screenshot_diff + openeyes_structured 两次 + 聚合输出 summary-<stamp>-flaky-comparison.json；加 `-Cleanup` 清理 > 7d 旧报告
 6. ✅ tests/Test-RunFlakyComparison.ps1 16/16 PASS（null report / empty / all-pass / mixed / JSON roundtrip）
+
+### Phase 2.6: baseline 键 = case_key + 首次 seeding ✅ 已完成（2026-11-20）
+
+1. ✅ `Resolve-ScreenshotDiffKey`：case_key 优先、task_id 仅兜底；文件名非法字符 sanitize（`ConvertTo-ScreenshotDiffFileKey`）
+2. ✅ `Resolve-BaselinePngPath` 参数改为 `-BaselineKey`（保留 `-TaskId` 别名，旧调用与旧 baseline 文件仍可解析）
+3. ✅ `scripts/lib/UiScreenshotCapture.ps1`：`eyes windows list --json --title-contains` + `eyes capture --window <hwnd> --out <png>`，复用 OpenEyesCli 适配层，不抛异常只返回 `ok/error`
+4. ✅ `scripts/lib/ScreenshotDiffAssertion.ps1`：把 `Invoke-ScreenshotDiffAssertion` 从 smoke 脚本抽成可测函数；分支 `phase_2_seeded_baseline`（首跑）/ `phase_2_5_real_comparison` / `phase_0_capture_failed`（捕获失败 = FAIL，不再静默 PASS）；支持 `-CaptureSourcePng` / `-Capture` / `-NoSeed` 注入
+5. ✅ 报告新增 `baseline_key` / `case_key` / `baseline_seeded` / `capture_mode` / `duration_ms`，schema_version 仍为 1
+6. ✅ tests/Test-ScreenshotDiffAssertion.ps1 41/41 PASS；runner 共 14 套件 / 264 通过 / 0 失败

@@ -130,27 +130,10 @@ function Invoke-OpenEyesUiAssertion {
     return (Get-Content -LiteralPath $outputPath -Raw | ConvertFrom-Json)
     }
 
-function Invoke-ScreenshotDiffAssertion {
-    param([string]$TaskId)
-    . (Join-Path $PSScriptRoot 'lib/BaselineScreenshotStub.ps1')
-    . (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')
-    . (Join-Path $PSScriptRoot 'lib/BaselinePng.ps1')
-    $baselinePath = Resolve-BaselinePngPath -BaselineDirectory $UiAssertionBaselineDirectory -TaskId $TaskId
-    if (-not $baselinePath) {
-        return New-ScreenshotDiffStubReport -TaskId $TaskId -BaselineDirectory $UiAssertionBaselineDirectory -BaselinePath $null
-    }
-    $currentPath = Join-Path $UiAssertionCurrentDirectory "$TaskId.png"
-    if (-not (Test-Path -LiteralPath $currentPath)) {
-        $stub = New-ScreenshotDiffStubReport -TaskId $TaskId -BaselineDirectory $UiAssertionBaselineDirectory -BaselinePath $baselinePath
-        $stub.note = 'Phase 2.5 pending: baseline PNG present but current PNG not captured yet'
-        return $stub
-    }
-    $compare = Compare-ScreenshotSimilarity -BaselinePath $baselinePath -CurrentPath $currentPath
-    if ($compare.error) {
-        return New-ScreenshotDiffComparisonReport -TaskId $TaskId -BaselinePath $baselinePath -CurrentPath $currentPath -Error $compare.error
-    }
-    return New-ScreenshotDiffComparisonReport -TaskId $TaskId -BaselinePath $baselinePath -CurrentPath $currentPath -Similarity $compare.similarity -Matched $compare.matched
-}
+# screenshot_diff orchestration lives in scripts/lib/ScreenshotDiffAssertion.ps1 so it
+# can be unit-tested without a harness. Baseline key = case_key (stable across runs);
+# the first run for a key seeds the baseline from the captured PNG.
+. (Join-Path $PSScriptRoot 'lib/ScreenshotDiffAssertion.ps1')
 
 function Wait-TaskTerminal {
     param([string]$TaskId)
@@ -204,8 +187,13 @@ if ($UiAssertionMode -eq 'openeyes_structured') {
 }
 if ($UiAssertionMode -eq 'screenshot_diff') {
     Assert-True (-not [string]::IsNullOrWhiteSpace($UiAssertionBaselineDirectory)) 'UiAssertionMode=screenshot_diff requires UiAssertionBaselineDirectory'
-    Assert-True (Test-Path -LiteralPath $UiAssertionBaselineDirectory) "Screenshot baseline directory not found: $UiAssertionBaselineDirectory"
+    # The baseline key is the case key, so the directory must be creatable but need not
+    # be pre-populated: the first run for a key seeds its baseline PNG.
+    $resolvedBaselineDir = if ([System.IO.Path]::IsPathRooted($UiAssertionBaselineDirectory)) { $UiAssertionBaselineDirectory } else { Join-Path (Get-Location).Path $UiAssertionBaselineDirectory }
+    New-Item -ItemType Directory -Force -Path $resolvedBaselineDir | Out-Null
+    Assert-True (-not [string]::IsNullOrWhiteSpace($UiAssertionAppTitleContains)) 'UiAssertionMode=screenshot_diff requires UiAssertionAppTitleContains (needed to capture the current PNG)'
     Assert-True (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')) 'lib/ScreenshotCompare.ps1 not found'
+    Assert-True (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'lib/ScreenshotDiffAssertion.ps1')) 'lib/ScreenshotDiffAssertion.ps1 not found'
     . (Join-Path $PSScriptRoot 'lib/ScreenshotCompare.ps1')
 }
 
@@ -366,7 +354,7 @@ foreach ($task in $tasks) {
             $uiAssertionReports += $assertion
             $assertion
         } elseif ($UiAssertionMode -eq 'screenshot_diff') {
-            $assertion = Invoke-ScreenshotDiffAssertion -TaskId $taskId
+            $assertion = Invoke-ScreenshotDiffAssertion -TaskId $taskId -TaskCaseKey ([string]$task.metadata.task_case_key) -BaselineDirectory $UiAssertionBaselineDirectory -CurrentDirectory $UiAssertionCurrentDirectory -AppTitleContains $UiAssertionAppTitleContains -WindowIndex $UiAssertionWindowIndex
             $uiAssertionReports += $assertion
             $assertion
         } else { $null }

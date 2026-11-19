@@ -20,6 +20,7 @@ $suites = @(
     @{ Path = 'tests\Test-ScreenshotCompare.ps1'; Name = 'screenshot-compare'; EmitSummary = $true },
     @{ Path = 'tests\Test-BaselineScreenshotStub.ps1'; Name = 'baseline-screenshot-stub'; EmitSummary = $true },
     @{ Path = 'tests\Test-BaselinePng.ps1'; Name = 'baseline-png'; EmitSummary = $true },
+    @{ Path = 'tests\Test-ScreenshotDiffAssertion.ps1'; Name = 'screenshot-diff-assertion'; EmitSummary = $true },
     @{ Path = 'tests\Run-JevPatrolL3Pipeline.ps1'; Name = 'e2e-pipeline'; EmitSummary = $false }
     @{ Path = 'tests\phase25_smoke.ps1'; Name = 'phase25-smoke'; EmitSummary = $false }
     @{ Path = 'tests\Test-RunFlakyComparison.ps1'; Name = 'flaky-comparison'; EmitSummary = $true }
@@ -64,6 +65,3 @@ if ($failedSuites.Count -gt 0 -or $totalFail -gt 0) {
     exit 1
 }
 exit 0
-
-
- += @{ Path = 'tests\\phase25_smoke.ps1'; Name = 'phase25-smoke'; EmitSummary = False }
