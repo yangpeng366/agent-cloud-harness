@@ -14,7 +14,8 @@ public record HarnessConfig(
     List<ProviderProtocolConfig> providers,
     Map<String, String> workspaceAliases,
     FeatureFlags featureFlags,
-    HarnessEyesMcpConfig eyesMcp
+    HarnessEyesMcpConfig eyesMcp,
+    JudgmentShadowConfig judgmentShadow
 ) {
     public HarnessConfig {
         if (defaults == null) defaults = new HarnessDefaults(null, null, null, null);
@@ -24,6 +25,7 @@ public record HarnessConfig(
         if (workspaceAliases == null) workspaceAliases = Map.of();
         if (featureFlags == null) featureFlags = FeatureFlags.defaults();
         if (eyesMcp == null) eyesMcp = new HarnessEyesMcpConfig(null, false, null, false, null);
+        if (judgmentShadow == null) judgmentShadow = JudgmentShadowConfig.disabled();
     }
 
     public HarnessConfig(
@@ -44,7 +46,19 @@ public record HarnessConfig(
         Map<String, String> workspaceAliases,
         FeatureFlags featureFlags
     ) {
-        this(defaults, ccx, workers, providers, workspaceAliases, featureFlags, null);
+        this(defaults, ccx, workers, providers, workspaceAliases, featureFlags, null, null);
+    }
+
+    public HarnessConfig(
+        HarnessDefaults defaults,
+        HarnessCcxConfig ccx,
+        List<WorkerLaneConfig> workers,
+        List<ProviderProtocolConfig> providers,
+        Map<String, String> workspaceAliases,
+        FeatureFlags featureFlags,
+        HarnessEyesMcpConfig eyesMcp
+    ) {
+        this(defaults, ccx, workers, providers, workspaceAliases, featureFlags, eyesMcp, null);
     }
 
     /**

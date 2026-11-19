@@ -79,6 +79,7 @@ public final class HarnessConfigLoader {
         Map<String, Object> defaultsMap = (Map<String, Object>) harness.getOrDefault("defaults", Map.of());
         Map<String, Object> ccxMap = (Map<String, Object>) harness.getOrDefault("ccx", Map.of());
         Map<String, Object> eyesMcpMap = (Map<String, Object>) harness.getOrDefault("eyes_mcp", Map.of());
+        Map<String, Object> shadowSection = judgmentShadowMap(root);
         List<Object> workersList = (List<Object>) harness.getOrDefault("workers", List.of());
         @SuppressWarnings("unchecked")
         Map<String, Object> workspaceAliasesMap = (Map<String, Object>) harness.getOrDefault("workspace-aliases", Map.of());
@@ -138,8 +139,56 @@ public final class HarnessConfigLoader {
         }
 
         return new HarnessConfig(defaults, ccx, List.copyOf(workers),
-            List.copyOf(providers), Map.copyOf(workspaceAliases), featureFlags, eyesMcp);
+            List.copyOf(providers), Map.copyOf(workspaceAliases), featureFlags, eyesMcp,
+            judgmentShadowFromMap(shadowSection));
 }
+
+    /** 取根级 {@code judgment.shadow}；缺失返回空 Map，由配置模型落到默认（全关）。 */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> judgmentShadowMap(Map<String, Object> root) {
+        if (root == null) return Map.of();
+        Object judgment = root.get("judgment");
+        if (!(judgment instanceof Map)) return Map.of();
+        Object shadow = ((Map<String, Object>) judgment).get("shadow");
+        if (!(shadow instanceof Map)) return Map.of();
+        return (Map<String, Object>) shadow;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static JudgmentShadowConfig judgmentShadowFromMap(Map<String, Object> shadow) {
+        if (shadow == null || shadow.isEmpty()) {
+            return JudgmentShadowConfig.disabled();
+        }
+        Map<String, Object> routerMap = (Map<String, Object>) shadow.getOrDefault("router", Map.of());
+        Map<String, Object> toolGateMap = (Map<String, Object>) shadow.getOrDefault("tool_gate", Map.of());
+        Map<String, Object> verifierMap = (Map<String, Object>) shadow.getOrDefault("verifier", Map.of());
+        Map<String, Object> statsMap = (Map<String, Object>) shadow.getOrDefault("stats", Map.of());
+
+        return new JudgmentShadowConfig(
+            booleanFromMap(shadow, "enabled"),
+            stringFromMap(shadow, "profile"),
+            stringFromMap(shadow, "policy_version"),
+            new JudgmentShadowConfig.Router(
+                booleanFromMap(routerMap, "enabled"),
+                stringFromMap(routerMap, "provider"),
+                pathFromMap(routerMap, "path", JudgmentShadowConfig.DEFAULT_ROUTER_SINK)
+            ),
+            new JudgmentShadowConfig.Channel(
+                booleanFromMap(toolGateMap, "enabled"),
+                stringFromMap(toolGateMap, "provider"),
+                pathFromMap(toolGateMap, "path", JudgmentShadowConfig.DEFAULT_TOOL_GATE_SINK)
+            ),
+            new JudgmentShadowConfig.Channel(
+                booleanFromMap(verifierMap, "enabled"),
+                stringFromMap(verifierMap, "provider"),
+                pathFromMap(verifierMap, "path", JudgmentShadowConfig.DEFAULT_VERIFIER_SINK)
+            ),
+            new JudgmentShadowConfig.Stats(
+                booleanFromMap(statsMap, "enabled"),
+                stringFromMap(statsMap, "cli_command")
+            )
+        );
+    }
 
     @SuppressWarnings("unchecked")
     private static WorkerLaneConfig workerLaneFromMap(Map<String, Object> map) {
@@ -241,6 +290,18 @@ public final class HarnessConfigLoader {
         if (map == null || key == null) return null;
         Object value = map.get(key);
         return value == null ? null : value.toString();
+    }
+
+    private static java.nio.file.Path pathFromMap(Map<String, Object> map, String key,
+                                                  java.nio.file.Path fallback) {
+        String raw = stringFromMap(map, key);
+        if (raw == null || raw.isBlank()) return fallback;
+        try {
+            return java.nio.file.Path.of(raw.trim());
+        } catch (RuntimeException e) {
+            log.warn("Invalid path in judgment.shadow.{}={} ; using default {}", key, raw, fallback);
+            return fallback;
+        }
     }
 
     private static Integer integerFromMap(Map<String, Object> map, String key) {

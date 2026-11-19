@@ -4,6 +4,7 @@ import com.agentcloud.agent.AgentDiscoveryService;
 import com.agentcloud.agent.AgentProviderRegistry;
 import com.agentcloud.agent.SimpleAgentDiscoveryService;
 import com.agentcloud.agent.providers.BuiltinAgentProviders;
+import com.agentcloud.agent.providers.JudgmentShadowConfig;
 import com.agentcloud.agent.providers.LocalCliAgentProvider;
 import com.agentcloud.agent.providers.UnsupportedAgentProvider;
 import com.agentcloud.engine.*;
@@ -13,6 +14,7 @@ import com.agentcloud.engine.router.WorkerRegistry;
 import com.agentcloud.engine.router.WorkerRouter;
 import com.agentcloud.judgment.JudgmentService;
 import com.agentcloud.judgment.PromptBasedJudgmentService;
+import com.agentcloud.judgment.model.shadow.RouterShadowHookFactory;
 import com.agentcloud.llm.LlmConfig;
 import com.agentcloud.llm.LlmClient;
 import com.agentcloud.llm.OpenAiCompatibleClient;
@@ -260,10 +262,12 @@ public class Main {
             harnessConfig.map(com.agentcloud.agent.providers.HarnessConfig::workspaceAliases).orElse(java.util.Map.of());
         CodexAppServerWorkerExecutor codexAppServerWorkerExecutor =
             new CodexAppServerWorkerExecutor(agentProviderRegistry, workerRegistry, workspaceAliases);
-        WorkerExecutor workerExecutor = new WorkerExecutorRouter(
+        WorkerExecutorRouter workerExecutorRouter = new WorkerExecutorRouter(
             workerRegistry, defaultWorkerExecutor, toolAwareWorkerExecutor,
             providerCliWorkerExecutor, codexAppServerWorkerExecutor
         );
+        wireRouterShadowHook(workerExecutorRouter, harnessConfig.orElse(null));
+        WorkerExecutor workerExecutor = workerExecutorRouter;
         log.info("Agent providers initialized. detectedProviders={}", agentDiscoveryService.detectAll().size());
 
         // 新增: Control Node Graph（注入 Phase 1 新组件）
@@ -360,6 +364,28 @@ public class Main {
 
         // 保持运行
         Thread.currentThread().join();
+    }
+
+    private static void wireRouterShadowHook(
+        WorkerExecutorRouter router,
+        com.agentcloud.agent.providers.HarnessConfig harnessConfig
+    ) {
+        JudgmentShadowConfig shadow = harnessConfig == null ? null : harnessConfig.judgmentShadow();
+        if (shadow == null || !shadow.routerObservable()) {
+            log.info("judgment.shadow router hook skipped. enabled={} profile={}",
+                shadow != null && shadow.enabled(),
+                shadow == null ? "absent" : shadow.profile());
+            return;
+        }
+        if (shadow.enforceRequested()) {
+            log.warn("judgment.shadow profile=enforce 无落点；按 record_only 仅写账，WorkerRouter 路由不变");
+        }
+        RouterShadowHookFactory.createIfEnabled(true, shadow.router().provider(), shadow.router().path())
+            .ifPresent(hook -> {
+                router.setRouterShadowHook(hook);
+                log.info("Router shadow hook injected. profile={} policyVersion={} sink={}",
+                    shadow.profile(), shadow.policyVersion(), shadow.router().path());
+            });
     }
 
     private static void registerDiscoveredProviders(ProviderProtocolDiscovery.DiscoveryResult discovery,
