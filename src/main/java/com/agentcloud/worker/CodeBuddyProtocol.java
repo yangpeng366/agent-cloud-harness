@@ -97,6 +97,6 @@ public class CodeBuddyProtocol extends AbstractStreamJsonProtocol {
                 appendLine(output, trimmed);
             }
         }
-        return new ParsedStreamOutput(status, output.toString().trim(), errorText, sessionId);
+        return new ParsedStreamOutput(status, output.toString().trim(), errorText, sessionId, activeModel);
     }
 }

@@ -104,6 +104,9 @@ public abstract class AbstractStreamJsonProtocol implements ProviderProtocol {
         if (parsed.errorText != null && !parsed.errorText.isBlank()) {
             metadata.put("provider_error", parsed.errorText);
         }
+        if (parsed.activeModel != null && !parsed.activeModel.isBlank()) {
+            metadata.put("provider_active_model", parsed.activeModel);
+        }
         return new WorkerExecutionResult(
             summarize(parsed.outputText, parsed.errorText, parsed.status),
             parsed.outputText,
@@ -120,7 +123,12 @@ public abstract class AbstractStreamJsonProtocol implements ProviderProtocol {
 
     // ── 公共数据结构 ──
 
-    protected record ParsedStreamOutput(String status, String outputText, String errorText, String sessionId) {}
+    protected record ParsedStreamOutput(String status, String outputText, String errorText, String sessionId,
+                                       String activeModel) {
+        protected ParsedStreamOutput(String status, String outputText, String errorText, String sessionId) {
+            this(status, outputText, errorText, sessionId, null);
+        }
+    }
 
     // ── 共享工具方法 ──
 
