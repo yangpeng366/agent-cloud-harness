@@ -50,6 +50,8 @@
 
 实测：`tests/Test-ScreenshotDiffAssertion.ps1` 41/41；runner 14 套件 / 264 通过 / 0 失败（原 215）。真实 e2e（隔离 WinForms 窗口 + eyes 0.2.0）：run1 `phase_2_seeded_baseline` PASS（capture 76354 bytes / 2651ms），run2/run3 `phase_2_5_real_comparison` similarity=1 matched=true。harness 级 short smoke 连跑两次（`localhost:18082` + `ACH-OpenEyes-Baseline-Target`）：第 1 次 `phase_counts={phase_2_seeded_baseline:1}` / `comparable_count=0`，第 2 次 `phase_counts={phase_2_5_real_comparison:1}` / `comparable_count=1` / `comparable_pass_rate=1.0`。剩余：全量 9 组合 × 2 mode 的 flaky 率采集（单轮 >30min，须拆轮）。
 
+2026-11-21（auto-patrol）：全量采集第 1/3 轮（short 桶 3 组合 × 2 mode）落地。新增 `scripts/Start-OpenEyesBaselineTarget.ps1` + `scripts/lib/OpenEyesBaselineTargetWindow.ps1`，把目标窗口（`ACH-OpenEyes-Baseline-Target`，8 个具名控件）从临时手搓固化为可复现脚本，支持 `-Status` / `-Stop` / `-LifetimeSeconds`。实跑：`Run-FlakyComparison.ps1 -CaseKeys short-001,short-002,short-003 -Modes strong_only`，首跑 diff pass_rate=0.6667（short-001 `size_mismatch`：旧 baseline 76354B vs 新窗口 28985B，证明 baseline 与窗口布局强耦合，换窗口须重新 seeding），次跑 diff pass_rate=1.0 / `comparable_count=2` / `comparable_pass_rate=1.0` / similarity=1，duration_p50=2240ms / p95=2437ms；structured pass_rate=1.0 / p50=2854ms / p95=2875ms；`pass_rate_lift=0`。同轮修 `-CaseKeys a,b,c` 经 `pwsh -File` 不拆逗号导致 HTTP 400 `unknown baseline case` 的调用坑（新增 `scripts/lib/FlakyComparisonArgs.ps1`，合同 test 35/35）。剩余：medium / long 两桶各需「seed + compare」两遍。
+
 ## blocker
 
 (无)

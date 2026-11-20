@@ -157,6 +157,16 @@ openeyes_structured 在某些 case（高动态 UI、频繁重排）反而 false 
 - 两条腿的 task 仍停在 `waiting_human`（provider CCX 未监听），UI assertion 与 worker 终态解耦。
 - 仍缺：需要 ≥2 次不同基线状态的 run 才能算 false_failure_rate / 稳定 flaky 率；`comparable_count` 现取「真实像素比较」样本，首次 seeding 不计入。<br>下一轮可跑全量 9 组合 × 2 mode（单轮 >30min，须拆分）。
 
+**2026-11-21 全量采集第 1/3 轮（short 桶，3 组合 × 2 mode）**
+
+- 前置：本轮新增 `scripts/Start-OpenEyesBaselineTarget.ps1`（+ `scripts/lib/OpenEyesBaselineTargetWindow.ps1`）把目标窗口固化成可复现产物（window 标题 `ACH-OpenEyes-Baseline-Target`，8 个具名控件，`-Status` / `-Stop` / `-LifetimeSeconds`）；上一轮是靠临时 WinForms 脚本手搓。
+- 命令：`pwsh -File scripts/Run-FlakyComparison.ps1 -CaseKeys short-001,short-002,short-003 -Modes strong_only -BaseUrl http://localhost:18082`
+- 首跑 `.tmp/flaky-comparison/20261120-165052-flaky-comparison.json`：diff pass_rate=0.6667（`phase_counts={phase_2_5_real_comparison:1, phase_2_seeded_baseline:2}`），唯一 FAIL 是 `short-001` 的 `size_mismatch`（baseline 76354 bytes 取自旧窗口，新窗口 current 28985 bytes）。**结论：baseline PNG 与目标窗口布局强耦合，换窗口必须重新 seeding**（旧 baseline 已另存 `short-001.pre-window-v2.png` 留证）。
+- 次跑 `.tmp/flaky-comparison/20261120-165651-flaky-comparison.json`：diff pass_rate=1.0、`comparable_count=2`、`comparable_pass_rate=1.0`、similarity=1（`short-002/003` 真实比较），duration_p50=2240ms / p95=2437ms；structured pass_rate=1.0、`duration_p50=2854ms`、`p95=2875ms`；`pass_rate_lift=0`。
+- 两条腿 task 仍停在 `waiting_human`（provider CCX 未监听），UI assertion 与 worker 终态解耦。
+- 顺手修 `-CaseKeys a,b,c` 的调用坑：`pwsh -File` 不做逗号拆分，整串会作为单个 case key 打到后端报 `unknown baseline case: ...`（HTTP 400），现由 `scripts/lib/FlakyComparisonArgs.ps1` 归一化并有 10 条合同 test 覆盖。
+- 仍缺：medium / long 两桶各 3 组合 × 2 mode（建议每桶跑「seed + compare」两遍，否则该桶 `comparable_count` 恒为 0）；structured 腿报告里 `phase` 为 `unknown`（断言脚本不写 phase），聚合靠 comparable 分支规避。
+
 ### Phase 3: 分析（1-2 天）
 
 写 docs/FEAT-05_FLAKY_RATE_COMPARISON_RESULTS.md：
