@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 # Use the production helper so this test cannot drift from the script it covers.
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\lib\FlakyComparisonSummary.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'scripts\lib\FlakyComparisonArgs.ps1')
 
 $pass = 0
 $fail = 0
@@ -136,6 +137,29 @@ Assert-Eq 1 $fieldSummary.phase_counts['phase_1_stub'] 'field report phase_count
 Assert-Eq 800 $fieldSummary.duration_p50_ms 'field report duration_p50_ms'
 Assert-Eq 1200 $fieldSummary.duration_p95_ms 'field report duration_p95_ms'
 
+# Regression: `pwsh -File ... -CaseKeys short-001,short-002` binds the whole comma list
+# as one [string[]] element. Without normalisation the harness rejects it as
+# `unknown baseline case: short-001,short-002` (HTTP 400) after the run name is spent.
+$commaExpanded = @(Expand-FlakyComparisonArgValues -Values @('short-001,short-002', 'long-001'))
+Assert-Eq 3 $commaExpanded.Count 'comma arg expands to 3 entries'
+Assert-Eq 'short-001' $commaExpanded[0] 'comma arg first entry'
+Assert-Eq 'short-002' $commaExpanded[1] 'comma arg second entry'
+Assert-Eq 'long-001' $commaExpanded[2] 'comma arg keeps already-separate entry'
+
+$alreadySplit = @(Expand-FlakyComparisonArgValues -Values @('strong_only'))
+Assert-Eq 1 $alreadySplit.Count 'single value stays single'
+Assert-Eq 'strong_only' $alreadySplit[0] 'single value preserved'
+
+$whitespaceTrimmed = @(Expand-FlakyComparisonArgValues -Values @(' short-001 , medium-001 '))
+Assert-Eq 'short-001' $whitespaceTrimmed[0] 'comma arg trims leading space'
+Assert-Eq 'medium-001' $whitespaceTrimmed[1] 'comma arg trims trailing space'
+
+$emptyExpanded = @(Expand-FlakyComparisonArgValues -Values @('', '  ', $null))
+Assert-Eq 0 $emptyExpanded.Count 'blank values drop out'
+
+$arrayType = @(Expand-FlakyComparisonArgValues -Values @('short-001,short-002'))
+Assert-Eq 2 $arrayType.Count 'helper emits entries, not a nested array'
+Assert-True ($arrayType[0] -is [string]) 'helper emits plain strings'
+
 Write-Host ''
-Write-Host "=== Test-RunFlakyComparison summary: pass=$pass fail=$fail ==="
-if ($fail -gt 0) { exit 1 } else { exit 0 }
+Write-Host "=== Test-RunFlakyComparison summary: pass=$pass fail=$fail ==="if ($fail -gt 0) { exit 1 } else { exit 0 }

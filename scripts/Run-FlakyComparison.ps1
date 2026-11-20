@@ -38,6 +38,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# `pwsh -File ... -CaseKeys a,b,c` binds the comma list as a single array element, which
+# previously died later as `unknown baseline case: a,b,c` (HTTP 400). Normalise both
+# invocation styles before anything else consumes the values.
+. (Join-Path $PSScriptRoot 'lib\FlakyComparisonArgs.ps1')
+$CaseKeys = @(Expand-FlakyComparisonArgValues -Values $CaseKeys)
+$Modes = @(Expand-FlakyComparisonArgValues -Values $Modes)
+if ($CaseKeys.Count -eq 0) { throw 'CaseKeys resolved to an empty list' }
+if ($Modes.Count -eq 0) { throw 'Modes resolved to an empty list' }
+
 if (-not (Test-Path -LiteralPath $ReportDirectory)) {
     New-Item -ItemType Directory -Force -Path $ReportDirectory | Out-Null
 }
