@@ -380,7 +380,8 @@ public class Main {
         if (shadow.enforceRequested()) {
             log.warn("judgment.shadow profile=enforce 无落点；按 record_only 仅写账，WorkerRouter 路由不变");
         }
-        RouterShadowHookFactory.createIfEnabled(true, shadow.router().provider(), shadow.router().path())
+        RouterShadowHookFactory.createIfEnabled(true, shadow.router().provider(), shadow.router().path(),
+                shadow.policyVersion())
             .ifPresent(hook -> {
                 router.setRouterShadowHook(hook);
                 log.info("Router shadow hook injected. profile={} policyVersion={} sink={}",

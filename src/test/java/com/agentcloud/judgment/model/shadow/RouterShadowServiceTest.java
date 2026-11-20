@@ -137,4 +137,31 @@ class RouterShadowServiceTest {
         JsonNode n = MAPPER.readTree(lines.get(0));
         assertTrue(n.get("degraded").asBoolean());
     }
+
+    @Test
+    void configuredPolicyVersionLandsInDecisionEvent(@TempDir Path tmp) throws Exception {
+        Path target = tmp.resolve("router-shadow-policyversion.jsonl");
+        DecisionEventSink sink = new JsonlDecisionEventSink(target, 4);
+        RouterShadowService service = new RouterShadowService(
+                new HeuristicRouterProvider(), sink, null, "patrol-20261120-v1");
+
+        assertEquals("patrol-20261120-v1", service.policyVersion());
+
+        service.observe("run-pv", "turn-1", "task-P", "worker:codex", Map.of("difficulty", 0.5));
+
+        JsonNode n = MAPPER.readTree(Files.readAllLines(target).get(0));
+        assertEquals("patrol-20261120-v1", n.get("policyVersion").asText(),
+                "harness-config.yml 的 policy_version 必须落到 DecisionEvent.policyVersion");
+        assertEquals("shadow-default", n.get("thresholdSetId").asText(),
+                "thresholdSetId 仍由 Provider decision 决定");
+    }
+
+    @Test
+    void blankPolicyVersionFallsBackToShadowDefault(@TempDir Path tmp) {
+        DecisionEventSink sink = new JsonlDecisionEventSink(tmp.resolve("router-shadow-blank.jsonl"));
+        RouterShadowService service = new RouterShadowService(
+                new HeuristicRouterProvider(), sink, "heuristic-shadow-v1", "  ");
+
+        assertEquals("shadow-default", service.policyVersion());
+    }
 }

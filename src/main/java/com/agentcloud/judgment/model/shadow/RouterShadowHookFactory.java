@@ -26,15 +26,20 @@ public final class RouterShadowHookFactory {
     }
 
     public static Optional<RouterShadowHook> createIfEnabled(boolean enabled, String provider, Path sinkPath) {
+        return createIfEnabled(enabled, provider, sinkPath, null);
+    }
+
+    public static Optional<RouterShadowHook> createIfEnabled(boolean enabled, String provider, Path sinkPath,
+                                                             String policyVersion) {
         if (!enabled) {
             return Optional.empty();
         }
         Path target = sinkPath == null ? Path.of("logs", "judgment", "router-shadow.jsonl") : sinkPath;
         RouterProvider resolved = resolveProvider(provider);
         DecisionEventSink sink = new JsonlDecisionEventSink(target);
-        RouterShadowService service = new RouterShadowService(resolved, sink);
-        log.info("judgment.shadow router hook enabled. provider={} sink={} mode=record_only",
-            resolved.providerRef(), target.toAbsolutePath());
+        RouterShadowService service = new RouterShadowService(resolved, sink, resolved.providerRef(), policyVersion);
+        log.info("judgment.shadow router hook enabled. provider={} sink={} mode=record_only policyVersion={}",
+            resolved.providerRef(), target.toAbsolutePath(), service.policyVersion());
         return Optional.of(new RouterShadowHookAdapter(service));
     }
 

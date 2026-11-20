@@ -18,17 +18,32 @@ public class RouterShadowService {
     private final RouterProvider provider;
     private final DecisionEventSink sink;
     private final String modelRef;
+    private final String policyVersion;
 
     public RouterShadowService(RouterProvider provider, DecisionEventSink sink) {
         this(provider, sink, provider.providerRef());
     }
 
     public RouterShadowService(RouterProvider provider, DecisionEventSink sink, String modelRef) {
+        this(provider, sink, modelRef, null);
+    }
+
+    /**
+     * @param policyVersion harness-config.yml {@code judgment.shadow.policy_version}，写入 DecisionEvent.policyVersion，
+     *                      供 M4 Calibration 按策略版本分组；空值回落 {@code shadow-default}。
+     */
+    public RouterShadowService(RouterProvider provider, DecisionEventSink sink, String modelRef, String policyVersion) {
         if (provider == null) throw new IllegalArgumentException("provider required");
         if (sink == null) throw new IllegalArgumentException("sink required");
         this.provider = provider;
         this.sink = sink;
         this.modelRef = modelRef == null || modelRef.isBlank() ? "unknown" : modelRef;
+        this.policyVersion = policyVersion == null || policyVersion.isBlank() ? "shadow-default" : policyVersion;
+    }
+
+    /** 当前写入 DecisionEvent 的策略版本标记。 */
+    public String policyVersion() {
+        return policyVersion;
     }
 
     /**
@@ -89,7 +104,7 @@ public class RouterShadowService {
                 taskId,
                 subjectRef,
                 "router",
-                decision.thresholdSetId(),
+                policyVersion,
                 decision.thresholdSetId(),
                 decision.scores(),
                 decision.confidence(),
