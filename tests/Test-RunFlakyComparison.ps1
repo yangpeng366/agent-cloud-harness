@@ -137,6 +137,27 @@ Assert-Eq 1 $fieldSummary.phase_counts['phase_1_stub'] 'field report phase_count
 Assert-Eq 800 $fieldSummary.duration_p50_ms 'field report duration_p50_ms'
 Assert-Eq 1200 $fieldSummary.duration_p95_ms 'field report duration_p95_ms'
 
+# The structured leg has no baseline phases; a blank phase must not surface as the
+# misleading 'unknown' bucket in phase_counts (it made a healthy structured run look
+# like unclassified data).
+$structuredReport = [pscustomobject]@{
+    terminal_run_count = 3
+    task_reports = @([pscustomobject]@{ task_id = 't3' }, [pscustomobject]@{ task_id = 't4' }, [pscustomobject]@{ task_id = 't5' })
+    ui_assertion_reports = @(
+        [pscustomobject]@{ status = 'PASS'; assertion_mode = 'openeyes_structured'; duration_ms = 3017 }
+        [pscustomobject]@{ status = 'PASS'; assertion_mode = 'openeyes_structured'; duration_ms = 2918 }
+        [pscustomobject]@{ status = 'PASS'; assertion_mode = 'openeyes_structured'; duration_ms = 2805 }
+    )
+}
+$structuredSummary = Get-FlakyComparisonSummary -Report $structuredReport -Mode 'openeyes_structured'
+Assert-Eq 3 $structuredSummary.pass_count 'structured leg pass_count'
+Assert-Eq 1.0 $structuredSummary.pass_rate 'structured leg pass_rate'
+Assert-Eq 3 $structuredSummary.phase_counts['structured_assertion'] 'structured leg labels phase by assertion mode'
+Assert-True (-not $structuredSummary.phase_counts.Contains('unknown')) 'structured leg has no unknown phase bucket'
+Assert-Eq 2918 $structuredSummary.duration_p50_ms 'structured leg duration_p50_ms'
+Assert-Eq 3017 $structuredSummary.duration_p95_ms 'structured leg duration_p95_ms'
+Assert-Eq 0 $structuredSummary.comparable_count 'structured leg has no pixel-comparable samples'
+
 # Regression: `pwsh -File ... -CaseKeys short-001,short-002` binds the whole comma list
 # as one [string[]] element. Without normalisation the harness rejects it as
 # `unknown baseline case: short-001,short-002` (HTTP 400) after the run name is spent.

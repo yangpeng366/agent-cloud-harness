@@ -23,7 +23,16 @@ function Get-FlakyComparisonSummary {
     # case-insensitive, so `foreach ($report in $reports)` would overwrite the
     # parameter and zero out every non-assertion field below.
     foreach ($assertionReport in $reports) {
-        $phaseKey = if ([string]::IsNullOrWhiteSpace([string]$assertionReport.phase)) { 'unknown' } else { [string]$assertionReport.phase }
+        # The structured leg has no baseline phases at all, so a blank phase is not a
+        # data gap there -- label it by assertion mode instead of the misleading
+        # 'unknown' bucket that previously made the structured column look broken.
+        $phaseKey = if (-not [string]::IsNullOrWhiteSpace([string]$assertionReport.phase)) {
+            [string]$assertionReport.phase
+        } elseif (-not [string]::IsNullOrWhiteSpace([string]$assertionReport.assertion_mode)) {
+            'structured_assertion'
+        } else {
+            'unknown'
+        }
         if (-not $phaseCounts.Contains($phaseKey)) { $phaseCounts[$phaseKey] = 0 }
         $phaseCounts[$phaseKey] = $phaseCounts[$phaseKey] + 1
     }
