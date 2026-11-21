@@ -51,6 +51,7 @@
 - `dialogue/`: `README.md + PROGRESS.md`
 - `evaluation/`: `README.md + PROGRESS.md`
 - `release/`: `README-only`
+- `INITIATIVES/`: `README-only`
 - 已启用 `PROGRESS.md` 的主题：`README.md -> PROGRESS.md -> 当前主线文档`
 - `README-only` 主题：`README.md -> docs/` 根目录主线文档
 

@@ -22,6 +22,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DocsStructureContractTest {
 
     private static final Set<String> ALLOWED_TOPIC_FILES = Set.of("README.md", "PROGRESS.md");
+
+    /**
+     * INITIATIVES 是按立项卡索引的专题：顶层除 README.md 外允许 INDEX.md 与 FEAT-* / HW-* / Jev-* 单卡。
+     * 其他专题仍只允许 README.md / PROGRESS.md，避免“轻量工作区”约束被普遍放松。
+     */
+    private static boolean isAllowedTopicFile(String topicName, String fileName) {
+        if (ALLOWED_TOPIC_FILES.contains(fileName)) {
+            return true;
+        }
+        if (!"INITIATIVES".equals(topicName)) {
+            return false;
+        }
+        return fileName.matches("INDEX\\.md")
+            || fileName.matches("FEAT-[A-Za-z0-9._-]+\\.md")
+            || fileName.matches("HW-[A-Za-z0-9._-]+\\.md")
+            || fileName.matches("Jev-[A-Za-z0-9._-]+\\.md");
+    }
     private static final Set<String> ALLOWED_TOPIC_DIRS = Set.of("tasks", "runs", "archive");
     private static final List<String> ROOT_ENTRY_FILES = List.of("WAKE.md", "AGENTS.md");
     private static final List<String> REQUIRED_TOPIC_HEADINGS = List.of(
@@ -97,7 +114,7 @@ class DocsStructureContractTest {
                         if (!ALLOWED_TOPIC_DIRS.contains(name)) {
                             unexpectedDirs.add(name);
                         }
-                    } else if (!ALLOWED_TOPIC_FILES.contains(name)) {
+                    } else if (!isAllowedTopicFile(topicName, name)) {
                         unexpectedFiles.add(name);
                     }
                 });

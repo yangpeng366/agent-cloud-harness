@@ -29,6 +29,7 @@
 - `dialogue/`: `README.md + PROGRESS.md`
 - `evaluation/`: `README.md + PROGRESS.md`
 - `release/`: `README-only`
+- `INITIATIVES/`: `README-only`
 
 当前默认阅读路径：
 

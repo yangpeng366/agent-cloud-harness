@@ -30,10 +30,10 @@ class DocsIndexAuditScriptTest {
 
         assertTrue(summary.path("passed").asBoolean(), "docs audit summary must report passed=true");
         assertEquals(0, summary.path("violation_count").asInt(), "docs audit must not report violations");
-        assertEquals(6, summary.path("topic_count").asInt(), "docs audit must project the current topic count");
+        assertEquals(7, summary.path("topic_count").asInt(), "docs audit must project the current topic count");
         assertEquals(5, summary.path("workspace_enabled_topics").asInt(),
             "docs audit must project current upgraded workspace count");
-        assertEquals(1, summary.path("readme_only_topics").asInt(),
+        assertEquals(2, summary.path("readme_only_topics").asInt(),
             "docs audit must keep the remaining README-only topic visible");
         assertEquals(5, summary.path("subtopic_routing_coverage_count").asInt(),
             "docs audit must keep the business-topic subtopic-routing sections visible");
@@ -45,7 +45,7 @@ class DocsIndexAuditScriptTest {
             "docs audit must keep the business-topic stable-baseline sections visible");
         assertEquals(5, summary.path("stable_baseline_narrative_coverage_count").asInt(),
             "docs audit must keep the business-topic still-true baseline narratives visible");
-        assertEquals(6, summary.path("topic_readme_order_coverage_count").asInt(),
+        assertEquals(7, summary.path("topic_readme_order_coverage_count").asInt(),
             "docs audit must keep the stable topic README heading order visible for every topic");
         assertEquals(5, summary.path("progress_section_order_coverage_count").asInt(),
             "docs audit must keep the stable PROGRESS heading order visible for every upgraded topic");
@@ -59,11 +59,11 @@ class DocsIndexAuditScriptTest {
             "docs audit must keep runs/README.md inside the default reading order for every runs-enabled topic");
         assertEquals(4, summary.path("runs_readme_section_coverage_count").asInt(),
             "docs audit must keep the minimal runs/README.md structure visible for every runs-enabled topic");
-        assertEquals(1, summary.path("readme_only_workspace_judgment_coverage_count").asInt(),
+        assertEquals(2, summary.path("readme_only_workspace_judgment_coverage_count").asInt(),
             "docs audit must keep the README-only workspace-judgment contract visible");
-        assertEquals(1, summary.path("readme_only_upgrade_gate_coverage_count").asInt(),
+        assertEquals(2, summary.path("readme_only_upgrade_gate_coverage_count").asInt(),
             "docs audit must keep the README-only upgrade-gate contract visible");
-        assertEquals(1, summary.path("readme_only_reading_order_coverage_count").asInt(),
+        assertEquals(2, summary.path("readme_only_reading_order_coverage_count").asInt(),
             "docs audit must keep the README-only reading-order contract visible");
         assertEquals(5, payload.path("topic_states").findValuesAsText("progress").stream().filter("true"::equals).count(),
             "docs audit payload must keep the current PROGRESS-enabled topic count visible");
@@ -125,9 +125,9 @@ class DocsIndexAuditScriptTest {
             "AGENTS.md must not duplicate the source-tree baseline");
         assertTrue(summary.path("agents_api_cheatsheet_absent").asBoolean(),
             "AGENTS.md must not duplicate the API contracts baseline");
-        assertEquals(6, summary.path("wake_workspace_row_coverage_count").asInt(),
+        assertEquals(7, summary.path("wake_workspace_row_coverage_count").asInt(),
             "WAKE.md workspace state block must cover every topic");
-        assertEquals(6, summary.path("agents_workspace_row_coverage_count").asInt(),
+        assertEquals(7, summary.path("agents_workspace_row_coverage_count").asInt(),
             "AGENTS.md workspace state block must cover every topic");
         assertTrue(summary.path("wake_progress_reading_order_present").asBoolean(),
             "WAKE.md must keep the PROGRESS reading path");

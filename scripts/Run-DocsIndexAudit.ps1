@@ -269,6 +269,36 @@ $agentsContent = Read-Utf8Text -Path $agentsPath
 $topicDirs = @(Get-ChildItem -LiteralPath $docsRootPath -Directory | Sort-Object Name)
 $allowedTopicFiles = @("README.md", "PROGRESS.md")
 $allowedTopicDirs = @("tasks", "runs", "archive")
+# INITIATIVES 是按立项卡索引的专题：顶层除 README.md 外允许 INDEX.md 与 FEAT-*/HW-*/Jev-* 单卡；
+# 其余专题仍只允许 README.md / PROGRESS.md，保持“轻量工作区”约束不被普遍放松。
+$allowedTopicFilePatternsByTopic = @{
+    "INITIATIVES" = @(
+        '^INDEX\.md$',
+        '^FEAT-[A-Za-z0-9._-]+\.md$',
+        '^HW-[A-Za-z0-9._-]+\.md$',
+        '^Jev-[A-Za-z0-9._-]+\.md$'
+    )
+}
+
+function Test-AllowedTopicFile {
+    param(
+        [string]$TopicName,
+        [string]$FileName
+    )
+    if ($FileName -in $allowedTopicFiles) {
+        return $true
+    }
+    $patterns = $allowedTopicFilePatternsByTopic[$TopicName]
+    if ($null -eq $patterns) {
+        return $false
+    }
+    foreach ($pattern in $patterns) {
+        if ($FileName -match $pattern) {
+            return $true
+        }
+    }
+    return $false
+}
 $signalsHeading = New-UnicodeString @(0x547d, 0x4e2d, 0x4fe1, 0x53f7)
 $readingOrderHeading = New-UnicodeString @(0x6700, 0x5c0f, 0x9605, 0x8bfb, 0x987a, 0x5e8f)
 $currentLineHeading = New-UnicodeString @(0x5f53, 0x524d, 0x4e3b, 0x7ebf, 0x6587, 0x6863)
@@ -532,7 +562,7 @@ foreach ($topicDir in $topicDirs) {
     $topLevelItems = @(Get-ChildItem -LiteralPath $topicPath -Force)
     $unexpectedFiles = @(
         $topLevelItems |
-            Where-Object { -not $_.PSIsContainer -and $_.Name -notin $allowedTopicFiles } |
+            Where-Object { -not $_.PSIsContainer -and -not (Test-AllowedTopicFile -TopicName $topicName -FileName $_.Name) } |
             Sort-Object Name |
             Select-Object -ExpandProperty Name
     )

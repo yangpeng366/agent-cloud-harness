@@ -49,3 +49,15 @@
 
 - 立项卡的「目标 / 范围 / 判据 / 遗留」四段结构今天仍然成立
 - `INDEX.md` 作为唯一入口清单的约束今天仍然成立
+
+## 当前工作区判断
+
+- 本专题保持 README-only：只保留 `README.md` 与立项卡（`INDEX.md`、`FEAT-*`、`HW-*`、`Jev-*`），不建 `PROGRESS.md`、`tasks/`、`runs/`、`archive/`
+- 默认阅读顺序：`README.md -> docs/` 根目录主线文档；专题内先 `README.md -> INDEX.md -> 单卡`
+- 立项卡即最小工作单元，条目状态集中在 `INDEX.md`，不另开进度文件
+
+## 何时升级
+
+- 单卡继续增多、需要按状态或负责人追踪时，升级为 `PROGRESS.md` + `tasks/`
+- 出现需要留存 dated 证据的立项（复现日志、对比实验）时，再补 `runs/`
+- 被取代的历史卡达到需要归档的规模时，补 `archive/`

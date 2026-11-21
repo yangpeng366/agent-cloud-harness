@@ -114,6 +114,7 @@
 | `dialogue/` | 已启用 `PROGRESS.md` | `dialogue/README.md -> dialogue/PROGRESS.md -> 当前子线文档 -> dialogue/runs/README.md` | 如并行子线继续增多时补 `tasks/`；若 acceptance/precheck evidence 继续密集增长，再在 `runs/` 下补更细分组 |
 | `evaluation/` | 已启用 `PROGRESS.md` | `evaluation/README.md -> evaluation/PROGRESS.md -> 当前子线文档 -> evaluation/runs/README.md` | 如子线继续增多时补 `tasks/`；若 dated execution evidence 继续密集增长，再在 `runs/` 下补更细分组 |
 | `release/` | 仅 `README.md` | `release/README.md -> docs/` 根目录主线文档 | 新一轮 release 周期开始，且连续短进度或多份新 dated precheck/dry-run 证据需要在主题内集中追踪时 |
+| `INITIATIVES/` | 仅 `README.md` | `INITIATIVES/README.md -> INITIATIVES/INDEX.md -> 单卡（FEAT-* / HW-* / Jev-*）` | 单卡继续增多、需要按状态或负责人追踪时，升级 `PROGRESS.md` + `tasks/` |
 | `docs/` | 仅 `README.md` | `docs/README.md -> docs/<topic>/README.md -> DOCS_GOVERNANCE.md -> PROGRESS.md / STATE.md / DECISIONS.md` | 当 `docs/` 根索引本身需要独立活跃进度追踪时 |
 
 更多工作区升级规则、命名合同和历史例外口径，统一见 `DOCS_GOVERNANCE.md`。
