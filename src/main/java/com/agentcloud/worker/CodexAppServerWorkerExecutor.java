@@ -97,8 +97,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 .directory(cwd == null || cwd.isBlank() ? null : Path.of(cwd).toFile())
                 .redirectErrorStream(true);
             process = builder.start();
-            // Close stdin immediately — prompt is passed as CLI argument, no stdin needed
-            process.getOutputStream().close();
+            // NOTE: do NOT close stdin here. In app-server stdio mode stdin IS the JSON-RPC
+            // channel; closing it before runSession() made the first write fail with
+            // "Stream Closed" (codex-cli 0.169.0, see docs/tiered-degradation-config.md).
+            // runSession() owns the stream via try-with-resources and closes it on exit.
             output = runSession(process, plan, runFiles, partialOutputThreshold);
             if (process.waitFor(APP_SERVER_SHUTDOWN_GRACE_MS, TimeUnit.MILLISECONDS)) {
                 output = output.withExitCode(process.exitValue());
@@ -144,6 +146,10 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         }
         metadata.put("provider_output_parser", output.protocol());
         metadata.put("tool_invocation_count", output.toolInvocationCount());
+        if (!output.tokenUsage().isEmpty()) {
+            metadata.put("provider_token_usage", output.tokenUsage());
+            metadata.put("provider_total_tokens", output.tokenUsage().getOrDefault("total_tokens", 0L));
+        }
         if (output.threadId() != null && !output.threadId().isBlank()) {
             metadata.put("provider_session_id", output.threadId());
             metadata.put("provider_thread_id", output.threadId());
@@ -1307,6 +1313,7 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
         private String protocol = "codex_json_rpc";
         private String timeoutKind;
         private String abortReason;
+        private Map<String, Object> tokenUsage = Map.of();
         private final int partialOutputThreshold;
         private long lastActivityAtMs = System.currentTimeMillis();
 
@@ -1514,6 +1521,20 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                         turnStatus = "completed";
                     }
                 }
+                // token 账：codex app-server 在每轮里推送累计 usage，这里取最后一次快照落到 metadata，
+                // 供 M1（单位有效成本）/M5（判定开销占比）度量。
+                case "thread/tokenUsage/updated" -> {
+                    JsonNode total = params.path("tokenUsage").path("total");
+                    if (!total.isMissingNode() && !total.isNull() && total.isObject()) {
+                        LinkedHashMap<String, Object> usage = new LinkedHashMap<>();
+                        usage.put("total_tokens", total.path("totalTokens").asLong(0L));
+                        usage.put("input_tokens", total.path("inputTokens").asLong(0L));
+                        usage.put("cached_input_tokens", total.path("cachedInputTokens").asLong(0L));
+                        usage.put("output_tokens", total.path("outputTokens").asLong(0L));
+                        usage.put("reasoning_output_tokens", total.path("reasoningOutputTokens").asLong(0L));
+                        tokenUsage = usage;
+                    }
+                }
                 case "error" -> {
                     boolean willRetry = params.path("willRetry").asBoolean(false);
                     String message = firstNonBlank(nestedText(params, "error", "message"), text(params, "message"));
@@ -1690,7 +1711,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                 abortReason,
                 toolInvocationCount,
                 List.copyOf(toolInvocationIds),
-                List.copyOf(protocolTrace)
+                List.copyOf(protocolTrace),
+                Map.copyOf(tokenUsage)
             );
         }
 
@@ -1830,7 +1852,8 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
                                       String abortReason,
                                       int toolInvocationCount,
                                       List<String> toolInvocationIds,
-                                      List<String> protocolTrace) {
+                                      List<String> protocolTrace,
+                                      Map<String, Object> tokenUsage) {
         private CodexSessionOutput {
             if (status == null || status.isBlank()) status = "completed";
             if (outputText == null) outputText = "";
@@ -1838,12 +1861,13 @@ public class CodexAppServerWorkerExecutor implements WorkerExecutor {
             if (turnStatus == null || turnStatus.isBlank()) turnStatus = status;
             if (toolInvocationIds == null) toolInvocationIds = List.of();
             if (protocolTrace == null) protocolTrace = List.of();
+            if (tokenUsage == null) tokenUsage = Map.of();
         }
 
         private CodexSessionOutput withExitCode(int value) {
             return new CodexSessionOutput(
                 status, outputText, errorText, threadId, value, protocol, turnStatus,
-                timeoutKind, abortReason, toolInvocationCount, toolInvocationIds, protocolTrace
+                timeoutKind, abortReason, toolInvocationCount, toolInvocationIds, protocolTrace, tokenUsage
             );
         }
     }

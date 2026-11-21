@@ -232,6 +232,39 @@ class CodexAppServerWorkerExecutorTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void appServerRecordsTokenUsageLedgerFromUsageNotification() {
+        String propertyKey = "agentcloud.providers.codex.path";
+        String runDirKey = "agentcloud.provider_runs.dir";
+        String modeKey = "agentcloud.providers.codex.execution_mode";
+        Map<String, String> originals = snapshotProperties(propertyKey, runDirKey, modeKey);
+        try {
+            Path cli = fakeTokenUsageCodexAppServerCli();
+            System.setProperty(propertyKey, cli.toString());
+            System.setProperty(runDirKey, tempDir.resolve("token-usage-codex-runs").toString());
+            System.clearProperty(modeKey);
+            AgentProviderRegistry registry = new AgentProviderRegistry();
+            BuiltinAgentProviders.defaults().forEach(registry::register);
+            CodexAppServerWorkerExecutor executor = new CodexAppServerWorkerExecutor(registry, null);
+            WorkerExecutionResult result = executor.executeOneRound(runtimeContext("codex"), "codex");
+            assertEquals("completed", result.executionStatus());
+            assertEquals(1234L, ((Number) result.metadata().get("provider_total_tokens")).longValue());
+            Map<String, Object> usage = (Map<String, Object>) result.metadata().get("provider_token_usage");
+            assertEquals(1234L, ((Number) usage.get("total_tokens")).longValue());
+            assertEquals(1000L, ((Number) usage.get("input_tokens")).longValue());
+            assertEquals(200L, ((Number) usage.get("cached_input_tokens")).longValue());
+            assertEquals(234L, ((Number) usage.get("output_tokens")).longValue());
+            assertEquals(34L, ((Number) usage.get("reasoning_output_tokens")).longValue());
+            assertTrue(result.metadata().get("provider_protocol_trace").toString()
+                .contains("thread/tokenUsage/updated"));
+        } catch (Exception e) {
+            throw new AssertionError(e);
+        } finally {
+            restoreProperties(originals);
+        }
+    }
+
+    @Test
     void appServerErrorAfterPartialOutputReturnsPartialTimeoutAndKeepsOutput() throws Exception {
         String propertyKey = "agentcloud.providers.codex.path";
         String runDirKey = "agentcloud.provider_runs.dir";
@@ -1019,6 +1052,28 @@ class CodexAppServerWorkerExecutorTest {
             exit /b 0
             """;
         return Files.writeString(tempDir.resolve("codex-sticky-app-server.cmd"), body);
+    }
+
+    private Path fakeTokenUsageCodexAppServerCli() throws Exception {
+        // 形状取自 codex app-server 自带协议 schema（ThreadTokenUsageUpdatedNotification）：
+        // params.tokenUsage.total.{totalTokens,inputTokens,cachedInputTokens,outputTokens,reasoningOutputTokens}
+        String body = """
+            @echo off
+            setlocal EnableExtensions
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":1,"result":{}}
+            set /p LINE=
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":2,"result":{"threadId":"thread_token_usage"}}
+            set /p LINE=
+            echo {"jsonrpc":"2.0","id":3,"result":{"status":"running"}}
+            echo {"jsonrpc":"2.0","method":"thread/tokenUsage/updated","params":{"threadId":"thread_token_usage","turnId":"turn_token_usage","tokenUsage":{"last":{"totalTokens":234,"inputTokens":200,"cachedInputTokens":0,"outputTokens":34,"reasoningOutputTokens":34},"total":{"totalTokens":1234,"inputTokens":1000,"cachedInputTokens":200,"outputTokens":234,"reasoningOutputTokens":34},"modelContextWindow":272000}}}
+            echo {"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"agentMessage","text":"token usage ledger result","phase":"final_answer"}}}
+            echo {"jsonrpc":"2.0","method":"turn/completed","params":{"turn":{"status":"completed"}}}
+            ping -n 8 127.0.0.1 > nul
+            exit /b 0
+            """;
+        return Files.writeString(tempDir.resolve("codex-token-usage-app-server.cmd"), body);
     }
 
     private Path fakePartialThenRpcErrorCodexAppServerCli() throws Exception {
