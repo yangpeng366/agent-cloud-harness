@@ -63,8 +63,43 @@ M4 Calibration 需要按策略版本分组，这条不修就只能看到默认�
 修复点：`RouterShadowService` 增加 policyVersion 维度（空值回落 `shadow-default`）→ `RouterShadowHookFactory.createIfEnabled(..., policyVersion)` →
 `Main.wireRouterShadowHook` 透传 `JudgmentShadowConfig.policyVersion()`。修复后重跑，`policyVersion=patrol-20261120-v1` 落账。
 
+### 已修缺陷①：`failed to start codex app-server: Stream Closed`（2026-11-22）
+
+**根因**：`CodexAppServerWorkerExecutor.executeOneRound` 在 `builder.start()` 之后立即
+`process.getOutputStream().close()`（注释写的是「prompt 走 CLI 参数，不需要 stdin」，但那是 exec 模式的说法）。
+app-server stdio 模式下 stdin 就是 JSON-RPC 通道，`runSession()` 随后要在这个已被关闭的流上写 `initialize`，
+第一次写入即抛 `IOException: Stream closed`，因此每次都在 6ms 内失败、`events.jsonl` 只有一行 `harness_send`。
+
+**修复**：删掉这行提前关闭，stdin 交给 `runSession()` 的 try-with-resources 持有，会话结束时随 Writer 关闭（发 EOF，app-server 正常退出）。
+`exec_json` 路径本来就是 `redirectInput(NUL)`，不受影响。
+
+**实跑复验**（`.tmp/shadow-record-only-run`，port 18099，record_only 注入）：
+
+| 观测点 | 修复前 | 修复后 |
+|---|---|---|
+| `provider_error` | `failed to start codex app-server: Stream Closed` | 空 |
+| `provider_turn_status` / `exit_code` | 无 / 无 | `completed` / `0` |
+| `duration_ms` | 6 | 37018 |
+| `events.jsonl` | 258 B（只有 initialize 发送行） | 208 KB（完整 thread/turn 事件流） |
+| `last_message.md` | 0 B | 12951 B 真实模型输出 |
+| `provider_session_id` | 无 | `01a20030-…`（thread 建立成功） |
+
+### token 账：`provider_token_usage`（2026-11-22 新增）
+
+codex app-server 在每轮里推送 `thread/tokenUsage/updated`（累计 usage 快照）。`JsonRpcSession.handleNotification`
+现在解析 `params.tokenUsage.total`，随运行元数据落 `metadata.json`：
+
+- `provider_token_usage.total_tokens / input_tokens / cached_input_tokens / output_tokens / reasoning_output_tokens`
+- `provider_total_tokens`（扁平字段，便于直接取数）
+
+数据来源只取 app-server 自报的累计快照（最后一次覆盖），不做本地估算，因此可直接用于 M1 单位有效成本与 M5 判定开销占比的分子。
+回归测试：`CodexAppServerWorkerExecutorTest#appServerRecordsTokenUsageLedgerFromUsageNotification`（fake app-server 按
+`ThreadTokenUsageUpdatedNotification` 形状回放，断言 1234/1000/200/234/34 全套字段与 `protocol_trace` 含该方法）。
+
 ### 未完成项（blocker）
 
-- 两轮真实执行都在 provider 启动处失败：`failed to start codex app-server: Stream Closed`（`codex-cli 0.169.0` 在 PATH 上，非缺 CLI）。
-  旁路账本照常落账，但**没有真实 LLM 产出**，M1 的 token 基线与 M5 判定开销占比仍无法测量，需 provider/app-server 通道修复后补一次成功轮。
+- M5 判定开销占比尚未实测：需要同一批 record_only 轮次里同时有「worker token 账」与「judgment/review LLM token 账」，
+  judgment 侧目前只在 INFO 日志里打 `judgeExecution/judgeCompletion`，还没把 review 通道的 usage 写进同一账本。
+- 本机 `ccx` 网关当前没有支持 `gpt-4o-mini` 的 chat 渠道（503 `没有 Chat 渠道支持模型 "gpt-4o-mini"`），
+  judgment 的 review 调用拿不到真实响应；M5 测量前需要先给 ccx 配一个 review 模型渠道或改 `review_model`。
 
