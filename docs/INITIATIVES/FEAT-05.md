@@ -54,9 +54,12 @@
 
 2026-11-21（auto-patrol，全量采集第 2/3 轮）：medium 桶（medium-001..003 × strong_only）seed + compare 两遍落地，harness `localhost:18082` + `scripts/Start-OpenEyesBaselineTarget.ps1 -LifetimeSeconds 1800`（8 具名控件目标窗口）。seed 遍 stamp `20261121-142307`：diff 三条全部 `phase_2_seeded_baseline`（comparable_count=0，属预期 seeding），duration_p50=1998ms / p95=2612ms；structured 3/3 PASS，p50=2961ms / p95=3084ms，pass_rate_lift=0。compare 遍 stamp `20261121-142828`：diff 三条全部 `phase_2_5_real_comparison`，comparable_count=3 / comparable_pass_rate=1.0 / similarity 全为 1，p50=2359ms / p95=2519ms；structured 3/3 PASS（逐条 3017 / 2918 / 2805ms），p50=2918ms / p95=3017ms。medium 桶 comparable 样本 3 条已凑够，两腿 pass_rate 均 1.0、lift=0，结构化腿目前无 flaky 改善可测（目标窗口确定性布局，像素腿也未 flake）。同轮修一处口径失真：structured 报告不含 `phase` 字段，聚合时全落进 `unknown` 桶、让健康的结构化腿看起来像数据缺失；`FlakyComparisonSummary.ps1` 改为有 `assertion_mode` 时归为 `structured_assertion`（无 mode 仍 `unknown`），合同测试 42/42 通过，并用已落盘报告复算验证 p50/p95 与 comparable 数值不变（structured p50=2918 / p95=3017，diff comparable=3 / p50=2359 / p95=2519）。剩余：long 桶 seed + compare 两遍。
 
+2026-11-22（auto-patrol，全量采集第 3/3 轮·long 桶未完成）：long 桶 seed 遍首次被两个不同问题挡住，均已在仓内留痕。① `Run-FlakyComparison.ps1` 不暴露 `RequestTimeoutSec`，而 baseline smoke 的 `/continue` POST 默认 30s 客户端超时：cold harness + worker readiness 探测超时时整条腿以 `The request was canceled due to the configured HttpClient.Timeout of 30 seconds elapsing` 直接失败（首跑 stamp `20261122-000100` 两条腿均 exit=1）。落地：新增 `-RequestTimeoutSec`（默认 30，保持原行为）并转发给 diff/structured 两条腿，`tests/Test-RunFlakyComparison.ps1` 42/42 通过。② 提高超时后重跑 seed（stamp `20261122-002053`）在 1750s 内仍跑不完 long 桶：任务元数据实测每个 long case 走「codex 执行失败 → same_worker_retry → auto_handoff」完整重试链，单 case ≈5–6 分钟（`long-001` 08:26:39 落 baseline PNG 20802B；`long-002` 停 `waiting_human`/`worker_budget_exhausted`；`long-003` 仍 `active`）。根因是 provider CCX `127.0.0.1:3688` 现可用但拒 `gpt-4o-mini`：`503 没有 Chat 渠道支持模型 "gpt-4o-mini"`，任务只能耗尽重试预算后落 human gate。结论：long 桶必须按「单腿/单遍」拆轮，或先修 LLM 模型口径。
+
 ## blocker
 
-(无)
+- **medium** long 桶 flaky 采集：每个 long case 真实 worker 重试链 ≈5–6 分钟，3 case × 2 mode × 2 遍无法压进单轮 30 分钟预算；需拆成 seed / compare 两轮，且 `-TaskPollTimeoutSec`、`-RequestTimeoutSec` 收紧（建议 150 / 90）。
+- **low** provider CCX `127.0.0.1:3688` 返回 `503 没有 Chat 渠道支持模型 "gpt-4o-mini"`，所有 real-worker 任务只能落 `waiting_human`；不影响 UI assertion 两腿（diff/structured 都照常产出报告）。
 
 ## sign-off checklist
 

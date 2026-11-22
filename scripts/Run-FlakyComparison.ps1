@@ -23,6 +23,10 @@ param(
     [string]$BaseUrl = 'http://localhost:8080',
     [int]$TaskPollTimeoutSec = 240,
     [int]$TaskPollIntervalSec = 5,
+    # The baseline smoke's /continue POST is synchronous on the server side and can
+    # exceed its 30s default while worker readiness probes time out. Forward a
+    # caller-tunable ceiling instead of letting the leg die with a client timeout.
+    [int]$RequestTimeoutSec = 30,
     [string]$ReportDirectory = '.tmp\flaky-comparison',
     [string]$UiAssertionAppTitleContains = 'ACH-OpenEyes-Baseline-Target',
     [int]$MinimumTerminalRuns = 1,
@@ -110,6 +114,7 @@ $diffParameters = @{
     BaseUrl                              = $BaseUrl
     TaskPollTimeoutSec                   = $TaskPollTimeoutSec
     TaskPollIntervalSec                  = $TaskPollIntervalSec
+    RequestTimeoutSec                    = $RequestTimeoutSec
     UiAssertionMode                      = 'screenshot_diff'
     UiAssertionAppTitleContains          = $UiAssertionAppTitleContains
     UiAssertionBaselineDirectory         = $BaselineDirectory
@@ -125,6 +130,7 @@ $structuredParameters = @{
     BaseUrl                              = $BaseUrl
     TaskPollTimeoutSec                   = $TaskPollTimeoutSec
     TaskPollIntervalSec                  = $TaskPollIntervalSec
+    RequestTimeoutSec                    = $RequestTimeoutSec
     UiAssertionMode                      = 'openeyes_structured'
     UiAssertionAppTitleContains          = $UiAssertionAppTitleContains
     ExperimentName                       = $structuredExperiment
