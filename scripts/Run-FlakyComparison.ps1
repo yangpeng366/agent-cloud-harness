@@ -33,6 +33,9 @@ param(
     [int]$MinimumEvaluatedRuns = 1,
     [string]$BaselineDirectory = '.tmp\openeyes-ui-assertion\baseline-png',
     [string]$CurrentDirectory = '.tmp\openeyes-ui-assertion\current-png',
+    # Isolated checkout for the real-worker tasks. Forwarded to both legs so the
+    # baseline tasks edit a disposable git worktree instead of the live worktree.
+    [string]$WorkspaceRoot = '',
     [string[]]$ExpectedElementAutomationId = @(),
     [string[]]$ExpectedElementControlType = @(),
     [string[]]$ExpectedElementNameContains = @(),
@@ -142,6 +145,10 @@ $structuredParameters = @{
 if ($ExpectedElementAutomationId.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementAutomationId = $ExpectedElementAutomationId }
 if ($ExpectedElementControlType.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementControlType = $ExpectedElementControlType }
 if ($ExpectedElementNameContains.Count -gt 0) { $structuredParameters.UiAssertionExpectedElementNameContains = $ExpectedElementNameContains }
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+    $diffParameters.WorkspaceRoot = $WorkspaceRoot
+    $structuredParameters.WorkspaceRoot = $WorkspaceRoot
+}
 
 Write-Host ''
 Write-Host "Run 1/2: screenshot_diff ..."

@@ -9,6 +9,11 @@ param(
     [int]$TaskPollTimeoutSec = 240,
     [int]$MinimumTerminalRuns = 1,
     [int]$MinimumEvaluatedRuns = 1,
+    # Baseline tasks execute real coding work; without an isolated checkout the worker
+    # edits the live worktree and destroys unrelated dirty changes. When set, this path
+    # is forwarded to task metadata as `workspace_root`, which the codex executor reads
+    # as the process cwd (see CodexAppServerWorkerExecutor.resolveWorkingDirectory).
+    [string]$WorkspaceRoot = '',
     [ValidateSet('none', 'openeyes_structured', 'screenshot_diff')]
     [string]$UiAssertionMode = 'none',
     [string]$UiAssertionScriptPath = (Join-Path $PSScriptRoot 'Run-OpenEyesUiAssertion.ps1'),
@@ -232,6 +237,25 @@ foreach ($worker in $codingWorkers) {
     }
 }
 
+$resolvedWorkspaceRoot = ''
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+    $resolvedWorkspaceRoot = if ([System.IO.Path]::IsPathRooted($WorkspaceRoot)) {
+        [System.IO.Path]::GetFullPath($WorkspaceRoot)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $WorkspaceRoot))
+    }
+    Assert-True (Test-Path -LiteralPath $resolvedWorkspaceRoot -PathType Container) "WorkspaceRoot not found: $resolvedWorkspaceRoot"
+}
+
+$runMetadata = @{
+    real_worker_smoke = $true
+    real_worker_smoke_name = 'baseline_matrix_v1_provider_backed'
+}
+if (-not [string]::IsNullOrWhiteSpace($resolvedWorkspaceRoot)) {
+    $runMetadata['workspace_root'] = $resolvedWorkspaceRoot
+}
+
 $runBody = @{
     experiment_name = $ExperimentName
     case_keys = $CaseKeys
@@ -239,10 +263,7 @@ $runBody = @{
     priority = 'high'
     source = 'eval_real_worker'
     auto_start = $false
-    metadata = @{
-        real_worker_smoke = $true
-        real_worker_smoke_name = 'baseline_matrix_v1_provider_backed'
-    }
+    metadata = $runMetadata
 }
 $runsResponse = Invoke-AgentApi -Method POST -Path '/api/v1/experiment_matrix/runs' -Body $runBody
 Assert-True ($runsResponse.success -eq $true) 'experiment matrix real worker run creation failed'
@@ -370,6 +391,7 @@ $report = [ordered]@{
     base_url = $BaseUrl
     experiment_name = $ExperimentName
     request_timeout_sec = $RequestTimeoutSec
+    workspace_root = $resolvedWorkspaceRoot
     case_keys = $CaseKeys
     modes = $Modes
     expected_run_count = $expectedRunCount

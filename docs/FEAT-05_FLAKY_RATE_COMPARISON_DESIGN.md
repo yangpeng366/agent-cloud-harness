@@ -207,3 +207,11 @@ openeyes_structured 在某些 case（高动态 UI、频繁重排）反而 false 
 4. ✅ `scripts/lib/ScreenshotDiffAssertion.ps1`：把 `Invoke-ScreenshotDiffAssertion` 从 smoke 脚本抽成可测函数；分支 `phase_2_seeded_baseline`（首跑）/ `phase_2_5_real_comparison` / `phase_0_capture_failed`（捕获失败 = FAIL，不再静默 PASS）；支持 `-CaptureSourcePng` / `-Capture` / `-NoSeed` 注入
 5. ✅ 报告新增 `baseline_key` / `case_key` / `baseline_seeded` / `capture_mode` / `duration_ms`，schema_version 仍为 1
 6. ✅ tests/Test-ScreenshotDiffAssertion.ps1 41/41 PASS；runner 共 14 套件 / 264 通过 / 0 失败
+
+### Phase 2.7: real-worker 任务隔离 worktree（workspace_root）✅ 已完成（2026-11-23）
+
+1. 问题：baseline matrix 的 real-worker 任务不是「只产一段文本」的伪任务，codex 会直接在**当前工作树**改源码。long 桶实测（stamp `20261123-075217`）`long-001` 的 provider 事件里出现 `turn/diff/updated`，改的是 `ExperimentRunService.java`——该文件本来就有其它方向的未提交改动，被同一轮任务叠加改写；同时新增未跟踪测试文件。而 UI 断言两腿（diff / structured）只需要一个确定性窗口，与工作树内容无关。
+2. 落地：`Run-BaselineMatrixRealWorkerSmoke.ps1` 新增 `-WorkspaceRoot <path>`，经 run request metadata 注入 task metadata `workspace_root`；`CodexAppServerWorkerExecutor.resolveWorkingDirectory()` 本来就按 `cwd / workspace / working_directory / workspace_root` 取子进程 cwd（服务端原有能力，**未改 Java**）。`Run-FlakyComparison.ps1 -WorkspaceRoot` 同时透传给 diff / structured 两条腿。
+3. 报告新增 `workspace_root` 字段（空表示沿用默认工作树），便于事后确认这次采集发生在哪个 checkout。
+4. 验证：`git worktree add --detach .tmp/wt-feat05-long HEAD` 后用 `-WorkspaceRoot` 跑 `short-001 / strong_only`，provider metadata `cli_cwd` 指向隔离 worktree（`duration_ms=377358`），主工作树在该时间窗内零新增改动；`tests/Test-RunFlakyComparison.ps1` 42/42 PASS。
+5. 约束：隔离 worktree 是干净 checkout（无 `target/`、`node_modules/`），若 worker 需要自检构建需先预热；long 桶单 case 实测 6 分钟量级，仍建议按「单 case / 单遍」拆轮采集。
