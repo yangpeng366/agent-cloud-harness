@@ -17,7 +17,12 @@
 
 param(
     [string]$Title = 'ACH-OpenEyes-Baseline-Target',
-    [int]$LifetimeSeconds = 0
+    [int]$LifetimeSeconds = 0,
+    # screenshot_diff captures through eyes, which grabs the window region rather than
+    # the window itself. When another app is raised over that region the capture is of
+    # the occluder and the pixel leg fails with size_mismatch / low similarity even
+    # though the target never changed. TopMost removes that whole failure class.
+    [switch]$TopMost
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,6 +103,8 @@ $results.Width = 500
 $results.Height = 200
 [void]$results.Items.Add('ready')
 $form.Controls.Add($results)
+
+if ($TopMost) { $form.TopMost = $true }
 
 if ($LifetimeSeconds -gt 0) {
     $timer = New-Object System.Windows.Forms.Timer

@@ -19,6 +19,7 @@ param(
     [int]$LifetimeSeconds = 0,
     [int]$TimeoutSec = 20,
     [string]$PidFile = '.tmp\openeyes-baseline-target.pid',
+    [switch]$TopMost,
     [switch]$Status,
     [switch]$Stop
 )
@@ -89,6 +90,7 @@ $arguments = @(
     '-Title', "`"$Title`""
     '-LifetimeSeconds', $LifetimeSeconds
 )
+if ($TopMost) { $arguments += '-TopMost' }
 $process = Start-Process -FilePath $shell -ArgumentList $arguments -PassThru
 Set-Content -LiteralPath $resolvedPidFile -Value $process.Id -Encoding ascii
 

@@ -58,8 +58,9 @@
 
 ## blocker
 
-- **medium** long 桶 flaky 采集：每个 long case 真实 worker 重试链 ≈5–6 分钟，3 case × 2 mode × 2 遍无法压进单轮 30 分钟预算；需拆成 seed / compare 两轮，且 `-TaskPollTimeoutSec`、`-RequestTimeoutSec` 收紧（建议 150 / 90）。
-- **low** provider CCX `127.0.0.1:3688` 返回 `503 没有 Chat 渠道支持模型 "gpt-4o-mini"`，所有 real-worker 任务只能落 `waiting_human`；不影响 UI assertion 两腿（diff/structured 都照常产出报告）。
+- **low** `POST /api/v1/tasks/{id}/pause` 客户端 10s 超时：本轮 5 个 long 桶 task 的暂停请求全部 HttpClient 超时，服务端是否已落 pause 未确认（需 GET 复核，勿盲目重放）。
+- **low** long 桶 task 未终态口径：`-TaskPollTimeoutSec 45` 远小于 long case 真实时长，6 个 task 均 `terminal_run_count=0`，两腿 duration 只含「断言阶段」，不含 agent 执行；与 short/medium 桶口径一致但不等于任务完成态。
+- **low** provider CCX 默认模型口径：`gpt-4o-mini` 仍 503，但 `Run-HarnessWithCcx.ps1 -Model codex`（OPENAI_MODEL=codex）下 `/api/v1/health` 报 `llm.available=true, model=codex`，属启动口径问题已绕开。
 
 ## sign-off checklist
 
@@ -91,3 +92,17 @@
 下一步（未做，需环境/时间）：Phase 2 数据采集 9 组合 × 2 mode = 18 baseline run 需 harness + 真实 worker + baseline PNG 库，单轮 >30min，留给专门轮次。
 
 2026-11-23（auto-patrol，long 桶第 4 次尝试·改期隔离）：先复核上一轮两个 blocker。① `POST /v1/chat/completions` model=`gpt-4o-mini` 仍 503（`没有 Chat 渠道支持模型 "gpt-4o-mini"`）；CCX 现挂 39 个模型，含 `codex` / `codex-free`，不含 gpt-4o-mini。② 用 `Run-HarnessWithCcx.ps1 -Port 18082`（OPENAI_MODEL=codex）起 harness 后 `/api/v1/health` 返回 `llm.available=true, model=codex`、`eyes_mcp.status=healthy, tool_count=23` —— 结论修正：503 是**启动口径**问题（默认 `gpt-4o-mini`），不是 CCX 缺模型。③ 用该 harness 跑 `Run-FlakyComparison.ps1 -CaseKeys long-001,long-002,long-003 -Modes strong_only`（stamp `20261123-075217`）暴露新事实：long 桶任务真在跑编码 agent。`long-001`（task_883229594a0b4269）provider 事件出现 `turn/diff/updated`，直接改 `src/main/java/com/agentcloud/engine/ExperimentRunService.java`（该文件本就有其它方向的未提交改动，diff 从 +215 行变 +216 行），并新增未跟踪 `src/test/java/com/agentcloud/engine/ExperimentRunServiceContinuityTest.java`；单 task 累计 token 753k+，12 分钟仍 active，`long-002/003` 卡在 intake。→ 3 case × 2 腿 × 2 遍在单轮 30 分钟内不可能完成，且会污染主工作树。已中止该轮（停 seed 进程、pause 三个 task、停 worker 与 harness，未产出 report）。落地隔离机制：`Run-BaselineMatrixRealWorkerSmoke.ps1 -WorkspaceRoot` → run metadata → task metadata `workspace_root`；`CodexAppServerWorkerExecutor.resolveWorkingDirectory` 原生按该字段取 cwd（未改 Java）；`Run-FlakyComparison.ps1` 同参数透传两腿。实测 `-WorkspaceRoot D:\_ach-baseline-wt` 跑 short-001/strong_only：task metadata `workspace_root` 正确落库，provider metadata `cli_cwd=D:\_ach-baseline-wt`（duration_ms=377358），16:07→16:35 主工作树零新增改动；契约测试 42/42。遗留：主工作树现有 long-001 写入的残留（`ExperimentRunService.java` +216 行、未跟踪 `ExperimentRunServiceContinuityTest.java`），未提交也未删除，需人工确认去留；long 桶采集改到 `.tmp/wt-feat05-long`（已建好、detached HEAD dfd8354）按单 case 拆轮。
+
+2026-11-27（auto-patrol，long 桶 seed + compare 完成，并修掉像素腿的几何门缺陷）：long-001..003 × strong_only 三遍实跑落地，全部 `localhost:18082` + `-WorkspaceRoot D:\_ach-baseline-wt`。
+
+① 先清脏 baseline：旧的 `long-001.png`(20802B)/`long-002.png`(32793B) 属旧窗口布局，移到 `.tmp/openeyes-ui-assertion/baseline-png-backup-20261127/`，用当前窗口重新 seed（31020B ×3）。
+
+② seed 遍 stamp `20261126-200204`：diff 3/3 `phase_2_seeded_baseline`（comparable 0，属预期 seeding），p50=2578ms / p95=2677ms；structured 3/3 PASS，p50=4159ms / p95=4497ms。两腿 exit=1 是 `MinimumTerminalRuns=1` 与 45s 轮询冲突所致，非断言失败。
+
+③ compare 遍 #1 stamp `20261126-201036`：diff 0/3 `size_mismatch`（baseline 31020B vs current 60891B），p50=12123ms / p95=14970ms；structured 3/3 PASS，p50=8242ms / p95=18441ms，lift=+1.0。目视 current PNG 确认抓到的是**覆盖在目标窗口区域上的其它应用**（同 729×599、像素 similarity 0.065）——遮挡类假失败。
+
+④ 加 `-TopMost`（`scripts/Start-OpenEyesBaselineTarget.ps1` + `scripts/lib/OpenEyesBaselineTargetWindow.ps1`，默认关闭不改旧行为）后 compare 遍 #2 stamp `20261126-202744`：diff 仍 0/3 `size_mismatch`（31020 vs 28769/33288/33288），此时 current 已确认为真窗口（目视一致）。暴露真正缺陷：`Compare-ScreenshotSimilarity` 用 **PNG 编码文件字节长度**当几何一致性门，同尺寸但内容不同的截图必然 `size_mismatch`，从未真正比较像素。
+
+⑤ 修复 `scripts/lib/ScreenshotCompare.ps1`：改像素级比较（`System.Drawing` LockBits 24bpp，逐像素 RGB 通道差、容差 32、`similarity = 1 - diff/sampled`、`>= 0.95` 判 PASS；仅宽高不等才 `size_mismatch`，并回传双方宽高）。保留 `bytes_sampled` / `bytes_over_tolerance` 字段名兼容 `ScreenshotDiffAssertion.ps1`，报告 schema 不变。测试：`Test-ScreenshotCompare` 21/21（新增「同尺寸不同内容不再 size_mismatch」回归用例）、`Test-ScreenshotDiffAssertion` 41/41、`Test-RunFlakyComparison` 42/42。
+
+⑥ 修复后 compare 遍 #3 stamp `20261126-203934`（TopMost 窗口）：diff 3/3 PASS，similarity 全 0.98（436671 采样像素 / 7303 差异像素，三 case 完全一致 → 差异来自窗口外圈采集边距，确定性），p50=5354ms / p95=7200ms；structured 3/3 PASS，p50=4900ms / p95=5024ms；lift=0。结论：long 桶两腿 pass_rate 均 1.0，结构化腿 p50 快 454ms、p95 快 2176ms，确定性布局下像素腿也不 flake——「structured 更高 pass_rate」在本口径下无证据支持，其价值在 z-order/遮挡无关与耗时更稳。

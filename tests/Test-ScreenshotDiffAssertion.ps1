@@ -51,13 +51,23 @@ function Assert-Contains {
     }
 }
 
+# Real PNG fixtures: Compare-ScreenshotSimilarity decodes pixels, so a fake byte
+# stream is not a valid fixture any more. The pattern is seeded so runs that should
+# look identical (same -Seed/-Width/-Height) produce identical pixels.
 function New-FakePng {
-    param([string]$Path, [int]$Seed = 7, [int]$Length = 1000)
-    $bytes = New-Object byte[] $Length
-    for ($i = 0; $i -lt $Length; $i++) { $bytes[$i] = [byte](($i + $Seed) % 251) }
+    param([string]$Path, [int]$Seed = 7, [int]$Width = 100, [int]$Height = 100)
+    Add-Type -AssemblyName System.Drawing
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
-    [System.IO.File]::WriteAllBytes($Path, $bytes)
+    $bmp = New-Object System.Drawing.Bitmap($Width, $Height)
+    for ($y = 0; $y -lt $Height; $y++) {
+        for ($x = 0; $x -lt $Width; $x++) {
+            $value = (($x * 7) + ($y * 13) + $Seed) % 251
+            $bmp.SetPixel($x, $y, [System.Drawing.Color]::FromArgb(255, $value, ($value + $Seed) % 251, ($value * 3) % 251))
+        }
+    }
+    $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
     return $Path
 }
 
@@ -135,8 +145,8 @@ try {
     Assert-Eq 'scriptblock' $report7.capture_mode 'run7: capture_mode=scriptblock'
 
     # --- run 8: size mismatch -> FAIL (no false PASS) ----------------------
-    New-FakePng -Path (Join-Path $baselineDir 'long-002.png') -Seed 5 -Length 400 | Out-Null
-    $shortSource = New-FakePng -Path (Join-Path $sourceDir 'short-size.png') -Seed 5 -Length 800
+    New-FakePng -Path (Join-Path $baselineDir 'long-002.png') -Seed 5 -Width 100 -Height 100 | Out-Null
+    $shortSource = New-FakePng -Path (Join-Path $sourceDir 'short-size.png') -Seed 5 -Width 140 -Height 100
     $report8 = Invoke-ScreenshotDiffAssertion -TaskId 'task_run8' -TaskCaseKey 'long-002' -BaselineDirectory $baselineDir -CurrentDirectory $currentDir -CaptureSourcePng $shortSource
     Assert-Eq 'FAIL' $report8.status 'run8: size mismatch -> FAIL'
     Assert-Eq 'size_mismatch' $report8.error 'run8: error=size_mismatch'

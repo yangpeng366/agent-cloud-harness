@@ -1,7 +1,9 @@
 # Test-ScreenshotCompare.ps1
 #
 # Contract test for scripts/lib/ScreenshotCompare.ps1 Compare-ScreenshotSimilarity.
-# Uses temp PNGs created via System.Drawing; no real screenshots needed.
+# Fixtures are real PNGs (decoded with System.Drawing) because the comparator works
+# on pixels: comparing encoded PNG bytes made every content change look like a
+# `size_mismatch` failure even when the window geometry never changed.
 
 $ErrorActionPreference = 'Stop'
 $libPath = Join-Path $PSScriptRoot '..\scripts\lib\ScreenshotCompare.ps1'
@@ -12,19 +14,6 @@ Add-Type -AssemblyName System.Drawing
 
 $tmpDir = Join-Path $env:TEMP "screenshot-compare-test"
 if (-not (Test-Path $tmpDir)) { New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null }
-
-function New-PngBytes([int]$Width, [int]$Height, [System.Drawing.Color]$Color) {
-    $bmp = New-Object System.Drawing.Bitmap($Width, $Height)
-    for ($y = 0; $y -lt $Height; $y++) {
-        for ($x = 0; $x -lt $Width; $x++) {
-            $bmp.SetPixel($x, $y, $Color)
-        }
-    }
-    $ms = New-Object System.IO.MemoryStream
-    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $bmp.Dispose()
-    return $ms.ToArray()
-}
 
 $pass = 0
 $fail = 0
@@ -51,47 +40,84 @@ function Assert-True {
     }
 }
 
-# Use raw byte streams instead of PNG (PNG compression is non-deterministic,
-# so two encodings of the same bitmap can produce different bytes).
-$bytesA = New-Object byte[] 1000
-for ($i = 0; $i -lt $bytesA.Length; $i++) { $bytesA[$i] = [byte]128 }
-$pathA = Join-Path $tmpDir 'raw-a.bin'
-$pathB = Join-Path $tmpDir 'raw-b.bin'
-[System.IO.File]::WriteAllBytes($pathA, $bytesA)
-[System.IO.File]::WriteAllBytes($pathB, $bytesA)
+function New-SolidPng {
+    param([string]$Path, [int]$Width, [int]$Height, [System.Drawing.Color]$Color)
+    $bmp = New-Object System.Drawing.Bitmap($Width, $Height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    $graphics.Clear($Color)
+    $graphics.Dispose()
+    $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    return $Path
+}
+
+function New-PngWithPatch {
+    param(
+        [string]$Path,
+        [int]$Width,
+        [int]$Height,
+        [System.Drawing.Color]$BaseColor,
+        [System.Drawing.Color]$PatchColor,
+        [int]$PatchX,
+        [int]$PatchY,
+        [int]$PatchSize
+    )
+    $bmp = New-Object System.Drawing.Bitmap($Width, $Height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    $graphics.Clear($BaseColor)
+    $brush = New-Object System.Drawing.SolidBrush($PatchColor)
+    $graphics.FillRectangle($brush, $PatchX, $PatchY, $PatchSize, $PatchSize)
+    $brush.Dispose()
+    $graphics.Dispose()
+    $bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+    return $Path
+}
+
+$white = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
+$black = [System.Drawing.Color]::FromArgb(255, 0, 0, 0)
+$nearWhite = [System.Drawing.Color]::FromArgb(255, 248, 248, 248)
+
+$pathA = Join-Path $tmpDir 'compare-a.png'
+$pathB = Join-Path $tmpDir 'compare-b.png'
+
+# --- identical pixels ---
+New-SolidPng -Path $pathA -Width 120 -Height 90 -Color $white | Out-Null
+New-SolidPng -Path $pathB -Width 120 -Height 90 -Color $white | Out-Null
 $identical = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
 Assert-Eq $null $identical.error 'identical: error null'
 Assert-Eq 1.0 $identical.similarity 'identical: similarity 1.0'
 Assert-True $identical.matched 'identical: matched true'
-Assert-Eq 0 $identical.bytes_over_tolerance 'identical: 0 bytes over tolerance'
-Assert-Eq 0 $identical.max_byte_diff 'identical: max_byte_diff 0'
+Assert-Eq 0 $identical.differing_pixels 'identical: 0 differing pixels'
+Assert-Eq 120 $identical.width 'identical: width reported'
 
-# --- one byte changed (within tolerance) ---
-$bytesModified = New-Object byte[] 1000
-for ($i = 0; $i -lt $bytesModified.Length; $i++) { $bytesModified[$i] = [byte]128 }
-$bytesModified[500] = [byte]135  # diff of 7, well within 32 tolerance
-[System.IO.File]::WriteAllBytes($pathB, $bytesModified)
-$onePixel = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
-Assert-Eq $null $onePixel.error 'one pixel: error null'
-Assert-True ($onePixel.similarity -ge 0.95) "one byte within tolerance: similarity >= 0.95 (got $($onePixel.similarity))"
-Assert-True $onePixel.matched 'one byte within tolerance: still matched'
+# --- same geometry, different content length: the old byte-length gate failed here ---
+New-PngWithPatch -Path $pathB -Width 120 -Height 90 -BaseColor $white -PatchColor $black -PatchX 10 -PatchY 10 -PatchSize 60 | Out-Null
+Assert-True ((Get-Item $pathA).Length -ne (Get-Item $pathB).Length) 'different content: encoded sizes differ (precondition)'
+$contentChanged = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
+Assert-Eq $null $contentChanged.error 'different content same geometry: no size_mismatch'
+Assert-True ($contentChanged.similarity -lt 1.0) "different content: similarity below 1.0 (got $($contentChanged.similarity))"
+Assert-True (-not $contentChanged.matched) 'different content: not matched'
 
-# --- completely different bytes ---
-$bytesAll = New-Object byte[] 1000
-for ($i = 0; $i -lt $bytesAll.Length; $i++) { $bytesAll[$i] = [byte]255 }
-[System.IO.File]::WriteAllBytes($pathB, $bytesAll)
-$different = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
-Assert-Eq $null $different.error 'completely different: error null'
-Assert-True ($different.similarity -lt 0.5) "completely different: similarity low (got $($different.similarity))"
-Assert-True (-not $different.matched) 'completely different: not matched'
+# --- sub-tolerance drift still passes ---
+New-SolidPng -Path $pathB -Width 120 -Height 90 -Color $nearWhite | Out-Null
+$withinTolerance = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
+Assert-Eq 1.0 $withinTolerance.similarity 'sub-tolerance drift: similarity 1.0'
+Assert-True $withinTolerance.matched 'sub-tolerance drift: matched'
 
-# --- size mismatch ---
-$bytesLarge = New-Object byte[] 2000
-for ($i = 0; $i -lt $bytesLarge.Length; $i++) { $bytesLarge[$i] = [byte]128 }
-[System.IO.File]::WriteAllBytes($pathA, $bytesLarge)
+# --- small occlusion (background sliver) keeps similarity above threshold ---
+New-PngWithPatch -Path $pathB -Width 120 -Height 90 -BaseColor $white -PatchColor $black -PatchX 0 -PatchY 0 -PatchSize 3 | Out-Null
+$smallPatch = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
+Assert-True ($smallPatch.similarity -ge 0.95) "small overlay: similarity >= 0.95 (got $($smallPatch.similarity))"
+Assert-True $smallPatch.matched 'small overlay: matched'
+
+# --- geometry mismatch is reported with both dimensions ---
+New-SolidPng -Path $pathB -Width 160 -Height 90 -Color $white | Out-Null
 $sizeMismatch = Compare-ScreenshotSimilarity -BaselinePath $pathA -CurrentPath $pathB
-Assert-Eq 'size_mismatch' $sizeMismatch.error 'size mismatch: error reported'
-Assert-Eq $false $sizeMismatch.matched 'size mismatch: not matched'
+Assert-Eq 'size_mismatch' $sizeMismatch.error 'geometry mismatch: error reported'
+Assert-Eq $false $sizeMismatch.matched 'geometry mismatch: not matched'
+Assert-Eq 120 $sizeMismatch.baseline_width 'geometry mismatch: baseline width reported'
+Assert-Eq 160 $sizeMismatch.current_width 'geometry mismatch: current width reported'
 
 # --- missing baseline ---
 $missing = Compare-ScreenshotSimilarity -BaselinePath "$tmpDir\nonexistent.png" -CurrentPath $pathB
