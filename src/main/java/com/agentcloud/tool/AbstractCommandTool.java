@@ -89,9 +89,21 @@ abstract class AbstractCommandTool implements Tool {
                                         int timeoutMs,
                                         int maxOutputChars,
                                         String displayCommand) throws IOException, InterruptedException {
+        return executeProcess(commandLine, cwd, timeoutMs, maxOutputChars, displayCommand, Map.of());
+    }
+
+    protected ToolResult executeProcess(List<String> commandLine,
+                                        Path cwd,
+                                        int timeoutMs,
+                                        int maxOutputChars,
+                                        String displayCommand,
+                                        Map<String, String> extraEnvironment) throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(commandLine);
         builder.directory(cwd.toFile());
         builder.redirectErrorStream(true);
+        if (extraEnvironment != null && !extraEnvironment.isEmpty()) {
+            builder.environment().putAll(extraEnvironment);
+        }
 
         long startedAt = System.currentTimeMillis();
         Process process = builder.start();

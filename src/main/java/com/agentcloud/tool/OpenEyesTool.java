@@ -90,7 +90,7 @@ public class OpenEyesTool extends AbstractCommandTool {
         int maxOutputChars = toolPolicy.resolveCommandMaxOutputChars(arguments);
 
         ToolResult result = executeProcess(commandLine, cwd, timeoutMs, maxOutputChars,
-            "openeyes " + subcommand);
+            "openeyes " + subcommand, utf8StdioEnvironment());
 
         LinkedHashMap<String, Object> metadata = new LinkedHashMap<>(result.metadata());
         metadata.put("subcommand", subcommand);
@@ -107,6 +107,16 @@ public class OpenEyesTool extends AbstractCommandTool {
         log.info("openeyes tool subcommand={} success={} elapsed_ms={}",
             subcommand, result.success(), metadata.get("elapsed_ms"));
         return new ToolResult(result.success(), result.summary(), result.output(), metadata);
+    }
+
+    /**
+     * 宿主机缺陷修复（2026-11-28 实测，中文 Windows / JDK 21）：{@code eyes} 是 Python CLI，
+     * 非 tty 输出时按 locale 选 cp936(GBK) 编码，遇到 U+200B 这类字符直接
+     * {@code UnicodeEncodeError} → 退出码 1，整个工具调用失败。
+     * 这里强制子进程用 UTF-8 stdio，与 {@code TextDecoding} 的解码口径一致。
+     */
+    private static Map<String, String> utf8StdioEnvironment() {
+        return Map.of("PYTHONIOENCODING", "utf-8", "PYTHONUTF8", "1");
     }
 
     private static ObjectNode tryParse(String output) {
