@@ -36,11 +36,37 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final Set<String> invalidUrls = ConcurrentHashMap.newKeySet();
     private volatile String preferredUrl;
 
+    /**
+     * 默认强制 HTTP/1.1：本地 CCX 网关（明文 h2c）对 JDK 默认的 HTTP/2 升级请求返回
+     * 503 {@code {"error":{"message":"All upstream channels are currently unavailable"}}}，
+     * 同一请求改走 HTTP/1.1 即 200。可用 {@code OPENAI_HTTP_VERSION=2} 显式切回 HTTP/2。
+     */
+    static final HttpClient.Version DEFAULT_HTTP_VERSION = HttpClient.Version.HTTP_1_1;
+
     public OpenAiCompatibleClient(LlmConfig config) {
         this.config = config;
         this.httpClient = HttpClient.newBuilder()
+            .version(resolveHttpVersion(config))
             .connectTimeout(Duration.ofSeconds(30))
             .build();
+    }
+
+    /** 读取 {@code OPENAI_HTTP_VERSION}（1.1/1/2），非法值回落 HTTP/1.1，不阻断启动。 */
+    static HttpClient.Version resolveHttpVersion(LlmConfig config) {
+        String raw = System.getenv("OPENAI_HTTP_VERSION");
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_HTTP_VERSION;
+        }
+        String normalized = raw.trim();
+        return switch (normalized) {
+            case "2", "2.0", "http2", "http_2" -> HttpClient.Version.HTTP_2;
+            default -> HttpClient.Version.HTTP_1_1;
+        };
+    }
+
+    /** 当前生效的 HTTP 协议版本（回归用）。 */
+    HttpClient.Version httpVersion() {
+        return httpClient.version();
     }
 
     @Override

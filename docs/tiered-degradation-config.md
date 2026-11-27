@@ -96,10 +96,57 @@ codex app-server 在每轮里推送 `thread/tokenUsage/updated`（累计 usage �
 回归测试：`CodexAppServerWorkerExecutorTest#appServerRecordsTokenUsageLedgerFromUsageNotification`（fake app-server 按
 `ThreadTokenUsageUpdatedNotification` 形状回放，断言 1234/1000/200/234/34 全套字段与 `protocol_trace` 含该方法）。
 
+### 已修缺陷②：review 通道 503 `All upstream channels are currently unavailable`（2026-11-27）
+
+**根因**：不是模型缺渠道。同一条 `POST /v1/responses`（相同 model/instructions/input）在 JDK `HttpClient` 默认
+`HTTP_2` 下稳定 503，显式 `HTTP_1_1` 即 200。本机 CCX 网关是明文 h2c 场景，JDK 的 HTTP/2 升级请求在网关侧
+路由不到上游，被回 `service_unavailable`；`PromptBasedJudgmentService` 吞掉空响应后回退
+（`action=continue` / `status=partially_done`），于是判定 token 账看起来「永远缺」。
+
+判据（`.tmp/m5-record-only-run/JdkResponsesProbe.java`，同一 token、同一 body、只改协议版本）：
+
+```
+HTTP_2   -> 503 {"error":{"message":"All upstream channels are currently unavailable"}}
+HTTP_1_1 -> 200 {"id":"resp_...","model":"deepseek-v4.1-flash", ...}
+```
+
+对照排除项：`chat_completions` 本身在 ccx 上是 503 `No Chat upstream configured`（无 chat 上游），所以
+wire 只能是 `responses`；请求体大小（2KB/8KB/20KB）、worker 轮次并发占用、model 选择均复现不出 503。
+
+**修复**：`OpenAiCompatibleClient` 固定 `HttpClient.Version.HTTP_1_1`（`DEFAULT_HTTP_VERSION`），
+可用 `OPENAI_HTTP_VERSION=2` 显式切回；回归测试 `OpenAiCompatibleClientTest#defaultsToHttp11ForCleartextGateways`。
+
+### M5 首次实测（2026-11-27，record_only 真链路 + 真实 review token）
+
+启动口径：Java 21 + 重建 shaded jar；工作目录 `.tmp/m5-record-only-run`；`judgment.shadow.profile=record_only`、
+`policy_version=m5-20261127`；`OPENAI_WIRE_API=responses`、`OPENAI_MODEL=codex`、`OPENAI_REVIEW_MODEL=codex`
+（ccx 实际落到 `deepseek-v4.1-flash` 上游）。任务：chat / low / `write_scope=none` / `preferred_worker=codex`。
+
+| 观测点 | 实测 |
+|---|---|
+| worker 轮次 | `provider_turn_status=completed`、`exit_code=0`、`duration_ms=7674`，真实输出落 `last_message.md` |
+| worker token（app-server 自报） | `total=31091`，`input=338`、`cached_input=30720`、`output=33`（含 `reasoning=25`） |
+| 判定 token（`judgment_*` 落决策 metadata） | execution `835 in / 196 out`；completion `826 in / 222 out`，合计 **2079** |
+| review 调用 503 | **0**（修复前同场景每轮 4 次） |
+| M5（总 token 口径，judgment/(judgment+worker)） | **6.27%**（2079 / 33170）≤ 10% 门限 |
+| M5（非缓存口径，剔除 `cached_input`） | **84.9%**（2079 / 2450）——单句任务上判定开销压倒执行开销 |
+
+两条口径差别必须一起报：worker 侧的 30720 cached token 是按缓存价计费的，而判定侧的 system prompt 每轮都在变、
+几乎不吃缓存。因此 M5「≤ 节省额 10%」只能在**同口径**下判：小任务用非缓存口径会直接否掉整个分级方案，
+真实判定应取代表性任务的加权口径，并在 Bitable 里登记口径，禁止混算。
+
+### 复现环境注意（本机已踩，非代码缺陷）
+
+- `D:\repository` 与 `C:\Users\47037\.m2` 都是指向已不存在目标的**悬空 Junction**，`mvn` 直接报
+  `Could not create local repository`；做法：临时 settings 指到真实目录 `D:/_m2repo`
+  （`mvn -s .tmp/maven-settings.xml ...`），不要改全局 `conf/settings.xml`。
+- PATH 上的 `java`（`javapath`）在本机崩溃（`-1073741819`）；构建/运行统一用
+  `C:\Program Files\Java\jdk-21.0.9+10\bin\java.exe`。
+
 ### 未完成项（blocker）
 
-- M5 判定开销占比尚未实测：需要同一批 record_only 轮次里同时有「worker token 账」与「judgment/review LLM token 账」，
-  judgment 侧目前只在 INFO 日志里打 `judgeExecution/judgeCompletion`，还没把 review 通道的 usage 写进同一账本。
-- 本机 `ccx` 网关当前没有支持 `gpt-4o-mini` 的 chat 渠道（503 `没有 Chat 渠道支持模型 "gpt-4o-mini"`），
-  judgment 的 review 调用拿不到真实响应；M5 测量前需要先给 ccx 配一个 review 模型渠道或改 `review_model`。
+- M5 目前只有 1 个单句任务样本（判定 2079 vs 执行 31091），样本不足以进 Bitable 结论；下一步要跑一批代表性任务，
+  输出 `judgment_token_share` 的中位数与四分位。
+- `ExperimentRunService` 的 `judgment_token_share` 只在实验跑链路聚合；record_only 旁路账目前只有决策 metadata 一份，
+  尚未有判定开销的定期聚合产物（CLI 侧仍是 `DecisionEventStatsCli` 的计数口径，不含 token）。
 

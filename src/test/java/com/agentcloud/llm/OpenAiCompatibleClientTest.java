@@ -25,6 +25,24 @@ class OpenAiCompatibleClientTest {
     Path tempDir;
 
     @Test
+    void defaultsToHttp11ForCleartextGateways() {
+        LlmConfig config = new LlmConfig(
+            "test-key",
+            "http://127.0.0.1:1/v1",
+            "codex",
+            null,
+            "responses",
+            30,
+            1,
+            null
+        );
+
+        OpenAiCompatibleClient client = new OpenAiCompatibleClient(config);
+
+        assertEquals(java.net.http.HttpClient.Version.HTTP_1_1, client.httpVersion());
+    }
+
+    @Test
     void chatUsesChatCompletionsWithDefaultModel() throws Exception {
         try (StubServer server = new StubServer("""
             {"choices":[{"message":{"content":"{\\"summary\\":\\"ok\\"}"}}]}
